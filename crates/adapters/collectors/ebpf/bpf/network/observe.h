@@ -43,7 +43,7 @@ static __always_inline int store_pending_net_op_with_flags(
         return 0;
     }
 
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid || !trace_id) {
         return 0;
     }

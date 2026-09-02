@@ -1,9 +1,7 @@
 //! HTTP and LLM request/response correlation orchestration.
 use model_core::diagnostics::LlmPipelineDiagnosticCode;
 use model_core::ids::TraceId;
-use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionStatus, attr_keys as attrs,
-};
+use semantic_action::{SemanticAction, SemanticActionStatus, attr_keys as attrs};
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
@@ -327,9 +325,6 @@ impl ProjectionCoordinator {
                 .unwrap_or(response.action.start_time),
         );
         self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-        if !response.compacted {
-            self.push_recorded_action(response.action.clone(), &mut output);
-        }
         let call = call::llm_call_from_request_response(&request, Some(&response.action));
         self.push_recorded_action(call, &mut output);
         output
@@ -414,15 +409,8 @@ impl ProjectionCoordinator {
             assignments,
             &mut output,
         );
-        if !response.compacted {
-            self.push_recorded_action(response.action.clone(), &mut output);
-        }
-        let mut llm_call =
+        let llm_call =
             call::llm_call_from_request_response(&request.action, Some(&response.action));
-        if response.action.status == SemanticActionStatus::Error {
-            llm_call.status = SemanticActionStatus::Error;
-            llm_call.completeness = SemanticActionCompleteness::Partial;
-        }
         self.push_recorded_action(llm_call, &mut output);
         let binding = ClosedLlmExchangeBinding::new(request, response);
         (output, Some(binding))
@@ -567,13 +555,8 @@ impl ProjectionCoordinator {
                     .unwrap_or(response.action.start_time),
             );
             self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-            if !response.compacted {
-                self.push_recorded_action(response.action.clone(), &mut output);
-            }
             let mut call = call::llm_call_from_request_response(&request, Some(&response.action));
             if response.action.status == SemanticActionStatus::Error {
-                call.status = SemanticActionStatus::Error;
-                call.completeness = SemanticActionCompleteness::Partial;
                 call.end_time = response.action.end_time.or(Some(finished_at));
                 if let Some(value) = response
                     .action

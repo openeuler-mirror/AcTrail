@@ -150,10 +150,10 @@ pub struct TraceLlmExchange {
     pub completed_at: Option<SystemTime>,
     pub request_body_bytes: u64,
     pub request_raw_bytes: Option<u64>,
-    pub request_complete: bool,
+    pub request_completeness: SemanticActionCompleteness,
     pub response_body_bytes: Option<u64>,
     pub response_raw_bytes: Option<u64>,
-    pub response_complete: bool,
+    pub response_completeness: Option<SemanticActionCompleteness>,
     pub response_status: TraceLlmResponseStatus,
 }
 

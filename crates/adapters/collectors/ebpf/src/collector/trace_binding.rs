@@ -3,6 +3,52 @@
 use super::*;
 
 impl EbpfCollector {
+    pub fn set_agent_descendant_observation_depth(
+        &mut self,
+        trace_id: TraceId,
+        observer_tgid: u32,
+        expected_start_boottime_ns: Option<u64>,
+        expected_start_time_ticks: u64,
+        remaining_depth: i32,
+    ) -> Result<(), CollectorError> {
+        if remaining_depth == -1 {
+            return Ok(());
+        }
+        if remaining_depth < -1 {
+            return Err(CollectorError::new(
+                "agent_observation_depth",
+                format!("remaining depth must be -1 or non-negative, got {remaining_depth}"),
+            ));
+        }
+        let tracked = self.bindings.by_host_pid(observer_tgid).ok_or_else(|| {
+            CollectorError::new(
+                "agent_observation_depth",
+                format!("observer TGID {observer_tgid} is not tracked"),
+            )
+        })?;
+        let generation_matches = match expected_start_boottime_ns {
+            Some(expected) => tracked.kernel_start_time == expected,
+            None if expected_start_time_ticks != 0 => {
+                tracked.observation.host.as_ref().is_some_and(|host| {
+                    host.start_time_ticks != 0 && host.start_time_ticks == expected_start_time_ticks
+                })
+            }
+            None => false,
+        };
+        if tracked.trace_id != trace_id || !generation_matches {
+            return Err(CollectorError::new(
+                "agent_observation_depth",
+                format!(
+                    "observer TGID {observer_tgid} no longer identifies trace {trace_id} generation boot={expected_start_boottime_ns:?} ticks={expected_start_time_ticks}"
+                ),
+            ));
+        }
+        let kernel_tgid = tracked.kernel_tgid;
+        self.runtime_ref()?
+            .set_process_observation_depth(kernel_tgid, tracked.kernel_start_time, remaining_depth)
+            .map_err(loader_error)
+    }
+
     pub fn fork_trace_lookup(&self, host_pid: u32) -> Result<ForkTraceLookup, CollectorError> {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(ForkTraceLookup::Unavailable);

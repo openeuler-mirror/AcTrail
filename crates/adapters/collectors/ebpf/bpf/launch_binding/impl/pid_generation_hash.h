@@ -1,12 +1,14 @@
 #ifndef ACTRAIL_LAUNCH_BINDING_PID_GENERATION_HASH_H
 #define ACTRAIL_LAUNCH_BINDING_PID_GENERATION_HASH_H
 
+#include "../../common/map_flags.h"
+
 static struct task_struct *(*bpf_get_current_task)(void) =
     (void *)BPF_FUNC_get_current_task;
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __uint(map_flags, ACTRAIL_TRACE_HASH_MAP_FLAGS);
     __uint(max_entries, 1);
     __type(key, struct actrail_launch_binding_key);
     __type(value, struct actrail_pending_exec_binding);
@@ -14,7 +16,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __uint(map_flags, ACTRAIL_TRACE_HASH_MAP_FLAGS);
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, struct actrail_launch_binding_key);

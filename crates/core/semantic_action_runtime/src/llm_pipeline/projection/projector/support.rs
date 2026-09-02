@@ -321,9 +321,11 @@ pub(super) fn llm_response_completeness(
     if matches!(
         llm_response_status(evidence, http_complete, body),
         SemanticActionStatus::Success
-    ) && evidence.all_capture_complete
+    ) && (http_complete || evidence.all_capture_complete)
     {
         SemanticActionCompleteness::Complete
+    } else if evidence.capture_is_policy_limited() {
+        SemanticActionCompleteness::CaptureLimited
     } else {
         SemanticActionCompleteness::Partial
     }

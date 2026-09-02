@@ -290,12 +290,15 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
         raise RuntimeError("activity provider did not publish its URL before timeout")
 
     def _write_xiaoo_config(self, provider_url: str) -> None:
+        chat_completions_url = (
+            f"{provider_url.rstrip('/')}/v1/chat/completions"
+        )
         self._xiaoo_config.write_text(
             "[llm]\n"
             'provider = "deepseek"\n'
             'model = "deepseek-chat"\n'
             'api_key_env = "ACTRAIL_ACTIVITY_ANOMALY_LOCAL_KEY"\n'
-            f"api_base = {json.dumps(provider_url)}\n"
+            f"api_base = {json.dumps(chat_completions_url)}\n"
             "max_tokens = 128\n"
             "context_window = 32768\n"
             'reasoning_effort = "off"\n',

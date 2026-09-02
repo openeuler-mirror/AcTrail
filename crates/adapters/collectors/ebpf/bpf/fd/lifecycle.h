@@ -20,7 +20,7 @@ static __always_inline int fd_socket_enter(struct trace_event_raw_sys_enter *ctx
     if (!operation_key || !fd_category_enabled(category)) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid || !trace_id) {
         return 0;
     }
@@ -74,7 +74,7 @@ static __always_inline int fd_open_enter(
     if (!operation_key || !fd_category_enabled(ACTRAIL_FD_CATEGORY_FILE)) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid || !trace_id) {
         return 0;
     }
@@ -120,7 +120,7 @@ static __always_inline int fd_close_dispatch_enter(struct trace_event_raw_sys_en
     __u64 *trace_id;
     struct actrail_pending_fd_close_op op = {};
 
-    if (!operation_key) {
+    if (!operation_key || !process_observation_is_detailed(pid)) {
         return 0;
     }
     state = fd_lookup(pid, fd);
@@ -128,7 +128,7 @@ static __always_inline int fd_close_dispatch_enter(struct trace_event_raw_sys_en
         return 0;
     }
     op.expected_generation = state->generation;
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid || !trace_id) {
         return 0;
     }
@@ -155,7 +155,7 @@ static __always_inline int fd_close_range_dispatch_enter(
     if (!operation_key || !fd_tracking_enabled()) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid || !trace_id) {
         return 0;
     }
@@ -273,7 +273,7 @@ static __always_inline int fd_dup_enter(
         return 0;
     }
     op.target_fd = target_fd;
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid || !trace_id) {
         return 0;
     }
@@ -465,7 +465,7 @@ static __always_inline int fd_flag_enter(
     struct actrail_fd_state *state;
     struct actrail_pending_fd_flag_op op = {};
 
-    if (!operation_key) {
+    if (!operation_key || !process_observation_is_detailed(pid)) {
         return 0;
     }
     state = fd_lookup(pid, fd);

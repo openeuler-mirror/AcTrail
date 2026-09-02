@@ -156,7 +156,7 @@ int handle_go_tls_conn_read_enter(struct pt_regs *ctx) {
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     struct actrail_go_tls_read_buffer_key key = {};
     struct actrail_go_tls_read_buffer value = {};
     __u64 requested_size = positive_uprobe_isize(ACTRAIL_GO_UPROBE_ARG3(ctx));

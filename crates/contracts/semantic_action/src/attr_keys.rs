@@ -5,8 +5,6 @@ pub mod actrail {
     pub const ACTION_VALID: &str = "actrail.action.valid";
     pub const ACTION_VALID_FALSE_MARKER: &str = "actrail.action.valid=false";
     pub const LINK_SOURCE: &str = "actrail.link.source";
-    pub const LINK_VALID: &str = "actrail.link.valid";
-    pub const LINK_VALID_FALSE_MARKER: &str = "actrail.link.valid=false";
 }
 
 pub mod agent {
@@ -236,7 +234,6 @@ pub mod llm_tool_call {
 pub mod llm_tool_result {
     pub const BINDING_STATE: &str = "llm.tool_result.binding_state";
     pub const CONTENT_BYTES: &str = "llm.tool_result.content_bytes";
-    pub const CONTENT_HASH: &str = "llm.tool_result.content_hash";
     pub const CONTENT_JSON: &str = "llm.tool_result.content_json";
     pub const CONTENT_EXPORT_STATE: &str = "llm.tool_result.content_export_state";
     pub const ID: &str = "llm.tool_result.id";

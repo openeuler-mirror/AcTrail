@@ -333,7 +333,10 @@ impl ToolCallAssembler {
         }
     }
 
-    fn apply_openai_response_custom_tool_call(&mut self, item: &Map<String, Value>) {
+    pub(in crate::llm_pipeline) fn apply_openai_response_custom_tool_call(
+        &mut self,
+        item: &Map<String, Value>,
+    ) {
         let raw_name = item
             .get("name")
             .and_then(Value::as_str)
@@ -344,10 +347,29 @@ impl ToolCallAssembler {
             let function = call.function.get_or_insert_with(LlmToolFunction::default);
             function.name = Self::qualified_response_tool_name(item);
         }
-        if raw_name == Some("exec")
-            && let Some(input) = item.get("input").and_then(Value::as_str)
-        {
-            self.apply_code_mode_mcp_calls(input, call_id);
+        if raw_name == Some("exec") {
+            for key in ["input", "arguments", "code"] {
+                if let Some(value) = item.get(key) {
+                    self.apply_code_mode_mcp_inputs(value, call_id);
+                }
+            }
+        }
+    }
+
+    fn apply_code_mode_mcp_inputs(&mut self, value: &Value, call_id: Option<&str>) {
+        match value {
+            Value::String(input) => self.apply_code_mode_mcp_calls(input, call_id),
+            Value::Array(values) => {
+                for value in values {
+                    self.apply_code_mode_mcp_inputs(value, call_id);
+                }
+            }
+            Value::Object(object) => {
+                for value in object.values() {
+                    self.apply_code_mode_mcp_inputs(value, call_id);
+                }
+            }
+            _ => {}
         }
     }
 

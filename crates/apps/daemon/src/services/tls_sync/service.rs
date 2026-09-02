@@ -33,7 +33,7 @@ use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
 use self::resolver::{ExecPlanConsumer, TlsSyncPlanResolver};
-use self::root_path::PeerRootResolver;
+use self::root_path::{PeerRootResolver, PinnedPeerPath};
 use crate::peer_identity::{PeerIdentity, peer_error};
 
 pub(crate) struct TlsSyncService {
@@ -53,6 +53,35 @@ pub(crate) enum ExecTlsPlanMode {
 pub(crate) struct ExecTlsPlanResolution {
     pub(crate) mode: ExecTlsPlanMode,
     pub(crate) reply: LaunchTlsPlanReply,
+}
+
+pub(crate) struct RuntimeRootPathMapper {
+    root: root_path::PeerRootHandle,
+}
+
+pub(crate) struct PinnedRuntimePath {
+    _handle: PinnedPeerPath,
+    probe_path: std::path::PathBuf,
+}
+
+impl RuntimeRootPathMapper {
+    pub(crate) fn pin(&self, runtime_path: &Path) -> Result<PinnedRuntimePath, ControlError> {
+        let handle = self
+            .root
+            .pin_path(runtime_path)
+            .map_err(|error| ControlError::new("tls_sync_plan_root", error))?;
+        let probe_path = handle.path();
+        Ok(PinnedRuntimePath {
+            _handle: handle,
+            probe_path,
+        })
+    }
+}
+
+impl PinnedRuntimePath {
+    pub(crate) fn path(&self) -> &Path {
+        &self.probe_path
+    }
 }
 
 #[derive(Debug, Default)]
@@ -136,6 +165,7 @@ impl TlsSyncService {
     pub(crate) fn resolve_launch_plan(
         &self,
         binary: &Path,
+        path_view_pid: u32,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
         let Some(resolver) = &self.resolver else {
             return Err(ControlError::new(
@@ -143,7 +173,18 @@ impl TlsSyncService {
                 "TLS sync plan resolver is disabled",
             ));
         };
-        resolver.resolve_launch_plan(binary)
+        let mut root = PeerRootResolver::new(path_view_pid);
+        resolver.resolve_launch_plan(binary, root.duplicate())
+    }
+
+    pub(crate) fn runtime_root_path_mapper(
+        &self,
+        path_view_pid: u32,
+    ) -> Result<RuntimeRootPathMapper, ControlError> {
+        let mut root = PeerRootResolver::new(path_view_pid);
+        root.duplicate()
+            .map(|root| RuntimeRootPathMapper { root })
+            .map_err(|error| ControlError::new("tls_sync_plan_root", error))
     }
 
     pub(crate) fn drain(
@@ -409,6 +450,7 @@ fn summary_segment(
         original_size,
         captured_size,
         operation_id: event.sequence,
+        operation_chunk_index: 0,
         operation_offset: 0,
         operation_original_size: original_size,
         operation_captured_size: captured_size,
@@ -449,6 +491,7 @@ fn payload_segment(
         original_size: captured_size,
         captured_size,
         operation_id: event.sequence,
+        operation_chunk_index: 0,
         operation_offset: 0,
         operation_original_size: captured_size,
         operation_captured_size: captured_size,

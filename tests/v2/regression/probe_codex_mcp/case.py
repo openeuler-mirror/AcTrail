@@ -18,17 +18,18 @@ class ProbeCodexMcpCase(TestCase):
         runtime: ActrailRuntime | None = None
         task: ProbeCodexMcpTask | None = None
         try:
+            try:
+                task = ProbeCodexMcpTask(self._config)
+            except AgentBinaryNotFoundError as error:
+                return TestResult(TestStatus.SKIPPED, str(error))
             runtime = ActrailRuntime.isolated(
                 self._config.repo,
                 self._config.bin_dir,
                 self._config.command_timeout_seconds,
                 test_context.output,
                 self._config.work_dir,
+                agent_invocation_commands=[task.native_binary],
             )
-            try:
-                task = ProbeCodexMcpTask(self._config, runtime)
-            except AgentBinaryNotFoundError as error:
-                return TestResult(TestStatus.SKIPPED, str(error))
             if not test_context.check_agent_availability(
                 "codex",
                 task.binary,
@@ -44,7 +45,7 @@ class ProbeCodexMcpCase(TestCase):
                 TestStatus.PASSED,
                 f"{len(lifecycle)} lifecycle commands completed",
             )
-            launch = task.run()
+            launch = task.run(runtime)
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"

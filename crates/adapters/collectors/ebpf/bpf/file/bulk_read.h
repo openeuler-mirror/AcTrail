@@ -81,7 +81,7 @@ static __always_inline struct actrail_file_bulk_read_fast_process_value *
 lookup_file_bulk_read_fast_process(__u32 pid, __u64 generation) {
     struct actrail_file_bulk_read_fast_process_key key = {};
 
-    if (!pid || !generation) {
+    if (!pid || !process_observation_is_detailed(pid) || !generation) {
         return 0;
     }
     fill_file_bulk_read_fast_process_key(pid, generation, &key);
@@ -220,7 +220,7 @@ static __always_inline int store_file_bulk_read_fast_read_op(
     struct actrail_file_bulk_read_fast_fd_stats *stats;
     struct actrail_pending_file_bulk_read_fast_op op = {};
 
-    if (!pid || !generation) {
+    if (!pid || !process_observation_is_detailed(pid) || !generation) {
         return 0;
     }
     stats = lookup_file_bulk_read_fast_fd(pid, fd, *generation);
@@ -275,7 +275,7 @@ static __always_inline int store_file_bulk_read_fast_close_op(
     struct actrail_file_bulk_read_fast_fd_stats *stats;
     struct actrail_pending_file_bulk_read_fast_op op = {};
 
-    if (!pid || !generation) {
+    if (!pid || !process_observation_is_detailed(pid) || !generation) {
         return 0;
     }
     stats = lookup_file_bulk_read_fast_fd(pid, fd, *generation);
@@ -322,7 +322,7 @@ static __always_inline int store_file_bulk_read_fast_dup_op(
     __u64 *generation = lookup_process_start_time(pid);
     struct actrail_pending_file_bulk_read_fast_op op = {};
 
-    if (!pid || !generation) {
+    if (!pid || !process_observation_is_detailed(pid) || !generation) {
         return 0;
     }
     op.pid = pid;

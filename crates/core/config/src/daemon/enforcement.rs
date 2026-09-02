@@ -123,10 +123,7 @@ impl Default for EnforcementConfig {
             mark_strategy: EnforcementMarkStrategy::ParentDirectories,
             audit_enabled: true,
             event_buffer_bytes: 65_536,
-            seccomp_syscalls: vec![
-                EnforcementSeccompSyscall::Mkdir,
-                EnforcementSeccompSyscall::Rmdir,
-            ],
+            seccomp_syscalls: Vec::new(),
             seccomp_path_max_bytes: 4_096,
         }
     }

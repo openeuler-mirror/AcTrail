@@ -2,6 +2,7 @@
 #define ACTRAIL_PROCESS_OBSERVE_H
 
 #include "../runtime/event_transport.h"
+#include "../runtime/fetch_add_compat.h"
 #include "../fd/suppressed.h"
 #include "../launch_binding/binding.h"
 #include "state.h"
@@ -9,6 +10,311 @@
 enum actrail_proc_coord_syscall_id {
     ACTRAIL_PROC_COORD_TRACEPOINT_SIGNAL_GENERATE = 1,
 };
+
+enum actrail_process_exec_abi {
+    ACTRAIL_PROCESS_EXEC_PATH_ABI_MAX_BYTES = 4096,
+    ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES = 4096,
+    ACTRAIL_PROCESS_EXEC_ARGV_COPY_MAX_BYTES = 4095,
+    ACTRAIL_PROCESS_EXEC_ARG_MAX = 128,
+};
+
+enum actrail_process_exec_syscall {
+    ACTRAIL_PROCESS_EXECVE = 1,
+    ACTRAIL_PROCESS_EXECVEAT = 2,
+};
+
+enum actrail_process_fork_syscall {
+    ACTRAIL_PROCESS_FORK = 3,
+    ACTRAIL_PROCESS_VFORK = 4,
+    ACTRAIL_PROCESS_CLONE = 5,
+    ACTRAIL_PROCESS_CLONE3 = 6,
+};
+
+enum actrail_process_fork_capture_flag {
+    ACTRAIL_PROCESS_FORK_CLONE3_TRUNCATED = 1,
+    ACTRAIL_PROCESS_FORK_CLONE3_READ_FAILED = 2,
+};
+
+enum actrail_process_clone_flag {
+    ACTRAIL_PROCESS_CLONE_THREAD = 0x00010000,
+};
+
+struct actrail_user_clone_args_prefix {
+    __u64 flags;
+};
+
+enum actrail_process_exec_capture_flag {
+    ACTRAIL_PROCESS_EXEC_PATH_TRUNCATED = 1,
+    ACTRAIL_PROCESS_EXEC_ARGV_TRUNCATED = 2,
+    ACTRAIL_PROCESS_EXEC_READ_FAILED = 4,
+    ACTRAIL_PROCESS_EXEC_ARG_LIMIT = 8,
+    ACTRAIL_PROCESS_EXEC_ARGV_COMPLETE = 16,
+};
+
+struct actrail_process_exec_config {
+    __u32 max_args;
+    __u32 max_arg_bytes;
+    __u32 max_total_arg_bytes;
+};
+
+struct actrail_pending_process_exec {
+    __u64 trace_id;
+    __u64 attempt_id;
+    __u64 observed_ktime_ns;
+    __u64 pid_generation;
+    __u32 pid;
+    __u32 tid;
+    __u32 host_pid;
+    __u32 host_tid;
+    __u32 syscall;
+};
+
+struct actrail_process_exec_attempt_event {
+    __u32 kind;
+    __u32 pid;
+    __u32 tid;
+    __u32 syscall;
+    __u64 trace_id;
+    __u64 observed_ktime_ns;
+    __u64 attempt_id;
+    __u64 pid_generation;
+    __s32 execveat_dirfd;
+    __u32 execveat_flags;
+    __u32 path_size;
+    __u32 argv_size;
+    __u32 argc;
+    __u32 capture_flags;
+    __u32 host_pid;
+    __u32 host_tid;
+    char path[ACTRAIL_PROCESS_EXEC_PATH_ABI_MAX_BYTES];
+};
+
+struct actrail_process_exec_arg_event {
+    __u32 kind;
+    __u32 pid;
+    __u32 tid;
+    __u32 syscall;
+    __u64 trace_id;
+    __u64 observed_ktime_ns;
+    __u64 attempt_id;
+    __u64 pid_generation;
+    __u32 index;
+    __u32 arg_size;
+    __u32 capture_flags;
+    __u32 host_pid;
+    __u32 host_tid;
+    __u32 reserved;
+    __u8 arg[ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES];
+};
+
+struct actrail_process_exec_result_event {
+    __u32 kind;
+    __u32 pid;
+    __u32 tid;
+    __u32 syscall;
+    __u64 trace_id;
+    __u64 observed_ktime_ns;
+    __u64 attempt_id;
+    __u64 pid_generation;
+    __s64 result;
+    __u32 host_pid;
+    __u32 host_tid;
+};
+
+struct actrail_pending_process_fork {
+    __u64 trace_id;
+    __u64 attempt_id;
+    __u64 observed_ktime_ns;
+    __u64 pid_generation;
+    __u64 flags;
+    __u64 clone3_args_ptr;
+    __u64 clone3_args_size;
+    __u32 pid;
+    __u32 tid;
+    __u32 host_pid;
+    __u32 host_tid;
+    __u32 syscall;
+    __u32 capture_flags;
+};
+
+struct actrail_process_fork_attempt_event {
+    __u32 kind;
+    __u32 pid;
+    __u32 tid;
+    __u32 syscall;
+    __u64 trace_id;
+    __u64 observed_ktime_ns;
+    __u64 attempt_id;
+    __u64 pid_generation;
+    __u64 flags;
+    __u64 clone3_args_ptr;
+    __u64 clone3_args_size;
+    __u32 capture_flags;
+    __u32 host_pid;
+    __u32 host_tid;
+    __u32 reserved;
+};
+
+struct actrail_process_fork_result_event {
+    __u32 kind;
+    __u32 pid;
+    __u32 tid;
+    __u32 syscall;
+    __u64 trace_id;
+    __u64 observed_ktime_ns;
+    __u64 attempt_id;
+    __u64 pid_generation;
+    __s64 result;
+    __u32 host_pid;
+    __u32 host_tid;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct actrail_process_exec_config);
+} process_exec_config SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u64);
+    __type(value, struct actrail_pending_process_exec);
+} pending_process_exec_ops SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} pending_process_exec_tgid_index SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u64);
+    __type(value, __u64);
+} process_exec_sequences SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u64);
+    __type(value, struct actrail_pending_process_fork);
+} pending_process_fork_ops SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u64);
+    __type(value, __u64);
+} process_fork_sequences SEC(".maps");
+
+static __always_inline struct actrail_process_exec_config *current_process_exec_config(void) {
+    __u32 key = 0;
+
+    return bpf_map_lookup_elem(&process_exec_config, &key);
+}
+
+static __always_inline __u64 next_process_exec_attempt_id(
+    __u64 kernel_pid_tgid
+) {
+    __u64 initial = 1;
+    __u64 *current =
+        bpf_map_lookup_elem(&process_exec_sequences, &kernel_pid_tgid);
+
+    if (!current) {
+        if (bpf_map_update_elem(
+                &process_exec_sequences,
+                &kernel_pid_tgid,
+                &initial,
+                BPF_NOEXIST
+            ) == 0) {
+            return actrail_thread_sequence_id(kernel_pid_tgid, initial);
+        }
+        current =
+            bpf_map_lookup_elem(&process_exec_sequences, &kernel_pid_tgid);
+        if (!current) {
+            return 0;
+        }
+    }
+    return actrail_thread_sequence_id(
+        kernel_pid_tgid,
+        actrail_fetch_add_next(current)
+    );
+}
+
+static __always_inline __u64 next_process_fork_attempt_id(
+    __u64 kernel_pid_tgid
+) {
+    __u64 initial = 1;
+    __u64 *current =
+        bpf_map_lookup_elem(&process_fork_sequences, &kernel_pid_tgid);
+
+    if (!current) {
+        if (bpf_map_update_elem(
+                &process_fork_sequences,
+                &kernel_pid_tgid,
+                &initial,
+                BPF_NOEXIST
+            ) == 0) {
+            return actrail_thread_sequence_id(kernel_pid_tgid, initial);
+        }
+        current =
+            bpf_map_lookup_elem(&process_fork_sequences, &kernel_pid_tgid);
+        if (!current) {
+            return 0;
+        }
+    }
+    return actrail_thread_sequence_id(
+        kernel_pid_tgid,
+        actrail_fetch_add_next(current)
+    );
+}
+
+static __always_inline __u64 current_process_fork_attempt_id(void) {
+    __u64 key = current_kernel_pid_tgid();
+    struct actrail_pending_process_fork *pending =
+        bpf_map_lookup_elem(&pending_process_fork_ops, &key);
+
+    return pending ? pending->attempt_id : 0;
+}
+
+static __always_inline void delete_pending_process_exec(
+    __u32 host_tgid,
+    __u64 kernel_pid_tgid
+) {
+    __u64 *indexed = bpf_map_lookup_elem(&pending_process_exec_tgid_index, &host_tgid);
+
+    bpf_map_delete_elem(&pending_process_exec_ops, &kernel_pid_tgid);
+    if (indexed && *indexed == kernel_pid_tgid) {
+        bpf_map_delete_elem(&pending_process_exec_tgid_index, &host_tgid);
+    }
+}
+
+static __always_inline __u64 take_successful_process_exec_attempt(__u32 host_tgid) {
+    __u64 *kernel_pid_tgid = bpf_map_lookup_elem(
+        &pending_process_exec_tgid_index,
+        &host_tgid
+    );
+    struct actrail_pending_process_exec *pending;
+    __u64 key;
+    __u64 attempt_id;
+
+    if (!kernel_pid_tgid) {
+        return 0;
+    }
+    key = *kernel_pid_tgid;
+    pending = bpf_map_lookup_elem(&pending_process_exec_ops, &key);
+    if (!pending) {
+        bpf_map_delete_elem(&pending_process_exec_tgid_index, &host_tgid);
+        return 0;
+    }
+    attempt_id = pending->attempt_id;
+    delete_pending_process_exec(host_tgid, key);
+    return attempt_id;
+}
 
 static __always_inline int finalize_fork_trace_binding(__u32 child_kernel_pid) {
     __u32 child_pid = 0;
@@ -78,6 +384,10 @@ static __always_inline int emit_exec_proc_event(
         sizeof(*event),
         trace_id
     );
+    event->attempt_id = take_successful_process_exec_attempt(current_kernel_tgid());
+    event->filename_size = 0;
+    event->filename_flags = 0;
+    event->filename[0] = 0;
     filename_offset = ctx->filename_loc & 0xffff;
     filename_data_size = ctx->filename_loc >> 16;
     if (filename_offset) {

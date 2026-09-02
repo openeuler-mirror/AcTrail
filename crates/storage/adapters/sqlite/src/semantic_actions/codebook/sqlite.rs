@@ -1,10 +1,8 @@
 //! SQLite-facing semantic action storage code helpers.
 
-use rusqlite::Row;
 use semantic_action::{
-    SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionStatus,
-    SemanticActionStoreError, SemanticEvidenceKind,
+    SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkOrigin,
+    SemanticActionLinkRole, SemanticActionStatus, SemanticActionStoreError, SemanticEvidenceKind,
 };
 
 use crate::semantic_actions::codebook;
@@ -49,10 +47,8 @@ pub(in crate::semantic_actions) fn link_role_code_from_str(
     )
 }
 
-pub(in crate::semantic_actions) fn link_confidence_code(
-    value: SemanticActionLinkConfidence,
-) -> i16 {
-    codebook::current().link_confidence.code(value)
+pub(in crate::semantic_actions) fn link_origin_code(value: SemanticActionLinkOrigin) -> i16 {
+    codebook::current().link_origin.code(value)
 }
 
 pub(in crate::semantic_actions) fn decode_kind(
@@ -85,10 +81,10 @@ pub(in crate::semantic_actions) fn decode_link_role(
     sqlite_code(codebook::current().link_role.decode(value))
 }
 
-pub(in crate::semantic_actions) fn decode_link_confidence(
+pub(in crate::semantic_actions) fn decode_link_origin(
     value: i64,
-) -> Result<SemanticActionLinkConfidence, rusqlite::Error> {
-    sqlite_code(codebook::current().link_confidence.decode(value))
+) -> Result<SemanticActionLinkOrigin, rusqlite::Error> {
+    sqlite_code(codebook::current().link_origin.decode(value))
 }
 
 fn store_code<T>(
@@ -100,33 +96,4 @@ fn store_code<T>(
 
 fn sqlite_code<T>(result: Result<T, codebook::CodebookError>) -> Result<T, rusqlite::Error> {
     result.map_err(|_| rusqlite::Error::InvalidQuery)
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(in crate::semantic_actions) struct LinkEvidenceKey {
-    trace_id: u64,
-    parent_action_id: String,
-    child_action_id: String,
-    role_code: i16,
-}
-
-impl LinkEvidenceKey {
-    pub(in crate::semantic_actions) fn from_link(link: &SemanticActionLink) -> Self {
-        Self {
-            trace_id: link.trace_id.get(),
-            parent_action_id: link.parent_action_id.clone(),
-            child_action_id: link.child_action_id.clone(),
-            role_code: link_role_code(link.role),
-        }
-    }
-
-    pub(in crate::semantic_actions) fn from_row(row: &Row<'_>) -> Result<Self, rusqlite::Error> {
-        Ok(Self {
-            trace_id: row.get("trace_id")?,
-            parent_action_id: row.get("parent_action_id")?,
-            child_action_id: row.get("child_action_id")?,
-            role_code: i16::try_from(row.get::<_, i64>("link_role_code")?)
-                .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        })
-    }
 }

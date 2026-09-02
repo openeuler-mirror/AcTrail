@@ -29,27 +29,39 @@ pub(crate) const PROCESS_SECCOMP_COLLECTOR_NAME: &str = "process-seccomp";
 
 #[derive(Debug)]
 pub(crate) struct ProcessSeccompService {
-    enabled: bool,
+    observation_enabled: bool,
+    pre_exec_hook_enabled: bool,
+    observation_syscalls: BTreeSet<KernelProcessSyscall>,
     syscalls: BTreeSet<KernelProcessSyscall>,
     max_args: u32,
     max_arg_bytes: u32,
+    max_total_arg_bytes: u32,
     pending_max_entries: u32,
 }
 
 impl ProcessSeccompService {
-    pub(crate) fn new(config: &ProcessSeccompConfig) -> Self {
+    pub(crate) fn new(config: &ProcessSeccompConfig, pre_exec_hook_enabled: bool) -> Self {
+        let observation_syscalls = effective_syscalls(config.syscalls.iter().copied())
+            .unwrap_or_else(|error| panic!("build process seccomp syscall map: {error:?}"));
+        let mut syscalls = observation_syscalls.clone();
+        if pre_exec_hook_enabled {
+            syscalls.insert(KernelProcessSyscall::Execve);
+            syscalls.insert(KernelProcessSyscall::Execveat);
+        }
         Self {
-            enabled: config.enabled,
-            syscalls: effective_syscalls(config.syscalls.iter().copied())
-                .unwrap_or_else(|error| panic!("build process seccomp syscall map: {error:?}")),
+            observation_enabled: config.enabled,
+            pre_exec_hook_enabled,
+            observation_syscalls,
+            syscalls,
             max_args: config.max_args,
             max_arg_bytes: config.max_arg_bytes,
+            max_total_arg_bytes: config.max_total_arg_bytes,
             pending_max_entries: config.pending_max_entries,
         }
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.enabled
+        self.observation_enabled || self.pre_exec_hook_enabled
     }
 
     pub(crate) fn pending_observation_batch_size(&self) -> Result<usize, ControlError> {
@@ -72,7 +84,7 @@ impl ProcessSeccompService {
         &self,
         context: &ExecNotificationContext,
     ) -> Result<Option<ProcessSeccompObservation>, ControlError> {
-        if !self.enabled {
+        if !self.observation_enabled {
             return Ok(None);
         }
         let syscall = match context.syscall_name() {
@@ -90,7 +102,7 @@ impl ProcessSeccompService {
             ProcessSeccompSyscall::Execveat => KernelProcessSyscall::Execveat,
             _ => unreachable!("deferred exec syscall is execve or execveat"),
         };
-        if !self.syscalls.contains(&kernel_syscall) {
+        if !self.observation_syscalls.contains(&kernel_syscall) {
             return Ok(None);
         }
         let (path, path_truncated) =
@@ -103,9 +115,23 @@ impl ProcessSeccompService {
         })?;
         let mut truncated = path_truncated || context.argv().len() > max_args;
         let mut argv = Vec::new();
+        let mut remaining_total = usize::try_from(self.max_total_arg_bytes).map_err(|error| {
+            ControlError::new(
+                "process_seccomp_exec",
+                format!("total argument byte limit overflow: {error}"),
+            )
+        })?;
         for arg in context.argv().iter().take(max_args) {
-            let (arg, arg_truncated) = Self::bounded_string(arg, self.max_arg_bytes)?;
+            if remaining_total == 0 {
+                truncated = true;
+                break;
+            }
+            let per_arg_limit = self
+                .max_arg_bytes
+                .min(u32::try_from(remaining_total).unwrap_or(u32::MAX));
+            let (arg, arg_truncated) = Self::bounded_string(arg, per_arg_limit)?;
             truncated |= arg_truncated;
+            remaining_total = remaining_total.saturating_sub(arg.len());
             argv.push(arg);
         }
         Ok(Some(ProcessSeccompObservation {
@@ -195,6 +221,61 @@ impl ProcessSeccompService {
         Ok(Some(target_identity))
     }
 
+    pub(crate) fn prepare_exec_notification(
+        &self,
+        trace_runtime: &TraceRuntime,
+        process_registry: &ProcessIdentityManager,
+        notification: &libc::seccomp_notif,
+        before_exec_continue: &mut impl FnMut(&ProcessSeccompExecCandidate) -> Result<(), ControlError>,
+    ) -> Result<(), ControlError> {
+        if !self.pre_exec_hook_enabled {
+            return Ok(());
+        }
+        let Some(syscall) = syscall_from_notification(notification)? else {
+            return Ok(());
+        };
+        if !matches!(
+            syscall,
+            KernelProcessSyscall::Execve | KernelProcessSyscall::Execveat
+        ) {
+            return Ok(());
+        }
+        let (path, execveat_dirfd) = match syscall {
+            KernelProcessSyscall::Execve => (
+                read_execve_path(
+                    notification.pid,
+                    notification.data.args[0],
+                    self.max_arg_bytes,
+                )?,
+                None,
+            ),
+            KernelProcessSyscall::Execveat => (
+                read_execveat_path(
+                    notification.pid,
+                    notification.data.args[1],
+                    self.max_arg_bytes,
+                )?,
+                Some(notification.data.args[0]),
+            ),
+            _ => unreachable!("pre-exec hook only handles exec syscalls"),
+        };
+        if skip_missing_exec_candidate(notification.pid, &path) {
+            return Ok(());
+        }
+        let parent_pid = parent_pid(notification.pid)?;
+        let trace_id = trace_for_host_pid(trace_runtime, process_registry, notification.pid)
+            .or_else(|| {
+                parent_pid.and_then(|pid| trace_for_host_pid(trace_runtime, process_registry, pid))
+            });
+        before_exec_continue(&ProcessSeccompExecCandidate {
+            pid: notification.pid,
+            trace_id,
+            path: path.path,
+            path_truncated: path.truncated,
+            execveat_dirfd,
+        })
+    }
+
     pub(crate) fn handle_notification(
         &self,
         trace_runtime: &TraceRuntime,
@@ -202,9 +283,8 @@ impl ProcessSeccompService {
         identity_reader: &impl ProcessIdentityReader,
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
-        before_exec_continue: &mut impl FnMut(&ProcessSeccompExecCandidate) -> Result<(), ControlError>,
     ) -> Result<Vec<ProcessSeccompObservation>, ControlError> {
-        if !self.enabled {
+        if !self.enabled() {
             return Ok(Vec::new());
         }
         let Some(syscall) = syscall_from_notification(notification)? else {
@@ -213,9 +293,15 @@ impl ProcessSeccompService {
         if !self.syscalls.contains(&syscall) {
             return Ok(Vec::new());
         }
+        let observation_requested =
+            self.observation_enabled && self.observation_syscalls.contains(&syscall);
         let syscall = syscall.as_configured_syscall();
         match syscall {
             ProcessSeccompSyscall::Execve => {
+                if !observation_requested {
+                    continuation.continue_now()?;
+                    return Ok(Vec::new());
+                }
                 let observed_at = SystemTime::now();
                 let path = read_execve_path(
                     notification.pid,
@@ -232,6 +318,7 @@ impl ProcessSeccompService {
                     notification.data.args[1],
                     self.max_args,
                     self.max_arg_bytes,
+                    self.max_total_arg_bytes,
                 )?;
                 let process = identity(
                     trace_runtime,
@@ -240,21 +327,6 @@ impl ProcessSeccompService {
                     notification.pid,
                 )?;
                 let parent_pid = parent_pid(notification.pid)?;
-                let trace_id =
-                    trace_for_host_pid(trace_runtime, process_registry, notification.pid).or_else(
-                        || {
-                            parent_pid.and_then(|pid| {
-                                trace_for_host_pid(trace_runtime, process_registry, pid)
-                            })
-                        },
-                    );
-                before_exec_continue(&ProcessSeccompExecCandidate {
-                    pid: notification.pid,
-                    trace_id,
-                    path: args.path.clone(),
-                    path_truncated: args.truncated,
-                    execveat_dirfd: None,
-                })?;
                 continuation.continue_now()?;
                 let Some(process) = process else {
                     return Ok(Vec::new());
@@ -272,6 +344,10 @@ impl ProcessSeccompService {
                 }])
             }
             ProcessSeccompSyscall::Execveat => {
+                if !observation_requested {
+                    continuation.continue_now()?;
+                    return Ok(Vec::new());
+                }
                 let observed_at = SystemTime::now();
                 let path = read_execveat_path(
                     notification.pid,
@@ -288,6 +364,7 @@ impl ProcessSeccompService {
                     notification.data.args[2],
                     self.max_args,
                     self.max_arg_bytes,
+                    self.max_total_arg_bytes,
                 )?;
                 let process = identity(
                     trace_runtime,
@@ -296,21 +373,6 @@ impl ProcessSeccompService {
                     notification.pid,
                 )?;
                 let parent_pid = parent_pid(notification.pid)?;
-                let trace_id =
-                    trace_for_host_pid(trace_runtime, process_registry, notification.pid).or_else(
-                        || {
-                            parent_pid.and_then(|pid| {
-                                trace_for_host_pid(trace_runtime, process_registry, pid)
-                            })
-                        },
-                    );
-                before_exec_continue(&ProcessSeccompExecCandidate {
-                    pid: notification.pid,
-                    trace_id,
-                    path: args.path.clone(),
-                    path_truncated: args.truncated,
-                    execveat_dirfd: Some(notification.data.args[0]),
-                })?;
                 continuation.continue_now()?;
                 let Some(process) = process else {
                     return Ok(Vec::new());
@@ -331,6 +393,10 @@ impl ProcessSeccompService {
             | ProcessSeccompSyscall::Vfork
             | ProcessSeccompSyscall::Clone
             | ProcessSeccompSyscall::Clone3 => {
+                if !observation_requested {
+                    continuation.continue_now()?;
+                    return Ok(Vec::new());
+                }
                 let observed_at = SystemTime::now();
                 let flags = clone_flags(notification, syscall)?;
                 if is_thread_clone(flags) {

@@ -174,6 +174,13 @@ pub(crate) fn run_launch(
     } else {
         None
     };
+    if sync_launch
+        .as_ref()
+        .is_some_and(SyncLaunch::has_direct_probe_plans)
+        && !permission_reply.selected_host_ebpf
+    {
+        return Err("static TLS plans require Host eBPF for launch-time attachment".to_string());
+    }
     timing.mark_detail("sync_launch", format_args!("enabled={tls_sync_enabled}"));
     let command = sync_launch
         .as_ref()

@@ -10,7 +10,7 @@ pub(super) struct SeccompNotifyDocument {
 impl Default for SeccompNotifyDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             reserved_listener_fd: 253,
         }
     }
@@ -32,6 +32,7 @@ pub(super) struct ProcessSeccompDocument {
     pub syscalls: Vec<String>,
     pub max_args: u32,
     pub max_arg_bytes: u32,
+    pub max_total_arg_bytes: u32,
     /// Bounds process observations and semantic exec intents awaiting completion.
     pub pending_max_entries: u32,
 }
@@ -39,13 +40,14 @@ pub(super) struct ProcessSeccompDocument {
 impl Default for ProcessSeccompDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
-            syscalls: ["execve", "execveat", "fork", "vfork", "clone", "clone3"]
+            enabled: false,
+            syscalls: ["execve", "execveat"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
             max_args: 128,
-            max_arg_bytes: 8192,
+            max_arg_bytes: 4095,
+            max_total_arg_bytes: 4095,
             pending_max_entries: 8192,
         }
     }
@@ -60,6 +62,10 @@ impl ProcessSeccompDocument {
             max_arg_bytes: require_positive_u32(
                 "process_seccomp.max_arg_bytes",
                 self.max_arg_bytes,
+            )?,
+            max_total_arg_bytes: require_positive_u32(
+                "process_seccomp.max_total_arg_bytes",
+                self.max_total_arg_bytes,
             )?,
             pending_max_entries: require_positive_u32(
                 "process_seccomp.pending_max_entries",

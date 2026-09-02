@@ -333,7 +333,8 @@ impl FileSummaryProjector {
             deferred_events,
             released_detailed_events: Vec::new(),
             consumed_by_summary: true,
-            retain_event: should_retain_event(self.config.bulk_read.raw_event_retention, event),
+            retain_event: !activates_now
+                && should_retain_event(self.config.bulk_read.raw_event_retention, event),
         }
     }
 }

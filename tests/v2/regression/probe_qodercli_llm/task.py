@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import secrets
 import shutil
 from pathlib import Path
 
@@ -15,7 +14,6 @@ class ProbeQoderCliLLMTask:
     def __init__(self, config: ProbeQoderCliLLMConfig, runtime: ActrailRuntime):
         self._config = config
         self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(5)}"
         self._qodercli = self._resolve_qodercli()
 
     def run(self) -> CommandResult:
@@ -41,7 +39,7 @@ class ProbeQoderCliLLMTask:
             self._qodercli,
             "--no-session-persistence",
             "-p",
-            f'Reply with exactly "{self.marker}" and nothing else. Do not use tools.',
+            "请简短回复，确认已经收到这条测试消息。",
             "--tools",
             "",
         ]

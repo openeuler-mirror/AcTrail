@@ -33,6 +33,7 @@ pub trait AttachService {
     fn resolve_launch_tls_plan(
         &mut self,
         command: &control_contract::command::ResolveLaunchTlsPlanCommand,
+        path_view_pid: u32,
     ) -> Result<LaunchTlsPlanReply, ControlError>;
     fn attach_existing(
         &mut self,
@@ -309,7 +310,8 @@ where
             _ => None,
         };
 
-        let mut reply = self.handle_with_launch_pidfd(command, launch_pidfd)?;
+        let mut reply =
+            self.dispatch_with_launch_pidfd(command, launch_pidfd, peer.credentials.pid)?;
         if let (
             Some((peer_process, track_add_request_id)),
             ControlReply::LaunchPermissions(permissions),
@@ -348,13 +350,27 @@ where
     }
 
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
-        self.handle_with_launch_pidfd(command, None)
+        self.dispatch_with_launch_pidfd(command, None, std::process::id())
     }
 
     fn handle_with_launch_pidfd(
         &mut self,
         command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> Result<ControlReply, ControlError> {
+        self.dispatch_with_launch_pidfd(command, launch_pidfd, std::process::id())
+    }
+}
+
+impl<A> DaemonServiceHost<A>
+where
+    A: AttachService,
+{
+    fn dispatch_with_launch_pidfd(
+        &mut self,
+        command: ControlCommand,
         mut launch_pidfd: Option<OwnedFd>,
+        path_view_pid: u32,
     ) -> Result<ControlReply, ControlError> {
         if launch_pidfd.is_some()
             && !matches!(
@@ -381,7 +397,7 @@ where
             ControlCommand::ResolveLaunchTlsPlan(command) => self
                 .wiring
                 .attach_service
-                .resolve_launch_tls_plan(&command)
+                .resolve_launch_tls_plan(&command, path_view_pid)
                 .map(ControlReply::LaunchTlsPlan),
             ControlCommand::TrackAdd(command) => {
                 let active_trace_count = self

@@ -39,6 +39,11 @@ from image import ContainerImage  # noqa: E402
 from request import ContainerRequest  # noqa: E402
 
 
+EVENT_COLLECTOR_MASK = 0x0F
+EVENT_COLLECTOR_EBPF = 1
+EVENT_COLLECTOR_PROCESS_SECCOMP = 2
+
+
 class MatrixCaseDefinition(Protocol):
     suffix: str
     expected_profile: str
@@ -293,24 +298,30 @@ class ContainerAutoScenario:
                 ebpf_events = int(
                     connection.execute(
                         "SELECT COUNT(*) FROM events "
-                        "WHERE trace_id = ? AND collector = 'ebpf'",
-                        (trace_id,),
+                        "WHERE trace_id = ? AND (event_meta & ?) = ?",
+                        (trace_id, EVENT_COLLECTOR_MASK, EVENT_COLLECTOR_EBPF),
                     ).fetchone()[0]
                 )
                 notify_events = int(
                     connection.execute(
                         "SELECT COUNT(*) FROM events "
-                        "WHERE trace_id = ? AND collector = 'process-seccomp'",
-                        (trace_id,),
+                        "WHERE trace_id = ? AND (event_meta & ?) = ?",
+                        (
+                            trace_id,
+                            EVENT_COLLECTOR_MASK,
+                            EVENT_COLLECTOR_PROCESS_SECCOMP,
+                        ),
                     ).fetchone()[0]
                 )
             last = (profile, payloads, ebpf_events, notify_events)
             host_ok = ebpf_events > 0 if case.expected_host == "enabled" else ebpf_events == 0
-            notify_ok = (
-                notify_events > 0
-                if case.expected_notify == "enabled"
-                else notify_events == 0
-            )
+            # Availability and selection are asserted from the launch output
+            # and trace profile.  A selected seccomp-notify provider need not
+            # emit process-seccomp events when the workload has no synchronous
+            # governance or pre-exec observation requirement; issue 01 moves
+            # those pure-observation fields to eBPF.  Disabled mode must still
+            # prove that no process-seccomp event escaped.
+            notify_ok = case.expected_notify == "enabled" or notify_events == 0
             if profile == case.expected_profile and payloads > 0 and host_ok and notify_ok:
                 return
             time.sleep(0.2)

@@ -11,6 +11,16 @@ CREATE TABLE IF NOT EXISTS process_id_sequence (
     next_process_id INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS event_id_high_water (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    last_event_id INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS event_id_claim_words (
+    word_id INTEGER PRIMARY KEY,
+    claimed_bits INTEGER NOT NULL CHECK (claimed_bits >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS processes (
     process_id INTEGER PRIMARY KEY,
     host_pid INTEGER,
@@ -30,6 +40,7 @@ CREATE TABLE IF NOT EXISTS process_namespace_aliases (
 );
 
 INSERT OR IGNORE INTO process_id_sequence (singleton, next_process_id) VALUES (1, 1);
+INSERT OR IGNORE INTO event_id_high_water (singleton, last_event_id) VALUES (1, 0);
 
 CREATE TABLE IF NOT EXISTS traces (
     trace_id INTEGER PRIMARY KEY,
@@ -76,26 +87,67 @@ CREATE TABLE IF NOT EXISTS events (
     trace_id INTEGER NOT NULL,
     observed_at INTEGER NOT NULL,
     process_id INTEGER NOT NULL,
-    collector TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    bootstrap_observed INTEGER NOT NULL,
-    metadata_partial INTEGER NOT NULL,
-    policy_modified INTEGER NOT NULL,
-    payload_variant TEXT NOT NULL,
-    payload BLOB NOT NULL,
-    payload_code INTEGER NOT NULL,
-    payload_blocks TEXT NOT NULL,
-    policy_verdict TEXT NOT NULL,
-    policy_note TEXT,
-    policy_redactions TEXT NOT NULL,
-    policy_truncations TEXT NOT NULL
+    event_meta INTEGER NOT NULL,
+    kind_code INTEGER NOT NULL,
+    payload_path_id INTEGER,
+    payload_id INTEGER,
+    payload_inline BLOB,
+    CHECK ((payload_id IS NOT NULL) != (payload_inline IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS event_payload_blocks (
+    event_id INTEGER NOT NULL,
+    block_order INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    encoded_bytes BLOB NOT NULL,
+    PRIMARY KEY (event_id, block_order)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS event_payload_dictionary (
+    payload_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    payload BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS event_record_blocks (
     block_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
+    first_event_id INTEGER NOT NULL UNIQUE,
+    max_event_id INTEGER NOT NULL,
+    min_observed_at INTEGER NOT NULL,
+    max_observed_at INTEGER NOT NULL,
+    event_count INTEGER NOT NULL CHECK (event_count > 0),
+    kind_counts BLOB NOT NULL,
+    codec_version INTEGER NOT NULL,
+    uncompressed_bytes INTEGER NOT NULL,
     encoded_bytes BLOB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_record_blocks_trace_time
+ON event_record_blocks (trace_id, min_observed_at, first_event_id);
+
+CREATE TABLE IF NOT EXISTS event_record_pending (
+    event_id INTEGER PRIMARY KEY,
+    trace_id INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    kind_code INTEGER NOT NULL,
+    encoded_frame BLOB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_record_pending_trace
+ON event_record_pending (trace_id, event_id);
+
+CREATE TABLE IF NOT EXISTS event_record_pending_state (
+    trace_id INTEGER PRIMARY KEY,
+    event_count INTEGER NOT NULL CHECK (event_count > 0),
+    framed_bytes INTEGER NOT NULL CHECK (framed_bytes > 0)
+);
+
+CREATE TABLE IF NOT EXISTS event_policy_details (
+    event_id INTEGER PRIMARY KEY,
+    note TEXT,
+    redactions TEXT NOT NULL,
+    truncations TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS payload_segments (
@@ -103,9 +155,14 @@ CREATE TABLE IF NOT EXISTS payload_segments (
     trace_id INTEGER NOT NULL,
     observed_at INTEGER NOT NULL,
     process_id INTEGER NOT NULL,
-    source_boundary TEXT NOT NULL,
-    content_state TEXT NOT NULL,
-    direction TEXT NOT NULL,
+    segment_meta INTEGER NOT NULL
+        CONSTRAINT payload_segment_meta_valid CHECK (
+            typeof(segment_meta) = 'integer'
+            AND segment_meta BETWEEN 0 AND 1023
+            AND (segment_meta & 12) != 12
+            AND (segment_meta & 192) != 192
+            AND (segment_meta & 768) != 768
+        ),
     stream_key TEXT NOT NULL,
     sequence INTEGER NOT NULL,
     original_size INTEGER NOT NULL,
@@ -114,9 +171,6 @@ CREATE TABLE IF NOT EXISTS payload_segments (
     operation_offset INTEGER NOT NULL DEFAULT 0,
     operation_original_size INTEGER NOT NULL DEFAULT 0,
     operation_captured_size INTEGER NOT NULL DEFAULT 0,
-    operation_completion_state TEXT NOT NULL DEFAULT 'unknown',
-    truncation_state TEXT NOT NULL,
-    redaction_state TEXT NOT NULL,
     library TEXT NOT NULL,
     symbol TEXT NOT NULL,
     protocol_hint TEXT,
@@ -126,9 +180,7 @@ CREATE TABLE IF NOT EXISTS payload_segments (
 CREATE TABLE IF NOT EXISTS semantic_action_ids (
     action_key INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
-    action_id TEXT NOT NULL UNIQUE,
-    action_id_hash BLOB NOT NULL,
-    UNIQUE (trace_id, action_id_hash, action_id)
+    action_id TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS agent_identities (
@@ -142,23 +194,17 @@ CREATE TABLE IF NOT EXISTS semantic_actions (
     action_key INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
     kind_code INTEGER NOT NULL,
-    title TEXT NOT NULL,
+    title TEXT,
+    file_path_id INTEGER,
     start_time INTEGER NOT NULL,
     end_time INTEGER,
     process_id INTEGER NOT NULL,
     status_code INTEGER NOT NULL,
     completeness_code INTEGER NOT NULL,
     action_valid_code INTEGER NOT NULL DEFAULT 1,
-    process_parent_conflict INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS semantic_action_evidence (
-    action_key INTEGER NOT NULL,
-    evidence_order INTEGER NOT NULL,
-    kind_code INTEGER NOT NULL,
-    evidence_id INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    PRIMARY KEY (action_key, evidence_order)
+    process_parent_conflict INTEGER NOT NULL DEFAULT 0,
+    evidence_blob BLOB NOT NULL,
+    CHECK (title IS NOT NULL OR file_path_id IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_links (
@@ -166,22 +212,10 @@ CREATE TABLE IF NOT EXISTS semantic_action_links (
     parent_action_key INTEGER NOT NULL,
     child_action_key INTEGER NOT NULL,
     role_code INTEGER NOT NULL,
-    confidence_code INTEGER NOT NULL,
+    origin_code INTEGER NOT NULL,
     valid INTEGER NOT NULL DEFAULT 1,
-    link_valid_code INTEGER NOT NULL DEFAULT 1,
+    evidence_blob BLOB NOT NULL,
     PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code)
-);
-
-CREATE TABLE IF NOT EXISTS semantic_action_link_evidence (
-    trace_id INTEGER NOT NULL,
-    parent_action_key INTEGER NOT NULL,
-    child_action_key INTEGER NOT NULL,
-    role_code INTEGER NOT NULL,
-    evidence_order INTEGER NOT NULL,
-    kind_code INTEGER NOT NULL,
-    evidence_id INTEGER NOT NULL,
-    evidence_role TEXT NOT NULL,
-    PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code, evidence_order)
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_cold_fields (
@@ -209,16 +243,15 @@ CREATE TABLE IF NOT EXISTS file_observation_paths (
     trace_id INTEGER NOT NULL,
     action_key INTEGER NOT NULL,
     path_order INTEGER NOT NULL,
-    path TEXT NOT NULL,
-    PRIMARY KEY (trace_id, action_key, path)
+    path_id INTEGER NOT NULL,
+    PRIMARY KEY (trace_id, action_key, path_id)
 );
 
 CREATE TABLE IF NOT EXISTS file_paths (
     path_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
-    path_hash TEXT NOT NULL,
     path_text TEXT NOT NULL,
-    UNIQUE (trace_id, path_hash, path_text)
+    UNIQUE (trace_id, path_text)
 );
 
 CREATE TABLE IF NOT EXISTS file_path_sets (
@@ -362,10 +395,8 @@ CREATE TABLE IF NOT EXISTS tombstones (
     cleanup_reason TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_memberships_trace_parent ON memberships (
-    trace_id,
-    inherited_from_process_id
-);
+CREATE INDEX IF NOT EXISTS idx_event_payload_dictionary_trace
+ON event_payload_dictionary (trace_id);
 
 CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_process_kind ON semantic_actions (
     trace_id,
@@ -373,9 +404,7 @@ CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_process_kind ON semantic_a
     kind_code
 );
 
-CREATE INDEX IF NOT EXISTS idx_processes_host_pid ON processes (host_pid);
-CREATE INDEX IF NOT EXISTS idx_process_alias_namespace_pid
-    ON process_namespace_aliases (pid_namespace, namespace_pid);
+CREATE INDEX IF NOT EXISTS idx_semantic_action_ids_trace ON semantic_action_ids (trace_id);
 
 CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child_role ON semantic_action_links (
     trace_id,
@@ -391,32 +420,6 @@ CREATE INDEX IF NOT EXISTS idx_file_observation_paths_action_order ON file_obser
     trace_id,
     action_key,
     path_order
-);
-
-CREATE INDEX IF NOT EXISTS idx_file_paths_trace_text ON file_paths (
-    trace_id,
-    path_text
-);
-
-CREATE INDEX IF NOT EXISTS idx_file_path_set_refs_path_set ON file_path_set_chunk_refs (
-    trace_id,
-    path_set_id,
-    chunk_order
-);
-
-CREATE INDEX IF NOT EXISTS idx_file_path_set_action_refs_path_set ON file_path_set_action_refs (
-    trace_id,
-    path_set_id
-);
-
-CREATE INDEX IF NOT EXISTS idx_mcp_jsonrpc_action_refs_message ON mcp_jsonrpc_action_refs (
-    trace_id,
-    message_id
-);
-
-CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_parent ON llm_request_lineage (
-    trace_id,
-    parent_action_key
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_fork ON llm_request_lineage (
@@ -448,9 +451,16 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_kind_start ON semantic_actions(trace_id, kind_code, start_time, action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_key);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_parent ON semantic_action_links(trace_id, valid, parent_action_key);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_child ON semantic_action_links(trace_id, valid, child_action_key);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role_code);",
+         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role_code);
+         DROP INDEX IF EXISTS idx_memberships_trace_parent;
+         DROP INDEX IF EXISTS idx_processes_host_pid;
+         DROP INDEX IF EXISTS idx_process_alias_namespace_pid;
+         DROP INDEX IF EXISTS idx_file_path_set_refs_path_set;
+         DROP INDEX IF EXISTS idx_file_path_set_action_refs_path_set;
+         DROP INDEX IF EXISTS idx_mcp_jsonrpc_action_refs_message;
+         DROP INDEX IF EXISTS idx_llm_request_lineage_parent;
+         DROP INDEX IF EXISTS idx_semantic_action_links_trace_valid_parent;
+         DROP INDEX IF EXISTS idx_semantic_action_links_trace_valid_child;",
     )
 }
 
@@ -492,6 +502,9 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_integer_column(connection, "llm_pipeline_diagnostics", "code")?;
     require_integer_column(connection, "llm_pipeline_diagnostics", "severity")?;
     require_column(connection, "processes", "process_id")?;
+    require_column(connection, "event_id_high_water", "last_event_id")?;
+    require_column(connection, "event_id_claim_words", "word_id")?;
+    require_column(connection, "event_id_claim_words", "claimed_bits")?;
     require_column(connection, "process_namespace_aliases", "process_id")?;
     require_column(connection, "traces", "alert_token")?;
     require_column(connection, "traces", "otel_trace_id")?;
@@ -500,42 +513,66 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "traces", "root_working_directory")?;
     require_column(connection, "memberships", "process_id")?;
     require_column(connection, "events", "process_id")?;
-    require_column(connection, "event_payload_blocks", "trace_id")?;
+    require_integer_column(connection, "events", "event_meta")?;
+    require_integer_column(connection, "events", "kind_code")?;
+    require_column(connection, "events", "payload_path_id")?;
+    require_column(connection, "events", "payload_id")?;
+    require_column(connection, "events", "payload_inline")?;
+    require_column(connection, "event_payload_blocks", "event_id")?;
+    require_integer_column(connection, "event_payload_blocks", "block_order")?;
     require_column(connection, "event_payload_blocks", "kind")?;
     require_column(connection, "event_payload_blocks", "encoded_bytes")?;
+    require_column(connection, "event_payload_dictionary", "payload_id")?;
+    require_column(connection, "event_payload_dictionary", "trace_id")?;
+    require_column(connection, "event_payload_dictionary", "payload")?;
+    require_column(connection, "event_record_blocks", "trace_id")?;
+    require_column(connection, "event_record_blocks", "first_event_id")?;
+    require_column(connection, "event_record_blocks", "max_event_id")?;
+    require_column(connection, "event_record_blocks", "min_observed_at")?;
+    require_column(connection, "event_record_blocks", "max_observed_at")?;
+    require_column(connection, "event_record_blocks", "event_count")?;
+    require_column(connection, "event_record_blocks", "kind_counts")?;
+    require_column(connection, "event_record_blocks", "codec_version")?;
+    require_column(connection, "event_record_blocks", "uncompressed_bytes")?;
+    require_column(connection, "event_record_blocks", "encoded_bytes")?;
+    require_column(connection, "event_record_pending", "event_id")?;
+    require_column(connection, "event_record_pending", "trace_id")?;
+    require_column(connection, "event_record_pending", "observed_at")?;
+    require_column(connection, "event_record_pending", "kind_code")?;
+    require_column(connection, "event_record_pending", "encoded_frame")?;
+    require_column(connection, "event_record_pending_state", "trace_id")?;
+    require_column(connection, "event_record_pending_state", "event_count")?;
+    require_column(connection, "event_record_pending_state", "framed_bytes")?;
+    require_column(connection, "event_policy_details", "event_id")?;
+    require_column(connection, "event_policy_details", "note")?;
+    require_column(connection, "event_policy_details", "redactions")?;
+    require_column(connection, "event_policy_details", "truncations")?;
     require_column(connection, "payload_segments", "process_id")?;
+    require_integer_column(connection, "payload_segments", "segment_meta")?;
     require_column(connection, "traces", "exited_at")?;
     require_column(connection, "semantic_action_ids", "action_key")?;
     require_column(connection, "semantic_action_ids", "action_id")?;
-    require_column(connection, "semantic_action_ids", "action_id_hash")?;
     require_column(connection, "semantic_actions", "action_key")?;
     require_column(connection, "semantic_actions", "kind_code")?;
+    require_column(connection, "semantic_actions", "title")?;
+    require_column(connection, "semantic_actions", "file_path_id")?;
     require_column(connection, "semantic_actions", "status_code")?;
     require_column(connection, "semantic_actions", "completeness_code")?;
     require_column(connection, "semantic_actions", "action_valid_code")?;
     require_column(connection, "semantic_actions", "process_parent_conflict")?;
+    require_column(connection, "semantic_actions", "evidence_blob")?;
     require_column(connection, "agent_identities", "trace_id")?;
     require_column(connection, "agent_identities", "process_id")?;
     require_column(connection, "agent_identities", "identity_action_key")?;
-    require_column(connection, "semantic_action_evidence", "action_key")?;
-    require_column(connection, "semantic_action_evidence", "kind_code")?;
     require_column(connection, "semantic_action_links", "parent_action_key")?;
     require_column(connection, "semantic_action_links", "child_action_key")?;
     require_column(connection, "semantic_action_links", "role_code")?;
-    require_column(connection, "semantic_action_links", "confidence_code")?;
-    require_column(connection, "semantic_action_links", "link_valid_code")?;
-    require_column(
-        connection,
-        "semantic_action_link_evidence",
-        "parent_action_key",
-    )?;
-    require_column(
-        connection,
-        "semantic_action_link_evidence",
-        "child_action_key",
-    )?;
-    require_column(connection, "semantic_action_link_evidence", "role_code")?;
-    require_column(connection, "semantic_action_link_evidence", "kind_code")?;
+    require_column(connection, "semantic_action_links", "origin_code")?;
+    require_column(connection, "semantic_action_links", "valid")?;
+    require_column(connection, "semantic_action_links", "evidence_blob")?;
+    require_column(connection, "file_observation_paths", "path_id")?;
+    require_column(connection, "file_paths", "trace_id")?;
+    require_column(connection, "file_paths", "path_text")?;
     require_column(connection, "file_observation_paths", "action_key")?;
     require_column(connection, "file_path_sets", "path_set_hash")?;
     require_column(connection, "file_path_set_action_refs", "action_key")?;

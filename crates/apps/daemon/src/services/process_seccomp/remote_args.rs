@@ -39,8 +39,16 @@ pub(super) fn read_execve_args(
     argv_ptr: u64,
     max_args: u32,
     max_arg_bytes: u32,
+    max_total_arg_bytes: u32,
 ) -> Result<ExecArgs, ControlError> {
-    read_exec_args(pid, path, argv_ptr, max_args, max_arg_bytes)
+    read_exec_args(
+        pid,
+        path,
+        argv_ptr,
+        max_args,
+        max_arg_bytes,
+        max_total_arg_bytes,
+    )
 }
 
 pub(super) fn read_execveat_args(
@@ -49,8 +57,16 @@ pub(super) fn read_execveat_args(
     argv_ptr: u64,
     max_args: u32,
     max_arg_bytes: u32,
+    max_total_arg_bytes: u32,
 ) -> Result<ExecArgs, ControlError> {
-    read_exec_args(pid, path, argv_ptr, max_args, max_arg_bytes)
+    read_exec_args(
+        pid,
+        path,
+        argv_ptr,
+        max_args,
+        max_arg_bytes,
+        max_total_arg_bytes,
+    )
 }
 
 fn read_exec_path(pid: u32, path_ptr: u64, max_arg_bytes: u32) -> Result<ExecPath, ControlError> {
@@ -65,9 +81,17 @@ fn read_exec_args(
     argv_ptr: u64,
     max_args: u32,
     max_arg_bytes: u32,
+    max_total_arg_bytes: u32,
 ) -> Result<ExecArgs, ControlError> {
     let mut truncated = path.truncated;
-    let argv = read_argv(pid, argv_ptr, max_args, max_arg_bytes, &mut truncated)?;
+    let argv = read_argv(
+        pid,
+        argv_ptr,
+        max_args,
+        max_arg_bytes,
+        max_total_arg_bytes,
+        &mut truncated,
+    )?;
     Ok(ExecArgs {
         path: path.path,
         argv,
@@ -80,6 +104,7 @@ fn read_argv(
     argv_ptr: u64,
     max_args: u32,
     max_arg_bytes: u32,
+    max_total_arg_bytes: u32,
     truncated: &mut bool,
 ) -> Result<Vec<String>, ControlError> {
     if argv_ptr == 0 {
@@ -103,12 +128,24 @@ fn read_argv(
         *truncated = true;
     }
     let mut argv = Vec::new();
+    let mut remaining_total = usize::try_from(max_total_arg_bytes).map_err(|error| {
+        ControlError::new(
+            "process_seccomp_args",
+            format!("max total arg bytes overflow: {error}"),
+        )
+    })?;
     for pointer_bytes in pointer_table.chunks_exact(pointer_size) {
         let pointer = usize::from_ne_bytes(pointer_bytes.try_into().expect("pointer width")) as u64;
         if pointer == 0 {
             return Ok(argv);
         }
-        if let Some(arg) = read_c_string(pid, pointer, max_arg_bytes, truncated)? {
+        if remaining_total == 0 {
+            *truncated = true;
+            return Ok(argv);
+        }
+        let read_limit = max_arg_bytes.min(u32::try_from(remaining_total).unwrap_or(u32::MAX));
+        if let Some(arg) = read_c_string(pid, pointer, read_limit, truncated)? {
+            remaining_total = remaining_total.saturating_sub(arg.len());
             argv.push(arg);
         }
     }

@@ -28,9 +28,9 @@ evidence tracker 维护 decoded body offset 到 payload segment 的紧凑映射�
 
 provider parser 输出与厂商无关的增量状态。projection 层再结合 HTTP request/response identity、stream id 和已有 correlation state，生成 `llm.request`、`llm.response`、`llm.call` 及其 link。保留策略分别约束 assembly、stream classifier 和 projection state；这些上限来自 `semantic_retention.l0_llm_call` 子配置。
 
-## 正常完成与异常收口
+## 正常完成与有限采集收口
 
-provider finish reason 与完整 HTTP boundary 共同驱动正常 terminal projection。异常 partial 才进入 `ResponseFinalizer`，其原因包括 peer close、trace close、confirmed gap、operation incomplete、protocol decode failure、HTTP/2 reset、buffer bytes exceeded 和 segment ranges exceeded。
+provider finish reason 与完整 HTTP boundary 共同驱动正常 terminal projection。未完整物化的 action 进入 `ResponseFinalizer`：性能模式实际触发前缀限采时收口为 `success/capture_limited`；peer close、trace close、confirmed gap、operation incomplete、protocol decode failure、HTTP/2 reset、buffer bytes exceeded 和 segment ranges exceeded 等异常收口为 `error/partial`。
 
 已确认且包含有效语义的异常 response 会生成 error/partial action；未确认或没有有效内容的 stream 只产生紧凑诊断。trace close 会为 partial action 附加对应属性。finalizer 释放当前 stream 状态，不反向终止 payload ingress。
 

@@ -65,6 +65,7 @@ class ActrailRuntime:
         hand_observation_listen_addr: str | None = None,
         sandbox_alerts_database: Path | None = None,
         alert_forwarding: AlertForwardingRuntimePaths | None = None,
+        agent_invocation_commands: list[Path] | None = None,
         clean_control_state: bool = True,
     ) -> "ActrailRuntime":
         work_dir = work_dir.resolve()
@@ -80,6 +81,7 @@ class ActrailRuntime:
             hand_observation_listen_addr=hand_observation_listen_addr,
             sandbox_alerts_database=sandbox_alerts_database,
             alert_forwarding=alert_forwarding,
+            agent_invocation_commands=agent_invocation_commands,
         )
         return cls(
             repo,
@@ -212,6 +214,7 @@ class ActrailRuntime:
         hand_observation_listen_addr: str | None = None,
         sandbox_alerts_database: Path | None = None,
         alert_forwarding: AlertForwardingRuntimePaths | None = None,
+        agent_invocation_commands: list[Path] | None = None,
     ) -> None:
         quoted = {
             name: json.dumps(str(work_dir / relative))
@@ -360,6 +363,17 @@ class ActrailRuntime:
                 "max_extras_bytes = 131072\n"
                 "link_thread_stack_bytes = 524288\n"
             )
+        agent_invocation = ""
+        if agent_invocation_commands is not None:
+            agent_invocation = (
+                "\n[agent_invocation]\n"
+                "commands = ["
+                + ", ".join(
+                    json.dumps(str(command.resolve()))
+                    for command in agent_invocation_commands
+                )
+                + "]\n"
+            )
         path.write_text(
             "[control]\n"
             f"socket_path = {quoted['socket']}\n"
@@ -396,6 +410,7 @@ class ActrailRuntime:
             f"drain_timeout_ms = {plugin_alert_drain_timeout_ms}\n"
             + hand_observation
             + sandbox_alerts
-            + alert_forwarding_document,
+            + alert_forwarding_document
+            + agent_invocation,
             encoding="utf-8",
         )

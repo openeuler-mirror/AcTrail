@@ -1,11 +1,9 @@
 //! Policy-record encoding used by the SQLite storage adapter.
 
-use model_core::policy::{PolicyRecord, RedactionRecord, TruncationRecord};
+use model_core::policy::{PolicyRecord, PolicyVerdict, RedactionRecord, TruncationRecord};
 use rusqlite::Error as SqlError;
 
-use crate::records::enums::{
-    decode_policy_verdict, decode_truncation_reason, encode_truncation_reason,
-};
+use crate::records::enums::{decode_truncation_reason, encode_truncation_reason};
 use crate::records::helpers::{escape, unescape};
 
 pub fn encode_policy_record(policy: &PolicyRecord) -> (String, String) {
@@ -33,7 +31,7 @@ pub fn encode_policy_record(policy: &PolicyRecord) -> (String, String) {
 }
 
 pub fn decode_policy_record(
-    verdict: &str,
+    verdict: PolicyVerdict,
     note: Option<String>,
     redactions: &str,
     truncations: &str,
@@ -60,7 +58,7 @@ pub fn decode_policy_record(
         })
         .collect();
     Ok(PolicyRecord {
-        verdict: decode_policy_verdict(verdict)?,
+        verdict,
         redactions,
         truncations,
         note,

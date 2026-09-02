@@ -38,9 +38,19 @@ pub(in crate::llm_pipeline) fn llm_call_from_request_response(
     copy_attr(request, &mut attributes, attrs::payload::STREAM_KEY);
     copy_attr(request, &mut attributes, attrs::payload::OPERATION_ID);
     copy_attr(request, &mut attributes, attrs::http_request::STREAM_ID);
+    copy_attr(
+        request,
+        &mut attributes,
+        attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE,
+    );
     if let Some(response) = response {
         copy_attr(response, &mut attributes, attrs::http_response::STATUS_CODE);
         copy_attr(response, &mut attributes, attrs::http_response::REASON);
+        copy_attr(
+            response,
+            &mut attributes,
+            attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE,
+        );
     }
 
     let mut evidence = request.evidence.clone();
@@ -52,7 +62,7 @@ pub(in crate::llm_pipeline) fn llm_call_from_request_response(
         .unwrap_or(SemanticActionStatus::InProgress);
     let completeness = response
         .map(|action| merge_llm_call_completeness(request.completeness, action.completeness))
-        .unwrap_or(SemanticActionCompleteness::Partial);
+        .unwrap_or(request.completeness);
     let title = attributes
         .get(attrs::llm_call::MODEL)
         .map(|model| format!("LLM call {model}"))
@@ -91,6 +101,15 @@ fn merge_llm_call_completeness(
         (SemanticActionCompleteness::Complete, SemanticActionCompleteness::Complete) => {
             SemanticActionCompleteness::Complete
         }
+        (SemanticActionCompleteness::Partial, _) | (_, SemanticActionCompleteness::Partial) => {
+            SemanticActionCompleteness::Partial
+        }
+        (SemanticActionCompleteness::CaptureLimited, SemanticActionCompleteness::Complete)
+        | (SemanticActionCompleteness::Complete, SemanticActionCompleteness::CaptureLimited)
+        | (
+            SemanticActionCompleteness::CaptureLimited,
+            SemanticActionCompleteness::CaptureLimited,
+        ) => SemanticActionCompleteness::CaptureLimited,
         (SemanticActionCompleteness::Inferred, SemanticActionCompleteness::Inferred) => {
             SemanticActionCompleteness::Inferred
         }

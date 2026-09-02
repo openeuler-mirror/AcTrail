@@ -511,10 +511,14 @@ impl HttpStreamState {
             let request_method = request_method.clone();
             let request_target = request_target.clone();
             let request_stream_id = request_stream_id.clone();
-            let Some(response) = self.responses.pop_front() else {
+            let Some(mut response) = self.responses.pop_front() else {
                 break;
             };
             if response.emitted_unassociated {
+                response.action.attributes.insert(
+                    "http.exchange.reconciled_late".to_string(),
+                    "true".to_string(),
+                );
                 tracing::info!(
                     trace_id = key.trace_id.get(),
                     process_id = key.process.get(),
@@ -525,6 +529,10 @@ impl HttpStreamState {
                     "reconciled HTTP response projected before its request action"
                 );
             }
+            response.action.attributes.insert(
+                attrs::http_response::REQUEST_ACTION_ID.to_string(),
+                request_action_id.clone(),
+            );
             let matched_request = MatchedHttpRequest {
                 action_id: request_action_id,
                 evidence: request_evidence,
@@ -705,7 +713,7 @@ mod tests {
         let key = HttpExchangeKey::from_http_message(&orphan).unwrap();
         tracker.observe_http_message(orphan);
         let state = tracker.streams.get_mut(&key).unwrap();
-        state.responses.front_mut().unwrap().received_at = UNIX_EPOCH;
+        state.responses.front_mut().unwrap().observed_at = UNIX_EPOCH;
         state.expire_responses(
             &key,
             UNIX_EPOCH + Duration::from_secs(10),

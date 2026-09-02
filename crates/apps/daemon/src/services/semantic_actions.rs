@@ -7,11 +7,12 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
-use model_core::process::ProcessRecord;
+use model_core::process::{ProcessIdentity, ProcessRecord};
 use model_core::trace::TraceRecord;
 use recording_runtime::{
     RecordingError, RecordingWriter, SemanticActionBatch, TraceRecordLookup, TraceStateRecord,
 };
+use semantic_action::SemanticActionKind;
 use semantic_action::SemanticActionLink;
 use semantic_action_runtime::derive_lineage_links;
 use trace_runtime::registry::TraceRuntime;
@@ -20,6 +21,97 @@ use crate::services::attach::StorageAttachService;
 use crate::services::live::next_diagnostic_id_from_seed;
 
 impl StorageAttachService {
+    pub(super) fn recognized_agent_processes(
+        batch: &SemanticActionBatch,
+    ) -> Vec<(TraceId, ProcessIdentity)> {
+        batch
+            .actions()
+            .iter()
+            .filter(|action| action.kind == SemanticActionKind::AgentIdentity)
+            .map(|action| (action.trace_id, action.process))
+            .collect()
+    }
+
+    pub(super) fn apply_agent_observation_depths(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        agents: Vec<(TraceId, ProcessIdentity)>,
+    ) {
+        for (trace_id, process) in agents {
+            let Some(depth) = trace_runtime
+                .get_trace(trace_id)
+                .map(|entry| entry.profile_snapshot.agent_descendant_observation_depth)
+            else {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    "Agent observation depth update skipped because trace state is missing"
+                );
+                continue;
+            };
+            if depth == -1 {
+                continue;
+            }
+            let Some(host) = self
+                .process_registry
+                .record(process)
+                .and_then(|record| record.host.as_ref())
+            else {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    process_id = process.get(),
+                    "Agent observation depth update skipped because observer TGID is missing"
+                );
+                continue;
+            };
+            let observer_tgid = host.pid;
+            let expected_start_boottime_ns = host.start_boottime_ns;
+            let expected_start_time_ticks = host.start_time_ticks;
+            if let Err(error) = self.collector.set_agent_descendant_observation_depth(
+                trace_id,
+                observer_tgid,
+                expected_start_boottime_ns,
+                expected_start_time_ticks,
+                depth,
+            ) {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    process_id = process.get(),
+                    observer_tgid,
+                    stage = %error.stage,
+                    message = %error.message,
+                    "Agent observation depth update failed locally"
+                );
+            }
+        }
+    }
+
+    pub(super) fn persisted_agent_processes_after_failure(
+        &self,
+        agents: Vec<(TraceId, ProcessIdentity)>,
+    ) -> Vec<(TraceId, ProcessIdentity)> {
+        agents
+            .into_iter()
+            .filter(
+                |(trace_id, process)| match self.storage.list_semantic_actions(*trace_id) {
+                    Ok(actions) => actions.iter().any(|action| {
+                        action.kind == SemanticActionKind::AgentIdentity
+                            && action.process == *process
+                    }),
+                    Err(error) => {
+                        tracing::warn!(
+                            trace_id = trace_id.get(),
+                            process_id = process.get(),
+                            stage = %error.stage,
+                            message = %error.message,
+                            "Agent observation depth persistence check failed locally"
+                        );
+                        false
+                    }
+                },
+            )
+            .collect()
+    }
+
     pub(super) fn write_semantic_action_batch(
         &mut self,
         batch: SemanticActionBatch,

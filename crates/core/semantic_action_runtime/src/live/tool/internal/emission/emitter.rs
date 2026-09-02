@@ -6,7 +6,7 @@ use model_core::diagnostics::{LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSe
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    LlmRequestLineageWrite, SemanticAction, SemanticActionLinkConfidence, SemanticActionLinkRole,
+    LlmRequestLineageWrite, SemanticAction, SemanticActionLinkOrigin, SemanticActionLinkRole,
 };
 
 use crate::live::tool::contract::ToolProjectionOutput;
@@ -75,7 +75,7 @@ impl ToolSemanticEmitter {
             response,
             action,
             SemanticActionLinkRole::LlmResponseToolCall,
-            SemanticActionLinkConfidence::Observed,
+            SemanticActionLinkOrigin::Observed,
         ));
     }
 
@@ -94,7 +94,7 @@ impl ToolSemanticEmitter {
                 tool_call,
                 action,
                 SemanticActionLinkRole::LlmToolCallResult,
-                SemanticActionLinkConfidence::Observed,
+                SemanticActionLinkOrigin::Observed,
             ));
         }
     }
@@ -108,7 +108,7 @@ impl ToolSemanticEmitter {
             tool_call,
             &invocation,
             SemanticActionLinkRole::LlmToolCallAgentInvocation,
-            SemanticActionLinkConfidence::Observed,
+            SemanticActionLinkOrigin::Observed,
         ));
         self.output.actions.push(invocation);
     }
@@ -122,7 +122,7 @@ impl ToolSemanticEmitter {
             invocation,
             request,
             SemanticActionLinkRole::AgentInvocationChildLlmRequest,
-            SemanticActionLinkConfidence::Derived,
+            SemanticActionLinkOrigin::Derived,
         ));
     }
 
@@ -136,7 +136,7 @@ impl ToolSemanticEmitter {
                 &tool_call,
                 &finalized.action,
                 SemanticActionLinkRole::LlmToolCallAgentInvocation,
-                SemanticActionLinkConfidence::Observed,
+                SemanticActionLinkOrigin::Observed,
             ));
         }
     }

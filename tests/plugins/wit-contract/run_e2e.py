@@ -119,6 +119,9 @@ def main() -> int:
         "handle-command: func(request: plugin-command-request) -> result<plugin-command-result, string>",
         "read-config: func(offset: u64, max-bytes: u64)",
         "record config-chunk",
+        "enum llm-action-completeness",
+        "request-completeness: llm-action-completeness",
+        "response-completeness: option<llm-action-completeness>",
     ]:
         require(required, raw)
 
@@ -136,6 +139,10 @@ def main() -> int:
     semantic_action = record_body("semantic-action-record", raw)
     for duplicated in ["summary:"]:
         reject(duplicated, semantic_action)
+
+    llm_exchange = record_body("llm-exchange-record", raw)
+    for removed in ["request-complete:", "response-complete:"]:
+        reject(removed, llm_exchange)
 
     command_draft = record_body("command-policy-rule-draft", raw)
     command_view = record_body("command-policy-rule-view", raw)

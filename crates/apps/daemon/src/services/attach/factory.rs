@@ -149,6 +149,7 @@ impl StorageAttachService {
         let payload_mcp = payload_config.mcp;
         let launch_seccomp_requirements = launch_seccomp_requirements(
             &payload_config,
+            &seccomp_notify_config,
             &process_seccomp_config,
             &network_control_config,
             &command_control_config,
@@ -172,7 +173,12 @@ impl StorageAttachService {
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
         let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
-        let process_seccomp = ProcessSeccompService::new(&process_seccomp_config);
+        let process_seccomp = ProcessSeccompService::new(
+            &process_seccomp_config,
+            seccomp_notify_config.enabled
+                && payload_config.tls.enabled
+                && payload_config.tls.capture_backend.is_sync(),
+        );
         let command_control = CommandControlService::new(&command_control_config)?;
         let network_control = NetworkControlService::new(&network_control_config)?;
         let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
@@ -192,6 +198,7 @@ impl StorageAttachService {
             collector: EbpfCollector::new(
                 ebpf_config,
                 payload_config,
+                process_seccomp_config.clone(),
                 file_observation.bulk_read.fast_path.clone(),
             ),
             host_ebpf_preflight: Default::default(),

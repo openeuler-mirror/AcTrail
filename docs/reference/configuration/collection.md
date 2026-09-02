@@ -19,7 +19,9 @@ flowchart LR
 
 ## `[capture]`
 
-`profile_name` 标识配置意图；`capabilities` 是每条 trace 必须满足的能力契约。当前 full-monitor 模板包含 process lifecycle/exec、file、mmap、network、IPC、stdio、TLS/socket plaintext、HTTP/HTTP2、resource metrics，以及文件和命令治理能力。
+`profile_name` 标识配置意图；`capabilities` 是每条 trace 必须满足的能力契约。当前 full-monitor 模板包含 process lifecycle/exec、file、mmap、network、IPC、stdio、TLS/socket plaintext、HTTP/HTTP2、resource metrics，以及 fanotify 文件治理能力。命令治理和 seccomp-notify 默认关闭，必须显式启用。
+
+`agent_descendant_observation_depth` 控制 Agent 被识别后新建后代的详细采集深度。默认 `-1` 表示不限制；`0` 表示 Agent 保持详细采集、其未来后代仅保留生命周期；正数表示继续详细采集对应层数的未来后代。识别前已经存在的进程保持完整采集，生命周期和治理不受该选项影响。
 
 Capability 保留在 required 列表、但提供该能力的 collector 被关闭时，配置或启动会失败。选择性能力应使用模板支持的 opportunistic/disabled 机制；拼写错误或字段缺失不能作为隐式降级手段。
 
@@ -44,9 +46,14 @@ TLS sync 必须使用 `actrailctl launch`。resolver 无法为实际 binary 生�
 
 ## `[payload.socket]`、`[payload.stdio]` 与 `[payload.mcp]`
 
-Socket 默认使用 `bpf-copy-seccomp-fallback`，并监听 `write`、`writev`、`sendto`、`sendmsg`。超过 inline cap 的 operation 需要 user-read fallback；vectored syscall 的内容也依赖该路径。Stdio 的 stdin/stdout/stderr 分别有 capture 和 storage mode；当前模板会完整保留 stdin、丢弃 stdout body、仅保留 stderr metadata。MCP 配置限制 parse buffer 与候选状态容量。
+本节帮助部署者选择 socket 明文采集后端，并理解两种模式的完整性保证。Socket 监听 `write`、`writev`、`sendto`、`sendmsg`，由 `payload.socket.capture_backend` 选择采集路径：
+
+- `bpf-copy`（默认，性能/证据模式）：仅依赖 eBPF，不要求 seccomp notify 或 `actrailctl launch`。每次 operation 最多抓取前导的一个 `max_segment_bytes` segment（默认 4095 字节；`writev`/`sendmsg` 取第一个非空 iovec 的头部）。超出部分标记为 payload `PolicyLimited`；可信 HTTP 路由仍可生成不伪造正文的 `llm.request`，其 status 为 `success`、completeness 为 `capture_limited`，并可与完整 response 关联用于性能剖析。这是该模式的预期结果，不产生截断错误 diagnostic。
+- `bpf-copy-seccomp-fallback`（完整采集，需显式启用）：要求 `[seccomp_notify] enabled = true`，workload 必须通过能安装 seccomp listener 的路径启动（例如 `actrailctl launch` 或容器 seccomp profile）。该模式下 BPF 只产生 operation 完成元数据（completion/sequence）；需要内容字节的 operation 由 daemon 在 seccomp notify 上读取并切分，完整上限为 `max_operation_bytes`，适合需要完整 HTTP/LLM 消息的观测。读取失败、缺口或不完整 operation 标记为 payload `Truncated` 和 semantic `partial`，属于异常并产生 diagnostic。未启用 seccomp notify 时配置校验会直接失败，不会静默降级。
 
 三类 payload 的 ring buffer、pending state、每 trace retention 与 redaction 均独立。调高其中一层不会自动扩大其他层。
+
+Stdio 的 stdin/stdout/stderr 分别有 capture 和 storage mode；当前模板会完整保留 stdin、丢弃 stdout body、仅保留 stderr metadata。MCP 配置限制 parse buffer 与候选状态容量。
 
 ## `[semantic_retention]`
 
@@ -61,8 +68,8 @@ Socket 默认使用 `bpf-copy-seccomp-fallback`，并监听 `write`、`writev`�
 | `l3_http2_frame` | 保留 frame summary，不保留 DATA content |
 | `l4_payload` | 当前关闭 body retention，只保留 stats |
 
-Capacity exhaustion、明确 truncation 或 partial operation 只隔离受影响的 direction/stream，并应产生 diagnostic；在重新观察到可信 message boundary 前不能把后续字节错误关联为完整请求。
+Capacity exhaustion、明确 `Truncated` 或 partial operation 只隔离受影响的 direction/stream，并产生 diagnostic；在重新观察到可信 message boundary 前不能把后续字节错误关联为完整请求。`PolicyLimited` 同样隔离缺失字节，但作为性能模式的预期边界静默恢复。
 
 ## 治理配置
 
-`[enforcement]`、`[command_control]` 和 `[network_control]` 会改变工作负载行为，不只是采集。当前生成配置中文件和命令控制启用、默认决策为 `allow`，网络控制关闭。部署必须审查规则文件、default/failure decision、gray timeout/fallback、审计和 capability 组合。
+`[enforcement]`、`[command_control]` 和 `[network_control]` 会改变工作负载行为，不只是采集。当前生成配置保留 fanotify 文件控制，但 seccomp syscall 列表为空，命令控制和网络控制关闭。需要同步治理时，部署必须显式启用 seccomp-notify 及对应控制能力，并审查规则文件、default/failure decision、gray timeout/fallback、审计和 capability 组合。

@@ -82,7 +82,8 @@ pub(super) fn project_stream_llm_response_message_actions(
     let first = evidence.first.as_ref()?;
     http.scheme = plaintext_transport_scheme(first.source_boundary);
     let status = llm_response_status_from_progress(evidence, http.complete, &progress);
-    if !force_terminal && status == SemanticActionStatus::InProgress {
+    let terminal = http_response_can_evict(&http) && status != SemanticActionStatus::InProgress;
+    if !force_terminal && !terminal {
         return Some(in_flight_projection(http.encoded_len, message_start));
     }
     let mut body = parse_llm_response_body_incremental(
@@ -114,9 +115,9 @@ pub(super) fn project_stream_llm_response_message_actions(
         actions: vec![response],
         provider_response_ids,
         payload_segments,
-        in_flight: None,
+        in_flight: (!terminal).then_some(InFlightResponse { message_start }),
         encoded_len: http.encoded_len,
-        terminal: http_response_can_evict(&http) && status != SemanticActionStatus::InProgress,
+        terminal,
     })
 }
 

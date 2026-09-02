@@ -57,7 +57,7 @@ class SemanticActionBoundariesTask:
         self._run_exec_edge_cases()
         results["exec-edge-cases"] = TestResult(
             TestStatus.PASSED,
-            "seccomp-only failure, eBPF-only completion, and nonzero "
+            "failed exec observation, eBPF-only completion, and nonzero "
             "exit passed",
         )
         self._test_context.report_progress(
@@ -127,12 +127,12 @@ class SemanticActionBoundariesTask:
             expected_exact,
             {"llm.request"},
         )
-        if counts.get("llm.request", 0) < 2 or mismatches or unexpected:
+        if counts.get("llm.request", 0) < 1 or mismatches or unexpected:
             raise AssertionError(
                 f"semantic action root process {process_id} counts are "
                 f"{dict(sorted(counts.items()))}, expected exact "
                 f"{dict(sorted(expected_exact.items()))}, "
-                "llm.request>=2, and no other kinds"
+                "llm.request>=1, and no other kinds"
             )
         action_id_counts = Counter(
             span.action_id for span in root_spans
@@ -156,10 +156,10 @@ class SemanticActionBoundariesTask:
 
     def _run_exec_edge_cases(self) -> None:
         self._test_context.report_progress(
-            "seccomp_exec",
-            "testing failed seccomp exec",
+            "failed_exec",
+            "testing failed exec observation",
         )
-        self._require_seccomp_only_exec_attempt()
+        self._require_failed_exec_attempt()
         self._test_context.report_progress(
             "ebpf_exec",
             "testing eBPF-only exec completion",
@@ -171,7 +171,7 @@ class SemanticActionBoundariesTask:
         )
         self._require_nonzero_process_exit()
 
-    def _require_seccomp_only_exec_attempt(self) -> None:
+    def _require_failed_exec_attempt(self) -> None:
         target = self._environment.config.work_dir / "non-executable"
         target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         target.chmod(0o644)
@@ -183,7 +183,7 @@ class SemanticActionBoundariesTask:
             launch = self._launch_command(
                 marker,
                 [
-                    "bash",
+                    "/bin/bash",
                     "-c",
                     'printf "%s\\n" "$1"; exec "$2"',
                     "actrail-boundary",
@@ -193,7 +193,7 @@ class SemanticActionBoundariesTask:
             )
             if launch.returncode == 0:
                 raise AssertionError(
-                    "seccomp-only exec unexpectedly succeeded"
+                    "non-executable target unexpectedly succeeded"
                 )
             trace_id = self._observation.require_trace_id(launch)
             self._observation.wait_for_terminal_trace(trace_id)
@@ -201,12 +201,71 @@ class SemanticActionBoundariesTask:
                 marker,
                 {"process.exec", "process.exit"},
             )
-            if any(
-                span.executable == str(target)
+            failed_execs = [
+                span
                 for span in spans
+                if span.kind == "process.exec"
+                and span.executable == str(target)
+            ]
+            if len(failed_execs) != 1:
+                raise AssertionError(
+                    "failed target exec count is "
+                    f"{len(failed_execs)}, expected 1"
+                )
+            failed_exec = failed_execs[0]
+            if failed_exec.status_code != "STATUS_CODE_ERROR":
+                raise AssertionError(
+                    "failed target exec has status "
+                    f"{failed_exec.status_code!r}"
+                )
+            action = self._observation.stored_action(
+                trace_id,
+                failed_exec.action_id,
+            )
+            attributes = action.get("attributes")
+            if not isinstance(attributes, dict):
+                raise AssertionError(
+                    "failed target exec has no attributes"
+                )
+            try:
+                result = int(str(attributes.get("result")))
+            except (TypeError, ValueError) as error:
+                raise AssertionError(
+                    "failed target exec has no numeric result"
+                ) from error
+            if (
+                attributes.get("exec.path") != str(target)
+                or attributes.get("exec.result") != "failed"
+                or result >= 0
             ):
                 raise AssertionError(
-                    "failed seccomp-only exec produced a semantic action"
+                    "failed target exec attributes are inconsistent: "
+                    f"path={attributes.get('exec.path')!r}, "
+                    f"exec.result={attributes.get('exec.result')!r}, "
+                    f"result={result}"
+                )
+            evidence = action.get("evidence")
+            roles = (
+                {
+                    item.get("role")
+                    for item in evidence
+                    if isinstance(item, dict)
+                }
+                if isinstance(evidence, list)
+                else set()
+            )
+            if (
+                "process.exec.completed" not in roles
+                or roles.difference(
+                    {
+                        "process.exec.intent",
+                        "process.exec.completed",
+                    }
+                )
+            ):
+                raise AssertionError(
+                    "failed target exec evidence roles are "
+                    f"{sorted(str(role) for role in roles)}"
                 )
         finally:
             target.unlink(missing_ok=True)
@@ -219,7 +278,7 @@ class SemanticActionBoundariesTask:
         launch = self._launch_command(
             marker,
             [
-                "bash",
+                "/bin/bash",
                 "-c",
                 'printf "%s\\n" "$1"; exec /bin/true',
                 "actrail-boundary",
@@ -278,7 +337,7 @@ class SemanticActionBoundariesTask:
         launch = self._launch_command(
             marker,
             [
-                "bash",
+                "/bin/bash",
                 "-c",
                 'printf "%s\\n" "$1"; exit 17',
                 "actrail-boundary",
@@ -346,7 +405,7 @@ class SemanticActionBoundariesTask:
                 "--name",
                 marker,
                 "--",
-                "bash",
+                "/bin/bash",
                 "-lc",
                 'cat /etc/hostname >/dev/null; exec "$@"',
                 "actrail-semantic-boundaries",
@@ -475,9 +534,25 @@ class SemanticActionBoundariesTask:
                 f"unexpected={dict(sorted(unexpected.items()))}"
             )
         for action in stored_persisted_actions:
-            if action.get("kind") != "process.exec":
-                continue
-            self._require_completed_exec(action)
+            if action.get("kind") == "process.exec":
+                self._require_completed_exec(action)
+            elif action.get("kind") == "llm.request":
+                self._require_llm_request_boundary(action)
+
+    @staticmethod
+    def _require_llm_request_boundary(action: dict[str, Any]) -> None:
+        attributes = action.get("attributes")
+        if not isinstance(attributes, dict):
+            raise AssertionError(
+                f"llm.request {action.get('action_id')} has no attributes"
+            )
+        method = str(attributes.get("http.request.method") or "").upper()
+        path = attributes.get("url.path")
+        if path == "/v1" and method != "POST":
+            raise AssertionError(
+                f"llm.request {action.get('action_id')} classified the "
+                f"ordinary {method or 'unknown-method'} /v1 probe"
+            )
 
     @staticmethod
     def _require_completed_exec(action: dict[str, Any]) -> None:
@@ -510,13 +585,18 @@ class SemanticActionBoundariesTask:
             for item in evidence
             if isinstance(item, dict)
         }
-        expected_roles = {
+        completed_only = {"process.exec.completed"}
+        completed_with_synchronous_intent = {
             "process.exec.intent",
             "process.exec.completed",
         }
-        if roles != expected_roles:
+        if roles not in {
+            frozenset(completed_only),
+            frozenset(completed_with_synchronous_intent),
+        }:
             raise AssertionError(
                 f"process.exec {action.get('action_id')} evidence roles "
                 f"are {sorted(str(role) for role in roles)}, expected "
-                f"{sorted(expected_roles)}"
+                f"{sorted(completed_only)} or "
+                f"{sorted(completed_with_synchronous_intent)}"
             )

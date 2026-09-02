@@ -16,7 +16,6 @@ const KNOWN_KEYS: &[&str] = &[
     "actrail.action.finalized_on_trace_close",
     "actrail.action.valid",
     "actrail.link.source",
-    "actrail.link.valid",
     "agent.child.command_line",
     "agent.child.executable",
     "agent.child.process_id",
@@ -228,12 +227,18 @@ const KNOWN_KEYS: &[&str] = &[
     "llm.tool_result.binding_state",
     "llm.tool_result.content_bytes",
     "llm.tool_result.content_export_state",
-    "llm.tool_result.content_hash",
     "llm.tool_result.content_json",
     "llm.tool_result.id",
     "llm.tool_result.is_error",
     "llm.tool_result.ordinal",
     "llm.tool_result.request_action_id",
+    "llm.request.canonical_body_export_state",
+    "llm.request.canonical_body_json",
+    "llm.request.tool_result_count",
+    "llm.request.trajectory_id",
+    "llm.request.trajectory_inference_version",
+    "llm.response.cache_creation_tokens",
+    "llm.response.tool_arguments",
 ];
 
 fn key_code_map() -> &'static BTreeMap<&'static str, u16> {

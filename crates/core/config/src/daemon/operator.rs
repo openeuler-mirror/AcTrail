@@ -279,11 +279,14 @@ pub struct StartupPluginLoadConfig {
 }
 
 /// Derive the seccomp-notify capabilities a launch must install from the
-/// payload, process, and network config. A payload backend needs the notify
-/// path only when it is enabled *and* its capture backend cannot collect
-/// without it. Single source of truth shared by ctl and the daemon.
+/// payload, notify, process, and network config. A payload backend needs the
+/// notify path only when it is enabled *and* its capture backend cannot collect
+/// without it. TLS sync adds its child-exec hook only when notify is enabled;
+/// root-launch synchronization remains available without it. Single source of
+/// truth shared by ctl and the daemon.
 pub fn launch_seccomp_requirements(
     payload: &PayloadConfig,
+    seccomp_notify: &SeccompNotifyConfig,
     process_seccomp: &ProcessSeccompConfig,
     network_control: &NetworkControlConfig,
     command_control: &CommandControlConfig,
@@ -291,7 +294,10 @@ pub fn launch_seccomp_requirements(
     LaunchSeccompRequirements::new(
         payload.tls.enabled && payload.tls.capture_backend.requires_seccomp_notify(),
         payload.socket.enabled && payload.socket.capture_backend.requires_seccomp_notify(),
-        process_seccomp.enabled,
+        process_seccomp.enabled
+            || (seccomp_notify.enabled
+                && payload.tls.enabled
+                && payload.tls.capture_backend.is_sync()),
         network_control.enabled,
     )
     .with_command_control(command_control.enabled)
@@ -304,6 +310,7 @@ impl OperatorConfig {
     pub fn launch_seccomp_requirements(&self) -> crate::capture_profile::LaunchSeccompRequirements {
         launch_seccomp_requirements(
             &self.payload_config,
+            &self.seccomp_notify,
             &self.process_seccomp,
             &self.network_control,
             &self.command_control,
@@ -494,10 +501,6 @@ fn validate_seccomp_config(
             "enforcement-network-connect-seccomp requires seccomp_notify.enabled=true".to_string(),
         );
     }
-    if capability_requested(capabilities, &Capability::ProcExecContext) && !process_seccomp.enabled
-    {
-        return Err("proc-exec-context requires process_seccomp_enabled=true".to_string());
-    }
     Ok(())
 }
 
@@ -633,7 +636,8 @@ mod tests {
         LlmRequestBodyExportRetention, LlmRequestContentRetention,
         LlmToolResultContentExportRetention,
     };
-    use super::OperatorConfig;
+    use super::{OperatorConfig, launch_seccomp_requirements};
+    use crate::daemon::{CommandControlConfig, PayloadSocketCaptureBackend};
 
     fn parse_l0_llm_call(patch: &str) -> Result<OperatorConfig, String> {
         OperatorConfig::init()

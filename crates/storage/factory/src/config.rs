@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use sqlite_storage::SqliteStorageConfig;
+use sqlite_storage::{EventRecordLayout, SqliteStorageConfig};
 
 use crate::parser::parse_storage_config;
 
@@ -55,11 +55,43 @@ impl StorageConfig {
         cold_field_compression_min_bytes: usize,
         cold_field_zstd_level: i32,
     ) -> Self {
+        Self::sqlite_with_options(
+            path,
+            busy_timeout_ms,
+            cold_field_compression_min_bytes,
+            cold_field_zstd_level,
+            sqlite_storage::SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
+            sqlite_storage::SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+            EventRecordLayout::Rows,
+            sqlite_storage::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+            sqlite_storage::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+            sqlite_storage::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
+        )
+    }
+
+    pub fn sqlite_with_options(
+        path: impl AsRef<Path>,
+        busy_timeout_ms: u64,
+        cold_field_compression_min_bytes: usize,
+        cold_field_zstd_level: i32,
+        event_payload_dictionary_cache_bytes: usize,
+        event_path_dictionary_cache_bytes: usize,
+        event_record_layout: EventRecordLayout,
+        event_record_block_max_events: usize,
+        event_record_block_max_uncompressed_bytes: usize,
+        event_record_block_zstd_level: i32,
+    ) -> Self {
         Self::Sqlite(SqliteStorageConfig {
             path: path.as_ref().to_path_buf(),
             busy_timeout_ms,
             cold_field_compression_min_bytes,
             cold_field_zstd_level,
+            event_payload_dictionary_cache_bytes,
+            event_path_dictionary_cache_bytes,
+            event_record_layout,
+            event_record_block_max_events,
+            event_record_block_max_uncompressed_bytes,
+            event_record_block_zstd_level,
         })
     }
 
@@ -90,6 +122,42 @@ impl StorageConfig {
     pub const fn sqlite_cold_field_zstd_level(&self) -> i32 {
         match self {
             Self::Sqlite(config) => config.cold_field_zstd_level,
+        }
+    }
+
+    pub const fn sqlite_event_payload_dictionary_cache_bytes(&self) -> usize {
+        match self {
+            Self::Sqlite(config) => config.event_payload_dictionary_cache_bytes,
+        }
+    }
+
+    pub const fn sqlite_event_path_dictionary_cache_bytes(&self) -> usize {
+        match self {
+            Self::Sqlite(config) => config.event_path_dictionary_cache_bytes,
+        }
+    }
+
+    pub const fn sqlite_event_record_layout(&self) -> EventRecordLayout {
+        match self {
+            Self::Sqlite(config) => config.event_record_layout,
+        }
+    }
+
+    pub const fn sqlite_event_record_block_max_events(&self) -> usize {
+        match self {
+            Self::Sqlite(config) => config.event_record_block_max_events,
+        }
+    }
+
+    pub const fn sqlite_event_record_block_max_uncompressed_bytes(&self) -> usize {
+        match self {
+            Self::Sqlite(config) => config.event_record_block_max_uncompressed_bytes,
+        }
+    }
+
+    pub const fn sqlite_event_record_block_zstd_level(&self) -> i32 {
+        match self {
+            Self::Sqlite(config) => config.event_record_block_zstd_level,
         }
     }
 }

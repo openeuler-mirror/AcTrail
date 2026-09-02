@@ -35,7 +35,7 @@ static __always_inline int emit_file_primary_path_enter(
     if (!file_event_capture_enabled()) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -86,7 +86,7 @@ static __always_inline int emit_file_full_path_enter(
     if (!file_event_capture_enabled()) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -136,7 +136,7 @@ static __always_inline int emit_file_header_enter(
     if (!file_event_capture_enabled()) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -405,7 +405,7 @@ static __always_inline int emit_file_exit(
     if (!file_event_capture_enabled()) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }
@@ -444,9 +444,8 @@ static __always_inline int emit_file_exit(
 }
 
 static __always_inline int store_pending_ipc_fd_pair_op(
-    struct trace_event_raw_sys_enter *ctx,
     __u32 kind,
-    __u32 fd_pair_arg,
+    __u64 fd_pair_ptr,
     __u32 domain,
     __u32 creation_flags
 ) {
@@ -454,15 +453,15 @@ static __always_inline int store_pending_ipc_fd_pair_op(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     struct actrail_pending_ipc_fd_pair_op op = {};
 
-    if (!operation_key || !tgid || !trace_id || !ctx->args[fd_pair_arg]) {
+    if (!operation_key || !tgid || !trace_id || !fd_pair_ptr) {
         return 0;
     }
 
     op.trace_id = *trace_id;
-    op.fd_pair_ptr = (__u64)ctx->args[fd_pair_arg];
+    op.fd_pair_ptr = fd_pair_ptr;
     op.pid_generation = current_process_start_time(tgid);
     op.kind = kind;
     op.domain = domain;

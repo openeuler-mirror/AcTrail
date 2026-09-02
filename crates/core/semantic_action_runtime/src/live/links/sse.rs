@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, attr_keys as attrs,
 };
 
@@ -146,7 +146,7 @@ impl SseLinkProjector {
             parent_action_id: parent.action_id.clone(),
             child_action_id: child.action_id.clone(),
             role,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: child.evidence.clone(),
             attributes: BTreeMap::new(),

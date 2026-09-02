@@ -232,52 +232,46 @@ impl ProcessWebSocket {
         {
             return WebSocketLlmObservation::default();
         }
-        let Some(accepted) = self.accepted.pop_front() else {
-            return WebSocketLlmObservation::default();
-        };
-        let mut connection = WebSocketConnection::new(
-            accepted.outbound_stream_key,
-            accepted.inbound_stream_key,
-            accepted.path,
-            accepted.extensions,
-            self.max_response_bytes,
-        );
-        tracing::debug!(
-            target: "actrail::semantic_projection",
-            direction = ?segment.direction,
-            stream_key = %segment.stream_key,
-            bytes = segment.bytes.len(),
-            "created WebSocket LLM connection"
-        );
-        match connection.observe(segment) {
-            Ok(Some(observation)) => {
-                let closed = observation.closed;
-                let mut projected = WebSocketLlmObservation::default();
-                projected.extend_connection(observation);
-                if !closed {
-                    self.push_connection(connection);
-                } else {
-                    projected
-                        .forgotten_exchange_streams
-                        .push(WebSocketExchangeStreamPrefix::new(
-                            connection.synthetic_stream_key_prefix().to_string(),
-                        ));
-                }
-                projected
-            }
-            Ok(None) => WebSocketLlmObservation::default(),
-            Err(()) => {
-                Self::warn_invalid_connection(segment);
-                let mut projected = WebSocketLlmObservation::default();
-                projected.extend_connection(connection.materialize_decode_failure(segment));
+        for position in 0..self.accepted.len() {
+            let Some(accepted) = self.accepted.get(position).cloned() else {
+                continue;
+            };
+            let mut connection = WebSocketConnection::new(
+                accepted.outbound_stream_key,
+                accepted.inbound_stream_key,
+                accepted.path,
+                accepted.extensions,
+                self.max_response_bytes,
+            );
+            let Ok(Some(observation)) = connection.observe(segment) else {
+                // A two-byte frame signature is not enough to prove that an
+                // unbound TLS segment belongs to this WebSocket. Keep the
+                // accepted handshake available until a candidate decodes.
+                continue;
+            };
+            self.accepted.remove(position);
+            tracing::debug!(
+                target: "actrail::semantic_projection",
+                direction = ?segment.direction,
+                stream_key = %segment.stream_key,
+                bytes = segment.bytes.len(),
+                "created WebSocket LLM connection"
+            );
+            let closed = observation.closed;
+            let mut projected = WebSocketLlmObservation::default();
+            projected.extend_connection(observation);
+            if !closed {
+                self.push_connection(connection);
+            } else {
                 projected
                     .forgotten_exchange_streams
                     .push(WebSocketExchangeStreamPrefix::new(
                         connection.synthetic_stream_key_prefix().to_string(),
                     ));
-                projected
             }
+            return projected;
         }
+        WebSocketLlmObservation::default()
     }
 
     fn forget_stream(&mut self, segment: &PayloadSegment) -> WebSocketLlmObservation {
@@ -546,10 +540,11 @@ impl ProcessWebSocket {
                 }
                 let candidate = &mut self.outbound_handshakes[position];
                 let observed = candidate.observe(segment, REQUEST_PREFIX);
-                if let Some((path, stream_key)) = candidate.request_path() {
+                if let Some((request, stream_key)) = candidate.request() {
                     self.outbound_handshakes.remove(position);
                     self.push_pending_offer(PendingOffer {
-                        path,
+                        path: request.path,
+                        expected_accept: request.expected_accept,
                         outbound_stream_key: stream_key,
                         early_outbound_stream_key: None,
                         pending_frames: Vec::new(),
@@ -572,9 +567,9 @@ impl ProcessWebSocket {
                 }
                 let candidate = &mut self.inbound_handshakes[position];
                 let observed = candidate.observe(segment, ACCEPT_PREFIX);
-                if let Some((extensions, inbound_stream_key)) = candidate.accepted_extensions() {
+                if let Some((accepted, inbound_stream_key)) = candidate.accepted() {
                     self.inbound_handshakes.remove(position);
-                    if let Some(offer) = self.pending_offers.pop_front() {
+                    if let Some(offer) = self.take_matching_offer(&accepted.value) {
                         tracing::debug!(
                             target: "actrail::semantic_projection",
                             outbound_stream_key = %offer.outbound_stream_key,
@@ -585,7 +580,7 @@ impl ProcessWebSocket {
                             path: offer.path,
                             outbound_stream_key: offer.outbound_stream_key,
                             inbound_stream_key,
-                            extensions,
+                            extensions: accepted.extensions,
                             pending_frames: offer.pending_frames,
                             pending_frame_bytes: offer.pending_frame_bytes,
                         });
@@ -631,6 +626,14 @@ impl ProcessWebSocket {
         self.pending_offers.push_back(offer);
     }
 
+    fn take_matching_offer(&mut self, accept: &str) -> Option<PendingOffer> {
+        let position = self
+            .pending_offers
+            .iter()
+            .position(|offer| offer.expected_accept == accept)?;
+        self.pending_offers.remove(position)
+    }
+
     fn push_accepted(&mut self, accepted: AcceptedHandshake) {
         self.reserve_connection_slot();
         self.accepted.push_back(accepted);
@@ -639,6 +642,7 @@ impl ProcessWebSocket {
 
 struct PendingOffer {
     path: String,
+    expected_accept: String,
     outbound_stream_key: PayloadStreamKey,
     early_outbound_stream_key: Option<PayloadStreamKey>,
     pending_frames: Vec<PayloadSegment>,
@@ -681,6 +685,7 @@ impl PendingOffer {
     }
 }
 
+#[derive(Clone)]
 struct AcceptedHandshake {
     path: String,
     outbound_stream_key: PayloadStreamKey,

@@ -77,32 +77,76 @@ pub(super) fn sse_event_payloads(
 ) -> Result<Vec<ApplicationPayload>, String> {
     let mut output = Vec::new();
     for block in sse_blocks(body) {
-        let fields = parse_sse_block(&block);
-        if fields.is_empty() {
-            continue;
+        if let Some(payload) = ParsedSseEvent::parse(&block).into_payload(config)? {
+            output.push(payload);
         }
-        let event_name = fields
-            .get("event")
-            .cloned()
-            .unwrap_or_else(|| "message".to_string());
+    }
+    Ok(output)
+}
+
+struct ParsedSseEvent {
+    event_type: Option<String>,
+    data: Option<String>,
+    saw_field: bool,
+}
+
+impl ParsedSseEvent {
+    fn parse(block: &str) -> Self {
+        let mut event = Self {
+            event_type: None,
+            data: None,
+            saw_field: false,
+        };
+        for line in block.lines() {
+            let line = line.trim_end_matches('\r');
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            event.saw_field = true;
+            let value = value.trim_start();
+            if name.trim().eq_ignore_ascii_case("data") {
+                Self::push_field(&mut event.data, value);
+            } else if name.trim().eq_ignore_ascii_case("event") {
+                Self::push_field(&mut event.event_type, value);
+            }
+        }
+        event
+    }
+
+    fn push_field(field: &mut Option<String>, value: &str) {
+        if let Some(current) = field {
+            current.push('\n');
+            current.push_str(value);
+        } else {
+            *field = Some(value.to_string());
+        }
+    }
+
+    fn into_payload(
+        self,
+        config: &ApplicationProtocolConfig,
+    ) -> Result<Option<ApplicationPayload>, String> {
+        if !self.saw_field {
+            return Ok(None);
+        }
+        let event_name = self.event_type.unwrap_or_else(|| "message".to_string());
         let mut metadata = BTreeMap::from([("event".to_string(), event_name.clone())]);
-        if let Some(data) = fields.get("data") {
+        if let Some(data) = self.data {
             metadata.insert("data_size".to_string(), data.len().to_string());
             if matches!(config.sse_data_policy, SseDataPolicy::Preview) {
-                let (preview, truncated) = preview_data(data, config.sse_max_data_bytes)?;
+                let (preview, truncated) = preview_data(&data, config.sse_max_data_bytes)?;
                 metadata.insert("data_preview".to_string(), preview);
                 metadata.insert("data_truncated".to_string(), truncated.to_string());
             }
         }
-        output.push(ApplicationPayload {
+        Ok(Some(ApplicationPayload {
             protocol: "sse".to_string(),
             operation: "event".to_string(),
             summary: event_name,
             body: None,
             metadata,
-        });
+        }))
     }
-    Ok(output)
 }
 
 fn complete_sse_prefix_len(text: &str) -> Option<usize> {
@@ -124,26 +168,6 @@ fn sse_blocks(body: &str) -> VecDeque<String> {
         }
     }
     blocks
-}
-
-fn parse_sse_block(block: &str) -> BTreeMap<String, String> {
-    let mut fields = BTreeMap::<String, String>::new();
-    for line in block.lines() {
-        let line = line.trim_end_matches('\r');
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let key = name.trim().to_ascii_lowercase();
-        let value = value.trim_start();
-        fields
-            .entry(key)
-            .and_modify(|existing| {
-                existing.push('\n');
-                existing.push_str(value);
-            })
-            .or_insert_with(|| value.to_string());
-    }
-    fields
 }
 
 fn preview_data(data: &str, max_bytes: u64) -> Result<(String, bool), String> {

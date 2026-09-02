@@ -13,7 +13,9 @@ pub(crate) struct HttpRequestParts {
     pub(crate) headers_text: Option<String>,
     pub(crate) headers_hpack_base64: Option<String>,
     pub(crate) body: Arc<Vec<u8>>,
+    pub(crate) declared_body_len: Option<usize>,
     pub(crate) encoded_len: usize,
+    pub(crate) complete: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
