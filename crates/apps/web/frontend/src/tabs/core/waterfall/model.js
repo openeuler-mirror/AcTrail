@@ -1,11 +1,19 @@
-import { compactRows, kindClass, shortTime } from '../action-tree/common';
-import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../actionLabels';
+import { compactRows, kindClass, shortTime } from '../action-tree/common.js';
+import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../actionLabels.js';
 import {
   buildLlmMessages,
   llmRequestMessage,
   llmResponseMessage,
   previewText,
-} from '../../../llm/insight';
+} from '../../../llm/insight.js';
+import { projectTimeInterval } from '../time-navigation/model.js';
+
+export {
+  constrainTimeViewport,
+  panTimeViewport,
+  projectTimeInterval,
+  zoomTimeViewport,
+} from '../time-navigation/model.js';
 
 // Single declarative extension seam: add a line here to surface a new metric in
 // every bar's tooltip and the detail panel. Attribute-based metrics need no
@@ -750,60 +758,6 @@ function phaseSegment(kind, phase, startMs, spanMs, live) {
       width: `${projected.widthPct}%`,
     },
   };
-}
-
-export function projectTimeInterval(intervalStartMs, intervalEndMs, viewport) {
-  const viewportStart = Number(viewport?.startMs);
-  const viewportSpan = Number(viewport?.spanMs);
-  if (!Number.isFinite(viewportStart) || !Number.isFinite(viewportSpan) || viewportSpan <= 0) {
-    return null;
-  }
-  const viewportEnd = viewportStart + viewportSpan;
-  const visibleStart = Math.max(Number(intervalStartMs), viewportStart);
-  const visibleEnd = Math.min(Number(intervalEndMs), viewportEnd);
-  if (!Number.isFinite(visibleStart) || !Number.isFinite(visibleEnd) || visibleEnd <= visibleStart) {
-    return null;
-  }
-  return {
-    leftPct: ((visibleStart - viewportStart) / viewportSpan) * 100,
-    widthPct: ((visibleEnd - visibleStart) / viewportSpan) * 100,
-  };
-}
-
-export function constrainTimeViewport(viewport, bounds, minimumSpanMs = 0.001) {
-  const boundsStart = Number(bounds?.startMs) || 0;
-  const boundsSpan = Math.max(Number(bounds?.spanMs) || minimumSpanMs, minimumSpanMs);
-  const spanMs = Math.min(
-    Math.max(Number(viewport?.spanMs) || boundsSpan, minimumSpanMs),
-    boundsSpan,
-  );
-  const latestStart = boundsStart + boundsSpan - spanMs;
-  const startMs = Math.min(
-    Math.max(Number(viewport?.startMs) || boundsStart, boundsStart),
-    latestStart,
-  );
-  return { startMs, spanMs };
-}
-
-export function zoomTimeViewport(viewport, bounds, factor, anchorRatio = 0.5) {
-  const current = constrainTimeViewport(viewport, bounds);
-  const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : 1;
-  const anchor = Math.min(Math.max(Number(anchorRatio) || 0, 0), 1);
-  const minimumSpanMs = Math.max(Math.min(Number(bounds?.spanMs) * 0.000001, 1), 0.001);
-  const nextSpan = current.spanMs / safeFactor;
-  const anchorTime = current.startMs + current.spanMs * anchor;
-  return constrainTimeViewport({
-    startMs: anchorTime - nextSpan * anchor,
-    spanMs: nextSpan,
-  }, bounds, minimumSpanMs);
-}
-
-export function panTimeViewport(viewport, bounds, deltaMs) {
-  const current = constrainTimeViewport(viewport, bounds);
-  return constrainTimeViewport({
-    startMs: current.startMs + Number(deltaMs || 0),
-    spanMs: current.spanMs,
-  }, bounds);
 }
 
 function llmMessagesFromAction(action) {

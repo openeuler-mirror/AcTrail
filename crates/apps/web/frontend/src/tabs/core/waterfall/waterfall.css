@@ -233,7 +233,16 @@
 .waterfall-legend {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+}
+
+.wf-navigation-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .waterfall-bottlenecks {

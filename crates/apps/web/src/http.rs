@@ -176,7 +176,20 @@ fn serve_stream(mut stream: TcpStream, context: &WebContext) -> Result<(), Strin
         Err(error) => Response::text(STATUS_INTERNAL_ERROR, error),
     };
     let response = response.with_optional_gzip(request.accepts_gzip);
-    write_response(&mut stream, &response).map_err(|error| error.to_string())
+    match write_response(&mut stream, &response) {
+        Ok(()) => Ok(()),
+        Err(error) if client_disconnected(&error) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn client_disconnected(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+    )
 }
 
 fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
@@ -847,5 +860,24 @@ impl Response {
         self.body = compressed;
         self.content_encoding = Some("gzip");
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_disconnected;
+
+    #[test]
+    fn recognizes_expected_client_disconnects() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+        ] {
+            assert!(client_disconnected(&std::io::Error::from(kind)));
+        }
+        assert!(!client_disconnected(&std::io::Error::from(
+            std::io::ErrorKind::WriteZero,
+        )));
     }
 }

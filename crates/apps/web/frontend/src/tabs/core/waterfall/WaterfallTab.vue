@@ -131,6 +131,7 @@
         <span class="wf-phase-key wf-bar-ttft">ttft</span>
         <span class="wf-phase-key wf-bar-response">res</span>
       </div>
+      <small class="wf-navigation-hint">W/S zoom · A/D pan · 0 reset · wheel/drag supported</small>
     </div>
 
     <section v-if="bottleneckGroups.length" class="waterfall-bottlenecks">
@@ -217,7 +218,7 @@
       ref="waterfallScroll"
       class="waterfall-scroll"
       :class="{ 'is-panning': timelinePanning }"
-      aria-label="Waterfall timeline. Use W and S to zoom, A and D to move. Scroll over the timeline to zoom and drag to pan."
+      aria-label="Waterfall timeline. Scroll vertically to explore rows. Hold Control while scrolling or use W and S to zoom, A and D to move, and drag to pan."
       @wheel="handleTimelineWheel"
       @pointerdown="startTimelinePan"
     >
@@ -396,7 +397,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import {
   ChevronDown,
   ChevronLeft,
@@ -415,6 +416,7 @@ import { formatAttributionDuration } from '../../../components/time-attribution/
 import TimeAttributionTab from '../time-attribution/TimeAttributionTab.vue';
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
+import { useTimelineNavigation } from '../time-navigation/useTimelineNavigation.js';
 import {
   actionDetail,
   buildWaterfall,
@@ -428,11 +430,9 @@ import {
   flattenMatchingWaterfall,
   flattenVisibleWaterfall,
   formatOffset,
-  panTimeViewport,
   projectTimeInterval,
   subtreeWindow,
   windowLabel,
-  zoomTimeViewport,
 } from './model';
 
 const props = defineProps({
@@ -482,17 +482,10 @@ const waterfallSection = ref(null);
 const waterfallScroll = ref(null);
 const axisTrack = ref(null);
 const manualTimeViewport = ref(null);
-const timelinePanning = ref(false);
-const model = ref(emptyWaterfallModel());
+const model = shallowRef(emptyWaterfallModel());
 const modelBuilding = ref(false);
 let modelBuildToken = 0;
 let modelIdleHandle = null;
-let panState = null;
-let panFrame = null;
-let pointerPosition = null;
-const heldTimelineKeys = new Set();
-let keyboardFrame = null;
-let keyboardFrameTime = null;
 
 function showAttribution() {
   attributionSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -542,13 +535,6 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => {
-  globalThis.addEventListener('keydown', handleTimelineKeydown, true);
-  globalThis.addEventListener('keyup', handleTimelineKeyup, true);
-  globalThis.addEventListener('pointermove', trackPointerPosition, true);
-  globalThis.addEventListener('blur', stopTimelineKeyboardControl);
-});
-
 onBeforeUnmount(() => {
   modelBuildToken += 1;
   if (modelIdleHandle !== null) {
@@ -558,12 +544,6 @@ onBeforeUnmount(() => {
       clearTimeout(modelIdleHandle);
     }
   }
-  globalThis.removeEventListener('keydown', handleTimelineKeydown, true);
-  globalThis.removeEventListener('keyup', handleTimelineKeyup, true);
-  globalThis.removeEventListener('pointermove', trackPointerPosition, true);
-  globalThis.removeEventListener('blur', stopTimelineKeyboardControl);
-  stopTimelineKeyboardControl();
-  stopTimelinePan();
 });
 
 const roots = computed(() => model.value.roots);
@@ -686,6 +666,23 @@ const baseAxisWindow = computed(() =>
     : focusAxisWindow.value ?? { startMs: 0, spanMs: window.value.spanMs },
 );
 const axisWindow = computed(() => manualTimeViewport.value ?? baseAxisWindow.value);
+const {
+  panning: timelinePanning,
+  zoomBy: zoomTimeline,
+  resetViewport: resetTimeline,
+  handleWheel: handleTimelineWheel,
+  startPan: startTimelinePan,
+} = useTimelineNavigation({
+  viewport: manualTimeViewport,
+  activeViewport: axisWindow,
+  bounds: baseAxisWindow,
+  surfaceRef: waterfallScroll,
+  trackRef: axisTrack,
+  trackSelector: '.wf-time-track',
+  reset: () => {
+    manualTimeViewport.value = null;
+  },
+});
 watch(
   () => `${baseAxisWindow.value.startMs}:${baseAxisWindow.value.spanMs}`,
   () => {
@@ -1030,6 +1027,7 @@ function zoomTo(row) {
 }
 
 function resetView() {
+  resetTimeline();
   if (zoomId.value) {
     zoomId.value = null;
     queueFocusApplication();
@@ -1040,198 +1038,6 @@ function resetView() {
   expandedIds.value = new Set(collectDefaultExpandedIds(roots.value));
   activeGroups.value = defaultActiveGroups(groups.value);
   visibleLimit.value = TABLE_RENDER_LIMITS.initialRows;
-}
-
-function zoomTimeline(factor, anchorRatio = 0.5) {
-  manualTimeViewport.value = zoomTimeViewport(
-    axisWindow.value,
-    baseAxisWindow.value,
-    factor,
-    anchorRatio,
-  );
-}
-
-function panTimeline(spanRatio) {
-  manualTimeViewport.value = panTimeViewport(
-    axisWindow.value,
-    baseAxisWindow.value,
-    axisWindow.value.spanMs * spanRatio,
-  );
-}
-
-function resetTimeline() {
-  manualTimeViewport.value = null;
-}
-
-function handleTimelineKeydown(event) {
-  if (
-    !pointerIsOverWaterfall()
-    || event.metaKey
-    || event.ctrlKey
-    || event.altKey
-    || event.isComposing
-  ) {
-    return;
-  }
-  const code = event.code || `Key${String(event.key).toUpperCase()}`;
-  if (code === 'Digit0' || code === 'Numpad0' || event.key === '0') {
-    event.preventDefault();
-    event.stopPropagation();
-    resetTimeline();
-    return;
-  }
-  if (!TIMELINE_HOLD_KEYS.has(code)) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  heldTimelineKeys.add(code);
-  if (keyboardFrame === null) {
-    applyHeldTimelineKeys(16);
-    keyboardFrameTime = performance.now();
-    keyboardFrame = requestAnimationFrame(runTimelineKeyboardFrame);
-  }
-}
-
-const TIMELINE_HOLD_KEYS = new Set(['KeyW', 'KeyS', 'KeyA', 'KeyD']);
-
-function handleTimelineKeyup(event) {
-  const code = event.code || `Key${String(event.key).toUpperCase()}`;
-  if (!heldTimelineKeys.has(code)) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  heldTimelineKeys.delete(code);
-  if (!heldTimelineKeys.size) {
-    stopTimelineKeyboardAnimation();
-  }
-}
-
-function runTimelineKeyboardFrame(timestamp) {
-  keyboardFrame = null;
-  if (!heldTimelineKeys.size || !pointerIsOverWaterfall()) {
-    stopTimelineKeyboardControl();
-    return;
-  }
-  const elapsedMs = Math.min(Math.max(timestamp - (keyboardFrameTime ?? timestamp), 0), 50);
-  keyboardFrameTime = timestamp;
-  applyHeldTimelineKeys(elapsedMs);
-  keyboardFrame = requestAnimationFrame(runTimelineKeyboardFrame);
-}
-
-function applyHeldTimelineKeys(elapsedMs) {
-  const frameScale = Math.max(elapsedMs, 1) / 16.6667;
-  if (heldTimelineKeys.has('KeyW') !== heldTimelineKeys.has('KeyS')) {
-    const zoomPerFrame = 1.018 ** frameScale;
-    zoomTimeline(heldTimelineKeys.has('KeyW') ? zoomPerFrame : 1 / zoomPerFrame);
-  }
-  if (heldTimelineKeys.has('KeyA') !== heldTimelineKeys.has('KeyD')) {
-    const direction = heldTimelineKeys.has('KeyA') ? -1 : 1;
-    panTimeline(direction * 0.012 * frameScale);
-  }
-}
-
-function stopTimelineKeyboardAnimation() {
-  if (keyboardFrame !== null) {
-    cancelAnimationFrame(keyboardFrame);
-    keyboardFrame = null;
-  }
-  keyboardFrameTime = null;
-}
-
-function stopTimelineKeyboardControl() {
-  heldTimelineKeys.clear();
-  stopTimelineKeyboardAnimation();
-}
-
-function trackPointerPosition(event) {
-  pointerPosition = { x: event.clientX, y: event.clientY };
-}
-
-function pointerIsOverWaterfall() {
-  const element = waterfallScroll.value;
-  if (!element || !pointerPosition) {
-    return false;
-  }
-  const rect = element.getBoundingClientRect();
-  return pointerPosition.x >= rect.left
-    && pointerPosition.x <= rect.right
-    && pointerPosition.y >= rect.top
-    && pointerPosition.y <= rect.bottom;
-}
-
-function handleTimelineWheel(event) {
-  if (!event.target.closest('.wf-time-track')) {
-    return;
-  }
-  event.preventDefault();
-  const rect = axisTrack.value?.getBoundingClientRect();
-  if (!rect?.width) {
-    return;
-  }
-  const anchorRatio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1);
-  zoomTimeline(event.deltaY < 0 ? 1.18 : 1 / 1.18, anchorRatio);
-}
-
-function startTimelinePan(event) {
-  if (
-    event.button !== 0
-    || !event.target.closest('.wf-time-track')
-    || event.target.closest('button, a, input, textarea, select')
-  ) {
-    return;
-  }
-  const rect = axisTrack.value?.getBoundingClientRect();
-  if (!rect?.width) {
-    return;
-  }
-  event.preventDefault();
-  panState = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    viewport: { ...axisWindow.value },
-    trackWidth: rect.width,
-    clientX: event.clientX,
-  };
-  timelinePanning.value = true;
-  globalThis.addEventListener('pointermove', moveTimelinePan);
-  globalThis.addEventListener('pointerup', stopTimelinePan);
-  globalThis.addEventListener('pointercancel', stopTimelinePan);
-}
-
-function moveTimelinePan(event) {
-  if (!panState || event.pointerId !== panState.pointerId) {
-    return;
-  }
-  panState.clientX = event.clientX;
-  if (panFrame !== null) {
-    return;
-  }
-  panFrame = requestAnimationFrame(() => {
-    panFrame = null;
-    if (!panState) {
-      return;
-    }
-    const deltaMs = -((panState.clientX - panState.startX) / panState.trackWidth) * panState.viewport.spanMs;
-    manualTimeViewport.value = panTimeViewport(
-      panState.viewport,
-      baseAxisWindow.value,
-      deltaMs,
-    );
-  });
-}
-
-function stopTimelinePan() {
-  panState = null;
-  timelinePanning.value = false;
-  if (panFrame !== null) {
-    cancelAnimationFrame(panFrame);
-    panFrame = null;
-  }
-  globalThis.removeEventListener('pointermove', moveTimelinePan);
-  globalThis.removeEventListener('pointerup', stopTimelinePan);
-  globalThis.removeEventListener('pointercancel', stopTimelinePan);
 }
 
 function rowOverlapsWindow(row, targetWindow) {
