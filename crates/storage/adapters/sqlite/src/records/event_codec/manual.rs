@@ -12,74 +12,14 @@ use model_core::event::{
     FilePayload, IpcPayload, LabelPayload, LossPayload, NetPayload, ProcessPayload,
     ResourcePayload, StdioPayload,
 };
+
+use super::key_codes::MetadataKeyCodebook;
+use super::value_codes::{value_code, value_for_code};
 use model_core::process::ProcessIdentity;
 
 use super::EventPayloadCodec;
 
 const UNKNOWN_KEY: u8 = 0xFF;
-
-/// Static metadata-key dictionary, assigned 1-based codes in declaration order.
-/// Keys missing here fall back to `UNKNOWN_KEY` + inline string, so nothing is
-/// ever dropped.
-const KNOWN_KEYS: &[&str] = &[
-    "content_length",
-    "content_type",
-    "data_preview",
-    "data_preview_omitted",
-    "data_preview_truncated",
-    "data_size",
-    "data_truncated",
-    "direction",
-    "endpoint_source",
-    "endpoint_unresolved",
-    "event",
-    "exec_filename",
-    "exec_filename_truncated",
-    "executable",
-    "exit_code",
-    "fd",
-    "flags",
-    "frame_type",
-    "frame_type_id",
-    "h2",
-    "host",
-    "http.body_json_state",
-    "length",
-    "method",
-    "operation",
-    "payload.captured_size",
-    "payload.omitted_size",
-    "payload.original_size",
-    "payload.summary.protocol",
-    "payload.summary.reason",
-    "payload.truncation",
-    "payload_segment_id",
-    "payload_sequence",
-    "reason",
-    "requested_size",
-    "result",
-    "signal",
-    "source_boundary",
-    "status_code",
-    "stream_id",
-    "stream_key",
-    "syscall_family",
-    "target",
-    "target_group",
-    "target_pid",
-    "transfer_encoding",
-];
-
-fn key_code(key: &str) -> Option<u8> {
-    KNOWN_KEYS
-        .binary_search(&key)
-        .ok()
-        .map(|index| u8::try_from(index + 1).expect("metadata key count fits u8"))
-}
-
-fn key_for_code(code: u8) -> Option<&'static str> {
-    KNOWN_KEYS.get(usize::from(code).checked_sub(1)?).copied()
-}
 
 pub struct ManualCodec;
 
@@ -348,7 +288,12 @@ fn decode_enforcement(bytes: &[u8], c: &mut usize) -> Result<EnforcementPayload,
 // ---- primitives ----
 
 fn write_string(out: &mut Vec<u8>, value: &str) {
-    write_bytes(out, value.as_bytes());
+    if let Some(code) = value_code(value) {
+        write_varint(out, (u64::from(code) << 1) | 1);
+    } else {
+        write_varint(out, (value.len() as u64) << 1);
+        out.extend_from_slice(value.as_bytes());
+    }
 }
 
 fn write_bytes(out: &mut Vec<u8>, value: &[u8]) {
@@ -421,7 +366,7 @@ fn write_bool(out: &mut Vec<u8>, value: bool) {
 fn write_map(out: &mut Vec<u8>, map: &BTreeMap<String, String>) {
     write_varint(out, map.len() as u64);
     for (key, value) in map {
-        match key_code(key) {
+        match MetadataKeyCodebook::code(key) {
             Some(code) => out.push(code),
             None => {
                 out.push(UNKNOWN_KEY);
@@ -483,7 +428,20 @@ fn read_bytes(bytes: &[u8], c: &mut usize) -> Result<Vec<u8>, String> {
 }
 
 fn read_string(bytes: &[u8], c: &mut usize) -> Result<String, String> {
-    String::from_utf8(read_bytes(bytes, c)?).map_err(|_| "invalid utf8 in payload".to_string())
+    let token = read_varint(bytes, c)?;
+    if token & 1 == 1 {
+        let code = u8::try_from(token >> 1).map_err(|_| "value code overflow")?;
+        return value_for_code(code)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("unknown payload value code {code}"));
+    }
+    let len = usize::try_from(token >> 1).map_err(|_| "length overflow")?;
+    let end = c.checked_add(len).ok_or("length overflow")?;
+    let value = bytes.get(*c..end).ok_or("unexpected end of payload")?;
+    *c = end;
+    std::str::from_utf8(value)
+        .map(str::to_owned)
+        .map_err(|_| "invalid utf8 in payload".to_string())
 }
 
 fn read_option_string(bytes: &[u8], c: &mut usize) -> Result<Option<String>, String> {
@@ -563,7 +521,7 @@ fn read_map(bytes: &[u8], c: &mut usize) -> Result<BTreeMap<String, String>, Str
         let key = if code == UNKNOWN_KEY {
             read_string(bytes, c)?
         } else {
-            key_for_code(code)
+            MetadataKeyCodebook::key(code)
                 .ok_or_else(|| format!("unknown metadata key code {code}"))?
                 .to_string()
         };

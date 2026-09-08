@@ -7,10 +7,28 @@ impl EbpfRuntime {
         mut object: Object,
         config: &EbpfCollectorConfig,
         payload: &PayloadConfig,
+        process_config: &ProcessSeccompConfig,
         attach_plan: &AttachPlan,
         static_link_teardown: StaticLinkTeardown,
     ) -> Result<Self, LoaderError> {
         let tracked_traces = map_handle(&object, "tracked_traces", "tracked_map")?;
+        let process_observation_depths = map_handle(
+            &object,
+            "process_observation_depths",
+            "process_observation_depths",
+        )?;
+        if process_observation_depths.key_size() as usize != std::mem::size_of::<u32>()
+            || process_observation_depths.value_size() as usize != 16
+        {
+            return Err(LoaderError::new(
+                "process_observation_depths",
+                format!(
+                    "unexpected observation scope map key/value sizes {}/{}",
+                    process_observation_depths.key_size(),
+                    process_observation_depths.value_size()
+                ),
+            ));
+        }
         let process_identities = map_handle(&object, "process_identities", "process_identity_map")?;
         let process_identity_resolutions = map_handle(
             &object,
@@ -112,6 +130,7 @@ impl EbpfRuntime {
         tls::configure_payload_tls_map(&object, &payload.tls)?;
         stdio::configure_payload_stdio_map(&object, &payload.stdio)?;
         socket::configure_payload_socket_map(&object, &payload.socket)?;
+        process::configure_map(&object, process_config)?;
 
         let (links, attached_programs) =
             Self::attach_loaded_programs(&mut object, payload, attach_plan)?;
@@ -129,6 +148,7 @@ impl EbpfRuntime {
             attached_programs,
             attached_capabilities,
             tracked_traces,
+            process_observation_depths,
             process_identities,
             process_identity_resolutions,
             trace_namespace_thread_identities,
@@ -380,9 +400,11 @@ impl EbpfRuntime {
             || diagnostics.stdio_read_user_fail != 0
             || diagnostics.socket_state_update_fail != 0
             || diagnostics.socket_sequence_update_fail != 0
+            || diagnostics.socket_read_user_fail != 0
+            || diagnostics.socket_reserve_fail != 0
         {
             let summary = format!(
-                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}, socket_state_update_fail={}, socket_sequence_update_fail={}",
+                "kernel event transport lost data: perf_lost={perf_lost}, reserve_fail={}, output_fail={}, output_fail_bytes={}, stdio_pending_update_fail={}, stdio_read_user_fail={}, socket_state_update_fail={}, socket_sequence_update_fail={}, socket_read_user_fail={}, socket_reserve_fail={}",
                 diagnostics.reserve_fail,
                 diagnostics.output_fail,
                 diagnostics.output_fail_bytes,
@@ -390,6 +412,8 @@ impl EbpfRuntime {
                 diagnostics.stdio_read_user_fail,
                 diagnostics.socket_state_update_fail,
                 diagnostics.socket_sequence_update_fail,
+                diagnostics.socket_read_user_fail,
+                diagnostics.socket_reserve_fail,
             );
             self.record_event_transport_loss_delta(summary);
         }
@@ -660,6 +684,7 @@ impl EbpfRuntime {
             .lookup(&key, MapFlags::ANY)
             .map_err(|error| LoaderError::new("untrack_pid_identity", error.to_string()))?;
         if identity.is_none() && !tracked {
+            self.clear_process_observation_depth(pid)?;
             return Ok(());
         }
         if identity.is_some() {
@@ -681,6 +706,7 @@ impl EbpfRuntime {
                 },
             ));
         }
+        self.clear_process_observation_depth(pid)?;
         Ok(())
     }
 

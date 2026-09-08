@@ -7,7 +7,10 @@ use std::time::Duration;
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::ProfileName;
 use serde::{Deserialize, Serialize};
-use storage_factory::StorageConfig;
+use storage_factory::{
+    EventRecordLayout, SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
+    SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES, StorageConfig,
+};
 
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
@@ -213,6 +216,26 @@ impl OperatorDocument {
                     .storage
                     .sqlite_cold_field_compression_min_bytes(),
                 cold_field_zstd_level: config.storage.sqlite_cold_field_zstd_level(),
+                event_payload_dictionary_cache_bytes: config
+                    .storage
+                    .sqlite_event_payload_dictionary_cache_bytes(),
+                event_path_dictionary_cache_bytes: config
+                    .storage
+                    .sqlite_event_path_dictionary_cache_bytes(),
+                event_record_layout: config
+                    .storage
+                    .sqlite_event_record_layout()
+                    .as_str()
+                    .to_string(),
+                event_record_block_max_events: config
+                    .storage
+                    .sqlite_event_record_block_max_events(),
+                event_record_block_max_uncompressed_bytes: config
+                    .storage
+                    .sqlite_event_record_block_max_uncompressed_bytes(),
+                event_record_block_zstd_level: config
+                    .storage
+                    .sqlite_event_record_block_zstd_level(),
             },
             retention: StorageRetentionDocument::from_config(&config.storage_retention),
         };
@@ -299,6 +322,9 @@ impl OperatorDocument {
             sandbox_alerts: SandboxAlertsDocument::from_config(&config.sandbox_alerts),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
+                agent_descendant_observation_depth: config
+                    .capture_profile
+                    .agent_descendant_observation_depth,
                 capabilities: required,
                 opportunistic_capabilities: opportunistic,
                 disabled_capabilities: disabled,
@@ -336,6 +362,7 @@ impl OperatorDocument {
                     .collect(),
                 max_args: config.process_seccomp.max_args,
                 max_arg_bytes: config.process_seccomp.max_arg_bytes,
+                max_total_arg_bytes: config.process_seccomp.max_total_arg_bytes,
                 pending_max_entries: config.process_seccomp.pending_max_entries,
             },
             agent_invocation: AgentInvocationDocument {
@@ -571,6 +598,9 @@ impl OperatorDocument {
             capture_profile: CaptureProfile::new(
                 ProfileName::new(self.capture.profile_name.clone()),
                 capabilities,
+            )
+            .with_agent_descendant_observation_depth(
+                self.capture.agent_descendant_observation_depth()?,
             ),
             ebpf_config,
             payload_config,

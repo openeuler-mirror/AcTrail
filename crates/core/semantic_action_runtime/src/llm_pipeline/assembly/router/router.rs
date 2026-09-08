@@ -8,8 +8,7 @@ use model_core::diagnostics::{
     LlmPipelineDiagnosticStage,
 };
 use model_core::payload::{
-    PayloadContentState, PayloadOperationCompletionState, PayloadSegment, PayloadSourceBoundary,
-    PayloadTruncationState,
+    PayloadCaptureState, PayloadContentState, PayloadSegment, PayloadSourceBoundary,
 };
 use semantic_action::{SemanticAction, SemanticActionKind};
 
@@ -37,6 +36,30 @@ pub(super) enum StreamBody {
 enum ResetTransport {
     Http1,
     Http2,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DesynchronizationCause {
+    CapturePolicyLimited,
+    Unexpected,
+}
+
+impl DesynchronizationCause {
+    fn from_reset(reason: AssemblyResetReason) -> Self {
+        if matches!(reason, AssemblyResetReason::CapturePolicyLimited) {
+            Self::CapturePolicyLimited
+        } else {
+            Self::Unexpected
+        }
+    }
+
+    fn merge(self, incoming: Self) -> Self {
+        if self == Self::Unexpected || incoming == Self::Unexpected {
+            Self::Unexpected
+        } else {
+            Self::CapturePolicyLimited
+        }
+    }
 }
 
 impl ResetTransport {
@@ -103,6 +126,9 @@ impl ResetContext {
                     AssemblyResetReason::ConfirmedGap => {
                         LlmPipelineDiagnosticCode::Http1ConfirmedGap
                     }
+                    AssemblyResetReason::CapturePolicyLimited => {
+                        LlmPipelineDiagnosticCode::Http1OperationIncomplete
+                    }
                     AssemblyResetReason::OperationIncomplete => {
                         LlmPipelineDiagnosticCode::Http1OperationIncomplete
                     }
@@ -125,6 +151,9 @@ impl ResetContext {
                     LlmPipelineDiagnosticCode::Http2AssemblySegmentCapacityExceeded
                 }
                 AssemblyResetReason::ConfirmedGap => LlmPipelineDiagnosticCode::Http2ConfirmedGap,
+                AssemblyResetReason::CapturePolicyLimited => {
+                    LlmPipelineDiagnosticCode::Http2OperationIncomplete
+                }
                 AssemblyResetReason::OperationIncomplete => {
                     LlmPipelineDiagnosticCode::Http2OperationIncomplete
                 }
@@ -135,7 +164,7 @@ impl ResetContext {
 
 pub(in crate::llm_pipeline) struct LiveStreamState {
     body: StreamBody,
-    desynchronized: bool,
+    desynchronization: Option<DesynchronizationCause>,
     desynchronized_discarded_bytes: u64,
     desynchronized_discarded_entries: u64,
     recovery_scanner: RecoveryScanner,
@@ -145,7 +174,7 @@ impl Default for LiveStreamState {
     fn default() -> Self {
         Self {
             body: StreamBody::Plain(PlainStreamAssembly::default()),
-            desynchronized: false,
+            desynchronization: None,
             desynchronized_discarded_bytes: 0,
             desynchronized_discarded_entries: 0,
             recovery_scanner: RecoveryScanner::default(),
@@ -162,10 +191,15 @@ impl LiveStreamState {
         key: &LiveStreamKey,
         segment: &PayloadSegment,
     ) -> LiveLlmOutput {
-        let incomplete_reason = incomplete_segment_reason(segment);
+        let mut incomplete = incomplete_segment_reason(segment).map(|reason| {
+            (
+                reason,
+                segment_original_bytes(segment).saturating_sub(segment.bytes.len()),
+            )
+        });
         let mut recovered_discard = LiveLlmOutput::default();
         let mut segment_already_appended = false;
-        if self.desynchronized {
+        if let Some(desynchronization) = self.desynchronization {
             let admission_failure = match &self.body {
                 StreamBody::Plain(plain) => plain.admission_failure(segment.bytes.len(), 1, limits),
                 StreamBody::Http2(_) => None,
@@ -200,9 +234,7 @@ impl LiveStreamState {
                 };
                 match boundary {
                     RecoveryBoundary::NeedMore => {
-                        if let Some(reason) = incomplete_reason {
-                            let missing_bytes =
-                                segment_original_bytes(segment).saturating_sub(segment.bytes.len());
+                        if let Some((reason, missing_bytes)) = incomplete {
                             return self.reset_for_discontinuity(
                                 config,
                                 codecs,
@@ -227,15 +259,17 @@ impl LiveStreamState {
                 key,
                 segment.observed_at,
             );
-            self.desynchronized = false;
+            self.desynchronization = None;
             self.recovery_scanner.reset();
-            tracing::warn!(
-                trace_id = key.group.trace_id.get(),
-                process_id = key.group.process.get(),
-                stream_key = %key.group.stream_key,
-                direction = ?key.direction,
-                "LLM plaintext assembly resynchronized at a trusted HTTP boundary"
-            );
+            if desynchronization == DesynchronizationCause::Unexpected {
+                tracing::warn!(
+                    trace_id = key.group.trace_id.get(),
+                    process_id = key.group.process.get(),
+                    stream_key = %key.group.stream_key,
+                    direction = ?key.direction,
+                    "LLM plaintext assembly resynchronized at a trusted HTTP boundary"
+                );
+            }
         }
         let mut output = match &mut self.body {
             StreamBody::Plain(plain) => {
@@ -272,11 +306,15 @@ impl LiveStreamState {
                             plain.project_inbound_responses(config, codecs, &key.group)
                         }
                     };
-                    if let Some(failure) = plain.take_http1_decode_failure()
-                        && incomplete_reason.is_none()
-                    {
+                    if let Some(failure) = plain.take_http1_decode_failure() {
+                        let skipped_bytes = incomplete.take().map_or(0, |(_, missing)| missing);
                         output.extend(self.reset_for_http1_decode_failure(
-                            config, codecs, key, segment, failure, 0,
+                            config,
+                            codecs,
+                            key,
+                            segment,
+                            failure,
+                            skipped_bytes,
                         ));
                     }
                     output
@@ -301,8 +339,7 @@ impl LiveStreamState {
             }
         };
         output.extend(recovered_discard);
-        if let Some(reason) = incomplete_reason {
-            let missing_bytes = segment_original_bytes(segment).saturating_sub(segment.bytes.len());
+        if let Some((reason, missing_bytes)) = incomplete {
             output.extend(self.reset_for_discontinuity(
                 config,
                 codecs,
@@ -371,14 +408,27 @@ impl LiveStreamState {
         segment: &PayloadSegment,
         reset: ResetContext,
     ) -> LiveLlmOutput {
-        let reason = reset.reason;
+        let incoming_reason = reset.reason;
+        let reset_cause = DesynchronizationCause::from_reset(incoming_reason);
+        let effective_desynchronization = self
+            .desynchronization
+            .map_or(reset_cause, |existing| existing.merge(reset_cause));
+        let reason = if matches!(incoming_reason, AssemblyResetReason::CapturePolicyLimited)
+            && effective_desynchronization == DesynchronizationCause::Unexpected
+        {
+            AssemblyResetReason::OperationIncomplete
+        } else {
+            incoming_reason
+        };
+        let finalization_reason = reason.finalization_reason();
+        let capture_policy_limited = finalization_reason.response_reusable();
         let mut output = LiveLlmOutput::default();
         if key.direction == LiveStreamDirection::Outbound {
             output.extend(self.body.materialize_incomplete_requests(
                 config,
                 codecs,
                 &key.group,
-                reason.finalization_reason(),
+                finalization_reason,
                 segment.observed_at,
             ));
         }
@@ -391,14 +441,16 @@ impl LiveStreamState {
                 if action.kind != SemanticActionKind::LlmResponse {
                     continue;
                 }
-                ResponseFinalizer::finalize_partial(
+                ResponseFinalizer::finalize_incomplete(
                     action,
-                    reason.finalization_reason(),
+                    finalization_reason,
                     segment.observed_at,
                 );
-                output
-                    .non_reusable_response_ids
-                    .insert(action.action_id.clone());
+            }
+            if capture_policy_limited {
+                output.mark_closed_response_actions(&actions);
+            } else {
+                output.mark_non_reusable_response_actions(&actions);
             }
             output.actions.extend(actions);
         }
@@ -407,39 +459,41 @@ impl LiveStreamState {
             StreamBody::Plain(_) => ResetTransport::Http1,
             StreamBody::Http2(_) => ResetTransport::Http2,
         };
-        let stage = transport.diagnostic_stage();
-        let code = reset.diagnostic_code(transport);
         let discarded_bytes = buffered_bytes.saturating_add(reset.skipped_bytes);
-        output.diagnostics.push(
-            LlmPipelineDiagnostic::new(
-                key.group.trace_id,
-                &key.group.process,
-                segment.observed_at,
-                code,
-                LlmPipelineDiagnosticSeverity::Warning,
-                stage,
-            )
-            .with_stream_key(&key.group.stream_key)
-            .with_discarded_bytes(u64::try_from(discarded_bytes).unwrap_or(u64::MAX))
-            .with_discarded_entries(1),
-        );
+        if !capture_policy_limited {
+            output.diagnostics.push(
+                LlmPipelineDiagnostic::new(
+                    key.group.trace_id,
+                    &key.group.process,
+                    segment.observed_at,
+                    reset.diagnostic_code(transport),
+                    LlmPipelineDiagnosticSeverity::Warning,
+                    transport.diagnostic_stage(),
+                )
+                .with_stream_key(&key.group.stream_key)
+                .with_discarded_bytes(u64::try_from(discarded_bytes).unwrap_or(u64::MAX))
+                .with_discarded_entries(1),
+            );
+        }
         let base_offset = self.stream_end_offset().saturating_add(reset.skipped_bytes);
         self.body = StreamBody::Plain(PlainStreamAssembly::with_base_offset(base_offset));
-        self.desynchronized = true;
+        self.desynchronization = Some(effective_desynchronization);
         self.recovery_scanner.reset();
-        tracing::warn!(
-            trace_id = key.group.trace_id.get(),
-            process_id = key.group.process.get(),
-            stream_key = %key.group.stream_key,
-            direction = ?key.direction,
-            reason = reason.as_str(),
-            http1_decode_failure = reset
-                .http1_decode_failure
-                .map(Http1DecodeFailure::as_str)
-                .unwrap_or("none"),
-            buffered_bytes,
-            "discarded unsafe LLM plaintext assembly state"
-        );
+        if !capture_policy_limited {
+            tracing::warn!(
+                trace_id = key.group.trace_id.get(),
+                process_id = key.group.process.get(),
+                stream_key = %key.group.stream_key,
+                direction = ?key.direction,
+                reason = reason.as_str(),
+                http1_decode_failure = reset
+                    .http1_decode_failure
+                    .map(Http1DecodeFailure::as_str)
+                    .unwrap_or("none"),
+                buffered_bytes,
+                "discarded unsafe LLM plaintext assembly state"
+            );
+        }
         append_codec_diagnostic(&mut output, codecs, key, segment.observed_at);
         output
     }
@@ -468,19 +522,21 @@ impl LiveStreamState {
         if self.desynchronized_discarded_entries == 0 {
             return;
         }
-        output.diagnostics.push(
-            LlmPipelineDiagnostic::new(
-                key.group.trace_id,
-                &key.group.process,
-                observed_at,
-                LlmPipelineDiagnosticCode::DesynchronizedBytesDiscarded,
-                LlmPipelineDiagnosticSeverity::Warning,
-                LlmPipelineDiagnosticStage::Lifecycle,
-            )
-            .with_stream_key(&key.group.stream_key)
-            .with_discarded_bytes(self.desynchronized_discarded_bytes)
-            .with_discarded_entries(self.desynchronized_discarded_entries),
-        );
+        if self.desynchronization != Some(DesynchronizationCause::CapturePolicyLimited) {
+            output.diagnostics.push(
+                LlmPipelineDiagnostic::new(
+                    key.group.trace_id,
+                    &key.group.process,
+                    observed_at,
+                    LlmPipelineDiagnosticCode::DesynchronizedBytesDiscarded,
+                    LlmPipelineDiagnosticSeverity::Warning,
+                    LlmPipelineDiagnosticStage::Lifecycle,
+                )
+                .with_stream_key(&key.group.stream_key)
+                .with_discarded_bytes(self.desynchronized_discarded_bytes)
+                .with_discarded_entries(self.desynchronized_discarded_entries),
+            );
+        }
         self.desynchronized_discarded_bytes = 0;
         self.desynchronized_discarded_entries = 0;
     }
@@ -508,7 +564,7 @@ impl LiveStreamState {
         finished_at: SystemTime,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
-        let recovery_bytes = if self.desynchronized {
+        let recovery_bytes = if self.desynchronization.is_some() {
             match &self.body {
                 StreamBody::Plain(plain) => plain.buffer.len(),
                 StreamBody::Http2(_) => 0,
@@ -545,7 +601,7 @@ impl LiveStreamState {
             output.provider_response_ids.extend(provider_response_ids);
             for action in &mut actions {
                 if action.kind == SemanticActionKind::LlmResponse {
-                    ResponseFinalizer::finalize_partial(action, reason, finished_at);
+                    ResponseFinalizer::finalize_incomplete(action, reason, finished_at);
                 }
             }
             output.actions.extend(actions);
@@ -582,18 +638,11 @@ impl LiveStreamState {
 }
 
 fn incomplete_segment_reason(segment: &PayloadSegment) -> Option<AssemblyResetReason> {
-    let operation_capture_ended = segment
-        .operation_offset
-        .saturating_add(segment.captured_size)
-        >= segment.operation_captured_size;
-    (operation_capture_ended
-        && (segment.truncation == PayloadTruncationState::Truncated
-            || matches!(
-                segment.operation_completion_state,
-                PayloadOperationCompletionState::Partial | PayloadOperationCompletionState::Failed
-            )
-            || segment.operation_original_size != segment.operation_captured_size))
-        .then_some(AssemblyResetReason::OperationIncomplete)
+    match segment.operation_capture_state() {
+        Some(PayloadCaptureState::PolicyLimited) => Some(AssemblyResetReason::CapturePolicyLimited),
+        Some(PayloadCaptureState::Incomplete) => Some(AssemblyResetReason::OperationIncomplete),
+        Some(PayloadCaptureState::Complete) | None => None,
+    }
 }
 
 fn append_codec_diagnostic(
@@ -626,6 +675,9 @@ fn segment_original_bytes(segment: &PayloadSegment) -> usize {
 
 fn log_http2_stream_resets(key: &LiveStreamKey, reasons: &[AssemblyResetReason]) {
     for reason in reasons {
+        if matches!(reason, AssemblyResetReason::CapturePolicyLimited) {
+            continue;
+        }
         tracing::warn!(
             trace_id = key.group.trace_id.get(),
             process_id = key.group.process.get(),
@@ -645,6 +697,7 @@ fn append_http2_reset_diagnostic(
 ) {
     for reason in reasons {
         let code = match reason {
+            AssemblyResetReason::CapturePolicyLimited => continue,
             AssemblyResetReason::ProtocolDecodeFailed => {
                 LlmPipelineDiagnosticCode::Http2ProtocolDecodeFailed
             }

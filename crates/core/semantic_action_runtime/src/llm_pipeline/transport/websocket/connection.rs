@@ -1,5 +1,6 @@
 //! Responses WebSocket message projection onto the existing HTTP LLM seam.
 
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::SystemTime;
 
 use model_core::payload::{
@@ -10,16 +11,21 @@ use serde_json::Value;
 use super::framing::DirectionAssembler;
 use super::handshake::NegotiatedExtensions;
 
+const MAX_PENDING_EXCHANGES: usize = 32;
+
 pub(super) struct WebSocketConnection {
-    stream_key: Option<PayloadStreamKey>,
+    stream_keys: BTreeSet<PayloadStreamKey>,
+    observed_frame_stream: bool,
     synthetic_stream_key_prefix: String,
     next_exchange_id: u64,
     active_exchange_stream_key: Option<PayloadStreamKey>,
+    pending_exchange_stream_keys: VecDeque<PayloadStreamKey>,
     path: String,
     outbound: DirectionAssembler,
     inbound: DirectionAssembler,
     response_text: String,
     response_output: Vec<Value>,
+    response_custom_tool_inputs: BTreeMap<String, String>,
     response_output_bytes: usize,
     response_started_at: Option<SystemTime>,
     max_response_bytes: usize,
@@ -48,13 +54,15 @@ impl WebSocketConnection {
         extensions: NegotiatedExtensions,
         max_response_bytes: usize,
     ) -> Self {
+        let synthetic_stream_key_prefix =
+            format!("websocket:{outbound_stream_key}:{inbound_stream_key}:exchange");
         Self {
-            synthetic_stream_key_prefix: format!(
-                "websocket:{outbound_stream_key}:{inbound_stream_key}:exchange"
-            ),
+            stream_keys: BTreeSet::from([outbound_stream_key, inbound_stream_key]),
+            observed_frame_stream: false,
+            synthetic_stream_key_prefix,
             next_exchange_id: 0,
             active_exchange_stream_key: None,
-            stream_key: None,
+            pending_exchange_stream_keys: VecDeque::new(),
             path,
             outbound: DirectionAssembler::new(
                 true,
@@ -68,6 +76,7 @@ impl WebSocketConnection {
             ),
             response_text: String::new(),
             response_output: Vec::new(),
+            response_custom_tool_inputs: BTreeMap::new(),
             response_output_bytes: 0,
             response_started_at: None,
             max_response_bytes,
@@ -165,11 +174,17 @@ impl WebSocketConnection {
     pub(super) fn retained_response_bytes(&self) -> usize {
         self.response_text
             .len()
+            .saturating_add(
+                self.response_custom_tool_inputs
+                    .values()
+                    .map(String::len)
+                    .sum(),
+            )
             .saturating_add(self.response_output_bytes)
     }
 
     pub(super) fn is_bound_to(&self, stream_key: &PayloadStreamKey) -> bool {
-        self.stream_key.as_ref() == Some(stream_key)
+        self.stream_keys.contains(stream_key)
     }
 
     pub(super) fn synthetic_stream_key_prefix(&self) -> &str {
@@ -177,14 +192,21 @@ impl WebSocketConnection {
     }
 
     fn accepts_segment(&mut self, segment: &PayloadSegment) -> bool {
-        if let Some(stream_key) = self.stream_key.as_ref() {
-            return stream_key == &segment.stream_key;
+        if self.stream_keys.contains(&segment.stream_key) {
+            self.observed_frame_stream = true;
+            return true;
         }
         let expected_masked = segment.direction == PayloadDirection::Outbound;
-        if !super::framing::FrameDecoder::looks_like_frame(&segment.bytes, expected_masked) {
+        if self.observed_frame_stream
+            || !super::framing::FrameDecoder::looks_like_frame(&segment.bytes, expected_masked)
+        {
             return false;
         }
-        self.stream_key = Some(segment.stream_key.clone());
+        // TLS capture may assign the first data frame a different stream key
+        // from the HTTP upgrade operation. Preserve that early binding while
+        // retaining both handshake direction keys for subsequent routing.
+        self.stream_keys.insert(segment.stream_key.clone());
+        self.observed_frame_stream = true;
         true
     }
 
@@ -198,18 +220,11 @@ impl WebSocketConnection {
         if value.get("type").and_then(Value::as_str) != Some("response.create") {
             return;
         }
-        if self.active_exchange_stream_key.is_some() {
-            self.materialize_partial_response(segment, observation);
-            observation.superseded_responses = observation.superseded_responses.saturating_add(1);
-        }
-        self.discarding_response_until_terminal = false;
-        self.clear_response();
         let stream_key = PayloadStreamKey::new(format!(
             "{}:{}",
             self.synthetic_stream_key_prefix, self.next_exchange_id
         ));
         self.next_exchange_id = self.next_exchange_id.saturating_add(1);
-        self.active_exchange_stream_key = Some(stream_key.clone());
         let body = text.as_bytes();
         let mut bytes = format!(
             "POST {} HTTP/1.1\r\nHost: chatgpt.com\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
@@ -220,10 +235,23 @@ impl WebSocketConnection {
         bytes.extend_from_slice(body);
         observation.projected.push(self.synthetic_segment(
             segment,
-            stream_key,
+            stream_key.clone(),
             PayloadDirection::Outbound,
             bytes,
         ));
+        if self.active_exchange_stream_key.is_some() || self.discarding_response_until_terminal {
+            if self.pending_exchange_stream_keys.len() < MAX_PENDING_EXCHANGES {
+                self.pending_exchange_stream_keys.push_back(stream_key);
+            } else {
+                observation.completed_exchange_streams.push(stream_key);
+                observation.superseded_responses =
+                    observation.superseded_responses.saturating_add(1);
+            }
+            return;
+        }
+        self.discarding_response_until_terminal = false;
+        self.clear_response();
+        self.active_exchange_stream_key = Some(stream_key);
     }
 
     fn project_inbound(
@@ -245,6 +273,7 @@ impl WebSocketConnection {
                     .oversized_response_discarded_bytes
                     .saturating_add(message_bytes as u64);
                 if is_terminal_response_message(message_type) {
+                    self.activate_next_exchange();
                     self.discarding_response_until_terminal = false;
                 }
             }
@@ -264,7 +293,19 @@ impl WebSocketConnection {
             self.append_response_text(segment, done_text, observation);
             return Ok(());
         }
-        if message_type == "response.output_item.done" {
+        if message_type == "response.custom_tool_call_input.delta" {
+            self.capture_custom_tool_input_delta(value);
+            return Ok(());
+        }
+        if message_type == "response.custom_tool_call_input.done" {
+            self.capture_custom_tool_input_done(value);
+            return Ok(());
+        }
+        let output_item = value.get("item");
+        if message_type == "response.output_item.done"
+            || (message_type == "response.output_item.added"
+                && output_item.is_some_and(response_output_item_is_tool_call))
+        {
             self.capture_response_output_item(segment, value, observation)?;
             return Ok(());
         }
@@ -278,6 +319,7 @@ impl WebSocketConnection {
                 .saturating_add(message_bytes as u64);
             self.materialize_partial_response(segment, observation);
             self.discarding_response_until_terminal = false;
+            self.activate_next_exchange();
             return Ok(());
         };
         Self::ensure_response_output(&mut response, &self.response_output, &self.response_text);
@@ -287,6 +329,7 @@ impl WebSocketConnection {
                 .decode_discarded_bytes
                 .saturating_add(message_bytes as u64);
             self.materialize_partial_response(segment, observation);
+            self.activate_next_exchange();
             return Ok(());
         };
         let mut bytes = format!(
@@ -296,7 +339,7 @@ impl WebSocketConnection {
         .into_bytes();
         bytes.extend_from_slice(&body);
         let Some(stream_key) = self.active_exchange_stream_key.take() else {
-            self.clear_response();
+            self.activate_next_exchange();
             return Ok(());
         };
         let mut synthetic = self.synthetic_segment(
@@ -308,7 +351,7 @@ impl WebSocketConnection {
         if let Some(response_started_at) = self.response_started_at {
             synthetic.observed_at = response_started_at;
         }
-        self.clear_response();
+        self.activate_next_exchange();
         observation.projected.push(synthetic);
         observation.completed_exchange_streams.push(stream_key);
         self.discarding_response_until_terminal = false;
@@ -344,11 +387,23 @@ impl WebSocketConnection {
         value: &Value,
         observation: &mut ConnectionObservation,
     ) -> Result<(), ()> {
-        let item = value.get("item").ok_or(())?;
-        let item_bytes = serde_json::to_vec(item).map_err(|_| ())?.len();
+        let mut item = value.get("item").cloned().ok_or(())?;
+        self.merge_custom_tool_input(&mut item);
+        let existing_index = self
+            .response_output
+            .iter()
+            .position(|existing| response_output_items_match(existing, &item));
+        if let Some(index) = existing_index {
+            preserve_existing_output_item_fields(&self.response_output[index], &mut item);
+        }
+        let item_bytes = serde_json::to_vec(&item).map_err(|_| ())?.len();
+        let existing_bytes = existing_index
+            .and_then(|index| serde_json::to_vec(&self.response_output[index]).ok())
+            .map_or(0, |item| item.len());
         let Some(response_output_bytes) = self
             .response_output_bytes
-            .checked_add(item_bytes)
+            .checked_sub(existing_bytes)
+            .and_then(|bytes| bytes.checked_add(item_bytes))
             .filter(|bytes| {
                 bytes.saturating_add(self.response_text.len()) <= self.max_response_bytes
             })
@@ -360,9 +415,89 @@ impl WebSocketConnection {
             self.discarding_response_until_terminal = true;
             return Ok(());
         };
-        self.response_output.push(item.clone());
+        if let Some(index) = existing_index {
+            self.response_output[index] = item;
+        } else {
+            self.response_output.push(item);
+        }
         self.response_output_bytes = response_output_bytes;
         Ok(())
+    }
+
+    fn capture_custom_tool_input_delta(&mut self, value: &Value) {
+        let Some(item_id) = custom_tool_item_id(value) else {
+            return;
+        };
+        let Some(delta) = value.get("delta").and_then(Value::as_str) else {
+            return;
+        };
+        let input = {
+            let input = self
+                .response_custom_tool_inputs
+                .entry(item_id.to_string())
+                .or_default();
+            input.push_str(delta);
+            input.clone()
+        };
+        self.update_captured_custom_tool_input(item_id, input);
+    }
+
+    fn capture_custom_tool_input_done(&mut self, value: &Value) {
+        let Some(item_id) = custom_tool_item_id(value) else {
+            return;
+        };
+        let Some(input) = value.get("input").and_then(Value::as_str) else {
+            return;
+        };
+        self.response_custom_tool_inputs
+            .insert(item_id.to_string(), input.to_string());
+        self.update_captured_custom_tool_input(item_id, input.to_string());
+    }
+
+    fn merge_custom_tool_input(&mut self, item: &mut Value) {
+        if item.get("type").and_then(Value::as_str) != Some("custom_tool_call") {
+            return;
+        }
+        let item_ids = response_output_item_ids(item)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if item_ids.is_empty() {
+            return;
+        }
+        let input = item_ids
+            .iter()
+            .find_map(|item_id| self.response_custom_tool_inputs.remove(item_id))
+            .or_else(|| {
+                if self.response_custom_tool_inputs.len() != 1 {
+                    return None;
+                }
+                let key = self.response_custom_tool_inputs.keys().next()?.clone();
+                self.response_custom_tool_inputs.remove(&key)
+            });
+        let Some(input) = input else { return };
+        if item
+            .get("input")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            item["input"] = Value::String(input);
+        }
+    }
+
+    fn update_captured_custom_tool_input(&mut self, item_id: &str, input: String) {
+        let Some(item) = self.response_output.iter_mut().find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("custom_tool_call")
+                && response_output_item_ids(item).any(|candidate| candidate == item_id)
+        }) else {
+            return;
+        };
+        item["input"] = Value::String(input);
+        self.response_output_bytes = self
+            .response_output
+            .iter()
+            .filter_map(|item| serde_json::to_vec(item).ok())
+            .map(|item| item.len())
+            .sum();
     }
 
     fn materialize_partial_response(
@@ -374,13 +509,13 @@ impl WebSocketConnection {
             self.clear_response();
             return;
         };
-        let projected_before = observation.projected.len();
         self.append_partial_response_segments(source, &stream_key, observation);
-        if observation.projected.len() > projected_before {
-            observation.partial_exchange_streams.push(stream_key);
-        } else {
-            observation.completed_exchange_streams.push(stream_key);
-        }
+        // Reaching this path with an active exchange means response.create
+        // was already projected as an LLM request. Even when no response
+        // bytes were observed, the synthetic stream must be finalized as
+        // partial so the facade emits a request-only llm.call instead of
+        // forgetting the open request as if the exchange had completed.
+        observation.partial_exchange_streams.push(stream_key);
         self.clear_response();
     }
 
@@ -469,9 +604,15 @@ impl WebSocketConnection {
             }));
     }
 
+    fn activate_next_exchange(&mut self) {
+        self.clear_response();
+        self.active_exchange_stream_key = self.pending_exchange_stream_keys.pop_front();
+    }
+
     fn clear_response(&mut self) {
         self.response_text.clear();
         self.response_output.clear();
+        self.response_custom_tool_inputs.clear();
         self.response_output_bytes = 0;
         self.response_started_at = None;
     }
@@ -557,6 +698,46 @@ impl WebSocketConnection {
             symbol: "message".to_string(),
             protocol_hint: Some("websocket.responses".to_string()),
             bytes,
+        }
+    }
+}
+
+fn custom_tool_item_id(value: &Value) -> Option<&str> {
+    ["item_id", "call_id", "id"]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(Value::as_str))
+}
+
+fn response_output_item_is_tool_call(item: &Value) -> bool {
+    matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("function_call" | "custom_tool_call")
+    )
+}
+
+fn response_output_item_ids(item: &Value) -> impl Iterator<Item = &str> {
+    ["id", "call_id"]
+        .into_iter()
+        .filter_map(|key| item.get(key).and_then(Value::as_str))
+        .filter(|id| !id.is_empty())
+}
+
+fn response_output_items_match(existing: &Value, incoming: &Value) -> bool {
+    response_output_item_ids(existing)
+        .any(|existing_id| response_output_item_ids(incoming).any(|id| id == existing_id))
+        || existing == incoming
+}
+
+fn preserve_existing_output_item_fields(existing: &Value, incoming: &mut Value) {
+    let (Some(existing), Some(incoming)) = (existing.as_object(), incoming.as_object_mut()) else {
+        return;
+    };
+    for (key, value) in existing {
+        let missing_or_empty = incoming
+            .get(key)
+            .is_none_or(|candidate| candidate.as_str().is_some_and(str::is_empty));
+        if missing_or_empty {
+            incoming.insert(key.clone(), value.clone());
         }
     }
 }

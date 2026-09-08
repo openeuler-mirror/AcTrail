@@ -17,17 +17,18 @@ class ProbeCodexLLMCase(TestCase):
         results: dict[str, TestResult] = {}
         runtime: ActrailRuntime | None = None
         try:
+            try:
+                task = ProbeCodexLLMTask(self._config)
+            except AgentBinaryNotFoundError as error:
+                return TestResult(TestStatus.SKIPPED, str(error))
             runtime = ActrailRuntime.isolated(
                 self._config.repo,
                 self._config.bin_dir,
                 self._config.command_timeout_seconds,
                 test_context.output,
                 self._config.work_dir,
+                agent_invocation_commands=[task.native_binary],
             )
-            try:
-                task = ProbeCodexLLMTask(self._config, runtime)
-            except AgentBinaryNotFoundError as error:
-                return TestResult(TestStatus.SKIPPED, str(error))
             test_context.report_progress(
                 "agent_availability",
                 "checking codex availability",
@@ -56,7 +57,7 @@ class ProbeCodexLLMCase(TestCase):
                 "agent_launch",
                 "launching codex",
             )
-            launch = task.run()
+            launch = task.run(runtime)
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
@@ -65,6 +66,15 @@ class ProbeCodexLLMCase(TestCase):
             results["launch"] = TestResult(
                 TestStatus.PASSED,
                 "actrailctl launch and Codex exited successfully",
+            )
+            if "seccomp_notify:disabled" not in launch.output:
+                raise AssertionError(
+                    "Codex launch did not preserve the default disabled "
+                    "seccomp-notify policy"
+                )
+            results["seccomp_default"] = TestResult(
+                TestStatus.PASSED,
+                "Codex capture used the disabled seccomp-notify default",
             )
 
             test_context.report_progress(

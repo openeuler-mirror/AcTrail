@@ -183,6 +183,8 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         result = self.runtime.run(
             self.runtime.control_command(
                 "launch",
+                "--seccomp-notify",
+                "required",
                 "--name",
                 trace_name,
                 "--",

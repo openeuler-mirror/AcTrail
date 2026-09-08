@@ -24,6 +24,11 @@ enum actrail_socket_payload_syscall {
 
 enum actrail_socket_payload_flags {
     ACTRAIL_SOCKET_PAYLOAD_TRUNCATED = 1,
+    ACTRAIL_SOCKET_PAYLOAD_TOTAL_LIMIT = 2,
+    ACTRAIL_SOCKET_PAYLOAD_CHUNK_LIMIT = 4,
+    ACTRAIL_SOCKET_PAYLOAD_IOVEC_LIMIT = 8,
+    ACTRAIL_SOCKET_PAYLOAD_USER_READ_FAILED = 16,
+    ACTRAIL_SOCKET_PAYLOAD_POLICY_LIMITED = 32,
 };
 struct actrail_socket_payload_event {
     __u32 kind;
@@ -33,6 +38,10 @@ struct actrail_socket_payload_event {
     __u64 trace_id;
     __u64 observed_ktime_ns;
     __u64 sequence;
+    __u64 operation_id;
+    __u64 operation_offset;
+    __u64 operation_original_size;
+    __u64 operation_captured_size;
     __u32 fd;
     __u32 original_size;
     __u32 captured_size;
@@ -42,6 +51,8 @@ struct actrail_socket_payload_event {
     __u64 pid_generation;
     __u32 host_pid;
     __u32 host_tid;
+    __u32 operation_chunk_index;
+    __u32 reserved;
     __u8 bytes[ACTRAIL_SOCKET_PAYLOAD_ABI_MAX_BYTES];
 };
 
@@ -53,6 +64,7 @@ struct actrail_socket_payload_completion_event {
     __u64 trace_id;
     __u64 observed_ktime_ns;
     __u64 sequence;
+    __u64 operation_id;
     __u64 completed_size;
     __u64 requested_size;
     __u64 buffer_ptr;

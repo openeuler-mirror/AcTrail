@@ -1,12 +1,7 @@
 //! Enum-to-string encoders used in SQLite record storage.
 
 use model_core::diagnostics::{DiagnosticKind, DiagnosticSeverity};
-use model_core::event::EventKind;
-use model_core::payload::{
-    PayloadContentState, PayloadDirection, PayloadOperationCompletionState, PayloadRedactionState,
-    PayloadSourceBoundary, PayloadTruncationState,
-};
-use model_core::policy::{PolicyVerdict, TruncationReason};
+use model_core::policy::TruncationReason;
 use model_core::process::{ExitObservationSource, MembershipState};
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use rusqlite::Error as SqlError;
@@ -64,58 +59,6 @@ pub fn decode_exit_observation_source(raw: &str) -> Result<ExitObservationSource
     match raw {
         "event" => Ok(ExitObservationSource::Event),
         "reconciled" => Ok(ExitObservationSource::Reconciled),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_event_kind(value: EventKind) -> &'static str {
-    match value {
-        EventKind::Process => "process",
-        EventKind::File => "file",
-        EventKind::Net => "net",
-        EventKind::Ipc => "ipc",
-        EventKind::Stdio => "stdio",
-        EventKind::Application => "application",
-        EventKind::Resource => "resource",
-        EventKind::Control => "control",
-        EventKind::Loss => "loss",
-        EventKind::Label => "label",
-        EventKind::Enforcement => "enforcement",
-    }
-}
-
-pub fn decode_event_kind(raw: &str) -> Result<EventKind, SqlError> {
-    match raw {
-        "process" => Ok(EventKind::Process),
-        "file" => Ok(EventKind::File),
-        "net" => Ok(EventKind::Net),
-        "ipc" => Ok(EventKind::Ipc),
-        "stdio" => Ok(EventKind::Stdio),
-        "application" => Ok(EventKind::Application),
-        "resource" => Ok(EventKind::Resource),
-        "control" => Ok(EventKind::Control),
-        "loss" => Ok(EventKind::Loss),
-        "label" => Ok(EventKind::Label),
-        "enforcement" => Ok(EventKind::Enforcement),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_policy_verdict(value: PolicyVerdict) -> &'static str {
-    match value {
-        PolicyVerdict::Allow => "allow",
-        PolicyVerdict::Redact => "redact",
-        PolicyVerdict::Drop => "drop",
-        PolicyVerdict::Fatal => "fatal",
-    }
-}
-
-pub(crate) fn decode_policy_verdict(raw: &str) -> Result<PolicyVerdict, SqlError> {
-    match raw {
-        "allow" => Ok(PolicyVerdict::Allow),
-        "redact" => Ok(PolicyVerdict::Redact),
-        "drop" => Ok(PolicyVerdict::Drop),
-        "fatal" => Ok(PolicyVerdict::Fatal),
         _ => Err(SqlError::InvalidQuery),
     }
 }
@@ -185,103 +128,6 @@ pub(crate) fn decode_truncation_reason(raw: &str) -> Result<TruncationReason, Sq
     match raw {
         "policy_limit" => Ok(TruncationReason::PolicyLimit),
         "transport_limit" => Ok(TruncationReason::TransportLimit),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_payload_source_boundary(value: PayloadSourceBoundary) -> &'static str {
-    match value {
-        PayloadSourceBoundary::TlsUserSpace => "tls_user_space",
-        PayloadSourceBoundary::Syscall => "syscall",
-        PayloadSourceBoundary::Stdio => "stdio",
-    }
-}
-
-pub fn decode_payload_source_boundary(raw: &str) -> Result<PayloadSourceBoundary, SqlError> {
-    match raw {
-        "tls_user_space" => Ok(PayloadSourceBoundary::TlsUserSpace),
-        "syscall" => Ok(PayloadSourceBoundary::Syscall),
-        "stdio" => Ok(PayloadSourceBoundary::Stdio),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_payload_content_state(value: PayloadContentState) -> &'static str {
-    match value {
-        PayloadContentState::Plaintext => "plaintext",
-        PayloadContentState::Ciphertext => "ciphertext",
-    }
-}
-
-pub fn decode_payload_content_state(raw: &str) -> Result<PayloadContentState, SqlError> {
-    match raw {
-        "plaintext" => Ok(PayloadContentState::Plaintext),
-        "ciphertext" => Ok(PayloadContentState::Ciphertext),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_payload_direction(value: PayloadDirection) -> &'static str {
-    match value {
-        PayloadDirection::Outbound => "outbound",
-        PayloadDirection::Inbound => "inbound",
-    }
-}
-
-pub fn decode_payload_direction(raw: &str) -> Result<PayloadDirection, SqlError> {
-    match raw {
-        "outbound" => Ok(PayloadDirection::Outbound),
-        "inbound" => Ok(PayloadDirection::Inbound),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_payload_redaction_state(value: PayloadRedactionState) -> &'static str {
-    match value {
-        PayloadRedactionState::NotRequired => "not_required",
-        PayloadRedactionState::Redacted => "redacted",
-        PayloadRedactionState::Unredacted => "unredacted",
-    }
-}
-
-pub fn decode_payload_redaction_state(raw: &str) -> Result<PayloadRedactionState, SqlError> {
-    match raw {
-        "not_required" => Ok(PayloadRedactionState::NotRequired),
-        "redacted" => Ok(PayloadRedactionState::Redacted),
-        "unredacted" => Ok(PayloadRedactionState::Unredacted),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_payload_truncation_state(value: PayloadTruncationState) -> &'static str {
-    match value {
-        PayloadTruncationState::Complete => "complete",
-        PayloadTruncationState::Truncated => "truncated",
-    }
-}
-
-pub fn decode_payload_truncation_state(raw: &str) -> Result<PayloadTruncationState, SqlError> {
-    match raw {
-        "complete" => Ok(PayloadTruncationState::Complete),
-        "truncated" => Ok(PayloadTruncationState::Truncated),
-        _ => Err(SqlError::InvalidQuery),
-    }
-}
-
-pub fn encode_payload_operation_completion_state(
-    value: PayloadOperationCompletionState,
-) -> &'static str {
-    value.as_str()
-}
-
-pub fn decode_payload_operation_completion_state(
-    raw: &str,
-) -> Result<PayloadOperationCompletionState, SqlError> {
-    match raw {
-        "unknown" => Ok(PayloadOperationCompletionState::Unknown),
-        "success" => Ok(PayloadOperationCompletionState::Success),
-        "partial" => Ok(PayloadOperationCompletionState::Partial),
-        "failed" => Ok(PayloadOperationCompletionState::Failed),
         _ => Err(SqlError::InvalidQuery),
     }
 }

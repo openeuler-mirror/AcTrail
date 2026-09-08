@@ -8,6 +8,7 @@ pub(super) use evidence::{
 };
 pub(in crate::llm_pipeline) use policy::semantic_payload_draft;
 pub(crate) use request_blocks::canonical_json as canonical_llm_json;
+pub(crate) use request_blocks::canonical_json_text as canonical_llm_json_text;
 pub(super) use request_blocks::{
     FORMAT_VERSION, canonical_request_content, canonical_shape_metadata,
 };

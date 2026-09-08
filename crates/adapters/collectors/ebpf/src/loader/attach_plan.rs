@@ -24,6 +24,23 @@ const PROCESS_CONTEXT_PROGRAMS: &[&str] = &[
     "handle_sched_process_exit",
 ];
 
+const PROC_EXEC_CONTEXT_PROGRAMS: &[&str] = &[
+    "handle_sched_process_fork",
+    "handle_sched_process_exec",
+    "handle_sys_enter_execve",
+    "handle_sys_exit_execve",
+    "handle_sys_enter_execveat",
+    "handle_sys_exit_execveat",
+    "handle_sys_enter_fork",
+    "handle_sys_exit_fork",
+    "handle_sys_enter_vfork",
+    "handle_sys_exit_vfork",
+    "handle_sys_enter_clone",
+    "handle_sys_exit_clone",
+    "handle_sys_enter_clone3",
+    "handle_sys_exit_clone3",
+];
+
 const TRACKING_REGISTRATION_PROGRAMS: &[&str] =
     &["handle_sched_process_exec", "handle_sched_process_exit"];
 
@@ -145,6 +162,15 @@ const FS_ACCESS_BASIC_CONTEXT_PROGRAMS: &[&str] = &[
 ];
 
 const PLATFORM_OPTIONAL_TRACEPOINT_PROGRAMS: &[&str] = &[
+    // arm64 exposes process creation through clone/clone3 and has no separate
+    // fork/vfork syscall tracepoints. clone3 is likewise absent on older
+    // kernels, while clone remains the portable required fallback.
+    "handle_sys_enter_fork",
+    "handle_sys_exit_fork",
+    "handle_sys_enter_vfork",
+    "handle_sys_exit_vfork",
+    "handle_sys_enter_clone3",
+    "handle_sys_exit_clone3",
     "handle_sys_enter_close_range",
     "handle_sys_exit_close_range",
     "handle_sys_enter_dup2",
@@ -483,6 +509,7 @@ fn capability_configured_for_attach(
 ) -> bool {
     match capability {
         Capability::ProcLifecycle
+        | Capability::ProcExecContext
         | Capability::NetTransport
         | Capability::FsAccessBasic
         | Capability::FsMmap => true,
@@ -504,6 +531,7 @@ fn capability_configured_for_attach(
 fn capability_required_programs(capability: &Capability) -> Option<&'static [&'static str]> {
     match capability {
         Capability::ProcLifecycle => Some(PROC_LIFECYCLE_PROGRAMS),
+        Capability::ProcExecContext => Some(PROC_EXEC_CONTEXT_PROGRAMS),
         Capability::NetTransport => Some(NET_TRANSPORT_PROGRAMS),
         Capability::FsAccessBasic => Some(FS_ACCESS_BASIC_FD_PROGRAMS),
         Capability::FsMmap => Some(FS_MMAP_PROGRAMS),
@@ -525,6 +553,7 @@ fn capability_programs(program_name: &str) -> Option<()> {
         FS_ACCESS_BASIC_PATH_PROGRAMS,
         FS_ACCESS_BASIC_CONTEXT_PROGRAMS,
         PROCESS_CONTEXT_PROGRAMS,
+        PROC_EXEC_CONTEXT_PROGRAMS,
         FD_PROCESS_LIFECYCLE_PROGRAMS,
         PROCESS_SIGNAL_DIAGNOSTIC_PROGRAMS,
         STDIO_PROGRAMS,

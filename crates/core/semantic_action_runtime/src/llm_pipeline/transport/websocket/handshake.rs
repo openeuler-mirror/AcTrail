@@ -1,11 +1,24 @@
 //! HTTP upgrade recognition for WebSocket connections.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use model_core::payload::{PayloadSegment, PayloadStreamKey};
+use sha1::{Digest, Sha1};
 
 const HEADER_END: &[u8] = b"\r\n\r\n";
 pub(super) const REQUEST_PREFIX: &[u8] = b"GET ";
 pub(super) const ACCEPT_PREFIX: &[u8] = b"HTTP/1.1 101 ";
 const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
+const WEBSOCKET_ACCEPT_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+pub(super) struct WebSocketRequest {
+    pub(super) path: String,
+    pub(super) expected_accept: String,
+}
+
+pub(super) struct WebSocketAccept {
+    pub(super) extensions: NegotiatedExtensions,
+    pub(super) value: String,
+}
 
 #[derive(Default)]
 pub(super) struct HandshakeCandidate {
@@ -52,22 +65,20 @@ impl HandshakeCandidate {
         true
     }
 
-    pub(super) fn request_path(&mut self) -> Option<(String, PayloadStreamKey)> {
+    pub(super) fn request(&mut self) -> Option<(WebSocketRequest, PayloadStreamKey)> {
         let header_end = self.header_end?;
-        let path = Self::websocket_request_path(&self.buffer[..header_end]);
+        let request = Self::websocket_request(&self.buffer[..header_end]);
         let stream_key = self.stream_key.clone();
         self.clear();
-        path.zip(stream_key)
+        request.zip(stream_key)
     }
 
-    pub(super) fn accepted_extensions(
-        &mut self,
-    ) -> Option<(NegotiatedExtensions, PayloadStreamKey)> {
+    pub(super) fn accepted(&mut self) -> Option<(WebSocketAccept, PayloadStreamKey)> {
         let header_end = self.header_end?;
-        let extensions = Self::websocket_accept(&self.buffer[..header_end]);
+        let accepted = Self::websocket_accept(&self.buffer[..header_end]);
         let stream_key = self.stream_key.clone();
         self.clear();
-        extensions.zip(stream_key)
+        accepted.zip(stream_key)
     }
 
     fn start(&mut self, segment: &PayloadSegment) {
@@ -130,7 +141,7 @@ impl HandshakeCandidate {
         self.clear();
     }
 
-    fn websocket_request_path(bytes: &[u8]) -> Option<String> {
+    fn websocket_request(bytes: &[u8]) -> Option<WebSocketRequest> {
         let header = std::str::from_utf8(bytes).ok()?;
         let mut lines = header.lines();
         let first = lines.next()?;
@@ -139,27 +150,36 @@ impl HandshakeCandidate {
             return None;
         }
         let path = parts.next()?.to_string();
-        if parts.next()? != "HTTP/1.1" || !Self::has_upgrade_headers(lines) {
+        if parts.next()? != "HTTP/1.1" || !Self::has_upgrade_headers(lines.clone()) {
             return None;
         }
-        Some(path)
+        let key = Self::header_value(lines, "sec-websocket-key")?;
+        let digest = Sha1::digest(format!("{key}{WEBSOCKET_ACCEPT_GUID}").as_bytes());
+        Some(WebSocketRequest {
+            path,
+            expected_accept: STANDARD.encode(digest),
+        })
     }
 
-    fn websocket_accept(bytes: &[u8]) -> Option<NegotiatedExtensions> {
+    fn websocket_accept(bytes: &[u8]) -> Option<WebSocketAccept> {
         let header = std::str::from_utf8(bytes).ok()?;
         let mut lines = header.lines();
         if !lines.next()?.starts_with("HTTP/1.1 101 ") || !Self::has_upgrade_headers(lines.clone())
         {
             return None;
         }
+        let value = Self::header_value(lines.clone(), "sec-websocket-accept")?.to_string();
         let extensions = Self::header_value(lines, "sec-websocket-extensions").unwrap_or_default();
         let lower = extensions.to_ascii_lowercase();
-        Some(NegotiatedExtensions {
-            permessage_deflate: lower
-                .split(',')
-                .any(|value| value.trim().starts_with("permessage-deflate")),
-            client_no_context_takeover: lower.contains("client_no_context_takeover"),
-            server_no_context_takeover: lower.contains("server_no_context_takeover"),
+        Some(WebSocketAccept {
+            extensions: NegotiatedExtensions {
+                permessage_deflate: lower
+                    .split(',')
+                    .any(|value| value.trim().starts_with("permessage-deflate")),
+                client_no_context_takeover: lower.contains("client_no_context_takeover"),
+                server_no_context_takeover: lower.contains("server_no_context_takeover"),
+            },
+            value,
         })
     }
 
@@ -201,6 +221,7 @@ impl HandshakeCandidate {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct NegotiatedExtensions {
     pub(super) permessage_deflate: bool,
     pub(super) client_no_context_takeover: bool,

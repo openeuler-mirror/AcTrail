@@ -47,4 +47,11 @@ docker exec actrail-agent actrailctl probe \
   --json
 ```
 
-接受降级时保留 `auto`；必须使用 seccomp-notify 时，用仓库提供的 `deploy/container-auto/seccomp/actrail-notify.json` 重新创建容器并改为 `required`。`seccomp=unconfined` 会移除 Docker 外层 syscall 过滤，只能用于可信排障环境。
+默认启动禁用 seccomp-notify。必须使用时，先在 operator 配置中显式启用：
+
+```toml
+[seccomp_notify]
+enabled = true
+```
+
+再用仓库提供的 `deploy/container-auto/seccomp/actrail-notify.json` 重新创建容器，并将 CLI 改为 `--seccomp-notify required`。需要允许降级时使用 `auto`。`seccomp=unconfined` 会移除 Docker 外层 syscall 过滤，只能用于可信排障环境。

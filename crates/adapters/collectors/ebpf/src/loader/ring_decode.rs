@@ -43,6 +43,11 @@ pub const STDIO_PAYLOAD_EVENT_KIND: u32 = 400;
 pub const STDIO_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 401;
 pub const SOCKET_PAYLOAD_EVENT_KIND: u32 = 500;
 pub const SOCKET_PAYLOAD_COMPLETION_EVENT_KIND: u32 = 501;
+pub const PROCESS_EXEC_ATTEMPT_EVENT_KIND: u32 = 5;
+pub const PROCESS_EXEC_RESULT_EVENT_KIND: u32 = 6;
+pub const PROCESS_FORK_ATTEMPT_EVENT_KIND: u32 = 7;
+pub const PROCESS_FORK_RESULT_EVENT_KIND: u32 = 8;
+pub const PROCESS_EXEC_ARG_EVENT_KIND: u32 = 9;
 
 const NET_CONNECT_EVENT_KIND: u32 = 100;
 const NET_ACCEPT_EVENT_KIND: u32 = 101;
@@ -67,6 +72,11 @@ pub enum KernelEvent {
     StdioPayloadCompletion(KernelStdioPayloadCompletionEvent),
     SocketPayload(KernelSocketPayloadEvent),
     SocketPayloadCompletion(KernelSocketPayloadCompletionEvent),
+    ProcessExecAttempt(KernelProcessExecAttemptEvent),
+    ProcessExecArg(KernelProcessExecArgEvent),
+    ProcessExecResult(KernelProcessExecResultEvent),
+    ProcessForkAttempt(KernelProcessForkAttemptEvent),
+    ProcessForkResult(KernelProcessForkResultEvent),
 }
 
 impl KernelEvent {
@@ -83,6 +93,11 @@ impl KernelEvent {
             Self::StdioPayloadCompletion(event) => event.observed_ktime_ns,
             Self::SocketPayload(event) => event.observed_ktime_ns,
             Self::SocketPayloadCompletion(event) => event.observed_ktime_ns,
+            Self::ProcessExecAttempt(event) => event.observed_ktime_ns,
+            Self::ProcessExecArg(event) => event.observed_ktime_ns,
+            Self::ProcessExecResult(event) => event.observed_ktime_ns,
+            Self::ProcessForkAttempt(event) => event.observed_ktime_ns,
+            Self::ProcessForkResult(event) => event.observed_ktime_ns,
         })
     }
 }
@@ -162,11 +177,7 @@ pub struct KernelEventIdentity {
 
 impl KernelEventIdentity {
     pub const fn binding_tgid(self) -> u32 {
-        if self.kernel_tgid != 0 {
-            self.kernel_tgid
-        } else {
-            self.observer_namespace_tgid
-        }
+        self.kernel_tgid
     }
 }
 
@@ -184,11 +195,14 @@ pub enum KernelObservationPayload {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelForkPayload {
     pub parent: KernelEventIdentity,
+    pub attempt_id: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelExecPayload {
     pub filename: Option<KernelExecFilename>,
+    pub attempt_id: u64,
+    pub exec_attempt: Option<KernelProcessExecAttemptEvent>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,6 +337,85 @@ pub struct KernelExecFilename {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelProcessExecAttemptEvent {
+    pub pid: u32,
+    pub tid: u32,
+    pub syscall: u32,
+    pub trace_id: TraceId,
+    pub observed_ktime_ns: u64,
+    pub attempt_id: u64,
+    pub pid_generation: u64,
+    pub execveat_dirfd: i32,
+    pub execveat_flags: u32,
+    pub capture_flags: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
+    pub path: String,
+    pub argv: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelProcessExecArgEvent {
+    pub pid: u32,
+    pub tid: u32,
+    pub syscall: u32,
+    pub trace_id: TraceId,
+    pub observed_ktime_ns: u64,
+    pub attempt_id: u64,
+    pub pid_generation: u64,
+    pub index: u32,
+    pub capture_flags: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
+    pub arg: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelProcessExecResultEvent {
+    pub pid: u32,
+    pub tid: u32,
+    pub syscall: u32,
+    pub trace_id: TraceId,
+    pub observed_ktime_ns: u64,
+    pub attempt_id: u64,
+    pub pid_generation: u64,
+    pub result: i64,
+    pub host_pid: u32,
+    pub host_tid: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelProcessForkAttemptEvent {
+    pub pid: u32,
+    pub tid: u32,
+    pub syscall: u32,
+    pub trace_id: TraceId,
+    pub observed_ktime_ns: u64,
+    pub attempt_id: u64,
+    pub pid_generation: u64,
+    pub flags: u64,
+    pub clone3_args_ptr: u64,
+    pub clone3_args_size: u64,
+    pub capture_flags: u32,
+    pub host_pid: u32,
+    pub host_tid: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelProcessForkResultEvent {
+    pub pid: u32,
+    pub tid: u32,
+    pub syscall: u32,
+    pub trace_id: TraceId,
+    pub observed_ktime_ns: u64,
+    pub attempt_id: u64,
+    pub pid_generation: u64,
+    pub result: i64,
+    pub host_pid: u32,
+    pub host_tid: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelFilePathEvent {
     pub kind: u32,
     pub pid: u32,
@@ -413,6 +506,21 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
         return decode_socket_payload_completion_event(raw)
             .map(KernelEvent::SocketPayloadCompletion);
     }
+    if kind == PROCESS_EXEC_ATTEMPT_EVENT_KIND {
+        return decode_process_exec_attempt_event(raw).map(KernelEvent::ProcessExecAttempt);
+    }
+    if kind == PROCESS_EXEC_ARG_EVENT_KIND {
+        return decode_process_exec_arg_event(raw).map(KernelEvent::ProcessExecArg);
+    }
+    if kind == PROCESS_EXEC_RESULT_EVENT_KIND {
+        return decode_process_exec_result_event(raw).map(KernelEvent::ProcessExecResult);
+    }
+    if kind == PROCESS_FORK_ATTEMPT_EVENT_KIND {
+        return decode_process_fork_attempt_event(raw).map(KernelEvent::ProcessForkAttempt);
+    }
+    if kind == PROCESS_FORK_RESULT_EVENT_KIND {
+        return decode_process_fork_result_event(raw).map(KernelEvent::ProcessForkResult);
+    }
     if (FILE_EVENT_OPEN..=FILE_EVENT_READ_SUMMARY).contains(&kind) {
         return decode_file_path_event(raw).map(KernelEvent::FilePath);
     }
@@ -420,6 +528,151 @@ pub fn decode_kernel_event(raw: &[u8]) -> Result<KernelEvent, LoaderError> {
         "decode_kernel_event",
         format!("unknown kernel event kind {kind}"),
     ))
+}
+
+fn decode_process_exec_attempt_event(
+    raw: &[u8],
+) -> Result<KernelProcessExecAttemptEvent, LoaderError> {
+    const HEADER_SIZE: usize = 80;
+    const PATH_MAX: usize = 4_096;
+    const EVENT_SIZE: usize = HEADER_SIZE + PATH_MAX;
+    if raw.len() != EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_process_exec_attempt",
+            format!("unexpected event size {}, expected {EVENT_SIZE}", raw.len()),
+        ));
+    }
+    let path_size = read_u32(raw, 56).expect("event length checked") as usize;
+    if path_size > PATH_MAX {
+        return Err(LoaderError::new(
+            "decode_process_exec_attempt",
+            format!("invalid path size {path_size}"),
+        ));
+    }
+    Ok(KernelProcessExecAttemptEvent {
+        pid: read_u32(raw, 4).expect("event length checked"),
+        tid: read_u32(raw, 8).expect("event length checked"),
+        syscall: read_u32(raw, 12).expect("event length checked"),
+        trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
+        observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
+        attempt_id: read_u64(raw, 32).expect("event length checked"),
+        pid_generation: read_u64(raw, 40).expect("event length checked"),
+        execveat_dirfd: read_i32(raw, 48).expect("event length checked"),
+        execveat_flags: read_u32(raw, 52).expect("event length checked"),
+        capture_flags: read_u32(raw, 68).expect("event length checked"),
+        host_pid: read_u32(raw, 72).expect("event length checked"),
+        host_tid: read_u32(raw, 76).expect("event length checked"),
+        path: String::from_utf8_lossy(&raw[HEADER_SIZE..HEADER_SIZE + path_size]).into_owned(),
+        argv: Vec::new(),
+    })
+}
+
+fn decode_process_exec_arg_event(raw: &[u8]) -> Result<KernelProcessExecArgEvent, LoaderError> {
+    const HEADER_SIZE: usize = 72;
+    const ARG_MAX: usize = 4_096;
+    const EVENT_SIZE: usize = HEADER_SIZE + ARG_MAX;
+    if raw.len() != EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_process_exec_arg",
+            format!("unexpected event size {}, expected {EVENT_SIZE}", raw.len()),
+        ));
+    }
+    let arg_size = read_u32(raw, 52).expect("event length checked") as usize;
+    if arg_size > ARG_MAX {
+        return Err(LoaderError::new(
+            "decode_process_exec_arg",
+            format!("invalid argument size {arg_size}"),
+        ));
+    }
+    Ok(KernelProcessExecArgEvent {
+        pid: read_u32(raw, 4).expect("event length checked"),
+        tid: read_u32(raw, 8).expect("event length checked"),
+        syscall: read_u32(raw, 12).expect("event length checked"),
+        trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
+        observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
+        attempt_id: read_u64(raw, 32).expect("event length checked"),
+        pid_generation: read_u64(raw, 40).expect("event length checked"),
+        index: read_u32(raw, 48).expect("event length checked"),
+        capture_flags: read_u32(raw, 56).expect("event length checked"),
+        host_pid: read_u32(raw, 60).expect("event length checked"),
+        host_tid: read_u32(raw, 64).expect("event length checked"),
+        arg: String::from_utf8_lossy(&raw[HEADER_SIZE..HEADER_SIZE + arg_size]).into_owned(),
+    })
+}
+
+fn decode_process_exec_result_event(
+    raw: &[u8],
+) -> Result<KernelProcessExecResultEvent, LoaderError> {
+    const EVENT_SIZE: usize = 64;
+    if raw.len() != EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_process_exec_result",
+            format!("unexpected event size {}, expected {EVENT_SIZE}", raw.len()),
+        ));
+    }
+    Ok(KernelProcessExecResultEvent {
+        pid: read_u32(raw, 4).expect("event length checked"),
+        tid: read_u32(raw, 8).expect("event length checked"),
+        syscall: read_u32(raw, 12).expect("event length checked"),
+        trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
+        observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
+        attempt_id: read_u64(raw, 32).expect("event length checked"),
+        pid_generation: read_u64(raw, 40).expect("event length checked"),
+        result: read_i64(raw, 48).expect("event length checked"),
+        host_pid: read_u32(raw, 56).expect("event length checked"),
+        host_tid: read_u32(raw, 60).expect("event length checked"),
+    })
+}
+
+fn decode_process_fork_attempt_event(
+    raw: &[u8],
+) -> Result<KernelProcessForkAttemptEvent, LoaderError> {
+    const EVENT_SIZE: usize = 88;
+    if raw.len() != EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_process_fork_attempt",
+            format!("unexpected event size {}, expected {EVENT_SIZE}", raw.len()),
+        ));
+    }
+    Ok(KernelProcessForkAttemptEvent {
+        pid: read_u32(raw, 4).expect("event length checked"),
+        tid: read_u32(raw, 8).expect("event length checked"),
+        syscall: read_u32(raw, 12).expect("event length checked"),
+        trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
+        observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
+        attempt_id: read_u64(raw, 32).expect("event length checked"),
+        pid_generation: read_u64(raw, 40).expect("event length checked"),
+        flags: read_u64(raw, 48).expect("event length checked"),
+        clone3_args_ptr: read_u64(raw, 56).expect("event length checked"),
+        clone3_args_size: read_u64(raw, 64).expect("event length checked"),
+        capture_flags: read_u32(raw, 72).expect("event length checked"),
+        host_pid: read_u32(raw, 76).expect("event length checked"),
+        host_tid: read_u32(raw, 80).expect("event length checked"),
+    })
+}
+
+fn decode_process_fork_result_event(
+    raw: &[u8],
+) -> Result<KernelProcessForkResultEvent, LoaderError> {
+    const EVENT_SIZE: usize = 64;
+    if raw.len() != EVENT_SIZE {
+        return Err(LoaderError::new(
+            "decode_process_fork_result",
+            format!("unexpected event size {}, expected {EVENT_SIZE}", raw.len()),
+        ));
+    }
+    Ok(KernelProcessForkResultEvent {
+        pid: read_u32(raw, 4).expect("event length checked"),
+        tid: read_u32(raw, 8).expect("event length checked"),
+        syscall: read_u32(raw, 12).expect("event length checked"),
+        trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
+        observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
+        attempt_id: read_u64(raw, 32).expect("event length checked"),
+        pid_generation: read_u64(raw, 40).expect("event length checked"),
+        result: read_i64(raw, 48).expect("event length checked"),
+        host_pid: read_u32(raw, 56).expect("event length checked"),
+        host_tid: read_u32(raw, 60).expect("event length checked"),
+    })
 }
 
 fn decode_launch_binding_failure(raw: &[u8]) -> Result<LaunchBindingFailure, LoaderError> {
@@ -461,6 +714,7 @@ fn decode_process_fork_event(raw: &[u8]) -> Result<KernelObservationEvent, Loade
                 start_boottime_ns: read_u64(raw, EVENT_HEADER_SIZE + 8)
                     .expect("event length checked"),
             },
+            attempt_id: read_u64(raw, EVENT_HEADER_SIZE + 16).expect("event length checked"),
         }),
     })
 }
@@ -497,7 +751,11 @@ fn decode_process_exec_event(raw: &[u8]) -> Result<KernelObservationEvent, Loade
     }
     Ok(KernelObservationEvent {
         common: header.common(),
-        payload: KernelObservationPayload::Exec(KernelExecPayload { filename }),
+        payload: KernelObservationPayload::Exec(KernelExecPayload {
+            filename,
+            attempt_id: read_u64(raw, EVENT_HEADER_SIZE).expect("event length checked"),
+            exec_attempt: None,
+        }),
     })
 }
 

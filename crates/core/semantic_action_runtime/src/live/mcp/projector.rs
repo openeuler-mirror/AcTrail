@@ -10,7 +10,6 @@ use semantic_action::{
     McpJsonRpcContentWrite, SemanticAction, SemanticActionLink, attr_keys as attrs,
 };
 
-use super::attribution::McpAttributionState;
 use super::content::McpJsonRpcContentProjector;
 use super::diagnostic::{LiveMcpStdioDiagnostic, McpStdioMetrics};
 use super::model::{McpCorrelationState, McpServerState, McpStdioSessionKey};
@@ -23,7 +22,6 @@ pub(in crate::live) struct LiveMcpProjector {
     pub(super) clients: BTreeMap<McpStdioSessionKey, ProcessIdentity>,
     pub(super) exec_parents: BTreeMap<McpStdioSessionKey, ProcessIdentity>,
     pub(super) correlation: McpCorrelationState,
-    pub(super) attribution: McpAttributionState,
     pub(super) content: McpJsonRpcContentProjector,
 }
 
@@ -74,7 +72,6 @@ impl LiveMcpProjector {
             clients: BTreeMap::new(),
             exec_parents: BTreeMap::new(),
             correlation: McpCorrelationState::default(),
-            attribution: McpAttributionState::default(),
             content: McpJsonRpcContentProjector::new(content_retention),
         }
     }
@@ -211,7 +208,6 @@ impl LiveMcpProjector {
         self.correlation
             .open_by_response
             .retain(|key, _| key.session.trace_id != trace_id);
-        self.forget_attribution_trace(trace_id);
     }
 
     pub(in crate::live) fn take_stdio_metrics(&mut self) -> McpStdioMetrics {

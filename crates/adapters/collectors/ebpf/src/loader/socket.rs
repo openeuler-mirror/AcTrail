@@ -8,8 +8,9 @@ use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 use crate::loader::LoaderError;
 
 const SOCKET_PAYLOAD_MAX_SEGMENT_BYTES: u32 = 4_095;
+const SOCKET_PAYLOAD_POLICY_LIMITED_FLAG: u32 = 32;
 const SOCKET_PAYLOAD_CONFIG_KEY: u32 = 0;
-const SOCKET_PAYLOAD_CONFIG_FIELDS: usize = 3;
+const SOCKET_PAYLOAD_CONFIG_FIELDS: usize = 5;
 const SOCKET_PAYLOAD_CONFIG_FIELD_SIZE: usize = std::mem::size_of::<u32>();
 const SOCKET_PAYLOAD_CONFIG_VALUE_SIZE: usize =
     SOCKET_PAYLOAD_CONFIG_FIELDS * SOCKET_PAYLOAD_CONFIG_FIELD_SIZE;
@@ -85,7 +86,16 @@ fn payload_socket_config_value(
     let fields = [
         bool_field(config.enabled),
         config.max_segment_bytes,
-        bool_field(config.capture_backend == PayloadSocketCaptureBackend::BpfCopySeccompFallback),
+        config.max_operation_bytes,
+        bool_field(
+            config.enabled
+                && config.capture_backend == PayloadSocketCaptureBackend::BpfCopySeccompFallback,
+        ),
+        if config.enabled && config.capture_backend == PayloadSocketCaptureBackend::BpfCopy {
+            SOCKET_PAYLOAD_POLICY_LIMITED_FLAG
+        } else {
+            0
+        },
     ];
     let mut value = [0_u8; SOCKET_PAYLOAD_CONFIG_VALUE_SIZE];
     for (index, field) in fields.into_iter().enumerate() {

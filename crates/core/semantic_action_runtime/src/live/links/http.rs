@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole,
 };
 
@@ -26,7 +26,7 @@ impl HttpMessageLinkProjector {
             parent_action_id: exchange.request.action_id.clone(),
             child_action_id: exchange.response.action_id.clone(),
             role: SemanticActionLinkRole::HttpRequestHttpResponse,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: Vec::new(),
             attributes: BTreeMap::new(),
@@ -48,7 +48,7 @@ impl HttpMessageLinkProjector {
             parent_action_id: llm_request.action_id.clone(),
             child_action_id: http_request.action_id.clone(),
             role: SemanticActionLinkRole::LlmRequestHttpMessage,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence,
             attributes: BTreeMap::new(),
@@ -79,7 +79,7 @@ impl HttpMessageLinkProjector {
             parent_action_id: llm_response.action_id.clone(),
             child_action_id: http_response.action_id.clone(),
             role: SemanticActionLinkRole::LlmResponseHttpMessage,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence,
             attributes: BTreeMap::new(),

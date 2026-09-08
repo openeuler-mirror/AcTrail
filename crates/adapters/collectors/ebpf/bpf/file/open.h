@@ -81,7 +81,7 @@ static __always_inline int emit_file_openat2_enter(
     if (!file_event_capture_enabled()) {
         return 0;
     }
-    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     if (!tgid) {
         return 0;
     }

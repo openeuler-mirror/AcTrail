@@ -11,7 +11,7 @@ pub struct SeccompNotifyConfig {
 impl Default for SeccompNotifyConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             reserved_listener_fd: 253,
         }
     }
@@ -58,6 +58,7 @@ pub struct ProcessSeccompConfig {
     pub syscalls: Vec<ProcessSeccompSyscall>,
     pub max_args: u32,
     pub max_arg_bytes: u32,
+    pub max_total_arg_bytes: u32,
     /// Bounds both unmaterialized process observations and exec intents awaiting completion.
     pub pending_max_entries: u32,
 }
@@ -65,17 +66,14 @@ pub struct ProcessSeccompConfig {
 impl Default for ProcessSeccompConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             syscalls: vec![
                 ProcessSeccompSyscall::Execve,
                 ProcessSeccompSyscall::Execveat,
-                ProcessSeccompSyscall::Fork,
-                ProcessSeccompSyscall::Vfork,
-                ProcessSeccompSyscall::Clone,
-                ProcessSeccompSyscall::Clone3,
             ],
             max_args: 128,
-            max_arg_bytes: 8_192,
+            max_arg_bytes: 4_095,
+            max_total_arg_bytes: 4_095,
             pending_max_entries: 8_192,
         }
     }

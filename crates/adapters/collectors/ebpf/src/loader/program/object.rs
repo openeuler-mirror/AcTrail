@@ -192,8 +192,13 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     const FILE_EVENT_SIZE: usize = FILE_EVENT_HEADER_SIZE + 256 * 2;
     const STDIO_EVENT_SIZE: usize = 80 + 4_096;
     const STDIO_COMPLETION_EVENT_SIZE: usize = 88;
-    const SOCKET_EVENT_SIZE: usize = 80 + 4_096;
-    const SOCKET_COMPLETION_EVENT_SIZE: usize = 96;
+    const SOCKET_EVENT_SIZE: usize = 120 + 4_096;
+    const SOCKET_COMPLETION_EVENT_SIZE: usize = 104;
+    const PROCESS_EXEC_ATTEMPT_EVENT_SIZE: usize = 80 + 4_096;
+    const PROCESS_EXEC_ARG_EVENT_SIZE: usize = 72 + 4_096;
+    const PROCESS_EXEC_RESULT_EVENT_SIZE: usize = 64;
+    const PROCESS_FORK_ATTEMPT_EVENT_SIZE: usize = 88;
+    const PROCESS_FORK_RESULT_EVENT_SIZE: usize = 64;
 
     if !known_event_kind(kind) {
         return false;
@@ -204,6 +209,11 @@ fn known_event_size(kind: u32, size: usize) -> bool {
         2 => size == PROCESS_EXEC_EVENT_SIZE,
         3 => size == PROCESS_EXIT_EVENT_SIZE,
         4 => size == PROCESS_SIGNAL_EVENT_SIZE,
+        5 => size == PROCESS_EXEC_ATTEMPT_EVENT_SIZE,
+        6 => size == PROCESS_EXEC_RESULT_EVENT_SIZE,
+        7 => size == PROCESS_FORK_ATTEMPT_EVENT_SIZE,
+        8 => size == PROCESS_FORK_RESULT_EVENT_SIZE,
+        9 => size == PROCESS_EXEC_ARG_EVENT_SIZE,
         100 | 101 | 104..=107 => size == NETWORK_EVENT_SIZE,
         102 | 103 => size == FD_IO_EVENT_SIZE,
         108 => size == SOCKET_RELEASE_EVENT_SIZE,
@@ -229,7 +239,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
 fn known_event_kind(kind: u32) -> bool {
     matches!(
         kind,
-        1..=4 | 100..=108 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
+        1..=9 | 100..=108 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
     )
 }
 

@@ -78,7 +78,7 @@ int handle_sys_enter_sendto(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_sendto")
 int handle_sys_exit_sendto(struct trace_event_raw_sys_exit *ctx) {
-    emit_socket_payload_op(ctx);
+    emit_socket_payload_op(ctx, 0);
     return emit_pending_net_op(ctx);
 }
 
@@ -95,7 +95,7 @@ int handle_sys_enter_writev(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_writev")
 int handle_sys_exit_writev(struct trace_event_raw_sys_exit *ctx) {
-    emit_socket_payload_op(ctx);
+    emit_socket_payload_op(ctx, 1);
     return emit_pending_net_op(ctx);
 }
 
@@ -112,7 +112,7 @@ int handle_sys_enter_sendmsg(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_sendmsg")
 int handle_sys_exit_sendmsg(struct trace_event_raw_sys_exit *ctx) {
-    emit_socket_payload_op(ctx);
+    emit_socket_payload_op(ctx, 1);
     return emit_pending_net_op(ctx);
 }
 
@@ -129,7 +129,7 @@ int handle_sys_enter_recvfrom(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_recvfrom")
 int handle_sys_exit_recvfrom(struct trace_event_raw_sys_exit *ctx) {
-    emit_socket_payload_op(ctx);
+    emit_socket_payload_op(ctx, 0);
     return emit_pending_net_op(ctx);
 }
 

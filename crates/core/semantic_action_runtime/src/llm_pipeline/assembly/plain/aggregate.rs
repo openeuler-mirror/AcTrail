@@ -218,7 +218,7 @@ impl PlainStreamAssembly {
             && !projection.actions.is_empty()
         {
             for action in &mut projection.actions {
-                ResponseFinalizer::finalize_partial(action, reason, finished_at);
+                ResponseFinalizer::finalize_incomplete(action, reason, finished_at);
             }
             output.actions.extend(projection.actions);
             output
@@ -229,6 +229,9 @@ impl PlainStreamAssembly {
                 .extend(projection.llm_request_histories);
             output.llm_tool_results.extend(projection.llm_tool_results);
             output.payload_segments.extend(projection.payload_segments);
+            return output;
+        }
+        if reason == StreamFinalizationReason::CapturePolicyLimited {
             return output;
         }
         let code = if self.http1_decoder.is_some() {

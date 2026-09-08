@@ -48,6 +48,33 @@ pub(super) fn require_positive_u64(key: &'static str, value: u64) -> Result<u64,
     Ok(value)
 }
 
+pub(super) fn require_positive_usize(key: &'static str, value: usize) -> Result<usize, String> {
+    if value == usize::default() {
+        return Err(format!("invalid {key}: value must be positive"));
+    }
+    Ok(value)
+}
+
+pub(super) fn require_bounded_positive_usize(
+    key: &'static str,
+    value: usize,
+    maximum: usize,
+) -> Result<usize, String> {
+    let value = require_positive_usize(key, value)?;
+    if value > maximum {
+        return Err(format!("invalid {key}: value must not exceed {maximum}"));
+    }
+    Ok(value)
+}
+
+pub(super) fn require_zstd_level(key: &'static str, value: i32) -> Result<i32, String> {
+    if (-7..=22).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("invalid {key}: expected -7..=22"))
+    }
+}
+
 pub(super) fn parse_disabled_or_positive_u64(
     key: &'static str,
     raw: &str,

@@ -464,8 +464,8 @@ impl FromStr for LlmRequestBodyExportRetention {
 }
 
 /// Whether an LLM-native tool result body may leave the host on a semantic
-/// action. Result identity, size, hash, and error state remain available when
-/// this is `none`.
+/// action. Result identity, size, and error state remain available when this is
+/// `none`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LlmToolResultContentExportRetention {
     #[default]

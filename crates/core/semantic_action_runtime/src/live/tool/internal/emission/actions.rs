@@ -154,10 +154,6 @@ pub(super) fn tool_result_action(
             result.content_bytes.to_string(),
         ),
         (
-            attrs::llm_tool_result::CONTENT_HASH.to_string(),
-            result.content_hash.clone(),
-        ),
-        (
             attrs::llm_tool_result::CONTENT_EXPORT_STATE.to_string(),
             result.content_export_state.to_string(),
         ),

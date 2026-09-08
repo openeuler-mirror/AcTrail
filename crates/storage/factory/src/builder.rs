@@ -14,10 +14,16 @@ pub fn open_storage_backend(
     match (config, mode) {
         (StorageConfig::Sqlite(config), StorageOpenMode::ReadWrite) => {
             create_parent_directory(&config.path)?;
-            SqliteStorage::open_with_compression(
+            SqliteStorage::open_with_options(
                 &config.path,
                 Some(Duration::from_millis(config.busy_timeout_ms)),
                 config.cold_field_compression(),
+                config.event_payload_dictionary_cache_bytes,
+                config.event_path_dictionary_cache_bytes,
+                config.event_record_layout,
+                config.event_record_block_max_events,
+                config.event_record_block_max_uncompressed_bytes,
+                config.event_record_block_zstd_level,
             )
             .map(|storage| Box::new(storage) as Box<dyn StorageBackend>)
             .map_err(|error| StorageError::new("open_sqlite_storage", error.to_string()))

@@ -5,22 +5,25 @@ use semantic_action::{
     FilePathSetState, FilePathSetWrite, SemanticActionStoreError, file_path_set_identity_for_paths,
 };
 
+use crate::records::PathInterner;
 use crate::semantic_actions::action_ids::intern_action_id_shared;
 
 use super::hash::{encode_path_ids, stable_hash_bytes, stable_hash_text};
 
 pub(in crate::semantic_actions) fn upsert_file_path_sets(
     connection: &rusqlite::Connection,
+    paths: &mut PathInterner,
     path_sets: &[FilePathSetWrite],
 ) -> Result<(), SemanticActionStoreError> {
     for path_set in path_sets {
-        upsert_file_path_set(connection, path_set)?;
+        upsert_file_path_set(connection, paths, path_set)?;
     }
     Ok(())
 }
 
 fn upsert_file_path_set(
     connection: &rusqlite::Connection,
+    paths: &mut PathInterner,
     path_set: &FilePathSetWrite,
 ) -> Result<(), SemanticActionStoreError> {
     if path_set.chunk_max_paths == 0 {
@@ -49,7 +52,12 @@ fn upsert_file_path_set(
     }
     let mut path_ids = Vec::with_capacity(path_set.paths.len());
     for path in &path_set.paths {
-        path_ids.push(intern_path(connection, path_set.trace_id.get(), path)?);
+        path_ids.push(intern_path(
+            connection,
+            paths,
+            path_set.trace_id.get(),
+            path,
+        )?);
     }
     path_ids.sort_unstable();
     let chunk_ids = upsert_chunks(connection, path_set, &path_ids)?;
@@ -61,29 +69,15 @@ fn upsert_file_path_set(
 
 pub(in crate::semantic_actions) fn intern_path(
     connection: &rusqlite::Connection,
+    paths: &mut PathInterner,
     trace_id: u64,
     path: &str,
 ) -> Result<u64, SemanticActionStoreError> {
-    let path_hash = stable_hash_text(path);
-    connection
-        .execute(
-            "INSERT OR IGNORE INTO file_paths (trace_id, path_hash, path_text)
-             VALUES (?1, ?2, ?3)",
-            params![trace_id, &path_hash, path],
-        )
-        .map_err(|error| SemanticActionStoreError::new("insert_file_path", error.to_string()))?;
-    let path_id = connection
-        .query_row(
-            "SELECT path_id FROM file_paths
-             WHERE trace_id = ?1 AND path_hash = ?2 AND path_text = ?3",
-            params![trace_id, &path_hash, path],
-            |row| {
-                let value = row.get::<_, i64>("path_id")?;
-                u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
-            },
-        )
-        .map_err(|error| SemanticActionStoreError::new("read_file_path_id", error.to_string()))?;
-    Ok(path_id)
+    let path_id = paths
+        .intern(connection, trace_id, path)
+        .map_err(|error| SemanticActionStoreError::new(error.stage, error.message))?;
+    u64::try_from(path_id)
+        .map_err(|error| SemanticActionStoreError::new("read_file_path_id", error.to_string()))
 }
 
 fn upsert_chunks(

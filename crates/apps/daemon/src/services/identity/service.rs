@@ -430,6 +430,28 @@ pub(crate) struct RuntimeProcessEventApplier<'a> {
     process_manager: &'a mut ProcessIdentityManager,
 }
 
+pub(crate) struct RuntimeProcessEventApplyResult {
+    pub(crate) matched: Option<IngestMatch>,
+    pub(crate) changed_membership: Option<ProcessIdentity>,
+}
+
+impl RuntimeProcessEventApplyResult {
+    fn unchanged(matched: Option<IngestMatch>) -> Self {
+        Self {
+            matched,
+            changed_membership: None,
+        }
+    }
+
+    fn changed(matched: Option<IngestMatch>, process: ProcessIdentity) -> Self {
+        let changed_membership = matched.as_ref().map(|_| process);
+        Self {
+            matched,
+            changed_membership,
+        }
+    }
+}
+
 impl<'a> RuntimeProcessEventApplier<'a> {
     pub(crate) fn new(
         trace_runtime: &'a mut TraceRuntime,
@@ -446,7 +468,7 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         raw_event: &RawCollectorEvent,
         process: ProcessIdentity,
         parent: Option<ProcessIdentity>,
-    ) -> Result<Option<IngestMatch>, ControlError> {
+    ) -> Result<RuntimeProcessEventApplyResult, ControlError> {
         match &raw_event.payload {
             RawObservationPayload::Process { operation, .. } if operation == "fork" => {
                 self.apply_fork(raw_event, process, parent)
@@ -463,9 +485,10 @@ impl<'a> RuntimeProcessEventApplier<'a> {
                 metadata,
                 ..
             } if operation == "exit" => self.apply_exit(raw_event, process, metadata),
-            _ => Ok(self
-                .match_process_for_event(raw_event, process)
-                .map(ResolvedTraceProcess::into_ingest_match)),
+            _ => Ok(RuntimeProcessEventApplyResult::unchanged(
+                self.match_process_for_event(raw_event, process)
+                    .map(ResolvedTraceProcess::into_ingest_match),
+            )),
         }
     }
 
@@ -474,19 +497,20 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         raw_event: &RawCollectorEvent,
         child: ProcessIdentity,
         parent: Option<ProcessIdentity>,
-    ) -> Result<Option<IngestMatch>, ControlError> {
+    ) -> Result<RuntimeProcessEventApplyResult, ControlError> {
         let Some(parent) = parent else {
-            return Ok(None);
+            return Ok(RuntimeProcessEventApplyResult::unchanged(None));
         };
         let Some(matched_parent) = self.match_process_for_event(raw_event, parent) else {
-            return Ok(None);
+            return Ok(RuntimeProcessEventApplyResult::unchanged(None));
         };
-        self.insert_child(
+        let matched = self.insert_child(
             matched_parent.trace_id,
             parent,
             child,
             raw_event.envelope.observed_at,
-        )
+        )?;
+        Ok(RuntimeProcessEventApplyResult::changed(matched, child))
     }
 
     fn apply_exec(
@@ -495,9 +519,11 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         process: ProcessIdentity,
         parent: Option<ProcessIdentity>,
         metadata: &BTreeMap<String, String>,
-    ) -> Result<Option<IngestMatch>, ControlError> {
+    ) -> Result<RuntimeProcessEventApplyResult, ControlError> {
         if let Some(matched) = self.match_process_for_event(raw_event, process) {
-            return Ok(Some(matched.into_ingest_match()));
+            return Ok(RuntimeProcessEventApplyResult::unchanged(Some(
+                matched.into_ingest_match(),
+            )));
         }
         let parent = parent.or_else(|| {
             metadata
@@ -506,17 +532,18 @@ impl<'a> RuntimeProcessEventApplier<'a> {
                 .and_then(|pid| self.process_manager.active_host_pid(pid))
         });
         let Some(parent) = parent else {
-            return Ok(None);
+            return Ok(RuntimeProcessEventApplyResult::unchanged(None));
         };
         let Some(matched_parent) = self.match_process_for_event(raw_event, parent) else {
-            return Ok(None);
+            return Ok(RuntimeProcessEventApplyResult::unchanged(None));
         };
-        self.insert_child(
+        let matched = self.insert_child(
             matched_parent.trace_id,
             parent,
             process,
             raw_event.envelope.observed_at,
-        )
+        )?;
+        Ok(RuntimeProcessEventApplyResult::changed(matched, process))
     }
 
     fn apply_exit(
@@ -524,9 +551,9 @@ impl<'a> RuntimeProcessEventApplier<'a> {
         raw_event: &RawCollectorEvent,
         process: ProcessIdentity,
         metadata: &BTreeMap<String, String>,
-    ) -> Result<Option<IngestMatch>, ControlError> {
+    ) -> Result<RuntimeProcessEventApplyResult, ControlError> {
         let Some(matched) = self.match_process_for_event(raw_event, process) else {
-            return Ok(None);
+            return Ok(RuntimeProcessEventApplyResult::unchanged(None));
         };
         let trace_id = matched.trace_id;
         self.trace_runtime
@@ -541,7 +568,10 @@ impl<'a> RuntimeProcessEventApplier<'a> {
             )
             .map_err(|error| ControlError::new("mark_process_exited", format!("{error:?}")))?;
         self.process_manager.mark_exited(process);
-        Ok(Some(matched.into_ingest_match()))
+        Ok(RuntimeProcessEventApplyResult::changed(
+            Some(matched.into_ingest_match()),
+            process,
+        ))
     }
 
     fn match_process_for_event(

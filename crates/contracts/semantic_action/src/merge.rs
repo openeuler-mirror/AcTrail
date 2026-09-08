@@ -121,6 +121,10 @@ fn merge_completeness(
         (SemanticActionCompleteness::Partial, _) | (_, SemanticActionCompleteness::Partial) => {
             SemanticActionCompleteness::Partial
         }
+        (SemanticActionCompleteness::CaptureLimited, _)
+        | (_, SemanticActionCompleteness::CaptureLimited) => {
+            SemanticActionCompleteness::CaptureLimited
+        }
         (SemanticActionCompleteness::Inferred, SemanticActionCompleteness::Inferred) => {
             SemanticActionCompleteness::Inferred
         }

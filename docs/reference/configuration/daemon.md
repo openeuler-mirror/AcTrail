@@ -33,8 +33,16 @@ actrailctl init --output /tmp/actraild.reference.conf
 | `busy_timeout_ms` | `5000` | 遇到暂时 lock 时的等待时间 |
 | `cold_field_compression_min_bytes` | `64` | cold attribute 启用 zstd 的最小序列化大小；`0` 关闭 |
 | `cold_field_zstd_level` | `3` | zstd level |
+| `event_payload_dictionary_cache_bytes` | `33554432` | 单次 daemon 会话内的事件 payload 精确去重缓存近似上限；不扫描历史库，`0` 禁用并全部 inline |
+| `event_path_dictionary_cache_bytes` | `8388608` | 单 writer、按 trace 的统一 path interner 缓存上限；event 与 semantic path 共用 `path_id`，容量耗尽只降低缓存命中率，不改变持久化格式 |
+| `event_record_layout` | `rows` | 原始事件物理布局；`rows` 保持逐行存储，`blocks` 启用无损事件块，两种布局读取时可共存 |
+| `event_record_block_max_events` | `256` | `blocks` 模式单块最大逻辑事件数，范围 `1..=65536` |
+| `event_record_block_max_uncompressed_bytes` | `1048576` | `blocks` 模式单块及每 trace 未满尾块的编码前字节上限；范围 `1..=67108864`，单事件超过上限时该次写入 fail-local |
+| `event_record_block_zstd_level` | `3` | `blocks` 模式 zstd level，范围 `-7..=22` |
 
 SQLite 使用 WAL 时，备份和恢复必须包含配套 WAL/SHM 状态或在 daemon 安全停止后取得一致副本。
+
+事件块仅改变 SQLite 物理布局：`event_id`、时间、顺序、进程、payload、policy 与 semantic evidence 引用保持完整。未满块以每 trace 有界的 pending frame 持久化，跨事务继续填充；达到事件数/字节边界或 trace 进入 terminal 状态时，在同一事务中原子压块。提交后的 pending event 可立即查询，重启后也能继续填充。未知 codec 或越过安全边界的损坏记录会使该次 trace 读取失败，不会让 daemon 进程崩溃。`blocks` 直接压缩完整 payload，因此 `event_payload_dictionary_cache_bytes` 只作用于 `rows`。默认继续使用 `rows`，便于按部署显式启用并测量写入与查询成本。
 
 `[storage.retention]` 当前默认启用：`max_trace_age = "7d"`、`sweep_interval = "1m"`、`min_terminal_age = "30s"`、每轮最多 `10` 个 trace，并保护 tag `retain` 和 `pinned`。生产环境应按调查保留期、磁盘容量和合规要求调整。
 

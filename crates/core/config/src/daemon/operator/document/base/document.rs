@@ -222,7 +222,7 @@ impl StorageDocument {
                 self.backend
             ));
         }
-        Ok(StorageConfig::sqlite_with_compression(
+        Ok(StorageConfig::sqlite_with_options(
             &self.sqlite.path,
             require_positive_u64(
                 "storage.sqlite.busy_timeout_ms",
@@ -230,12 +230,42 @@ impl StorageDocument {
             )?,
             self.sqlite.cold_field_compression_min_bytes,
             self.sqlite.cold_field_zstd_level,
+            self.sqlite.event_payload_dictionary_cache_bytes,
+            self.sqlite.event_path_dictionary_cache_bytes,
+            match self.sqlite.event_record_layout.as_str() {
+                "rows" => EventRecordLayout::Rows,
+                "blocks" => EventRecordLayout::Blocks,
+                value => {
+                    return Err(format!(
+                        "invalid storage.sqlite.event_record_layout: expected rows or blocks, got {value}"
+                    ));
+                }
+            },
+            require_bounded_positive_usize(
+                "storage.sqlite.event_record_block_max_events",
+                self.sqlite.event_record_block_max_events,
+                SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
+            )?,
+            require_bounded_positive_usize(
+                "storage.sqlite.event_record_block_max_uncompressed_bytes",
+                self.sqlite.event_record_block_max_uncompressed_bytes,
+                SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
+            )?,
+            require_zstd_level(
+                "storage.sqlite.event_record_block_zstd_level",
+                self.sqlite.event_record_block_zstd_level,
+            )?,
         ))
     }
 }
 
 const DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES: usize = 64;
 const DEFAULT_COLD_FIELD_ZSTD_LEVEL: i32 = 3;
+const DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES: usize = 8 * 1024 * 1024;
+const DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS: usize = 256;
+const DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
+const DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL: i32 = 3;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -244,6 +274,12 @@ pub(super) struct SqliteStorageDocument {
     pub busy_timeout_ms: u64,
     pub cold_field_compression_min_bytes: usize,
     pub cold_field_zstd_level: i32,
+    pub event_payload_dictionary_cache_bytes: usize,
+    pub event_path_dictionary_cache_bytes: usize,
+    pub event_record_layout: String,
+    pub event_record_block_max_events: usize,
+    pub event_record_block_max_uncompressed_bytes: usize,
+    pub event_record_block_zstd_level: i32,
 }
 
 impl Default for SqliteStorageDocument {
@@ -253,6 +289,13 @@ impl Default for SqliteStorageDocument {
             busy_timeout_ms: 5000,
             cold_field_compression_min_bytes: DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES,
             cold_field_zstd_level: DEFAULT_COLD_FIELD_ZSTD_LEVEL,
+            event_payload_dictionary_cache_bytes: DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
+            event_path_dictionary_cache_bytes: DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+            event_record_layout: "rows".to_string(),
+            event_record_block_max_events: DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+            event_record_block_max_uncompressed_bytes:
+                DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+            event_record_block_zstd_level: DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
         }
     }
 }
@@ -430,6 +473,7 @@ impl SnapshotExportDocument {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CaptureDocument {
     pub profile_name: String,
+    pub agent_descendant_observation_depth: i32,
     pub capabilities: Vec<String>,
     pub opportunistic_capabilities: Vec<String>,
     pub disabled_capabilities: Vec<String>,
@@ -439,6 +483,7 @@ impl Default for CaptureDocument {
     fn default() -> Self {
         Self {
             profile_name: "default-full-monitor".to_string(),
+            agent_descendant_observation_depth: -1,
             capabilities: [
                 "proc-lifecycle",
                 "proc-exec-context",
@@ -453,7 +498,6 @@ impl Default for CaptureDocument {
                 "net-application-plaintext-http",
                 "net-application-http2-frames",
                 "resource-metrics",
-                "enforcement-command-execution-seccomp",
                 "enforcement-file-permission-fanotify",
             ]
             .into_iter()
@@ -466,6 +510,16 @@ impl Default for CaptureDocument {
 }
 
 impl CaptureDocument {
+    pub(super) fn agent_descendant_observation_depth(&self) -> Result<i32, String> {
+        if self.agent_descendant_observation_depth < -1 {
+            return Err(format!(
+                "capture.agent_descendant_observation_depth must be -1 or non-negative, got {}",
+                self.agent_descendant_observation_depth
+            ));
+        }
+        Ok(self.agent_descendant_observation_depth)
+    }
+
     pub(super) fn capability_requests(&self) -> Result<Vec<CapabilityRequest>, String> {
         let mut requests = Vec::new();
         for raw in &self.capabilities {

@@ -448,7 +448,7 @@ fn ebpf_seccomp_policy(
         host_ebpf: host_ebpf.map(Into::into).unwrap_or(PermissionMode::Auto),
         seccomp_notify: seccomp_notify
             .map(Into::into)
-            .unwrap_or(PermissionMode::Auto),
+            .unwrap_or(PermissionMode::Disabled),
     }
 }
 

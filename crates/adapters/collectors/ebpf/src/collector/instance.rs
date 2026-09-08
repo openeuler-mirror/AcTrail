@@ -138,6 +138,8 @@ impl CollectorInstance for EbpfCollector {
         self.net_aggregation_backlog
             .extend(self.net_aggregator.flush_trace(trace_id));
         self.stdio_payloads.release_trace(trace_id);
+        self.process_exec.forget_trace(trace_id);
+        self.process_fork.forget_trace(trace_id);
         self.cancel_pending_launch(trace_id)?;
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
@@ -174,6 +176,45 @@ impl CollectorInstance for EbpfCollector {
                 reason: "ebpf_exit_lifecycle_binding_gap".to_string(),
                 count: self.binding_gap_lifecycle_skips,
             });
+        }
+        if self.process_exec.evictions() != 0 {
+            dropped.push(DropCounter {
+                reason: "ebpf_process_exec_pending_capacity".to_string(),
+                count: self.process_exec.evictions(),
+            });
+        }
+        if self.process_exec.orphan_args() != 0 {
+            dropped.push(DropCounter {
+                reason: "ebpf_process_exec_orphan_arg".to_string(),
+                count: self.process_exec.orphan_args(),
+            });
+        }
+        if self.process_fork.evictions() != 0 {
+            dropped.push(DropCounter {
+                reason: "ebpf_process_fork_pending_capacity".to_string(),
+                count: self.process_fork.evictions(),
+            });
+        }
+        for (reason, count) in [
+            (
+                "ebpf_socket_partial:operation_limit",
+                self.socket_total_limit_partials,
+            ),
+            (
+                "ebpf_socket_partial:chunk_limit",
+                self.socket_chunk_limit_partials,
+            ),
+            (
+                "ebpf_socket_partial:iovec_limit",
+                self.socket_iovec_limit_partials,
+            ),
+        ] {
+            if count != 0 {
+                dropped.push(DropCounter {
+                    reason: reason.to_string(),
+                    count,
+                });
+            }
         }
         for (reason, count) in self.file_tracker.lineage_gap_diagnostics() {
             dropped.push(DropCounter {

@@ -78,6 +78,7 @@ impl Http2StreamAssembly {
             &self.plain.buffer,
             Arc::clone(&self.body),
             &segments,
+            true,
         ) else {
             return output;
         };
@@ -120,10 +121,11 @@ impl Http2StreamAssembly {
             &self.plain.buffer,
             Arc::clone(&self.body),
             &segments,
+            false,
         ) && !projection.actions.is_empty()
         {
             for action in &mut projection.actions {
-                ResponseFinalizer::finalize_partial(action, reason, finished_at);
+                ResponseFinalizer::finalize_incomplete(action, reason, finished_at);
             }
             output.actions.extend(projection.actions);
             output
@@ -134,6 +136,9 @@ impl Http2StreamAssembly {
                 .extend(projection.llm_request_histories);
             output.llm_tool_results.extend(projection.llm_tool_results);
             output.payload_segments.extend(projection.payload_segments);
+            return output;
+        }
+        if reason == StreamFinalizationReason::CapturePolicyLimited {
             return output;
         }
         let diagnostic_stream_key = format!("{}#h2:{}", key.stream_key, stream_id);
@@ -640,6 +645,7 @@ impl Http2ConnectionAssembly {
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
         for mut pending in std::mem::take(&mut self.pending_finalizations) {
+            let finalization_reason = pending.reason.finalization_reason();
             let retained = pending.stream.retention_footprint();
             if direction == LiveStreamDirection::Inbound
                 && let Some(in_flight) = pending.stream.plain.in_flight_response.take()
@@ -656,15 +662,17 @@ impl Http2ConnectionAssembly {
                 output.provider_response_ids.extend(provider_response_ids);
                 for action in &mut actions {
                     if action.kind == SemanticActionKind::LlmResponse {
-                        ResponseFinalizer::finalize_partial(
+                        ResponseFinalizer::finalize_incomplete(
                             action,
-                            pending.reason.finalization_reason(),
+                            finalization_reason,
                             pending.observed_at,
                         );
-                        output
-                            .non_reusable_response_ids
-                            .insert(action.action_id.clone());
                     }
+                }
+                if finalization_reason.response_reusable() {
+                    output.mark_closed_response_actions(&actions);
+                } else {
+                    output.mark_non_reusable_response_actions(&actions);
                 }
                 output.actions.extend(actions);
             }

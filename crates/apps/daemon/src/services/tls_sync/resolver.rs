@@ -39,6 +39,7 @@ struct PlanLookupJob {
     runtime_binary: PathBuf,
     consumer: ProbeConsumer,
     peer_root: Option<Result<PeerRootHandle, String>>,
+    pin_peer_path: bool,
     response: Option<UnixStream>,
     control_response: Option<Sender<LaunchPlanLookupOutcome>>,
 }
@@ -113,6 +114,7 @@ impl TlsSyncPlanResolver {
                 runtime_binary: binary.to_path_buf(),
                 consumer: ProbeConsumer::Sync,
                 peer_root: Some(peer_root),
+                pin_peer_path: false,
                 response: Some(response),
                 control_response: None,
             })
@@ -122,8 +124,9 @@ impl TlsSyncPlanResolver {
     pub(super) fn resolve_launch_plan(
         &self,
         binary: &Path,
+        peer_root: Result<PeerRootHandle, String>,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
-        self.submit_control_lookup(binary, ProbeConsumer::Daemon)?
+        self.submit_control_lookup(binary, ProbeConsumer::Daemon, Some(peer_root), true)?
             .recv()
             .map(|outcome| outcome.reply)
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
@@ -135,7 +138,7 @@ impl TlsSyncPlanResolver {
         consumer: ExecPlanConsumer,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
         match self
-            .submit_control_lookup(binary, consumer.probe_consumer())?
+            .submit_control_lookup(binary, consumer.probe_consumer(), None, false)?
             .recv_timeout(self.dynamic_exec_plan_timeout)
         {
             Ok(outcome) => Ok(outcome.reply),
@@ -158,13 +161,16 @@ impl TlsSyncPlanResolver {
         &self,
         binary: &Path,
         consumer: ProbeConsumer,
+        peer_root: Option<Result<PeerRootHandle, String>>,
+        pin_peer_path: bool,
     ) -> Result<Receiver<LaunchPlanLookupOutcome>, ControlError> {
         let (sender, receiver) = mpsc::channel();
         self.requests
             .send(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
                 consumer,
-                peer_root: None,
+                peer_root,
+                pin_peer_path,
                 response: None,
                 control_response: Some(sender),
             })
@@ -185,7 +191,12 @@ impl ExecPlanConsumer {
 impl TlsSyncPlanWorker {
     fn run(mut self, receiver: Receiver<PlanLookupJob>) {
         for mut job in receiver {
-            let outcome = self.lookup(&job.runtime_binary, job.consumer, job.peer_root);
+            let outcome = self.lookup(
+                &job.runtime_binary,
+                job.consumer,
+                job.peer_root,
+                job.pin_peer_path,
+            );
             let Some(response_stream) = job.response.as_mut() else {
                 if let Some(sender) = job.control_response {
                     let _ = sender.send(LaunchPlanLookupOutcome {
@@ -212,6 +223,7 @@ impl TlsSyncPlanWorker {
         runtime_binary: &Path,
         consumer: ProbeConsumer,
         peer_root: Option<Result<PeerRootHandle, String>>,
+        pin_peer_path: bool,
     ) -> PlanLookupOutcome {
         let started = Instant::now();
         let peer_root = match peer_root {
@@ -227,17 +239,45 @@ impl TlsSyncPlanWorker {
             }
             None => None,
         };
-        let probe_binary = match probe_binary_path(runtime_binary, peer_root.as_ref()) {
-            Ok(path) => path,
-            Err(reason) => {
-                tracing::warn!(
-                    target: "actrail::tls_sync",
-                    runtime_binary = %runtime_binary.display(),
-                    reason = %reason,
-                    "TLS sync plan lookup path resolution failed"
-                );
-                return unsupported_outcome(reason, started);
+        let pinned_probe = if pin_peer_path {
+            match peer_root.as_ref() {
+                Some(root) => match root.pin_path(runtime_binary) {
+                    Ok(path) => Some(path),
+                    Err(reason) => {
+                        tracing::warn!(
+                            target: "actrail::tls_sync",
+                            runtime_binary = %runtime_binary.display(),
+                            reason = %reason,
+                            "TLS sync plan lookup path resolution failed"
+                        );
+                        return unsupported_outcome(reason, started);
+                    }
+                },
+                None => {
+                    return unsupported_outcome(
+                        "authenticated peer root is required for pinned TLS plan lookup"
+                            .to_string(),
+                        started,
+                    );
+                }
             }
+        } else {
+            None
+        };
+        let probe_binary = match pinned_probe.as_ref() {
+            Some(path) => path.path(),
+            None => match probe_binary_path(runtime_binary, peer_root.as_ref()) {
+                Ok(path) => path,
+                Err(reason) => {
+                    tracing::warn!(
+                        target: "actrail::tls_sync",
+                        runtime_binary = %runtime_binary.display(),
+                        reason = %reason,
+                        "TLS sync plan lookup path resolution failed"
+                    );
+                    return unsupported_outcome(reason, started);
+                }
+            },
         };
         let cache_before = self.analysis_cache.stats();
         let record = match self.resolve_plans(&probe_binary, runtime_binary, consumer) {

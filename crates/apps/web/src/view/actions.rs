@@ -661,11 +661,11 @@ fn link_json(link: &SemanticActionLink) -> String {
         evidence_json(&link.evidence)
     };
     format!(
-        "{{\"parent\":{},\"child\":{},\"role\":{},\"confidence\":{},\"valid\":{},\"attributes\":{},\"evidence\":{}}}",
+        "{{\"parent\":{},\"child\":{},\"role\":{},\"origin\":{},\"valid\":{},\"attributes\":{},\"evidence\":{}}}",
         json::string(&link.parent_action_id),
         json::string(&link.child_action_id),
         json::string(link.role.as_str()),
-        json::string(link.confidence.as_str()),
+        json::string(link.origin.as_str()),
         json::boolean(link.valid),
         json::map(&link.attributes),
         evidence
@@ -674,11 +674,11 @@ fn link_json(link: &SemanticActionLink) -> String {
 
 fn link_json_lite(link: &SemanticActionLink) -> String {
     format!(
-        "{{\"parent\":{},\"child\":{},\"role\":{},\"confidence\":{},\"valid\":{}}}",
+        "{{\"parent\":{},\"child\":{},\"role\":{},\"origin\":{},\"valid\":{}}}",
         json::string(&link.parent_action_id),
         json::string(&link.child_action_id),
         json::string(link.role.as_str()),
-        json::string(link.confidence.as_str()),
+        json::string(link.origin.as_str()),
         json::boolean(link.valid)
     )
 }

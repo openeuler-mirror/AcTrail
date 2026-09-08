@@ -168,6 +168,8 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         result = self.runtime.run(
             self.runtime.control_command(
                 "launch",
+                "--seccomp-notify",
+                "required",
                 "--name",
                 "v2-command-policy-bash-nonmatching-args",
                 "--",
@@ -186,6 +188,8 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         result = self.runtime.run(
             self.runtime.control_command(
                 "launch",
+                "--seccomp-notify",
+                "required",
                 "--name",
                 "v2-command-policy-nonleader-exec",
                 "--",
@@ -220,6 +224,8 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         result = self.runtime.run(
             self.runtime.control_command(
                 "launch",
+                "--seccomp-notify",
+                "required",
                 "--name",
                 trace_name,
                 "--",

@@ -137,6 +137,7 @@ impl SemanticActionStatus {
 pub enum SemanticActionCompleteness {
     Complete,
     Partial,
+    CaptureLimited,
     Inferred,
 }
 
@@ -174,6 +175,7 @@ impl SemanticActionCompleteness {
         match self {
             Self::Complete => "complete",
             Self::Partial => "partial",
+            Self::CaptureLimited => "capture_limited",
             Self::Inferred => "inferred",
         }
     }
@@ -182,6 +184,7 @@ impl SemanticActionCompleteness {
         match value {
             "complete" => Some(Self::Complete),
             "partial" => Some(Self::Partial),
+            "capture_limited" => Some(Self::CaptureLimited),
             "inferred" => Some(Self::Inferred),
             _ => None,
         }
@@ -649,12 +652,12 @@ impl SemanticActionLinkRole {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SemanticActionLinkConfidence {
+pub enum SemanticActionLinkOrigin {
     Observed,
     Derived,
 }
 
-impl SemanticActionLinkConfidence {
+impl SemanticActionLinkOrigin {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Observed => "observed",
@@ -677,7 +680,7 @@ pub struct SemanticActionLink {
     pub parent_action_id: String,
     pub child_action_id: String,
     pub role: SemanticActionLinkRole,
-    pub confidence: SemanticActionLinkConfidence,
+    pub origin: SemanticActionLinkOrigin,
     pub valid: bool,
     pub evidence: Vec<SemanticEvidence>,
     pub attributes: BTreeMap<String, String>,
