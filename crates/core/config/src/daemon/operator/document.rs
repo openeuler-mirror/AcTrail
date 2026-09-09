@@ -82,6 +82,8 @@ mod file;
 mod hand_observation;
 #[path = "document/helpers.rs"]
 mod helpers;
+#[path = "document/idle.rs"]
+mod idle;
 #[path = "document/network.rs"]
 mod network;
 #[path = "document/payload.rs"]
@@ -105,6 +107,7 @@ use command::*;
 use file::*;
 use hand_observation::*;
 use helpers::*;
+use idle::*;
 use network::*;
 use payload::*;
 use plugin::*;
@@ -133,6 +136,7 @@ pub(super) struct OperatorDocument {
     process_seccomp: ProcessSeccompDocument,
     agent_invocation: AgentInvocationDocument,
     semantic_retention: SemanticRetentionDocument,
+    idle_detection: IdleDetectionDocument,
     file_observation: FileObservationDocument,
     application: ApplicationDocument,
     resource_metrics: ResourceMetricsDocument,
@@ -163,6 +167,7 @@ impl Default for OperatorDocument {
             process_seccomp: ProcessSeccompDocument::default(),
             agent_invocation: AgentInvocationDocument::default(),
             semantic_retention: SemanticRetentionDocument::default(),
+            idle_detection: IdleDetectionDocument::default(),
             file_observation: FileObservationDocument::default(),
             application: ApplicationDocument::default(),
             resource_metrics: ResourceMetricsDocument::default(),
@@ -465,6 +470,7 @@ impl OperatorDocument {
                 shutdown_wait_ms: config.shutdown_wait_ms,
                 poll_interval_ms: config.supervision_poll_interval_ms,
             },
+            idle_detection: IdleDetectionDocument::from_config(&config.idle_detection),
         }
     }
 
@@ -608,6 +614,7 @@ impl OperatorDocument {
             process_seccomp,
             agent_invocation: self.agent_invocation.to_config(),
             semantic_retention: self.semantic_retention.to_config()?,
+            idle_detection: self.idle_detection.to_config()?,
             file_observation: self.file_observation.to_config()?,
             application_protocol,
             resource_metrics,

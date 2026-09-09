@@ -67,6 +67,7 @@ use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::idle_detector::IdleRuntime;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
@@ -133,6 +134,7 @@ pub(crate) struct StorageAttachService {
     pub(super) semantic_actions: LiveSemanticActionRuntime,
     pub(super) export_runtime: ExportRuntime,
     pub(super) alert_ingress: AlertIngress,
+    pub(super) idle_runtime: IdleRuntime,
     pub(super) alert_forwarding: AlertForwardingService,
     pub(super) post_trace_broker: PostTraceBroker,
     pub(super) post_trace_coordinator: PostTraceCoordinator,
@@ -835,9 +837,16 @@ impl AttachService for StorageAttachService {
             timeout,
             (!self.pending_terminal_finalizations.is_empty()
                 || self.post_trace_coordinator.has_running_tasks()
-                || self.alert_ingress.has_outstanding_writes()?)
+                || self.alert_ingress.has_outstanding_writes()?
+                || self.idle_runtime.has_pending_ops())
             .then_some(self.finalization_poll_interval),
         );
+        if let Some(deadline) = self.idle_runtime.next_deadline() {
+            let until_deadline = deadline
+                .duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO);
+            timeout = min_optional_timeout(timeout, Some(until_deadline));
+        }
         timeout = min_optional_timeout(timeout, self.storage_retention.poll_timeout());
         Ok(timeout)
     }
@@ -905,6 +914,20 @@ impl AttachService for StorageAttachService {
         }
         self.seccomp_notify
             .register_listener(command.trace_id, command.listener_fd)
+    }
+
+    fn report_turn_lifecycle(
+        &mut self,
+        event: idle_contract::TurnLifecycleEvent,
+    ) -> Result<(), ControlError> {
+        self.report_turn_lifecycle_impl(event)
+    }
+
+    fn report_user_interaction(
+        &mut self,
+        event: idle_contract::UserInteractionEvent,
+    ) -> Result<(), ControlError> {
+        self.report_user_interaction_impl(event)
     }
 
     fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {

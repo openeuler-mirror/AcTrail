@@ -1,7 +1,9 @@
 //! Semantic action tree JSON for the web UI.
 
 use std::path::Path;
+use std::time::SystemTime;
 
+use idle_contract::IdleInterval;
 use model_core::ids::TraceId;
 use semantic_action::{
     FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, LlmRequestLineage,
@@ -81,12 +83,22 @@ pub(super) fn action_tree_json(
         .iter()
         .map(link_json_lite)
         .collect::<Vec<_>>();
+    let idle_intervals = storage
+        .idle_intervals_for_trace(trace_id)
+        .map_err(|error| idle_store_error("read idle intervals", error))?;
+    let idle_intervals_json = idle_intervals
+        .iter()
+        .map(idle_interval_json)
+        .collect::<Vec<_>>();
+    let axis_end = axis_end_unix_nanos(&projection.actions, &idle_intervals);
     Ok(format!(
-        "{{\"roots\":[{}],\"actions\":[{}],\"links\":[{}],\"associations\":[{}]}}",
+        "{{\"roots\":[{}],\"actions\":[{}],\"links\":[{}],\"associations\":[{}],\"idle_intervals\":[{}],\"axis_end_unix_nanos\":{}}}",
         roots.join(","),
         actions.join(","),
         links.join(","),
-        associations.join(",")
+        associations.join(","),
+        idle_intervals_json.join(","),
+        axis_end,
     ))
 }
 
@@ -100,13 +112,23 @@ pub(super) fn waterfall_initial_json(
     let links = storage
         .semantic_action_links_matching_roles(trace_id, WATERFALL_INITIAL_LINK_ROLES)
         .map_err(|error| storage_error("read waterfall links", error))?;
+    let idle_intervals = storage
+        .idle_intervals_for_trace(trace_id)
+        .map_err(|error| idle_store_error("read waterfall idle intervals", error))?;
     let selected = actions.len();
+    let axis_end = axis_end_unix_nanos(&actions, &idle_intervals);
     let actions = actions.iter().map(action_json_lite).collect::<Vec<_>>();
     let links = links.iter().map(link_json_lite).collect::<Vec<_>>();
+    let idle_intervals = idle_intervals
+        .iter()
+        .map(idle_interval_json)
+        .collect::<Vec<_>>();
     Ok(format!(
-        "{{\"actions\":[{}],\"links\":[{}],\"selected_actions\":{},\"partial\":true}}",
+        "{{\"actions\":[{}],\"links\":[{}],\"idle_intervals\":[{}],\"axis_end_unix_nanos\":{},\"selected_actions\":{},\"partial\":true}}",
         actions.join(","),
         links.join(","),
+        idle_intervals.join(","),
+        axis_end,
         json::number(selected)
     ))
 }
@@ -718,6 +740,63 @@ fn summary_json(summary: SemanticActionSummary) -> String {
 
 fn storage_error(stage: &str, error: StorageError) -> String {
     format!("{} failed: {}: {}", stage, error.stage, error.message)
+}
+
+fn idle_store_error(stage: &str, error: idle_contract::IdleStoreError) -> String {
+    format!("{} failed: {}: {}", stage, error.stage, error.message)
+}
+
+fn idle_interval_json(interval: &IdleInterval) -> String {
+    format!(
+        "{{\"id\":{},\"task_id\":{},\"start_time_unix_nanos\":{},\"end_time_unix_nanos\":{}}}",
+        json::string(&interval.id.to_string()),
+        json::string(&interval.task_id),
+        json::time_nanos(interval.start_time),
+        json::optional_time_nanos(interval.end_time),
+    )
+}
+
+/// Server-provided timeline axis end: `max(last_observed_at, server_now)` so
+/// open intervals and unfinished actions extend with server time, not the
+/// browser clock. Completed traces keep their last observed end; extending
+/// those to "now" would render a huge empty tail after the trace ended.
+fn axis_end_unix_nanos(actions: &[SemanticAction], intervals: &[IdleInterval]) -> String {
+    let now = SystemTime::now();
+    let end = latest_observed_at(actions, intervals).unwrap_or(now);
+    let axis_end = if has_live_item(actions, intervals) {
+        end.max(now)
+    } else {
+        end
+    };
+    json::time_nanos(axis_end)
+}
+
+fn has_live_item(actions: &[SemanticAction], intervals: &[IdleInterval]) -> bool {
+    actions.iter().any(|action| action.end_time.is_none())
+        || intervals.iter().any(|interval| interval.end_time.is_none())
+}
+
+fn latest_observed_at(
+    actions: &[SemanticAction],
+    intervals: &[IdleInterval],
+) -> Option<SystemTime> {
+    let mut latest: Option<SystemTime> = None;
+    for time in actions
+        .iter()
+        .flat_map(|action| {
+            [Some(action.start_time), action.end_time]
+                .into_iter()
+                .flatten()
+        })
+        .chain(intervals.iter().flat_map(|interval| {
+            [Some(interval.start_time), interval.end_time]
+                .into_iter()
+                .flatten()
+        }))
+    {
+        latest = Some(latest.map_or(time, |current| current.max(time)));
+    }
+    latest
 }
 
 fn bool_json(value: bool) -> &'static str {

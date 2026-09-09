@@ -86,13 +86,14 @@ export function defaultActiveGroups(groups) {
   return new Set(WATERFALL_DEFAULT_ACTIVE_GROUPS.filter((group) => available.has(group)));
 }
 
-export function buildWaterfall(actions, links) {
+export function buildWaterfall(actions, links, idleIntervals = [], axisEndNanos = null) {
   const validActions = actions ?? [];
+  const intervals = (idleIntervals ?? []).map(idleIntervalNode);
+  const window = computeWindow(validActions, intervals, axisEndNanos);
   if (!validActions.length) {
-    return { roots: [], window: emptyWindow(), groups: [], totalActions: 0 };
+    return { roots: [], window, groups: [], totalActions: 0, idleIntervals: intervals };
   }
 
-  const window = computeWindow(validActions);
   const nodeById = new Map(
     validActions.map((action) => [action.id, actionNode(action, window)]),
   );
@@ -153,6 +154,37 @@ export function buildWaterfall(actions, links) {
     window,
     groups: groupSummary(validActions),
     totalActions: validActions.length,
+    idleIntervals: intervals,
+  };
+}
+
+// Map persisted idle intervals to standalone Idle lane segments.
+export function idleIntervalRows(intervals, window) {
+  return (intervals ?? []).map((interval) => {
+    const startOffsetMs = nanosDiffMs(interval.startNanos, window.startNanos);
+    const endOffsetMs = interval.live
+      ? null
+      : nanosDiffMs(interval.endNanos, window.startNanos);
+    return {
+      ...interval,
+      startOffsetMs,
+      endOffsetMs,
+      durMs: interval.live ? null : Math.max(endOffsetMs - startOffsetMs, 0),
+    };
+  });
+}
+
+function idleIntervalNode(interval) {
+  const startNanos = toBigInt(interval.start_time_unix_nanos);
+  const endNanos = interval.end_time_unix_nanos
+    ? toBigInt(interval.end_time_unix_nanos)
+    : null;
+  return {
+    id: String(interval.id ?? interval.interval_id),
+    taskId: interval.task_id ?? '',
+    startNanos,
+    endNanos,
+    live: endNanos === null,
   };
 }
 
@@ -423,22 +455,42 @@ function groupChildren(links, nodeById) {
   return map;
 }
 
-function computeWindow(actions) {
+function computeWindow(actions, intervals = [], axisEndNanos = null) {
   let startNanos = null;
   let endNanos = null;
   let startIso = null;
   let endIso = null;
-  for (const action of actions) {
-    const start = toBigInt(action.start_time_unix_nanos);
-    const end = action.end_time_unix_nanos ? toBigInt(action.end_time_unix_nanos) : start;
+  const consider = (start, end, isoStart, isoEnd) => {
     if (startNanos === null || start < startNanos) {
       startNanos = start;
-      startIso = action.start_time;
+      startIso = isoStart;
     }
     if (endNanos === null || end > endNanos) {
       endNanos = end;
-      endIso = action.end_time ?? action.start_time;
+      endIso = isoEnd;
     }
+  };
+  for (const action of actions) {
+    const start = toBigInt(action.start_time_unix_nanos);
+    const end = action.end_time_unix_nanos ? toBigInt(action.end_time_unix_nanos) : start;
+    consider(start, end, action.start_time, action.end_time ?? action.start_time);
+  }
+  for (const interval of intervals) {
+    consider(
+      interval.startNanos,
+      interval.endNanos ?? interval.startNanos,
+      null,
+      null,
+    );
+  }
+  if (axisEndNanos) {
+    const axisEnd = toBigInt(axisEndNanos);
+    if (endNanos === null || axisEnd > endNanos) {
+      endNanos = axisEnd;
+    }
+  }
+  if (startNanos === null) {
+    return emptyWindow();
   }
   const spanMs = Math.max(nanosDiffMs(endNanos, startNanos), 1);
   return { startNanos, endNanos, spanMs, startIso, endIso };

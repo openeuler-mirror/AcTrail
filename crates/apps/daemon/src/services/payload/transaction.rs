@@ -73,7 +73,7 @@ impl StorageAttachService {
                 trace_runtime,
                 std::mem::take(&mut output.llm_pipeline_diagnostics),
             );
-            let batch = SemanticActionBatch::from_action_output(
+            let mut batch = SemanticActionBatch::from_action_output(
                 output.actions,
                 output.links,
                 output.file_observation_paths,
@@ -85,9 +85,18 @@ impl StorageAttachService {
             );
             if !batch.actions().is_empty() || !batch.links().is_empty() {
                 let agents = Self::recognized_agent_processes(&batch);
-                let persisted = self.write_semantic_action_batch(batch)?;
+                let idle_update = self
+                    .idle_runtime
+                    .prepare_batch(&mut batch, close.observed_at);
+                let export_batch = batch.clone();
+                RecordingWriter::new(self.storage.as_mut())
+                    .persist_semantic_actions_with_additional_write(batch, |storage| {
+                        idle_update.persist(storage)
+                    })
+                    .map_err(recording_error_to_control)?;
+                self.idle_runtime.commit(idle_update);
                 self.apply_agent_observation_depths(trace_runtime, agents);
-                self.publish_live_export_actions(trace_runtime, identity.trace_id, persisted)?;
+                self.publish_live_export_actions(trace_runtime, identity.trace_id, export_batch)?;
             }
         }
         Ok(())
@@ -154,7 +163,6 @@ impl StorageAttachService {
             .collect::<Result<Vec<_>, _>>()?;
         let trace_state_count = membership_trace_states.len();
         let traces = LiveTraceRecordLookup::new(trace_runtime);
-        let next_diagnostic_id = &mut self.next_diagnostic_id;
         let semantic_action_count;
         let semantic_link_count;
         let mut mcp_stdio_diagnostics = Vec::new();
@@ -162,7 +170,7 @@ impl StorageAttachService {
         let mut retained_payload_transaction = RetainedPayloadTransaction::default();
         let semantic_flush_diagnostics = self.workload_diagnostics.clone();
         let started = crate::services::workload_diagnostics::now();
-        let result = {
+        let (result, payload_persisted, agents) = {
             let mut context = PayloadTransactionContext {
                 trace_runtime,
                 payload_body_retention_gate: &mut self.payload_body_retention_gate,
@@ -205,11 +213,16 @@ impl StorageAttachService {
             let agents = Self::recognized_agent_processes(&export_batch);
             semantic_action_count = export_batch.actions().len();
             semantic_link_count = export_batch.links().len();
-            let result = RecordingWriter::new(self.storage.as_mut())
-                .write_session_then_export(
+            let observed_at = SystemTime::now();
+            let idle_update = self
+                .idle_runtime
+                .prepare_batch(&mut export_batch, observed_at);
+            let next_diagnostic_id = &mut self.next_diagnostic_id;
+            let (result, persisted) = RecordingWriter::new(self.storage.as_mut())
+                .write_session_then_export_with_additional_write(
                     &self.export_runtime,
                     &traces,
-                    SystemTime::now(),
+                    observed_at,
                     || {
                         next_diagnostic_id_from_seed(next_diagnostic_id)
                             .map_err(control_error_to_recording)
@@ -222,6 +235,7 @@ impl StorageAttachService {
                             semantic_action_count + semantic_link_count,
                         );
                     },
+                    |storage| idle_update.persist(storage),
                     |session| {
                         let prepared = prepared.map_err(control_error_to_recording)?;
                         for record in process_records.into_values() {
@@ -234,13 +248,17 @@ impl StorageAttachService {
                             .persist_prepared_payload_segments(session, prepared)
                             .map_err(control_error_to_recording)
                     },
-                )
-                .map_err(recording_error_to_control);
-            (result, agents)
+                );
+            if persisted {
+                self.idle_runtime.commit(idle_update);
+            }
+            let result = result.map_err(recording_error_to_control);
+            (result, persisted, agents)
         };
-        let (result, agents) = result;
-        retained_payload_transaction
-            .apply_result(&mut self.retained_payload_bytes_by_trace, &result);
+        retained_payload_transaction.apply_result(
+            &mut self.retained_payload_bytes_by_trace,
+            &payload_persisted.then_some(()).ok_or(()),
+        );
         self.workload_diagnostics.record_storage_batch(
             started.elapsed(),
             0,

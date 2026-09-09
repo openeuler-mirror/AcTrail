@@ -6,6 +6,7 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 alert_contract = { path = "../../contracts/alert" }
+idle_contract = { path = "../../contracts/idle" }
 model_core = { path = "../../core/model" }
 semantic_action = { path = "../../contracts/semantic_action" }
 store_read_contract = { path = "../../contracts/store/read" }

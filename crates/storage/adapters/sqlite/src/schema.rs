@@ -434,6 +434,7 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_writable_schema_state(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     connection.execute_batch(crate::alerts::schema::CREATE_SQL)?;
+    connection.execute_batch(crate::idle::schema::CREATE_SQL)?;
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
         .and_then(|codebook| codebook.validate())
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
@@ -490,6 +491,7 @@ fn validate_writable_schema_state(
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
     crate::alerts::schema::validate(connection)?;
+    crate::idle::schema::validate(connection)?;
     require_schema_object(connection, "table", "tls_flow_diagnostics")?;
     require_column(connection, "tls_flow_diagnostics", "trace_id")?;
     require_column(connection, "tls_flow_diagnostics", "stream_key")?;
@@ -615,7 +617,7 @@ fn user_table_count(connection: &Connection) -> Result<i64, rusqlite::Error> {
     )
 }
 
-fn require_column(
+pub(crate) fn require_column(
     connection: &Connection,
     table: &str,
     column: &str,

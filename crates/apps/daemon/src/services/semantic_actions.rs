@@ -112,48 +112,51 @@ impl StorageAttachService {
             .collect()
     }
 
-    pub(super) fn write_semantic_action_batch(
-        &mut self,
-        batch: SemanticActionBatch,
-    ) -> Result<SemanticActionBatch, ControlError> {
-        RecordingWriter::new(self.storage.as_mut())
-            .persist_semantic_actions(batch)
-            .map_err(recording_error_to_control)
-    }
 
     pub(super) fn persist_observed_batch_then_publish(
         &mut self,
         trace_runtime: &TraceRuntime,
         events: Vec<DomainEvent>,
-        diagnostics: Vec<DiagnosticRecord>,
-        semantic_actions: SemanticActionBatch,
+        mut diagnostics: Vec<DiagnosticRecord>,
+        mut semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
         process_records: Vec<ProcessRecord>,
     ) -> Result<(), ControlError> {
+        let observed_at = SystemTime::now();
+        let idle_update = self
+            .idle_runtime
+            .prepare_batch(&mut semantic_actions, observed_at);
+        diagnostics.extend(
+            self.idle_attribution_diagnostics(idle_update.ambiguous_traces(), observed_at)?,
+        );
         let event_count = events.len();
         let diagnostic_count = diagnostics.len();
         let semantic_action_count = semantic_actions.actions().len();
         let semantic_link_count = semantic_actions.links().len();
         let trace_state_count = trace_states.len();
         let traces = LiveTraceRecordLookup::new(trace_runtime);
-        let next_diagnostic_id = &mut self.next_diagnostic_id;
         let started = crate::services::workload_diagnostics::now();
-        let result = RecordingWriter::new(self.storage.as_mut())
-            .persist_live_events_then_export(
+        let next_diagnostic_id = &mut self.next_diagnostic_id;
+        let (result, persisted) = RecordingWriter::new(self.storage.as_mut())
+            .persist_live_events_then_export_with_additional_write(
                 &self.export_runtime,
                 events,
                 diagnostics,
                 semantic_actions,
                 trace_states,
                 process_records,
+                |storage| idle_update.persist(storage),
                 &traces,
-                SystemTime::now(),
+                observed_at,
                 || {
                     next_diagnostic_id_from_seed(next_diagnostic_id)
                         .map_err(control_error_to_recording)
                 },
-            )
-            .map_err(recording_error_to_control);
+            );
+        if persisted {
+            self.idle_runtime.commit(idle_update);
+        }
+        let result = result.map_err(recording_error_to_control);
         self.workload_diagnostics.record_storage_batch(
             started.elapsed(),
             event_count,
@@ -199,24 +202,41 @@ impl StorageAttachService {
         trace_id: TraceId,
         finished_at: std::time::SystemTime,
     ) -> Result<(), ControlError> {
-        let (semantic_actions, llm_pipeline_diagnostics) =
+        // Attribute final trace actions before projecting and persisting them.
+        let (mut semantic_actions, llm_pipeline_diagnostics) =
             self.finalize_semantic_actions_for_trace(trace_id, finished_at);
+        let idle_update =
+            self.idle_runtime
+                .prepare_terminal_batch(&mut semantic_actions, finished_at, trace_id);
         let mut export_batch = semantic_actions.clone();
         let mut errors = Vec::new();
-
-        match self.write_semantic_action_batch(semantic_actions) {
-            Ok(_) => match self.rebuild_lineage_semantic_links(trace_id) {
-                Ok(lineage_links) => {
-                    export_batch.extend(SemanticActionBatch::from_parts(Vec::new(), lineage_links));
+        let mut final_batch_persisted = false;
+        match RecordingWriter::new(self.storage.as_mut())
+            .persist_semantic_actions_with_additional_write(semantic_actions, |storage| {
+                idle_update.persist(storage)
+            })
+            .map_err(recording_error_to_control)
+        {
+            Ok(()) => {
+                final_batch_persisted = true;
+                self.idle_runtime.commit(idle_update);
+                match self.rebuild_lineage_semantic_links(trace_id) {
+                    Ok(lineage_links) => {
+                        export_batch
+                            .extend(SemanticActionBatch::from_parts(Vec::new(), lineage_links));
+                    }
+                    Err(error) => errors.push(error),
                 }
-                Err(error) => errors.push(error),
-            },
+            }
             Err(error) => errors.push(error),
         }
 
-        if let Err(error) = self.publish_live_export_actions(trace_runtime, trace_id, export_batch)
-        {
-            errors.push(error);
+        if final_batch_persisted {
+            if let Err(error) =
+                self.publish_live_export_actions(trace_runtime, trace_id, export_batch)
+            {
+                errors.push(error);
+            }
         }
 
         self.persist_llm_pipeline_diagnostics_fail_local(trace_runtime, llm_pipeline_diagnostics);
