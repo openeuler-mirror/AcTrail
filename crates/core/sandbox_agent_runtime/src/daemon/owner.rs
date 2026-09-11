@@ -6,13 +6,16 @@ use std::thread;
 
 use sandbox_control::{SandboxControlPort, SandboxControlStatus};
 
-use super::{SandboxAgentControlHandle, WorkerSet, spawn_io_worker, spawn_resource_worker};
+use super::{
+    SandboxAgentControlHandle, WorkerSet, spawn_io_worker, spawn_pressure_worker,
+    spawn_resource_worker,
+};
 use crate::delivery::{ConnectionGate, DeliveryPipeline, DeliveryQueue};
 use crate::session::{SessionOwner, SessionWake, SharedSessionStatus};
 use crate::status::DaemonMetrics;
 use crate::{
-    GuestResourceSource, ProcessIoSource, SandboxAgentConfig, SandboxAgentSnapshot,
-    SandboxTransportFactory,
+    GuestPressureSource, GuestResourceSource, ProcessIoSource, SandboxAgentConfig,
+    SandboxAgentSnapshot, SandboxTransportFactory,
 };
 
 pub struct SandboxAgentDaemon {
@@ -29,6 +32,7 @@ impl SandboxAgentDaemon {
         config: SandboxAgentConfig,
         mut io_source: Box<dyn ProcessIoSource>,
         mut resource_source: Box<dyn GuestResourceSource>,
+        pressure_source: Option<Box<dyn GuestPressureSource>>,
         transport: Arc<dyn SandboxTransportFactory>,
     ) -> io::Result<Self> {
         config.validate()?;
@@ -66,10 +70,21 @@ impl SandboxAgentDaemon {
             config.worker_thread_stack_bytes,
             Arc::clone(&stop),
             Arc::clone(&metrics),
-            delivery,
+            delivery.clone(),
             config.resource_poll_interval,
             resource_source,
         )?);
+
+        if let Some(pressure_source) = pressure_source {
+            workers.push(spawn_pressure_worker(
+                config.worker_thread_stack_bytes,
+                Arc::clone(&stop),
+                Arc::clone(&metrics),
+                delivery,
+                config.pressure_poll_interval,
+                pressure_source,
+            )?);
+        }
 
         let session = SessionOwner::new(
             config.clone(),

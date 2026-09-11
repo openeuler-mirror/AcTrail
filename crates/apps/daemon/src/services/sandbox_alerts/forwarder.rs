@@ -94,6 +94,32 @@ impl SandboxAlertForwarder {
                     None,
                 )
             }
+            SandboxAlertKind::OomImminent {
+                guest_boot_id,
+                some_avg10_millipercent,
+                threshold_millipercent,
+                available_bytes,
+                threshold_bytes,
+                ..
+            } => {
+                extras.insert(
+                    "some_avg10_millipercent".to_string(),
+                    Value::from(some_avg10_millipercent),
+                );
+                extras.insert(
+                    "threshold_millipercent".to_string(),
+                    Value::from(threshold_millipercent),
+                );
+                extras.insert("available_bytes".to_string(), Value::from(available_bytes));
+                extras.insert("threshold_bytes".to_string(), Value::from(threshold_bytes));
+                (
+                    DeliverySeverity::Warning,
+                    "sandbox.resource.oom_imminent",
+                    "Sandbox memory pressure predicts an imminent OOM",
+                    guest_boot_id,
+                    None,
+                )
+            }
             SandboxAlertKind::HighRead {
                 guest_boot_id,
                 process,
@@ -173,6 +199,7 @@ impl SandboxAlertForwarder {
             SandboxAlertKind::HighCpu { .. } => "sandbox.resource.high_cpu",
             SandboxAlertKind::OomKilled { .. } => "sandbox.resource.oom_killed",
             SandboxAlertKind::OomRisk { .. } => "sandbox.resource.oom_risk",
+            SandboxAlertKind::OomImminent { .. } => "sandbox.resource.oom_imminent",
             SandboxAlertKind::HighRead { .. } => "sandbox.process.high_read",
             SandboxAlertKind::HighWrite { .. } => "sandbox.process.high_write",
         }

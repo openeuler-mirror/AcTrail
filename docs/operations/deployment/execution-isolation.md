@@ -109,3 +109,11 @@ sudo actrailviewer --config /etc/actrail/operator.conf traces
 ```
 
 激活失败时，依次检查 guest control response、gateway 的 guest connection（peer）状态、gateway 到 daemon 的 connection（upstream）状态，以及 daemon Hand listener；不通过弱化 peer、路径或凭据校验绕过失败边界。
+
+## Guest memory PSI
+
+`actrail-sb` 在 `[pressure]` 启用（默认 `enabled = true`、`poll_interval_ms = 1000`）时从 `/proc/pressure/memory` 采集 Guest 级 memory PSI，并把 `GuestPressure` observation 经既有 route 上报；`sandbox-resource-alert` 插件据此与 `GuestResource` 组合发出 `OomImminent`。
+
+Guest 内核必须包含 `CONFIG_PSI`。若内核按 `CONFIG_PSI_DEFAULT_DISABLED=y` 构建，则内核命令行必须包含 `psi=1`，否则 `/proc/pressure/memory` 不存在。
+
+缺少 PSI 时行为是 fail-soft：`actrail-sb` 仍正常启动，不产生 `GuestPressure`，启动日志输出 `actrail-sb pressure unavailable reason=...`，其余观测与 OOM 路径不受影响。

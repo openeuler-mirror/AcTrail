@@ -1,11 +1,13 @@
 use sandbox_evidence_store::sandbox_observation::{
-    CpuSnapshot, GuestBootId, GuestResourceSnapshot, MemorySnapshot, Observation,
-    OomVictimAttribution, OomVictimObservation, ProcessIoCounters, ProcessMarker,
+    CpuSnapshot, GuestBootId, GuestPressureSnapshot, GuestResourceSnapshot, MemorySnapshot,
+    Observation, OomVictimAttribution, OomVictimObservation, ProcessIoCounters, ProcessMarker,
+    PsiAverages,
 };
 
 const PROCESS_IO_KIND: u8 = 1;
 const GUEST_RESOURCE_KIND: u8 = 2;
 const OOM_VICTIM_KIND: u8 = 3;
+const GUEST_PRESSURE_KIND: u8 = 4;
 
 pub(super) struct ObservationCodec;
 
@@ -73,6 +75,16 @@ impl ObservationCodec {
                 bytes.extend_from_slice(&root.start_time_ticks.to_be_bytes());
                 bytes.extend_from_slice(&root.executable_name);
                 (OOM_VICTIM_KIND, bytes)
+            }
+            Observation::GuestPressure(value) => {
+                bytes.extend_from_slice(value.guest_boot_id.as_bytes());
+                bytes.extend_from_slice(&value.sampled_at_ms.to_be_bytes());
+                for avg in [value.memory_some, value.memory_full] {
+                    bytes.extend_from_slice(&avg.avg10_millipercent.to_be_bytes());
+                    bytes.extend_from_slice(&avg.avg60_millipercent.to_be_bytes());
+                    bytes.extend_from_slice(&avg.avg300_millipercent.to_be_bytes());
+                }
+                (GUEST_PRESSURE_KIND, bytes)
             }
         }
     }
@@ -153,6 +165,20 @@ impl ObservationCodec {
                     .validate()?,
                 )
             }
+            GUEST_PRESSURE_KIND => Observation::GuestPressure(GuestPressureSnapshot {
+                guest_boot_id: GuestBootId::new(cursor.array()?),
+                sampled_at_ms: cursor.u64()?,
+                memory_some: PsiAverages {
+                    avg10_millipercent: cursor.u32()?,
+                    avg60_millipercent: cursor.u32()?,
+                    avg300_millipercent: cursor.u32()?,
+                },
+                memory_full: PsiAverages {
+                    avg10_millipercent: cursor.u32()?,
+                    avg60_millipercent: cursor.u32()?,
+                    avg300_millipercent: cursor.u32()?,
+                },
+            }),
             _ => return Err(format!("unknown sandbox evidence observation kind {kind}")),
         };
         if cursor.remaining() != 0 {
@@ -205,5 +231,45 @@ impl<'a> PayloadCursor<'a> {
 
     fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pressure() -> GuestPressureSnapshot {
+        GuestPressureSnapshot {
+            guest_boot_id: GuestBootId::new([3; 16]),
+            sampled_at_ms: 9_876,
+            memory_some: PsiAverages {
+                avg10_millipercent: 30_000,
+                avg60_millipercent: 15_500,
+                avg300_millipercent: 1_000,
+            },
+            memory_full: PsiAverages {
+                avg10_millipercent: 0,
+                avg60_millipercent: 123_456,
+                avg300_millipercent: 7,
+            },
+        }
+    }
+
+    #[test]
+    fn pressure_observation_round_trips() {
+        let observation = Observation::GuestPressure(pressure());
+        let (kind, bytes) = ObservationCodec::encode(&observation);
+        assert_eq!(kind, GUEST_PRESSURE_KIND);
+        assert_eq!(bytes.len(), 48);
+        let decoded = ObservationCodec::decode(kind, &bytes).expect("decode pressure");
+        assert_eq!(decoded, observation);
+    }
+
+    #[test]
+    fn pressure_decode_rejects_trailing_bytes() {
+        let observation = Observation::GuestPressure(pressure());
+        let (kind, mut bytes) = ObservationCodec::encode(&observation);
+        bytes.push(0);
+        assert!(ObservationCodec::decode(kind, &bytes).is_err());
     }
 }

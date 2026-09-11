@@ -10,7 +10,8 @@ use sandbox_alert_store::{
     SandboxAlertWritePort,
 };
 use sandbox_observation::{
-    GuestResourceSnapshot, Observation, OomVictimObservation, ProcessIoCounters,
+    GuestPressureSnapshot, GuestResourceSnapshot, Observation, OomVictimObservation,
+    ProcessIoCounters,
 };
 use sandbox_plugin_delivery::{
     SandboxConsumeError, SandboxConsumeReport, SandboxConsumerBatch, SandboxConsumerId,
@@ -130,6 +131,18 @@ impl SandboxResourceAlertPlugin {
                         &mut alerts,
                     );
                 }
+                Observation::GuestPressure(pressure) => {
+                    self.observe_pressure(
+                        &mut states,
+                        source,
+                        alert_source,
+                        sequence,
+                        observation_index,
+                        &config,
+                        pressure,
+                        &mut alerts,
+                    )?;
+                }
             }
         }
         Ok(alerts)
@@ -168,6 +181,13 @@ impl SandboxResourceAlertPlugin {
                 ));
             }
         }
+        states
+            .update_memory_available(
+                source,
+                resource.guest_boot_id,
+                resource.memory.available_bytes,
+            )
+            .map_err(Self::state_error)?;
         let memory_risk = resource.memory.available_bytes < config.memory_available_threshold_bytes;
         if states
             .update_memory_risk(source, memory_risk)
@@ -181,6 +201,44 @@ impl SandboxResourceAlertPlugin {
                     guest_boot_id: resource.guest_boot_id,
                     sampled_at_ms: resource.sampled_at_ms,
                     available_bytes: resource.memory.available_bytes,
+                    threshold_bytes: config.memory_available_threshold_bytes,
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    fn observe_pressure(
+        &self,
+        states: &mut SourceStateTable,
+        source: sandbox_plugin_delivery::SandboxSource,
+        alert_source: SandboxAlertSource,
+        sequence: u64,
+        observation_index: u32,
+        config: &SandboxResourceAlertConfig,
+        pressure: &GuestPressureSnapshot,
+        alerts: &mut Vec<SandboxAlertRecord>,
+    ) -> Result<(), SandboxConsumeError> {
+        let Some(available_bytes) = states.memory_available(source).map_err(Self::state_error)? else {
+            return Ok(());
+        };
+        let pressure_risk = pressure.memory_some.avg10_millipercent
+            >= config.memory_pressure_some_avg10_threshold_millipercent
+            && available_bytes < config.memory_available_threshold_bytes;
+        if states
+            .update_pressure_risk(source, pressure_risk)
+            .map_err(Self::state_error)?
+        {
+            alerts.push(SandboxAlertRecord::new(
+                alert_source,
+                sequence,
+                observation_index,
+                SandboxAlertKind::OomImminent {
+                    guest_boot_id: pressure.guest_boot_id,
+                    sampled_at_ms: pressure.sampled_at_ms,
+                    some_avg10_millipercent: pressure.memory_some.avg10_millipercent,
+                    threshold_millipercent: config.memory_pressure_some_avg10_threshold_millipercent,
+                    available_bytes,
                     threshold_bytes: config.memory_available_threshold_bytes,
                 },
             ));
@@ -302,7 +360,10 @@ mod tests {
     use sandbox_alert_store::{
         SandboxAlertAdmission, SandboxAlertKind, SandboxAlertRecord, SandboxAlertWritePort,
     };
-    use sandbox_observation::{CpuSnapshot, GuestBootId, GuestResourceSnapshot, MemorySnapshot};
+    use sandbox_observation::{
+        CpuSnapshot, GuestBootId, GuestPressureSnapshot, GuestResourceSnapshot, MemorySnapshot,
+        PsiAverages,
+    };
     use sandbox_plugin_delivery::{
         SandboxConsumerBatch, SandboxObservationConsumer, SandboxSource,
     };
@@ -366,6 +427,7 @@ mod tests {
             SandboxResourceAlertConfig {
                 cpu_usage_threshold_basis_points: 7_500,
                 memory_available_threshold_bytes: 1,
+                memory_pressure_some_avg10_threshold_millipercent: 30_000,
                 read_interval_threshold_bytes: 1,
                 write_interval_threshold_bytes: 1,
                 source_state_capacity: 4,
@@ -413,5 +475,85 @@ mod tests {
         assert_eq!(alerts.len(), 2);
         assert_eq!(alerts[1].batch_sequence(), 5);
         assert_eq!(alerts[1].detected_at_ms(), 50);
+    }
+
+    fn pressure_batch(
+        sequence: u64,
+        sampled_at_ms: u64,
+        some_avg10_millipercent: u32,
+    ) -> SandboxConsumerBatch {
+        let observations = vec![sandbox_observation::Observation::GuestPressure(
+            GuestPressureSnapshot {
+                guest_boot_id: GuestBootId::new([7; 16]),
+                sampled_at_ms,
+                memory_some: PsiAverages {
+                    avg10_millipercent: some_avg10_millipercent,
+                    avg60_millipercent: 0,
+                    avg300_millipercent: 0,
+                },
+                memory_full: PsiAverages::default(),
+            },
+        )]
+        .into();
+        SandboxConsumerBatch::new(
+            SandboxSource::new(3, 5).expect("valid source"),
+            sequence,
+            observations,
+            vec![0].into(),
+        )
+    }
+
+    #[test]
+    fn oom_imminent_is_edge_triggered_on_pressure_and_low_memory() {
+        let sink = Arc::new(RecordingAlertSink::default());
+        let plugin = SandboxResourceAlertPlugin::new(
+            SandboxResourceAlertConfig {
+                cpu_usage_threshold_basis_points: 10_000,
+                memory_available_threshold_bytes: 2_000,
+                memory_pressure_some_avg10_threshold_millipercent: 30_000,
+                read_interval_threshold_bytes: 1,
+                write_interval_threshold_bytes: 1,
+                source_state_capacity: 4,
+            },
+            sink.clone(),
+        )
+        .expect("valid plugin config");
+
+        // Establish memory availability (1024 < 2000) and the guest boot id.
+        plugin
+            .consume(resource_batch(1, 10, 1_000, 800))
+            .expect("resource baseline");
+
+        let imminent = |sink: &RecordingAlertSink| {
+            sink.alerts()
+                .into_iter()
+                .filter(|alert| matches!(alert.kind(), SandboxAlertKind::OomImminent { .. }))
+                .count()
+        };
+
+        plugin
+            .consume(pressure_batch(2, 20, 25_000))
+            .expect("pressure below threshold");
+        assert_eq!(imminent(&sink), 0);
+
+        plugin
+            .consume(pressure_batch(3, 30, 30_000))
+            .expect("pressure crosses threshold");
+        assert_eq!(imminent(&sink), 1);
+
+        plugin
+            .consume(pressure_batch(4, 40, 40_000))
+            .expect("sustained pressure");
+        assert_eq!(imminent(&sink), 1);
+
+        plugin
+            .consume(pressure_batch(5, 50, 0))
+            .expect("pressure recovery");
+        assert_eq!(imminent(&sink), 1);
+
+        plugin
+            .consume(pressure_batch(6, 60, 50_000))
+            .expect("second pressure transition");
+        assert_eq!(imminent(&sink), 2);
     }
 }

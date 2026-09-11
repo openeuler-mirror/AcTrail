@@ -9,5 +9,8 @@ mod status;
 
 pub use config::SandboxAgentConfig;
 pub use daemon::{SandboxAgentControlHandle, SandboxAgentDaemon};
-pub use ports::{GuestResourceSource, ProcessIoSource, SandboxConnection, SandboxTransportFactory};
+pub use ports::{
+    GuestPressureSource, GuestResourceSource, ProcessIoSource, SandboxConnection,
+    SandboxTransportFactory,
+};
 pub use status::SandboxAgentSnapshot;
