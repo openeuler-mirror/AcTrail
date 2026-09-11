@@ -202,8 +202,10 @@ const activeTabProps = computed(() => {
   if (activeTab.value === TAB_IDS.llmTrajectory) {
     tabProps.trajectoryGraph = trajectoryGraph.value;
   }
-  if (activeTab.value === TAB_IDS.waterfall) {
+  if (activeTab.value === TAB_IDS.waterfall || activeTab.value === TAB_IDS.flameGraph) {
     tabProps.waterfall = waterfall.value;
+  }
+  if (activeTab.value === TAB_IDS.waterfall) {
     tabProps.focusInterval = waterfallFocus.value;
     tabProps.attribution = timeAttribution.value;
   }
@@ -246,7 +248,7 @@ const showLoadingPanel = computed(() => {
   if (activeTab.value === TAB_IDS.commands) {
     return commands.value?.loadedTraceId !== selectedTraceId.value;
   }
-  if (activeTab.value === TAB_IDS.waterfall) {
+  if (activeTab.value === TAB_IDS.waterfall || activeTab.value === TAB_IDS.flameGraph) {
     return waterfall.value?.loadedTraceId !== selectedTraceId.value;
   }
   if (activeTab.value === TAB_IDS.llmTrajectory) {
@@ -527,18 +529,37 @@ async function ensureCommandsForActiveTab() {
 
 async function ensureWaterfallForActiveTab() {
   const traceId = selectedTraceId.value;
-  if (!traceId || activeTab.value !== TAB_IDS.waterfall) {
+  if (
+    !traceId
+    || (activeTab.value !== TAB_IDS.waterfall && activeTab.value !== TAB_IDS.flameGraph)
+  ) {
     return;
   }
-  if (waterfall.value?.loadedTraceId === traceId) {
+  const needsFullTrace = activeTab.value === TAB_IDS.flameGraph;
+  if (
+    waterfall.value?.loadedTraceId === traceId
+    && (!needsFullTrace || !waterfall.value?.partial)
+  ) {
     return;
   }
   const token = Symbol();
   activeWaterfallLoad = token;
   try {
-    const data = await readWaterfall(traceId);
+    const data = needsFullTrace
+      ? await readActionTree(traceId)
+      : await readWaterfall(traceId);
     if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
-      waterfall.value = withWaterfallTrace(data, traceId);
+      waterfall.value = withWaterfallTrace(
+        needsFullTrace
+          ? {
+              ...data,
+              selected_actions: data.actions?.length ?? 0,
+              total_actions: data.actions?.length ?? 0,
+              partial: false,
+            }
+          : data,
+        traceId,
+      );
     }
   } catch (err) {
     if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
@@ -576,7 +597,10 @@ async function loadFullWaterfall() {
 
 async function ensureTimeAttributionForActiveTab() {
   const traceId = selectedTraceId.value;
-  if (!traceId || activeTab.value !== TAB_IDS.waterfall) {
+  if (
+    !traceId
+    || activeTab.value !== TAB_IDS.waterfall
+  ) {
     return;
   }
   if (timeAttribution.value?.trace && traceIdMatches(timeAttribution.value.trace.id, traceId)) {
@@ -643,6 +667,7 @@ function emptyWaterfall() {
   return {
     actions: [],
     links: [],
+    associations: [],
     roots: [],
     selectedActions: 0,
     totalActions: 0,
@@ -655,6 +680,7 @@ function withWaterfallTrace(data, traceId) {
   return {
     actions: freezeTraceList(data.actions),
     links: freezeTraceList(data.links),
+    associations: freezeTraceList(data.associations),
     roots: data.roots ?? [],
     selectedActions: data.selected_actions ?? data.actions?.length ?? 0,
     totalActions:
