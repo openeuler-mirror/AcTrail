@@ -286,6 +286,42 @@ impl TraceRuntime {
             .map_err(RegistryError::InvalidStateTransition)
     }
 
+    /// Completes a draining trace only after its managed resource boundary has
+    /// been durably finalized. Open memberships remain intact as evidence and
+    /// degrade trace health instead of blocking the transition indefinitely.
+    pub fn complete_after_resource_barrier(
+        &mut self,
+        trace_id: TraceId,
+        completed_at: SystemTime,
+    ) -> Result<bool, RegistryError> {
+        let entry = self
+            .traces
+            .get_mut(&trace_id)
+            .ok_or(RegistryError::TraceNotFound(trace_id))?;
+        let has_open_memberships = entry.memberships.memberships().any(|membership| {
+            membership.capture_enabled
+                && matches!(
+                    membership.state,
+                    MembershipState::Starting | MembershipState::Active
+                )
+        });
+        if has_open_memberships {
+            state_machine::degrade_trace(&mut entry.trace);
+        }
+        if entry.trace.lifecycle_state == TraceLifecycleState::Draining {
+            state_machine::complete_trace(&mut entry.trace, completed_at)
+                .map_err(RegistryError::InvalidStateTransition)?;
+        } else if !entry.trace.lifecycle_state.is_terminal() {
+            return Err(RegistryError::InvalidStateTransition(
+                state_machine::StateTransitionError {
+                    from: entry.trace.lifecycle_state,
+                    to: TraceLifecycleState::Completed,
+                },
+            ));
+        }
+        Ok(has_open_memberships)
+    }
+
     pub fn get_trace(&self, trace_id: TraceId) -> Option<&TraceEntry> {
         self.traces.get(&trace_id)
     }

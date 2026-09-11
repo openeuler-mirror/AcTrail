@@ -23,6 +23,7 @@ config_core = { path = "../../core/config" }
 ebpf_collector = { path = "../../adapters/collectors/ebpf" }
 export_core = { path = "../../export/core" }
 export_factory = { path = "../../export/factory" }
+getrandom = "0.3"
 ingest_runtime = { path = "../../core/ingest_runtime" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
@@ -62,3 +63,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 toml = "0.8"
 uds_control_server = { path = "../../adapters/control/uds/server" }
 uds_control_client = { path = "../../adapters/control/uds/client" }
+
+[dev-dependencies]
+tempfile = "3"

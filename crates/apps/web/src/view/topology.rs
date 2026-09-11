@@ -285,11 +285,17 @@ fn event_summary(payload: &EventPayload) -> String {
 
 fn resource_summary(payload: &model_core::event::ResourcePayload) -> String {
     format!(
-        "{} cpu={} rss_kb={}",
+        "{} method={} coverage={} cpu={} cgroup_memory_current_bytes={} rss_kb={}",
         payload.subject,
+        payload.accounting_method.as_str(),
+        payload.accounting_coverage.as_str(),
         payload
             .cpu_percent_millis
             .map(format_percent_millis)
+            .unwrap_or_default(),
+        payload
+            .memory_current_bytes
+            .map(|value| value.to_string())
             .unwrap_or_default(),
         payload
             .rss_kb

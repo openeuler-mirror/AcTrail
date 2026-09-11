@@ -490,6 +490,7 @@ impl ConfigValues {
                 .required_disabled_or_positive_u64("resource_metrics_cpu_alert_percent_millis")?,
             memory_alert_rss_kb: self
                 .required_disabled_or_positive_u64("resource_metrics_memory_alert_rss_kb")?,
+            ..ResourceMetricsConfig::default()
         })
     }
 

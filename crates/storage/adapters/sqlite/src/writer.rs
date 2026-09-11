@@ -5,7 +5,7 @@ use model_core::event::DomainEvent;
 use model_core::payload::PayloadSegment;
 use model_core::process::ProcessMembership;
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use store_write_contract::WriteError;
 use store_write_contract::diagnostics::DiagnosticWriteStore;
 use store_write_contract::events::EventWriteStore;
@@ -163,70 +163,73 @@ impl MembershipWriteStore for SqliteStorage {
 }
 
 impl EventWriteStore for SqliteStorage {
-    fn append_event(&mut self, mut event: DomainEvent) -> Result<(), WriteError> {
-        let encoded = encode_event_payload(&mut event.payload)
-            .map_err(|error| WriteError::new("encode_event_payload", error.to_string()))?;
-        let (policy_redactions, policy_truncations) = encode_policy_record(&event.policy);
+    fn append_event(&mut self, event: DomainEvent) -> Result<(), WriteError> {
         let connection = self.connection().borrow_mut();
-        let mut block_ids = Vec::with_capacity(encoded.blocks.len());
-        for block in &encoded.blocks {
-            let compressed = zstd::stream::encode_all(
-                block.bytes.as_slice(),
-                self.cold_field_compression.zstd_level,
-            )
+        append_event_to_connection(&connection, self.cold_field_compression.zstd_level, event)
+    }
+}
+
+pub(crate) fn append_event_to_connection(
+    connection: &Connection,
+    zstd_level: i32,
+    mut event: DomainEvent,
+) -> Result<(), WriteError> {
+    let encoded = encode_event_payload(&mut event.payload)
+        .map_err(|error| WriteError::new("encode_event_payload", error.to_string()))?;
+    let (policy_redactions, policy_truncations) = encode_policy_record(&event.policy);
+    let mut block_ids = Vec::with_capacity(encoded.blocks.len());
+    for block in &encoded.blocks {
+        let compressed = zstd::stream::encode_all(block.bytes.as_slice(), zstd_level)
             .map_err(|error| WriteError::new("encode_event_payload_block", error.to_string()))?;
-            connection
-                .execute(
-                    "INSERT INTO event_payload_blocks (trace_id, kind, encoded_bytes)
-                     VALUES (?1, ?2, ?3)",
-                    params![
-                        event.envelope.trace_id.get(),
-                        block.kind.to_i64(),
-                        compressed
-                    ],
-                )
-                .map_err(|error| {
-                    WriteError::new("insert_event_payload_block", error.to_string())
-                })?;
-            block_ids.push(connection.last_insert_rowid());
-        }
-        let payload_blocks = block_ids
-            .iter()
-            .map(i64::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
         connection
-            .prepare_cached(
-                "INSERT OR REPLACE INTO events (
+            .execute(
+                "INSERT INTO event_payload_blocks (trace_id, kind, encoded_bytes)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    event.envelope.trace_id.get(),
+                    block.kind.to_i64(),
+                    compressed
+                ],
+            )
+            .map_err(|error| WriteError::new("insert_event_payload_block", error.to_string()))?;
+        block_ids.push(connection.last_insert_rowid());
+    }
+    let payload_blocks = block_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    connection
+        .prepare_cached(
+            "INSERT OR REPLACE INTO events (
                     event_id, trace_id, observed_at, process_id, collector, kind, bootstrap_observed,
                     metadata_partial, policy_modified, payload_variant, payload, payload_code,
                     payload_blocks, policy_verdict, policy_note, policy_redactions, policy_truncations
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-            )
-            .and_then(|mut statement| {
-                statement.execute(params![
-                    event.envelope.event_id.get(),
-                    event.envelope.trace_id.get(),
-                    encode_time(event.envelope.observed_at),
-                    event.envelope.process.get(),
-                    event.envelope.collector.to_string(),
-                    encode_event_kind(event.envelope.kind),
-                    bool_to_i64(event.envelope.flags.bootstrap_observed),
-                    bool_to_i64(event.envelope.flags.metadata_partial),
-                    bool_to_i64(event.envelope.flags.policy_modified),
-                    encoded.variant,
-                    encoded.fields,
-                    1i64,
-                    payload_blocks,
-                    encode_policy_verdict(event.policy.verdict),
-                    event.policy.note,
-                    policy_redactions,
-                    policy_truncations,
-                ])
-            })
-            .map(|_| ())
-            .map_err(|error| WriteError::new("append_event", error.to_string()))
-    }
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
+                event.envelope.event_id.get(),
+                event.envelope.trace_id.get(),
+                encode_time(event.envelope.observed_at),
+                event.envelope.process.get(),
+                event.envelope.collector.to_string(),
+                encode_event_kind(event.envelope.kind),
+                bool_to_i64(event.envelope.flags.bootstrap_observed),
+                bool_to_i64(event.envelope.flags.metadata_partial),
+                bool_to_i64(event.envelope.flags.policy_modified),
+                encoded.variant,
+                encoded.fields,
+                1i64,
+                payload_blocks,
+                encode_policy_verdict(event.policy.verdict),
+                event.policy.note,
+                policy_redactions,
+                policy_truncations,
+            ])
+        })
+        .map(|_| ())
+        .map_err(|error| WriteError::new("append_event", error.to_string()))
 }
 
 impl PayloadWriteStore for SqliteStorage {

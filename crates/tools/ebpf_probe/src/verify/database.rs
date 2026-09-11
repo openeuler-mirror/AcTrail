@@ -352,20 +352,31 @@ fn require_resource_payloads(
     }) else {
         return Err("missing resource metrics event".to_string());
     };
+    require_resource_payload(payload, expect_system_metrics)
+}
+
+fn require_resource_payload(
+    payload: &model_core::event::ResourcePayload,
+    expect_system_metrics: bool,
+) -> Result<(), String> {
     if payload.subject.is_empty() {
         return Err("resource metrics event missing subject".to_string());
     }
-    if payload.rss_kb.is_none() {
-        return Err("resource metrics event missing rss_kb".to_string());
+    if payload.rss_kb.is_none() && payload.memory_current_bytes.is_none() {
+        return Err("resource metrics event missing rss_kb and memory_current_bytes".to_string());
     }
-    if payload.virtual_memory_kb.is_none() {
+    if payload.accounting_method == model_core::event::ResourceAccountingMethod::ProcfsRssSum
+        && payload.virtual_memory_kb.is_none()
+    {
         return Err("resource metrics event missing virtual_memory_kb".to_string());
     }
-    if !payload.metadata.contains_key("sampled_processes") {
-        return Err("resource metrics event missing sampled_processes".to_string());
-    }
-    if !payload.metadata.contains_key("include_children") {
-        return Err("resource metrics event missing include_children".to_string());
+    if payload.accounting_method == model_core::event::ResourceAccountingMethod::ProcfsRssSum {
+        if !payload.metadata.contains_key("sampled_processes") {
+            return Err("resource metrics event missing sampled_processes".to_string());
+        }
+        if !payload.metadata.contains_key("include_children") {
+            return Err("resource metrics event missing include_children".to_string());
+        }
     }
     if expect_system_metrics {
         for key in [
@@ -385,4 +396,58 @@ fn sorted(values: HashSet<String>) -> Vec<String> {
     let mut values = values.into_iter().collect::<Vec<_>>();
     values.sort();
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use model_core::event::{
+        ResourceAccountingCoverage, ResourceAccountingMethod, ResourcePayload, ResourceSampleKind,
+    };
+
+    use super::require_resource_payload;
+
+    #[test]
+    fn cgroup_resource_verification_does_not_require_procfs_metadata() {
+        let payload = ResourcePayload {
+            scope: "trace".to_string(),
+            subject: "trace-1".to_string(),
+            accounting_method: ResourceAccountingMethod::CgroupV2,
+            accounting_coverage: ResourceAccountingCoverage::Exact,
+            sample_kind: ResourceSampleKind::Periodic,
+            memory_current_bytes: Some(4096),
+            metadata: BTreeMap::new(),
+            ..ResourcePayload::default()
+        };
+
+        require_resource_payload(&payload, false).unwrap();
+    }
+
+    #[test]
+    fn procfs_resource_verification_still_requires_procfs_metadata() {
+        let mut payload = ResourcePayload {
+            scope: "process_tree".to_string(),
+            subject: "pid:10".to_string(),
+            accounting_method: ResourceAccountingMethod::ProcfsRssSum,
+            accounting_coverage: ResourceAccountingCoverage::Partial,
+            sample_kind: ResourceSampleKind::Periodic,
+            rss_kb: Some(128),
+            virtual_memory_kb: Some(256),
+            metadata: BTreeMap::new(),
+            ..ResourcePayload::default()
+        };
+
+        assert_eq!(
+            require_resource_payload(&payload, false).unwrap_err(),
+            "resource metrics event missing sampled_processes"
+        );
+        payload
+            .metadata
+            .insert("sampled_processes".to_string(), "1".to_string());
+        payload
+            .metadata
+            .insert("include_children".to_string(), "true".to_string());
+        require_resource_payload(&payload, false).unwrap();
+    }
 }

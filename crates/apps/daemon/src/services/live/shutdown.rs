@@ -153,7 +153,9 @@ impl StorageAttachService {
             .list_trace_records()
             .into_iter()
             .filter(|trace| {
-                trace.lifecycle_state.is_terminal()
+                (trace.lifecycle_state.is_terminal()
+                    || (trace.lifecycle_state == TraceLifecycleState::Draining
+                        && self.resource_metrics.has_pending_barrier(trace.trace_id)))
                     && !self.finalized_terminal_traces.contains(&trace.trace_id)
             })
             .count()
@@ -299,6 +301,11 @@ impl StorageAttachService {
     ) -> Result<(), ControlError> {
         let started_at = Instant::now();
         let mut previous_pending_count = usize::MAX;
+        // Shutdown owns one bounded global deadline. An already-empty scope
+        // still finalizes exactly; a populated scope becomes an explicit
+        // partial final sample instead of multiplying per-trace waits.
+        self.drain_resource_finalizations_impl(trace_runtime)?;
+        self.resource_metrics.force_pending_finalizations_due();
         loop {
             if self.pending_terminal_finalizations.is_empty()
                 && self.terminal_trace_count(trace_runtime) == 0
@@ -463,6 +470,14 @@ impl StorageAttachService {
                 continue;
             }
             if terminal_trace_has_open_memberships(trace_runtime, trace_id)? {
+                if !self.resource_metrics.completed_managed_barrier(trace_id) {
+                    continue;
+                }
+            }
+            if !self.resource_metrics.resource_barrier_ready(trace_id) {
+                continue;
+            }
+            if !self.resource_metrics.external_barrier_ready(trace_id) {
                 continue;
             }
             if !self.post_trace_coordinator.barrier_ready(trace_id) {

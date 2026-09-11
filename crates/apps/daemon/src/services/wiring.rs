@@ -173,12 +173,6 @@ fn build_runtime_wiring_with_attach_service(
     let trace_id_seed = storage
         .next_trace_id_seed()
         .map_err(|error| ControlError::new(error.stage, error.message))?;
-    let event_id_seed = storage
-        .next_event_id_seed()
-        .map_err(|error| ControlError::new(error.stage, error.message))?;
-    let diagnostic_id_seed = storage
-        .next_diagnostic_id_seed()
-        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let payload_segment_id_seed = storage
         .next_payload_segment_id_seed()
         .map_err(|error| ControlError::new(error.stage, error.message))?;
@@ -239,6 +233,16 @@ fn build_runtime_wiring_with_attach_service(
             export_runtime,
         )?,
     };
+    // Startup recovery may have persisted final resource events and diagnostics.
+    // Seed the live allocator after constructing the service to avoid reusing IDs.
+    let event_id_seed = attach_service
+        .storage
+        .next_event_id_seed()
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
+    let diagnostic_id_seed = attach_service
+        .storage
+        .next_diagnostic_id_seed()
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     attach_service.set_id_seeds(event_id_seed, diagnostic_id_seed);
     attach_service.set_payload_segment_id_seed(payload_segment_id_seed);
     attach_service.preflight_host_ebpf();

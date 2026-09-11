@@ -27,6 +27,8 @@ use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeveri
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
 use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
 use model_core::process::ProcessMembership;
+use model_core::resource_scope::ResourceScopeLifecycleState;
+use model_core::trace::{TraceHealth, TraceLifecycleState};
 use recording_runtime::{RecordingWriter, SemanticActionBatch, TraceStateRecord};
 use trace_runtime::registry::TraceRuntime;
 
@@ -385,12 +387,13 @@ impl StorageAttachService {
 
     fn drain_resource_metrics_impl(
         &mut self,
-        trace_runtime: &trace_runtime::TraceRuntime,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
-        let drafts = match self
-            .resource_metrics
-            .drain_due(trace_runtime, &self.process_registry)
-        {
+        let drain = match self.resource_metrics.drain_due(
+            trace_runtime,
+            &self.process_registry,
+            self.storage.as_mut(),
+        ) {
             Ok(d) => d,
             Err(error) => {
                 tracing::warn!(
@@ -402,6 +405,74 @@ impl StorageAttachService {
             }
         };
         let mut events = Vec::new();
+        let mut recovered_events = Vec::new();
+        for draft in drain.samples {
+            let recovered = draft.recovered;
+            let event = DomainEvent::new(
+                EventEnvelope {
+                    event_id: self.next_event_id()?,
+                    trace_id: draft.trace_id,
+                    observed_at: draft.observed_at,
+                    process: draft.process,
+                    collector: CollectorName::new(RESOURCE_METRICS_COLLECTOR_NAME),
+                    kind: EventKind::Resource,
+                    flags: EventFlags::clean(),
+                },
+                EventPayload::Resource(draft.payload),
+            );
+            if recovered {
+                recovered_events.push(event);
+            } else {
+                events.push(event);
+            }
+        }
+        self.persist_observed_event_batch(trace_runtime, events)?;
+        for event in recovered_events {
+            self.storage
+                .append_event(event)
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+        }
+        for failure in drain.failures {
+            if failure.recovered {
+                self.storage
+                    .update_trace_health(failure.trace_id, TraceHealth::Degraded)
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
+            } else {
+                trace_runtime
+                    .mark_degraded(failure.trace_id)
+                    .map_err(|error| {
+                        ControlError::new("resource_metrics_degraded", format!("{error:?}"))
+                    })?;
+            }
+            let diagnostic = DiagnosticRecord::new(
+                self.next_diagnostic_id()?,
+                Some(failure.trace_id),
+                DiagnosticKind::RuntimeFailure,
+                DiagnosticSeverity::Warning,
+                SystemTime::now(),
+                "verified cgroup resource accounting unavailable",
+            )
+            .with_metadata("error", failure.message);
+            RecordingWriter::new(self.storage.as_mut())
+                .persist_diagnostic(diagnostic)
+                .map_err(recording_error_to_control)?;
+            if !failure.recovered {
+                self.persist_trace_state(trace_runtime, failure.trace_id)?;
+            }
+        }
+        self.drain_resource_finalizations_impl(trace_runtime)?;
+        self.drain_external_finalizations_impl(trace_runtime)
+    }
+
+    fn drain_external_finalizations_impl(
+        &mut self,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let drafts = self.resource_metrics.poll_external_finalizations(
+            trace_runtime,
+            &self.process_registry,
+            self.storage.as_mut(),
+        )?;
         for draft in drafts {
             let event = DomainEvent::new(
                 EventEnvelope {
@@ -415,9 +486,202 @@ impl StorageAttachService {
                 },
                 EventPayload::Resource(draft.payload),
             );
-            events.push(event);
+            self.storage
+                .append_final_event_and_close_external_binding(event, SystemTime::now())
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+            self.resource_metrics
+                .finish_external_finalization(draft.trace_id);
         }
-        self.persist_observed_event_batch(trace_runtime, events)
+        Ok(())
+    }
+
+    fn drain_resource_finalizations_impl(
+        &mut self,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let poll = self
+            .resource_metrics
+            .poll_finalizations(trace_runtime, &self.process_registry)?;
+        for trace_id in poll.waiting {
+            self.storage
+                .update_resource_scope_state(
+                    trace_id,
+                    ResourceScopeLifecycleState::WaitingForEmpty,
+                    None,
+                    SystemTime::now(),
+                )
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+        }
+
+        for finalization in poll.ready {
+            let event_id = self.next_event_id()?;
+            let event = DomainEvent::new(
+                EventEnvelope {
+                    event_id,
+                    trace_id: finalization.trace_id,
+                    observed_at: finalization.sample.observed_at,
+                    process: finalization.sample.process,
+                    collector: CollectorName::new(RESOURCE_METRICS_COLLECTOR_NAME),
+                    kind: EventKind::Resource,
+                    flags: EventFlags {
+                        metadata_partial: finalization.timed_out,
+                        ..EventFlags::clean()
+                    },
+                },
+                EventPayload::Resource(finalization.sample.payload),
+            );
+            let lifecycle_state = if finalization.timed_out {
+                ResourceScopeLifecycleState::Orphaned
+            } else {
+                ResourceScopeLifecycleState::Finalized
+            };
+            self.persist_resource_final_event(event, lifecycle_state)?;
+            if finalization.recovered {
+                self.complete_recovered_resource_trace(
+                    finalization.trace_id,
+                    finalization.timed_out,
+                )?;
+                self.resource_metrics
+                    .finish_finalization(finalization.trace_id, !finalization.timed_out);
+                continue;
+            }
+            if finalization.timed_out {
+                trace_runtime
+                    .mark_degraded(finalization.trace_id)
+                    .map_err(|error| {
+                        ControlError::new("resource_finalization_degraded", format!("{error:?}"))
+                    })?;
+            }
+            let has_open_memberships = trace_runtime
+                .complete_after_resource_barrier(finalization.trace_id, SystemTime::now())
+                .map_err(|error| {
+                    ControlError::new("resource_finalization_transition", format!("{error:?}"))
+                })?;
+            if has_open_memberships {
+                self.persist_resource_open_membership_diagnostic(
+                    trace_runtime,
+                    finalization.trace_id,
+                )?;
+            }
+            self.persist_trace_state(trace_runtime, finalization.trace_id)?;
+            self.resource_metrics
+                .finish_finalization(finalization.trace_id, !finalization.timed_out);
+        }
+        Ok(())
+    }
+
+    fn complete_recovered_resource_trace(
+        &mut self,
+        trace_id: TraceId,
+        timed_out: bool,
+    ) -> Result<(), ControlError> {
+        let completed_at = SystemTime::now();
+        let mut trace = self
+            .storage
+            .get_trace(trace_id)
+            .map_err(|error| ControlError::new(error.stage, error.message))?
+            .ok_or_else(|| {
+                ControlError::new("resource_recovery", "recovered trace record is missing")
+            })?;
+        trace.lifecycle_state = TraceLifecycleState::Completed;
+        trace.timings.completed_at = Some(completed_at);
+        if timed_out {
+            trace.health = TraceHealth::Degraded;
+        }
+        self.storage
+            .create_trace(trace)
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let diagnostic = DiagnosticRecord::new(
+            self.next_diagnostic_id()?,
+            Some(trace_id),
+            DiagnosticKind::RuntimeFailure,
+            if timed_out {
+                DiagnosticSeverity::Warning
+            } else {
+                DiagnosticSeverity::Info
+            },
+            completed_at,
+            "resource scope finalized after daemon restart",
+        )
+        .with_metadata("timed_out", timed_out.to_string());
+        RecordingWriter::new(self.storage.as_mut())
+            .persist_diagnostic(diagnostic)
+            .map_err(recording_error_to_control)
+    }
+
+    fn persist_resource_final_event(
+        &mut self,
+        event: DomainEvent,
+        lifecycle_state: ResourceScopeLifecycleState,
+    ) -> Result<EventId, ControlError> {
+        let trace_id = event.envelope.trace_id;
+        if let Some(existing) = self
+            .storage
+            .get_resource_scope(trace_id)
+            .map_err(|error| ControlError::new(error.stage, error.message))?
+            .and_then(|scope| scope.final_event_id)
+        {
+            return Ok(existing);
+        }
+        let event_id = event.envelope.event_id;
+        let transaction = self
+            .storage
+            .begin()
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let write_result = self.storage.append_event(event).and_then(|()| {
+            self.storage.update_resource_scope_state(
+                trace_id,
+                lifecycle_state,
+                Some(event_id),
+                SystemTime::now(),
+            )
+        });
+        match write_result {
+            Ok(()) => transaction
+                .commit()
+                .map_err(|error| ControlError::new(error.stage, error.message))?,
+            Err(error) => {
+                let rollback = transaction.rollback();
+                let message = match rollback {
+                    Ok(()) => error.message,
+                    Err(rollback) => format!(
+                        "{}; rollback failed at {}: {}",
+                        error.message, rollback.stage, rollback.message
+                    ),
+                };
+                return Err(ControlError::new(error.stage, message));
+            }
+        }
+        Ok(event_id)
+    }
+
+    fn persist_resource_open_membership_diagnostic(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+    ) -> Result<(), ControlError> {
+        let root = trace_runtime
+            .get_trace(trace_id)
+            .map(|entry| entry.trace.root_process_identity)
+            .ok_or_else(|| ControlError::new("resource_finalization", "trace not found"))?;
+        if !self
+            .diagnosed_terminal_open_memberships
+            .insert((trace_id, root))
+        {
+            return Ok(());
+        }
+        let diagnostic = DiagnosticRecord::new(
+            self.next_diagnostic_id()?,
+            Some(trace_id),
+            DiagnosticKind::RuntimeFailure,
+            DiagnosticSeverity::Warning,
+            SystemTime::now(),
+            "resource_finalized_with_open_memberships",
+        )
+        .with_process(root);
+        RecordingWriter::new(self.storage.as_mut())
+            .persist_diagnostic(diagnostic)
+            .map_err(recording_error_to_control)
     }
 
     fn drain_enforcement_impl(

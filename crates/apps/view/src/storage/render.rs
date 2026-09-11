@@ -343,11 +343,18 @@ fn application_detail(payload: &model_core::event::ApplicationPayload) -> String
 
 fn resource_detail(payload: &model_core::event::ResourcePayload) -> String {
     format!(
-        "subject={} cpu_percent={} rss_kb={} virtual_memory_kb={}",
+        "subject={} accounting_method={} accounting_coverage={} sample_kind={} cpu_percent={} cgroup_memory_current_bytes={} rss_kb={} virtual_memory_kb={}",
         payload.subject,
+        payload.accounting_method.as_str(),
+        payload.accounting_coverage.as_str(),
+        payload.sample_kind.as_str(),
         payload
             .cpu_percent_millis
             .map(format_percent_millis)
+            .unwrap_or_default(),
+        payload
+            .memory_current_bytes
+            .map(|value| value.to_string())
             .unwrap_or_default(),
         payload
             .rss_kb

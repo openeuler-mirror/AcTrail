@@ -3,8 +3,10 @@
 pub mod alerts;
 pub mod backend;
 pub mod config;
+mod external_cgroups;
 pub mod query;
 pub mod records;
+mod resource_scopes;
 pub mod retention;
 pub mod schema;
 pub mod semantic_actions;

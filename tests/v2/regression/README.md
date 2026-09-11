@@ -23,6 +23,9 @@ workload bundle 和 xiaoO 路径，因此正常验收不需要再粘贴环境变
 
 当前已注册的辅助与可选回归 case 包含以下职责：
 
+- `resource_metrics_cgroup` 负责 release binaries 在 systemd delegated cgroup v2
+  下的 exact、restart recovery、exactly-once finalization 与 timeout 验收，仅在显式
+  选择时运行。
 - `sandbox_resource_alert_host` 负责无 VMM 的 Host native-VSOCK 组件通路验收。
 - `sandbox_oom_killed_alert_host` 只负责一次受控 Host memory-cgroup OOM
   与 `sandbox.resource.oom_killed` 公开告警投递，仅在显式选择时运行。
@@ -72,6 +75,8 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --no-profile --case sandbox_resource_alert_host
 deploy/virtual-container/host/run-v2-tests.sh \
   --no-profile --case sandbox_oom_killed_alert_host
+sudo -E python3.11 tests/v2/regression/test_all.py \
+  --no-profile --case resource_metrics_cgroup
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_auto
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
 sudo -E python3.11 tests/v2/regression/test_all.py --case semantic_action_boundaries
@@ -162,6 +167,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `virtual_container_xiaoo_concurrency` | [`virtual_container_xiaoo_concurrency/README.zh.md`](virtual_container_xiaoo_concurrency/README.zh.md) |
 | `sandbox_resource_alert_host` | [`sandbox_resource_alert_host/README.zh.md`](sandbox_resource_alert_host/README.zh.md) |
 | `sandbox_oom_killed_alert_host` | [`sandbox_oom_killed_alert_host/README.zh.md`](sandbox_oom_killed_alert_host/README.zh.md) |
+| `resource_metrics_cgroup` | [`resource_metrics_cgroup/README.zh.md`](resource_metrics_cgroup/README.zh.md) |
 | `execution_isolation_firecracker` | [`execution_isolation_firecracker/v2/README.zh.md`](execution_isolation_firecracker/v2/README.zh.md) |
 | `execution_isolation_stratovirt` | [`execution_isolation_stratovirt/v2/README.zh.md`](execution_isolation_stratovirt/v2/README.zh.md) |
 | `execution_isolation_cloud_hypervisor` | [`execution_isolation_cloud_hypervisor/v2/README.zh.md`](execution_isolation_cloud_hypervisor/v2/README.zh.md) |
