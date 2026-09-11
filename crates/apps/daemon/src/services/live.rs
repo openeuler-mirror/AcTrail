@@ -58,6 +58,7 @@ impl StorageAttachService {
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         self.drain_alert_ingress_impl()?;
+        self.tick_idle_detector_impl()?;
         self.drain_post_trace_runtime_impl()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;

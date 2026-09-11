@@ -1,0 +1,11 @@
+# Runtime detector for idle task intervals.
+[package]
+name = "idle_detector"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+idle_contract = { path = "../../contracts/idle" }
+model_core = { path = "../model" }
+semantic_action = { path = "../../contracts/semantic_action" }

@@ -113,7 +113,7 @@
       </button>
     </div>
 
-    <div v-if="groups.length" class="waterfall-legend">
+    <div v-if="groups.length || idleRows.length" class="waterfall-legend">
       <button
         v-for="group in groups"
         :key="group.group"
@@ -126,6 +126,15 @@
         {{ group.group }}
         <small>{{ group.count }}</small>
       </button>
+      <span
+        v-if="idleRows.length"
+        class="wf-chip wf-chip-idle"
+        :title="`${idleRows.length} no-observable-progress interval(s)`"
+      >
+        <span class="wf-chip-dot"></span>
+        Idle
+        <small>{{ idleRows.length }}</small>
+      </span>
       <div v-if="isGroupActive('llm')" class="wf-phase-legend" aria-hidden="true">
         <span class="wf-phase-key wf-bar-request">req</span>
         <span class="wf-phase-key wf-bar-ttft">ttft</span>
@@ -214,7 +223,7 @@
     </section>
 
     <div
-      v-if="rows.length"
+      v-if="rows.length || idleLaneSegments.length"
       ref="waterfallScroll"
       class="waterfall-scroll"
       :class="{ 'is-panning': timelinePanning }"
@@ -260,6 +269,25 @@
             >
               <span v-if="segment.showLabel">{{ segment.label }}</span>
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="idleLaneSegments.length" class="waterfall-idle-lanes">
+        <div class="wf-idle-lane">
+          <div class="wf-gutter">
+            Idle
+            <small>{{ idleLaneSegments.length }}</small>
+          </div>
+          <div class="wf-idle-track wf-time-track">
+            <span
+              v-for="segment in idleLaneSegments"
+              :key="segment.id"
+              class="wf-idle-segment"
+              :class="{ live: segment.live }"
+              :style="segment.style"
+              :title="segment.title"
+            ></span>
           </div>
         </div>
       </div>
@@ -430,6 +458,8 @@ import {
   flattenMatchingWaterfall,
   flattenVisibleWaterfall,
   formatOffset,
+  idleIntervalRows,
+  panTimeViewport,
   projectTimeInterval,
   subtreeWindow,
   windowLabel,
@@ -492,10 +522,13 @@ function showAttribution() {
 }
 
 const hasWaterfallData = computed(
-  () => (props.waterfall?.actions?.length ?? 0) > 0 || (props.waterfall?.links?.length ?? 0) > 0,
+  () =>
+    (props.waterfall?.actions?.length ?? 0) > 0
+    || (props.waterfall?.links?.length ?? 0) > 0
+    || (props.waterfall?.idleIntervals?.length ?? 0) > 0,
 );
 
-function scheduleWaterfallBuild(actions, links) {
+function scheduleWaterfallBuild(actions, links, intervals, axisEnd) {
   modelBuildToken += 1;
   const token = modelBuildToken;
   if (modelIdleHandle !== null) {
@@ -506,7 +539,7 @@ function scheduleWaterfallBuild(actions, links) {
     }
     modelIdleHandle = null;
   }
-  if (!actions?.length && !links?.length) {
+  if (!actions?.length && !links?.length && !intervals?.length) {
     model.value = emptyWaterfallModel();
     modelBuilding.value = false;
     return;
@@ -517,7 +550,7 @@ function scheduleWaterfallBuild(actions, links) {
     if (token !== modelBuildToken) {
       return;
     }
-    model.value = buildWaterfall(actions, links);
+    model.value = buildWaterfall(actions, links, intervals, axisEnd);
     modelBuilding.value = false;
   };
   if (typeof requestIdleCallback === 'function') {
@@ -528,9 +561,14 @@ function scheduleWaterfallBuild(actions, links) {
 }
 
 watch(
-  () => [props.waterfall?.actions, props.waterfall?.links],
-  ([actions, links]) => {
-    scheduleWaterfallBuild(actions, links);
+  () => [
+    props.waterfall?.actions,
+    props.waterfall?.links,
+    props.waterfall?.idleIntervals,
+    props.waterfall?.axisEnd,
+  ],
+  ([actions, links, intervals, axisEnd]) => {
+    scheduleWaterfallBuild(actions, links, intervals, axisEnd);
   },
   { immediate: true },
 );
@@ -549,6 +587,9 @@ onBeforeUnmount(() => {
 const roots = computed(() => model.value.roots);
 const groups = computed(() => model.value.groups);
 const window = computed(() => model.value.window);
+const idleRows = computed(() =>
+  idleIntervalRows(model.value.idleIntervals ?? [], window.value),
+);
 const totalActions = computed(() => model.value.totalActions);
 const windowText = computed(() => windowLabel(window.value));
 const parentIds = computed(() => collectParentIds(roots.value));
@@ -791,7 +832,6 @@ const axisWindowKey = computed(() => {
   const { startMs, spanMs } = axisWindow.value;
   return `${startMs}:${spanMs}`;
 });
-
 const ticks = computed(() => {
   const { startMs, spanMs } = axisWindow.value;
   return Array.from({ length: 5 }, (_, index) => {
@@ -814,6 +854,17 @@ const rows = computed(() => decorateWaterfallRows(
   allRows.value.slice(0, visibleLimit.value),
   axisWindow.value,
 ));
+const idleLaneSegments = computed(() => {
+  const segments = [];
+  for (const interval of idleRows.value) {
+    const style = idleSegmentStyle(interval);
+    if (!style) {
+      continue;
+    }
+    segments.push({ id: interval.id, style, title: idleTitle(interval), live: interval.live });
+  }
+  return segments;
+});
 const remainingRows = computed(() => Math.max(totalRows.value - rows.value.length, 0));
 const nextBatchSize = computed(() => Math.min(TABLE_RENDER_LIMITS.rowBatchSize, remainingRows.value));
 const hasMoreRows = computed(() => remainingRows.value > 0 && nextBatchSize.value > 0);
@@ -882,6 +933,37 @@ function clearDetail() {
 
 function isFocusAction(actionId) {
   return focusEnabled.value && focusActionIdSet.value.has(String(actionId));
+}
+
+function idleSegmentStyle(interval) {
+  const axis = axisWindow.value;
+  // Open intervals end at the server-provided axis end. The surrounding
+  // workspace refreshes the action-tree response to advance this boundary.
+  const endMs = interval.endOffsetMs ?? axis.startMs + axis.spanMs;
+  const projected = projectTimeInterval(interval.startOffsetMs, endMs, axis);
+  if (!projected) {
+    return null;
+  }
+  return {
+    left: `${projected.leftPct}%`,
+    width: `${projected.widthPct}%`,
+  };
+}
+
+function idleTitle(interval) {
+  const lines = ['No observable progress'];
+  if (interval.taskId) {
+    lines.push(`Task: ${interval.taskId}`);
+  }
+  lines.push(`Start: ${nanosClock(interval.startNanos)}`);
+  lines.push(`End: ${interval.live ? 'running…' : nanosClock(interval.endNanos)}`);
+  lines.push(`Duration: ${interval.live ? 'running…' : formatOffset(interval.durMs)}`);
+  return lines.join('\n');
+}
+
+function nanosClock(nanos) {
+  const millis = Number(BigInt(nanos) / 1000000n);
+  return new Date(millis).toLocaleString();
 }
 
 function queueFocusApplication() {

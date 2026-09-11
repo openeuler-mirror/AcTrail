@@ -3,6 +3,7 @@
 pub mod alerts;
 pub mod backend;
 pub mod config;
+pub mod idle;
 pub mod query;
 pub mod records;
 pub mod retention;
@@ -201,6 +202,10 @@ impl SqliteStorage {
             "payload_segments",
             "segment_id",
         )
+    }
+
+    pub fn next_idle_interval_id_seed(&self) -> Result<u64, rusqlite::Error> {
+        next_id_seed(&self.connection().borrow(), "idle_intervals", "interval_id")
     }
 
     pub fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), rusqlite::Error> {

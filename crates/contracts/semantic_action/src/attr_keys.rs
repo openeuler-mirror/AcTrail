@@ -188,6 +188,7 @@ pub mod llm_request {
 }
 
 pub mod agent_turn {
+    pub const TASK_ID: &str = "agent.turn.task_id";
     pub const USER_INPUT_OBSERVED_AT_UNIX_NANOS: &str =
         "agent.turn.user_input_observed_at_unix_nanos";
     pub const USER_INPUT_SEGMENT_ID: &str = "agent.turn.user_input_segment_id";

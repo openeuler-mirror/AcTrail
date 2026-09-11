@@ -15,10 +15,10 @@ use storage_factory::StorageConfig;
 use super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig, CommandControlConfig,
     DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
-    IpcLineageConfig, NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    IdleDetectionConfig, IpcLineageConfig, NetworkControlConfig, PayloadConfig,
+    PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
+    StorageRetentionConfig, TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -67,6 +67,7 @@ pub struct OperatorConfig {
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub workload_diagnostics: WorkloadDiagnosticsConfig,
     pub capture_profile: CaptureProfile,
+    pub idle_detection: IdleDetectionConfig,
     pub ebpf_config: EbpfCollectorConfig,
     pub payload_config: PayloadConfig,
     pub seccomp_notify: SeccompNotifyConfig,

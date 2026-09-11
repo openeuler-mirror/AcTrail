@@ -16,6 +16,7 @@ use crate::observed::{
 use crate::semantic::{
     RecordingError, SemanticActionBatch, SemanticActionExportRecorder, TraceRecordLookup,
 };
+use crate::transaction::RecordingTransaction;
 
 pub struct RecordingWriter<'a> {
     storage: &'a mut dyn StorageBackend,
@@ -31,6 +32,19 @@ impl<'a> RecordingWriter<'a> {
         batch: ObservedRecordBatch,
     ) -> Result<ObservedRecordCommit, RecordingError> {
         ObservedRecordRecorder::new(self.storage).persist_batch(batch)
+    }
+
+    fn persist_batch_with_additional_write(
+        &mut self,
+        batch: ObservedRecordBatch,
+        additional_write: impl FnOnce(&mut dyn StorageBackend) -> Result<(), RecordingError>,
+    ) -> Result<(), RecordingError> {
+        let transaction = RecordingTransaction::begin(self.storage)?;
+        let result = ObservedRecordRecorder::new(self.storage)
+            .persist_batch(batch)
+            .map(|_| ())
+            .and_then(|()| additional_write(self.storage));
+        transaction.commit_or_rollback(result.map(|_| ()), |error| error)
     }
 
     pub fn persist_trace_state(
@@ -108,6 +122,94 @@ impl<'a> RecordingWriter<'a> {
             .persist_batch_then_export(batch, traces, emitted_at, next_diagnostic_id)
     }
 
+    pub fn persist_semantic_actions_with_additional_write(
+        &mut self,
+        semantic_actions: SemanticActionBatch,
+        additional_write: impl FnOnce(&mut dyn StorageBackend) -> Result<(), RecordingError>,
+    ) -> Result<(), RecordingError> {
+        self.persist_batch_with_additional_write(
+            ObservedRecordBatch::from_semantic_actions(semantic_actions),
+            additional_write,
+        )
+    }
+
+    fn finish_then_export(
+        &mut self,
+        persist_result: Result<(), RecordingError>,
+        export_runtime: &ExportRuntime,
+        traces: &dyn TraceRecordLookup,
+        export_batch: SemanticActionBatch,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+    ) -> (Result<(), RecordingError>, bool) {
+        let persisted = persist_result.is_ok();
+        let result = persist_result.and_then(|()| {
+            SemanticActionExportRecorder::new(self.storage, export_runtime)
+                .publish_batches_by_trace(traces, export_batch, emitted_at, next_diagnostic_id)
+        });
+        (result, persisted)
+    }
+
+    /// Persists a live batch and an additional write atomically, then exports the actions.
+    pub fn persist_live_events_then_export_with_additional_write(
+        &mut self,
+        export_runtime: &ExportRuntime,
+        events: Vec<DomainEvent>,
+        diagnostics: Vec<DiagnosticRecord>,
+        semantic_actions: SemanticActionBatch,
+        trace_states: Vec<TraceStateRecord>,
+        process_records: Vec<ProcessRecord>,
+        additional_write: impl FnOnce(&mut dyn StorageBackend) -> Result<(), RecordingError>,
+        traces: &dyn TraceRecordLookup,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+    ) -> (Result<(), RecordingError>, bool) {
+        let export_batch = semantic_actions.clone();
+        let persist_result = self.persist_batch_with_additional_write(
+            ObservedRecordBatch::from_live_events(
+                events,
+                diagnostics,
+                semantic_actions,
+                trace_states,
+                process_records,
+            ),
+            additional_write,
+        );
+        self.finish_then_export(
+            persist_result,
+            export_runtime,
+            traces,
+            export_batch,
+            emitted_at,
+            next_diagnostic_id,
+        )
+    }
+
+    fn write_session_with_additional_write(
+        &mut self,
+        observe_semantic_flush: impl FnOnce(Duration),
+        additional_write: impl FnOnce(&mut dyn StorageBackend) -> Result<(), RecordingError>,
+        write: impl FnOnce(&mut ObservedRecordWriteSession<'_>) -> Result<(), RecordingError>,
+    ) -> Result<(), RecordingError> {
+        let transaction = RecordingTransaction::begin(self.storage)?;
+        let (write_result, flush_elapsed) = {
+            let mut session = ObservedRecordWriteSession::new(self.storage);
+            match write(&mut session) {
+                Ok(()) => {
+                    let started = std::time::Instant::now();
+                    (session.finish(), Some(started.elapsed()))
+                }
+                Err(error) => (Err(error), None),
+            }
+        };
+        let write_result = write_result.and_then(|()| additional_write(self.storage));
+        let result = transaction.commit_or_rollback(write_result, |error| error);
+        if let Some(elapsed) = flush_elapsed {
+            observe_semantic_flush(elapsed);
+        }
+        result
+    }
+
     pub fn write_session_then_export(
         &mut self,
         export_runtime: &ExportRuntime,
@@ -127,6 +229,33 @@ impl<'a> RecordingWriter<'a> {
                 observe_semantic_flush,
                 write,
             )
+    }
+
+    /// Writes a session and an additional operation atomically, then exports the actions.
+    pub fn write_session_then_export_with_additional_write(
+        &mut self,
+        export_runtime: &ExportRuntime,
+        traces: &dyn TraceRecordLookup,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+        export_batch: SemanticActionBatch,
+        observe_semantic_flush: impl FnOnce(Duration),
+        additional_write: impl FnOnce(&mut dyn StorageBackend) -> Result<(), RecordingError>,
+        write: impl FnOnce(&mut ObservedRecordWriteSession<'_>) -> Result<(), RecordingError>,
+    ) -> (Result<(), RecordingError>, bool) {
+        let persist_result = self.write_session_with_additional_write(
+            observe_semantic_flush,
+            additional_write,
+            write,
+        );
+        self.finish_then_export(
+            persist_result,
+            export_runtime,
+            traces,
+            export_batch,
+            emitted_at,
+            next_diagnostic_id,
+        )
     }
 
     pub fn export_semantic_action_batch_for_trace(

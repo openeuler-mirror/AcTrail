@@ -11,8 +11,8 @@ use control_contract::command::{
     ControlCommand, DoctorCommand, LaunchTlsProbePlan, ListTracesCommand, PluginCommandCommand,
     PluginConfigGetCommand, PluginConfigUpdateCommand, PluginConfigValidateCommand,
     PluginListCommand, PluginLoadCommand, PluginStatusCommand, PluginUnloadCommand, ProcessRef,
-    RegisterSeccompListenerCommand, ResolveLaunchTlsPlanCommand, TrackAddCommand,
-    TrackRemoveCommand,
+    RegisterSeccompListenerCommand, ReportTurnLifecycleCommand, ReportUserInteractionCommand,
+    ResolveLaunchTlsPlanCommand, TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{
     ControlError, ControlReply, DoctorReply, LaunchTlsPlanDescriptor, LaunchTlsPlanReply,
@@ -20,6 +20,7 @@ use control_contract::reply::{
     TraceListItem, TrackAddReply,
 };
 use control_contract::selector::TraceSelector;
+use idle_contract::{TurnLifecycleKind, UserInteractionState};
 use model_core::binary_identity::{BinaryIdentity, BinaryIdentityTypeCode};
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity, SuppressedFdPurpose};
@@ -114,6 +115,23 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
         ControlCommand::Doctor(command) => {
             fields.push("doctor".to_string());
             fields.push(command.request_id.get().to_string());
+        }
+        ControlCommand::ReportTurnLifecycle(command) => {
+            fields.push("report_turn_lifecycle".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.trace_id.get().to_string());
+            fields.push(command.task_id.clone());
+            fields.push(command.kind.as_str().to_string());
+            fields.push(system_time_to_nanos(command.observed_at).to_string());
+        }
+        ControlCommand::ReportUserInteraction(command) => {
+            fields.push("report_user_interaction_v1".to_string());
+            fields.push(command.request_id.get().to_string());
+            fields.push(command.trace_id.get().to_string());
+            fields.push(command.task_id.clone());
+            fields.push(command.interaction_id.clone());
+            fields.push(command.state.as_str().to_string());
+            fields.push(system_time_to_nanos(command.observed_at).to_string());
         }
         ControlCommand::PluginList(command) => {
             fields.push("plugin_list".to_string());
@@ -469,6 +487,35 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 config_json: field(&fields, 3)?.clone(),
             },
         )),
+        "report_turn_lifecycle" => Ok(ControlCommand::ReportTurnLifecycle(
+            ReportTurnLifecycleCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                trace_id: TraceId::new(parse_u64(field(&fields, 2)?, "trace_id")?),
+                task_id: field(&fields, 3)?.clone(),
+                kind: TurnLifecycleKind::parse(field(&fields, 4)?).ok_or_else(|| {
+                    ControlCodecError::new("decode", "invalid turn lifecycle kind")
+                })?,
+                observed_at: nanos_to_system_time(parse_u64(
+                    field(&fields, 5)?,
+                    "observed_at_unix_nanos",
+                )?)?,
+            },
+        )),
+        "report_user_interaction_v1" => Ok(ControlCommand::ReportUserInteraction(
+            ReportUserInteractionCommand {
+                request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+                trace_id: TraceId::new(parse_u64(field(&fields, 2)?, "trace_id")?),
+                task_id: field(&fields, 3)?.clone(),
+                interaction_id: field(&fields, 4)?.clone(),
+                state: UserInteractionState::parse(field(&fields, 5)?).ok_or_else(|| {
+                    ControlCodecError::new("decode", "invalid user interaction state")
+                })?,
+                observed_at: nanos_to_system_time(parse_u64(
+                    field(&fields, 6)?,
+                    "observed_at_unix_nanos",
+                )?)?,
+            },
+        )),
         _ => Err(ControlCodecError::new("decode", "unknown command opcode")),
     }
 }
@@ -543,6 +590,12 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             fields.push(reply.loaded_policy_plugins.len().to_string());
             fields.extend(reply.loaded_policy_plugins.iter().cloned());
             fields.push(reply.storage_ready.to_string());
+        }
+        Ok(ControlReply::TurnLifecycleRecorded) => {
+            fields.push("reply_turn_lifecycle_recorded".to_string());
+        }
+        Ok(ControlReply::UserInteractionRecorded) => {
+            fields.push("reply_user_interaction_recorded".to_string());
         }
         Ok(ControlReply::PluginList(items)) => {
             fields.push("reply_plugin_list_v2".to_string());
@@ -657,6 +710,8 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
         }))),
         "reply_track_removed" => Ok(Ok(ControlReply::TrackRemoved)),
         "reply_seccomp_listener_registered" => Ok(Ok(ControlReply::SeccompListenerRegistered)),
+        "reply_turn_lifecycle_recorded" => Ok(Ok(ControlReply::TurnLifecycleRecorded)),
+        "reply_user_interaction_recorded" => Ok(Ok(ControlReply::UserInteractionRecorded)),
         "reply_trace_list" | "reply_trace_list_v2" | "reply_trace_list_v3" => {
             let trace_list_version = fields[0].as_str();
             let count = parse_usize(field(&fields, 1)?, "count")?;
@@ -964,4 +1019,17 @@ fn system_time_to_secs(value: SystemTime) -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+fn system_time_to_nanos(value: SystemTime) -> u64 {
+    value
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default()
+}
+
+fn nanos_to_system_time(nanos: u64) -> Result<SystemTime, ControlCodecError> {
+    UNIX_EPOCH
+        .checked_add(Duration::from_nanos(nanos))
+        .ok_or_else(|| ControlCodecError::new("decode", "observed_at is out of range"))
 }

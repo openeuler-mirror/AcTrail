@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use idle_contract::{TurnLifecycleKind, UserInteractionState};
 use model_core::binary_identity::BinaryIdentity;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
@@ -105,6 +106,27 @@ pub struct DoctorCommand {
     pub request_id: RequestId,
 }
 
+/// Authoritative root-task lifecycle transition reported by an agent host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportTurnLifecycleCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub task_id: String,
+    pub kind: TurnLifecycleKind,
+    pub observed_at: std::time::SystemTime,
+}
+
+/// Authoritative user-wait transition reported by an agent host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportUserInteractionCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub task_id: String,
+    pub interaction_id: String,
+    pub state: UserInteractionState,
+    pub observed_at: std::time::SystemTime,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginListCommand {
     pub request_id: RequestId,
@@ -167,6 +189,8 @@ pub enum ControlCommand {
     TrackRemove(TrackRemoveCommand),
     ListTraces(ListTracesCommand),
     Doctor(DoctorCommand),
+    ReportTurnLifecycle(ReportTurnLifecycleCommand),
+    ReportUserInteraction(ReportUserInteractionCommand),
     PluginList(PluginListCommand),
     PluginStatus(PluginStatusCommand),
     PluginLoad(PluginLoadCommand),

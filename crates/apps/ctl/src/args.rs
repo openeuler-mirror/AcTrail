@@ -55,6 +55,7 @@ pub enum CtlCommand {
         agent_invocation_commands: Vec<String>,
         supervision_poll_interval_ms: u64,
         ebpf_seccomp_policy: DeploymentPermissionPolicy,
+        opencode_plugin_dir: Option<PathBuf>,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -225,6 +226,7 @@ impl CtlCommandArgs {
                         })?
                         .supervision_poll_interval_ms,
                     ebpf_seccomp_policy: ebpf_seccomp_policy(args.host_ebpf, args.seccomp_notify),
+                    opencode_plugin_dir: opencode_plugin_dir(config, &args.argv)?,
                     argv: args.argv,
                 })
             }
@@ -438,6 +440,30 @@ struct LaunchArgs {
         allow_hyphen_values = true
     )]
     argv: Vec<String>,
+}
+
+fn opencode_plugin_dir(
+    config: Option<&OperatorConfig>,
+    argv: &[String],
+) -> Result<Option<PathBuf>, String> {
+    let command_is_opencode = argv
+        .first()
+        .and_then(|command| std::path::Path::new(command).file_name())
+        .is_some_and(|name| name == "opencode");
+    if !(command_is_opencode
+        && config.is_some_and(|config| config.idle_detection.opencode_auto_inject))
+    {
+        return Ok(None);
+    }
+    let idle_detection = &config
+        .ok_or_else(|| "missing operator config for OpenCode launch".to_string())?
+        .idle_detection;
+    if !idle_detection.enabled {
+        return Ok(None);
+    }
+    idle_detection.opencode_plugin_dir.clone().ok_or_else(|| {
+        "idle_detection.opencode_plugin_dir is required for OpenCode plugin launch when idle_detection.enabled=true".to_string()
+    }).map(Some)
 }
 
 fn ebpf_seccomp_policy(

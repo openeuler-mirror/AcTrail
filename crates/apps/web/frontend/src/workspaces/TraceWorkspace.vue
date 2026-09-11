@@ -682,6 +682,8 @@ function withWaterfallTrace(data, traceId) {
     links: freezeTraceList(data.links),
     associations: freezeTraceList(data.associations),
     roots: data.roots ?? [],
+    idleIntervals: freezeTraceList(data.idle_intervals),
+    axisEnd: data.axis_end_unix_nanos ?? null,
     selectedActions: data.selected_actions ?? data.actions?.length ?? 0,
     totalActions:
       data.total_actions ?? actionTree.value?.summary?.actions ?? data.actions?.length ?? 0,
