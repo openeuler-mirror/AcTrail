@@ -49,10 +49,11 @@ use super::super::{
     PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
     PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig,
     PluginDiscoveryConfig, PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
-    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    WebAlertsConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    ResourceMetricsConfig, ResourceMetricsMode, SeccompNotifyConfig, SemanticContentOwner,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, SseEventContentRetention,
+    StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
+    StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig, WebServerConfig,
+    WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -348,14 +349,21 @@ impl OperatorDocument {
             application: ApplicationDocument::from_config(&config.application_protocol),
             resource_metrics: ResourceMetricsDocument {
                 enabled: config.resource_metrics.enabled,
+                mode: config.resource_metrics.mode.as_str().to_string(),
                 interval_ms: config.resource_metrics.interval_ms,
                 include_children: config.resource_metrics.include_children,
                 include_system: config.resource_metrics.include_system,
+                cgroup_root: config.resource_metrics.cgroup_root.display().to_string(),
+                finalization_timeout_ms: config.resource_metrics.finalization_timeout_ms,
+                orphan_limit: config.resource_metrics.orphan_limit,
                 cpu_alert_percent_millis: disabled_or_u64_as_string(
                     config.resource_metrics.cpu_alert_percent_millis,
                 ),
                 memory_alert_rss_kb: disabled_or_u64_as_string(
                     config.resource_metrics.memory_alert_rss_kb,
+                ),
+                memory_alert_current_bytes: disabled_or_u64_as_string(
+                    config.resource_metrics.memory_alert_current_bytes,
                 ),
             },
             provider: ProviderDocument {

@@ -9,4 +9,5 @@ pub mod ids;
 pub mod payload;
 pub mod policy;
 pub mod process;
+pub mod resource_scope;
 pub mod trace;

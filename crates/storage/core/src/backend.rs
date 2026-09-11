@@ -12,6 +12,7 @@ use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
+use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
@@ -128,6 +129,20 @@ pub trait StorageBackend {
 
     fn upsert_membership(&mut self, membership: ProcessMembership) -> Result<(), StorageError>;
     fn trace_memberships(&self, trace_id: TraceId) -> Result<Vec<ProcessMembership>, StorageError>;
+
+    fn create_resource_scope(&mut self, scope: TraceResourceScope) -> Result<(), StorageError>;
+    fn get_resource_scope(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<TraceResourceScope>, StorageError>;
+    fn list_resource_scopes(&self) -> Result<Vec<TraceResourceScope>, StorageError>;
+    fn update_resource_scope_state(
+        &mut self,
+        trace_id: TraceId,
+        lifecycle_state: ResourceScopeLifecycleState,
+        final_event_id: Option<model_core::ids::EventId>,
+        updated_at: SystemTime,
+    ) -> Result<(), StorageError>;
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError>;
     fn list_events(&self, trace_id: TraceId) -> Result<Vec<DomainEvent>, StorageError>;

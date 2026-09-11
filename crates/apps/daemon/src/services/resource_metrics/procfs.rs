@@ -10,7 +10,8 @@ pub(super) const BYTES_PER_KIB: u64 = 1024;
 const PROC_STAT_UTIME_INDEX: usize = 11;
 const PROC_STAT_STIME_INDEX: usize = 12;
 const PROC_STAT_THREADS_INDEX: usize = 17;
-const PROC_STAT_MIN_FIELD_COUNT: usize = PROC_STAT_THREADS_INDEX + 1;
+const PROC_STAT_START_TIME_INDEX: usize = 19;
+const PROC_STAT_MIN_FIELD_COUNT: usize = PROC_STAT_START_TIME_INDEX + 1;
 
 #[derive(Clone, Copy)]
 pub(super) struct SystemUnits {
@@ -39,6 +40,7 @@ pub(super) struct ProcStat {
     pub comm: String,
     pub total_cpu_ticks: u64,
     pub threads: u64,
+    pub start_time_ticks: u64,
 }
 
 pub(super) struct ProcMemory {
@@ -146,10 +148,12 @@ fn parse_proc_stat(raw: &str) -> Result<ProcStat, String> {
     let utime = parse_u64(fields[PROC_STAT_UTIME_INDEX], "utime")?;
     let stime = parse_u64(fields[PROC_STAT_STIME_INDEX], "stime")?;
     let threads = parse_u64(fields[PROC_STAT_THREADS_INDEX], "num_threads")?;
+    let start_time_ticks = parse_u64(fields[PROC_STAT_START_TIME_INDEX], "starttime")?;
     Ok(ProcStat {
         comm,
         total_cpu_ticks: utime.saturating_add(stime),
         threads,
+        start_time_ticks,
     })
 }
 

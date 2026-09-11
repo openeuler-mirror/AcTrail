@@ -21,8 +21,8 @@ use uds_control_client::{UdsControlClient, UdsSocketTransport};
 use crate::args::{AcTraildCommand, PluginCommand, parse_args};
 use crate::plugin_registry;
 use crate::process::{
-    DaemonProcessState, cleanup_runtime_files, remove_runtime_file, start_daemon, status_daemon,
-    stop_daemon, write_pid_file,
+    DaemonProcessState, cleanup_runtime_files, ensure_runtime_socket_available,
+    remove_runtime_file, start_daemon, status_daemon, stop_daemon, write_pid_file,
 };
 use crate::signals;
 
@@ -137,6 +137,10 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
     signals::install_shutdown_handlers()?;
     write_pid_file(&config.pid_file, std::process::id())?;
     let pid_written = true;
+    if let Err(error) = ensure_runtime_socket_available("control", &config.socket_path) {
+        cleanup_pid_file(config, pid_written)?;
+        return Err(error);
+    }
     daemon::host_id::init(config.host_id.clone());
     if let Some(host_id) = daemon::host_id::get() {
         tracing::info!(host_id = %host_id, "actraild host id resolved");

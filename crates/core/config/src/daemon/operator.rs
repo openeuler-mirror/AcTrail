@@ -575,6 +575,11 @@ fn validate_resource_metrics_config(
     if capability_requested(capabilities, &Capability::ResourceMetrics) && !config.enabled {
         return Err("resource-metrics requires resource_metrics_enabled=true".to_string());
     }
+    if !config.cgroup_root.is_absolute() || config.cgroup_root.file_name().is_none() {
+        return Err(
+            "resource_metrics.cgroup_root must be an absolute managed child path".to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -631,7 +636,7 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 mod tests {
     use super::super::{
         LlmRequestBodyExportRetention, LlmRequestContentRetention,
-        LlmToolResultContentExportRetention,
+        LlmToolResultContentExportRetention, ResourceMetricsMode,
     };
     use super::OperatorConfig;
 
@@ -788,5 +793,55 @@ mod tests {
         let rendered = config.dump().expect("operator config renders");
         let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
         assert_eq!(reparsed.agent_invocation, config.agent_invocation);
+    }
+
+    #[test]
+    fn resource_metrics_cgroup_settings_parse_and_round_trip() {
+        let config = OperatorConfig::init()
+            .expect("default operator config initializes")
+            .patch(
+                "[resource_metrics]\n\
+                 mode = \"cgroup-v2\"\n\
+                 cgroup_root = \"/sys/fs/cgroup/actrail-test\"\n\
+                 finalization_timeout_ms = 45000\n\
+                 orphan_limit = 77\n",
+            )
+            .expect("cgroup resource settings parse");
+
+        assert_eq!(config.resource_metrics.mode, ResourceMetricsMode::CgroupV2);
+        assert_eq!(
+            config.resource_metrics.cgroup_root.to_string_lossy(),
+            "/sys/fs/cgroup/actrail-test"
+        );
+        assert_eq!(config.resource_metrics.finalization_timeout_ms, 45_000);
+        assert_eq!(config.resource_metrics.orphan_limit, 77);
+
+        let rendered = config.dump().expect("operator config renders");
+        let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
+        assert_eq!(reparsed.resource_metrics, config.resource_metrics);
+    }
+
+    #[test]
+    fn resource_metrics_default_remains_procfs() {
+        let config = OperatorConfig::init().expect("default operator config initializes");
+        assert_eq!(config.resource_metrics.mode, ResourceMetricsMode::Procfs);
+    }
+
+    #[test]
+    fn charged_memory_alert_round_trips_and_rejects_zero() {
+        let config = OperatorConfig::init()
+            .unwrap()
+            .patch("[resource_metrics]\nmemory_alert_current_bytes = \"1048576\"\n")
+            .unwrap();
+        assert_eq!(
+            config.resource_metrics.memory_alert_current_bytes,
+            Some(1048576)
+        );
+        assert!(
+            OperatorConfig::init()
+                .unwrap()
+                .patch("[resource_metrics]\nmemory_alert_current_bytes = \"0\"\n")
+                .is_err()
+        );
     }
 }

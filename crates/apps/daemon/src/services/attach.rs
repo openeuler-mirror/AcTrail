@@ -49,6 +49,7 @@ use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
+use model_core::resource_scope::TraceResourceScope;
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityError;
 use process_identity::ProcessIdentityManager;
@@ -424,6 +425,28 @@ impl StorageAttachService {
             sensor_plan,
         )?;
 
+        let pending_resource_scope = {
+            let entry = trace_runtime.get_trace(bootstrap.trace_id).ok_or_else(|| {
+                ControlError::new("trace_missing", "trace disappeared during bootstrap")
+            })?;
+            let root_pid = bootstrap
+                .root_observation
+                .host
+                .as_ref()
+                .map(|host| host.pid)
+                .ok_or_else(|| ControlError::new("pid_resolution", "root host PID is missing"))?;
+            match self
+                .resource_metrics
+                .admit_stopped_launch(entry, root_pid, command.launch_mode)
+            {
+                Ok(scope) => scope,
+                Err(error) => {
+                    let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
+                    return Err(error);
+                }
+            }
+        };
+
         let member_processes = trace_runtime
             .get_trace(bootstrap.trace_id)
             .ok_or_else(|| {
@@ -513,11 +536,34 @@ impl StorageAttachService {
                 "snapshot bootstrap completed before virtual collector sampling and remains gap-marked"
             },
         );
-        if result.is_err() && uses_ebpf_collector && command.launch_mode {
-            let _ = self.collector.unbind_trace(bootstrap.trace_id);
+        if let Err(error) = result {
+            if uses_ebpf_collector && command.launch_mode {
+                let _ = self.collector.unbind_trace(bootstrap.trace_id);
+            }
             let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
+            return Err(error);
+        }
+        if let Some(scope) = pending_resource_scope {
+            if let Err(error) = self.persist_and_activate_resource_scope(&scope) {
+                if uses_ebpf_collector && command.launch_mode {
+                    let _ = self.collector.unbind_trace(bootstrap.trace_id);
+                }
+                let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
+                let _ = self.persist_trace_state(trace_runtime, bootstrap.trace_id);
+                return Err(error);
+            }
         }
         result
+    }
+
+    fn persist_and_activate_resource_scope(
+        &mut self,
+        scope: &TraceResourceScope,
+    ) -> Result<(), ControlError> {
+        self.storage
+            .create_resource_scope(scope.clone())
+            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        self.resource_metrics.activate_scope(scope)
     }
 
     fn attach_command(

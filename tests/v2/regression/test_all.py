@@ -70,6 +70,9 @@ from tests.v2.regression.sandbox_resource_alert_host.run_e2e import (  # noqa: E
 from tests.v2.regression.sandbox_oom_killed_alert_host.run_e2e import (  # noqa: E402
     TEST_DEFINITION as SANDBOX_OOM_KILLED_ALERT_HOST,
 )
+from tests.v2.regression.resource_metrics_cgroup.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as RESOURCE_METRICS_CGROUP,
+)
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
 )
@@ -121,6 +124,7 @@ DEFAULT_TESTS = [
 ]
 
 OPTIONAL_TESTS = [
+    RESOURCE_METRICS_CGROUP,
     SANDBOX_OOM_KILLED_ALERT_HOST,
     EXECUTION_ISOLATION_FIRECRACKER,
     EXECUTION_ISOLATION_CLOUD_HYPERVISOR,

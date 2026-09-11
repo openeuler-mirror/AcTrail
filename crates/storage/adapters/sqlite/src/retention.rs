@@ -264,6 +264,14 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("delete_memberships", error.to_string()))?;
         transaction
             .execute(
+                "DELETE FROM trace_resource_scopes WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_trace_resource_scope", error.to_string())
+            })?;
+        transaction
+            .execute(
                 "DELETE FROM traces WHERE trace_id = ?1",
                 params![trace_id.get()],
             )

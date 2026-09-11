@@ -212,6 +212,18 @@ fn insert_application_payload(
 fn insert_resource_payload(attributes: &mut BTreeMap<String, String>, payload: &ResourcePayload) {
     attributes.insert("scope".to_string(), payload.scope.clone());
     attributes.insert("subject".to_string(), payload.subject.clone());
+    attributes.insert(
+        "accounting_method".to_string(),
+        payload.accounting_method.as_str().to_string(),
+    );
+    attributes.insert(
+        "accounting_coverage".to_string(),
+        payload.accounting_coverage.as_str().to_string(),
+    );
+    attributes.insert(
+        "sample_kind".to_string(),
+        payload.sample_kind.as_str().to_string(),
+    );
     if let Some(cpu_percent_millis) = payload.cpu_percent_millis {
         attributes.insert(
             "cpu_percent_millis".to_string(),
@@ -227,7 +239,59 @@ fn insert_resource_payload(attributes: &mut BTreeMap<String, String>, payload: &
             virtual_memory_kb.to_string(),
         );
     }
+    for (key, value) in [
+        ("memory_current_bytes", payload.memory_current_bytes),
+        ("memory_peak_bytes", payload.memory_peak_bytes),
+        ("memory_anon_bytes", payload.memory_anon_bytes),
+        ("memory_file_bytes", payload.memory_file_bytes),
+        (
+            "memory_swap_current_bytes",
+            payload.memory_swap_current_bytes,
+        ),
+        ("cpu_usage_usec", payload.cpu_usage_usec),
+        ("cpu_user_usec", payload.cpu_user_usec),
+        ("cpu_system_usec", payload.cpu_system_usec),
+        ("cpu_nr_throttled", payload.cpu_nr_throttled),
+        ("cpu_throttled_usec", payload.cpu_throttled_usec),
+        ("io_read_bytes", payload.io_read_bytes),
+        ("io_write_bytes", payload.io_write_bytes),
+        ("pids_current", payload.pids_current),
+        ("pids_peak", payload.pids_peak),
+        ("process_rss_sum_kb", payload.process_rss_sum_kb),
+    ] {
+        if let Some(value) = value {
+            attributes.insert(key.to_string(), value.to_string());
+        }
+    }
+    insert_memory_event_attributes(attributes, "memory_events", &payload.memory_events);
+    insert_memory_event_attributes(
+        attributes,
+        "memory_events_local",
+        &payload.memory_events_local,
+    );
     insert_metadata(attributes, "metadata.", &payload.metadata);
+}
+
+fn insert_memory_event_attributes(
+    attributes: &mut BTreeMap<String, String>,
+    prefix: &str,
+    counters: &Option<model_core::event::MemoryEventCounters>,
+) {
+    let Some(counters) = counters else {
+        return;
+    };
+    for (key, value) in [
+        ("low", counters.low),
+        ("high", counters.high),
+        ("max", counters.max),
+        ("oom", counters.oom),
+        ("oom_kill", counters.oom_kill),
+        ("oom_group_kill", counters.oom_group_kill),
+    ] {
+        if let Some(value) = value {
+            attributes.insert(format!("{prefix}.{key}"), value.to_string());
+        }
+    }
 }
 
 fn insert_loss_payload(attributes: &mut BTreeMap<String, String>, payload: &LossPayload) {

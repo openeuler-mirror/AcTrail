@@ -7,3 +7,7 @@ license = "MulanPSL-2.0"
 [dependencies]
 config_core = { path = "../config" }
 libc = "0.2"
+linux_cgroup = { path = "../linux_cgroup" }
+
+[dev-dependencies]
+tempfile = "3"

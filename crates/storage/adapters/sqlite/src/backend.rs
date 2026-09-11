@@ -12,6 +12,7 @@ use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
+use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
@@ -140,6 +141,41 @@ impl StorageBackend for SqliteStorage {
 
     fn trace_memberships(&self, trace_id: TraceId) -> Result<Vec<ProcessMembership>, StorageError> {
         SqliteStorage::trace_memberships(self, trace_id).map_err(StorageError::from)
+    }
+
+    fn create_resource_scope(&mut self, scope: TraceResourceScope) -> Result<(), StorageError> {
+        SqliteStorage::create_resource_scope(self, &scope)
+            .map_err(|error| StorageError::new("create_resource_scope", error.to_string()))
+    }
+
+    fn get_resource_scope(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<TraceResourceScope>, StorageError> {
+        SqliteStorage::get_resource_scope(self, trace_id)
+            .map_err(|error| StorageError::new("get_resource_scope", error.to_string()))
+    }
+
+    fn list_resource_scopes(&self) -> Result<Vec<TraceResourceScope>, StorageError> {
+        SqliteStorage::list_resource_scopes(self)
+            .map_err(|error| StorageError::new("list_resource_scopes", error.to_string()))
+    }
+
+    fn update_resource_scope_state(
+        &mut self,
+        trace_id: TraceId,
+        lifecycle_state: ResourceScopeLifecycleState,
+        final_event_id: Option<model_core::ids::EventId>,
+        updated_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::update_resource_scope_state(
+            self,
+            trace_id,
+            lifecycle_state,
+            final_event_id,
+            updated_at,
+        )
+        .map_err(|error| StorageError::new("update_resource_scope_state", error.to_string()))
     }
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError> {

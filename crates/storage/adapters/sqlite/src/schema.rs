@@ -71,6 +71,17 @@ CREATE TABLE IF NOT EXISTS memberships (
     PRIMARY KEY (trace_id, process_id)
 );
 
+CREATE TABLE IF NOT EXISTS trace_resource_scopes (
+    trace_id INTEGER PRIMARY KEY,
+    nonce TEXT NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    accounting_method TEXT NOT NULL,
+    lifecycle_state TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    final_event_id INTEGER,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY,
     trace_id INTEGER NOT NULL,
@@ -374,6 +385,8 @@ CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_process_kind ON semantic_a
 );
 
 CREATE INDEX IF NOT EXISTS idx_processes_host_pid ON processes (host_pid);
+CREATE INDEX IF NOT EXISTS idx_trace_resource_scopes_lifecycle
+    ON trace_resource_scopes (lifecycle_state, updated_at);
 CREATE INDEX IF NOT EXISTS idx_process_alias_namespace_pid
     ON process_namespace_aliases (pid_namespace, namespace_pid);
 
@@ -428,6 +441,23 @@ CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_fork ON llm_request_lineage (
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     let version = user_version(connection)?;
+    if version == 26 {
+        // dev added an additive codebook role in version 27. Validate the old
+        // shape before adding managed scopes and the new query index atomically.
+        validate_schema(connection, false)?;
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            connection.execute_batch(CREATE_TABLES_SQL)?;
+            validate_current_schema(connection)?;
+            migrate_query_indexes(connection)?;
+            connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
+            connection.execute_batch("COMMIT")
+        })();
+        if result.is_err() {
+            let _ = connection.execute_batch("ROLLBACK");
+        }
+        return result;
+    }
     validate_writable_schema_state(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     connection.execute_batch(crate::alerts::schema::CREATE_SQL)?;
@@ -437,6 +467,57 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_current_schema(connection)?;
     connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
     migrate_query_indexes(connection)
+}
+
+#[cfg(test)]
+mod baseline_upgrade_tests {
+    use super::*;
+
+    #[test]
+    fn archived_database_opens_read_only_without_creating_resource_registry() {
+        for version in [26, 27] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("archive.sqlite");
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(include_str!("../tests/fixtures/schema-fb5a6c68.sql"))
+                .unwrap();
+            connection
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            drop(connection);
+            let before = std::fs::read(&path).unwrap();
+            let storage = crate::SqliteStorage::open_read_only(&path).unwrap();
+            assert!(
+                storage_core::StorageBackend::list_events(
+                    &storage,
+                    model_core::ids::TraceId::new(1)
+                )
+                .unwrap()
+                .is_empty()
+            );
+            drop(storage);
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            let connection =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .unwrap();
+            assert_eq!(user_version(&connection).unwrap(), version);
+            assert!(!column_exists(&connection, "trace_resource_scopes", "trace_id").unwrap());
+        }
+    }
+
+    #[test]
+    fn baseline_database_gains_resource_scopes_and_can_reopen() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("../tests/fixtures/schema-fb5a6c68.sql"))
+            .unwrap();
+        assert!(!column_exists(&connection, "trace_resource_scopes", "trace_id").unwrap());
+        initialize(&connection).unwrap();
+        validate_read_schema(&connection).unwrap();
+        assert!(column_exists(&connection, "trace_resource_scopes", "trace_id").unwrap());
+        initialize(&connection).unwrap();
+    }
 }
 
 fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -455,13 +536,16 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
 }
 
 pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
-    if user_version(connection)? != SQLITE_SCHEMA_VERSION_CURRENT {
+    let version = user_version(connection)?;
+    if version != 26 && version != SQLITE_SCHEMA_VERSION_CURRENT {
         return Err(rusqlite::Error::InvalidQuery);
     }
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
         .and_then(|codebook| codebook.validate())
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    validate_current_schema(connection)?;
+    // Resource registries are writer-owned lifecycle state. Historical read-only
+    // clients need only the unchanged event/trace tables, without a migration.
+    validate_schema(connection, false)?;
     Ok(())
 }
 
@@ -479,6 +563,13 @@ fn validate_writable_schema_state(
 }
 
 fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
+    validate_schema(connection, true)
+}
+
+fn validate_schema(
+    connection: &Connection,
+    require_resource_scopes: bool,
+) -> Result<(), rusqlite::Error> {
     crate::alerts::schema::validate(connection)?;
     require_schema_object(connection, "table", "tls_flow_diagnostics")?;
     require_column(connection, "tls_flow_diagnostics", "trace_id")?;
@@ -499,6 +590,16 @@ fn validate_current_schema(connection: &Connection) -> Result<(), rusqlite::Erro
     require_column(connection, "traces", "root_process_id")?;
     require_column(connection, "traces", "root_working_directory")?;
     require_column(connection, "memberships", "process_id")?;
+    if require_resource_scopes {
+        require_column(connection, "trace_resource_scopes", "trace_id")?;
+        require_column(connection, "trace_resource_scopes", "nonce")?;
+        require_column(connection, "trace_resource_scopes", "relative_path")?;
+        require_column(connection, "trace_resource_scopes", "accounting_method")?;
+        require_column(connection, "trace_resource_scopes", "lifecycle_state")?;
+        require_column(connection, "trace_resource_scopes", "created_at")?;
+        require_column(connection, "trace_resource_scopes", "final_event_id")?;
+        require_column(connection, "trace_resource_scopes", "updated_at")?;
+    }
     require_column(connection, "events", "process_id")?;
     require_column(connection, "event_payload_blocks", "trace_id")?;
     require_column(connection, "event_payload_blocks", "kind")?;

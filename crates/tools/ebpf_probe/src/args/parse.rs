@@ -238,6 +238,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<ProbeCommand
                     &flags,
                     "--resource-metrics-memory-alert-rss-kb",
                 )?,
+                ..ResourceMetricsConfig::default()
             },
             enforcement: EnforcementConfig {
                 enabled: required_bool(&flags, "--enforcement-enabled")?,

@@ -1,5 +1,8 @@
 # AcTrail 文档
 
+- [Host cgroup resource accounting](operations/resource-metrics-host.md)
+- [Resource metrics three-PR delivery plan](designs/resource-metrics-pr-split-plan.md)
+
 > 本文按实际任务提供 AcTrail 入门、操作、参考、架构与规范文档的统一入口。
 
 AcTrail 观测并治理 AI Agent 的真实活动，使运维与安全人员能够调查行为、追溯证据并执行安全边界。
