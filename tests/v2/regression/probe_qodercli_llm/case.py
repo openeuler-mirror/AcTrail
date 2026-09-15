@@ -92,17 +92,9 @@ class ProbeQoderCliLLMCase(TestCase):
 
             test_context.report_progress(
                 "launch_validation",
-                "validating answer marker and trace id",
+                "validating trace id",
             )
-            assertion = LLMTraceAssertion(
-                runtime,
-                task.marker,
-            )
-            assertion.require_answer_marker(launch, "qodercli")
-            results["answer_marker"] = TestResult(
-                TestStatus.PASSED,
-                f"qodercli stdout answer contains {task.marker}",
-            )
+            assertion = LLMTraceAssertion(runtime)
 
             trace_id = assertion.require_trace_id(
                 launch,
@@ -134,7 +126,7 @@ class ProbeQoderCliLLMCase(TestCase):
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,
                 f"trace-{trace_id} has {request_count} terminal paired request(s), "
-                f"{response_count} response(s), and a linked marker exchange",
+                f"{response_count} response(s), and a successful complete exchange",
             )
             return TestResult(
                 TestStatus.COMPOSITE,

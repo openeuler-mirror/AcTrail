@@ -49,17 +49,15 @@ int handle_sys_enter_dup(struct trace_event_raw_sys_enter *ctx) {
             ACTRAIL_SUPPRESSED_FD_DUP_RET_FD
         )) {
         socket_payload_dup_enter(
-            ctx,
+            (__u32)ctx->args[0],
             0,
-            ACTRAIL_SYSCALL_ARG_MISSING,
             ACTRAIL_SOCKET_DUP_RET_FD
         );
         return 0;
     }
     socket_payload_dup_enter(
-        ctx,
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
         ACTRAIL_SOCKET_DUP_RET_FD
     );
     store_file_bulk_read_fast_dup_op(
@@ -95,10 +93,18 @@ int handle_sys_enter_dup2(struct trace_event_raw_sys_enter *ctx) {
             1,
             ACTRAIL_SUPPRESSED_FD_DUP_TARGET_FD
         )) {
-        socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
+        socket_payload_dup_enter(
+            (__u32)ctx->args[0],
+            (__u32)ctx->args[1],
+            ACTRAIL_SOCKET_DUP_TARGET_FD
+        );
         return 0;
     }
-    socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
+    socket_payload_dup_enter(
+        (__u32)ctx->args[0],
+        (__u32)ctx->args[1],
+        ACTRAIL_SOCKET_DUP_TARGET_FD
+    );
     store_file_bulk_read_fast_dup_op(
         (__u32)ctx->args[0],
         (__u32)ctx->args[1],
@@ -132,10 +138,18 @@ int handle_sys_enter_dup3(struct trace_event_raw_sys_enter *ctx) {
             1,
             ACTRAIL_SUPPRESSED_FD_DUP_TARGET_FD
         )) {
-        socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
+        socket_payload_dup_enter(
+            (__u32)ctx->args[0],
+            (__u32)ctx->args[1],
+            ACTRAIL_SOCKET_DUP_TARGET_FD
+        );
         return 0;
     }
-    socket_payload_dup_enter(ctx, 0, 1, ACTRAIL_SOCKET_DUP_TARGET_FD);
+    socket_payload_dup_enter(
+        (__u32)ctx->args[0],
+        (__u32)ctx->args[1],
+        ACTRAIL_SOCKET_DUP_TARGET_FD
+    );
     store_file_bulk_read_fast_dup_op(
         (__u32)ctx->args[0],
         (__u32)ctx->args[1],

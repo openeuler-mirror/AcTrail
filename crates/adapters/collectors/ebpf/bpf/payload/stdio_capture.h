@@ -179,7 +179,7 @@ static __always_inline int store_stdio_payload_op(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
     struct actrail_stdio_payload_config *config = stdio_payload_config();
     struct actrail_pending_stdio_payload_op op = {};
     struct actrail_pending_stdio_payload_op *stored_op;

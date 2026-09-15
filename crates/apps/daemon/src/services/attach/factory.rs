@@ -1,20 +1,20 @@
 //! Construction for the storage-backed attach service.
 
-use std::collections::BTreeMap;
-
 use config_core::daemon::{
     AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
-    PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    EbpfCollectorConfig, FileObservationConfig, IdleDetectionConfig, NetworkControlConfig,
+    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
     launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
 use export_core::ExportRuntime;
+use idle_detector::IdleDetector;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
 use semantic_action_runtime::LiveSemanticActionRuntime;
+use std::collections::BTreeMap;
 use storage_core::StorageBackend;
 
 use crate::profiles::DaemonProfileRegistry;
@@ -24,6 +24,7 @@ use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::idle_detector::IdleRuntime;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
@@ -50,6 +51,7 @@ impl StorageAttachService {
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
@@ -74,6 +76,7 @@ impl StorageAttachService {
             process_seccomp,
             agent_invocation,
             semantic_retention,
+            idle_detection,
             file_observation,
             application_protocol,
             resource_metrics,
@@ -102,6 +105,7 @@ impl StorageAttachService {
         process_seccomp_config: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
         resource_metrics: ResourceMetricsConfig,
@@ -149,6 +153,7 @@ impl StorageAttachService {
         let payload_mcp = payload_config.mcp;
         let launch_seccomp_requirements = launch_seccomp_requirements(
             &payload_config,
+            &seccomp_notify_config,
             &process_seccomp_config,
             &network_control_config,
             &command_control_config,
@@ -172,7 +177,12 @@ impl StorageAttachService {
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
         let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
-        let process_seccomp = ProcessSeccompService::new(&process_seccomp_config);
+        let process_seccomp = ProcessSeccompService::new(
+            &process_seccomp_config,
+            seccomp_notify_config.enabled
+                && payload_config.tls.enabled
+                && payload_config.tls.capture_backend.is_sync(),
+        );
         let command_control = CommandControlService::new(&command_control_config)?;
         let network_control = NetworkControlService::new(&network_control_config)?;
         let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
@@ -183,6 +193,18 @@ impl StorageAttachService {
             alert_forwarding.plugin(),
         )?;
         let resource_metrics = ResourceMetricsSampler::new(resource_metrics, storage.as_mut())?;
+        let idle_detector = if idle_detection.enabled {
+            let idle_interval_id_seed = storage
+                .next_idle_interval_id_seed()
+                .map_err(storage_error)?;
+            Some(IdleDetector::new(
+                idle_detection.threshold,
+                idle_interval_id_seed,
+            ))
+        } else {
+            None
+        };
+        let idle_runtime = IdleRuntime::new(idle_detector);
         Ok(Self {
             profiles,
             host_id: crate::host_id::get(),
@@ -193,6 +215,7 @@ impl StorageAttachService {
             collector: EbpfCollector::new(
                 ebpf_config,
                 payload_config,
+                process_seccomp_config.clone(),
                 file_observation.bulk_read.fast_path.clone(),
             ),
             host_ebpf_preflight: Default::default(),
@@ -246,6 +269,7 @@ impl StorageAttachService {
             ),
             export_runtime,
             alert_ingress,
+            idle_runtime,
             alert_forwarding,
             post_trace_broker,
             post_trace_coordinator,

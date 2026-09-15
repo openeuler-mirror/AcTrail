@@ -26,10 +26,11 @@ use control_contract::reply::ControlError;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
 use model_core::ids::{CollectorName, DiagnosticId, EventId, TraceId};
-use model_core::process::ProcessMembership;
+use model_core::process::{ProcessIdentity, ProcessMembership};
 use model_core::resource_scope::ResourceScopeLifecycleState;
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use recording_runtime::{RecordingWriter, SemanticActionBatch, TraceStateRecord};
+use trace_runtime::membership::MembershipIndex;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
@@ -59,6 +60,7 @@ impl StorageAttachService {
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         self.drain_alert_ingress_impl()?;
+        self.tick_idle_detector_impl()?;
         self.drain_post_trace_runtime_impl()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
@@ -830,6 +832,41 @@ impl StorageAttachService {
             })
             .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))
     }
+
+    pub(in crate::services) fn trace_state_record_for_memberships(
+        &self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+        membership_ids: &BTreeSet<ProcessIdentity>,
+    ) -> Result<TraceStateRecord, ControlError> {
+        // Trace-state persistence upserts the supplied memberships and never
+        // deletes omitted rows, so hot-path batches only need their mutations.
+        // Lifecycle/finalization paths continue to use the full snapshot above.
+        let entry = trace_runtime
+            .get_trace(trace_id)
+            .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))?;
+        let memberships =
+            memberships_for_persistence(trace_id, &entry.memberships, membership_ids)?;
+        Ok(TraceStateRecord::new(entry.trace.clone(), memberships))
+    }
+}
+
+fn memberships_for_persistence(
+    trace_id: TraceId,
+    memberships: &MembershipIndex,
+    membership_ids: &BTreeSet<ProcessIdentity>,
+) -> Result<Vec<ProcessMembership>, ControlError> {
+    membership_ids
+        .iter()
+        .map(|identity| {
+            memberships.get(identity).cloned().ok_or_else(|| {
+                ControlError::new(
+                    "persist_trace_membership",
+                    format!("trace {trace_id} membership {identity} not found"),
+                )
+            })
+        })
+        .collect()
 }
 
 pub(super) fn next_diagnostic_id_from_seed(seed: &mut u64) -> Result<DiagnosticId, ControlError> {

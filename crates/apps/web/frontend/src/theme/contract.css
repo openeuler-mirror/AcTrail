@@ -306,6 +306,37 @@
   --trace-waterfall-ttft-bar: #c7d2fe;
   --trace-waterfall-ttft-stripe-a: #eef2ff;
   --trace-waterfall-ttft-stripe-b: #c7d2fe;
+  --trace-flame-toolbar-bg: #ffffff;
+  --trace-flame-axis-bg: #fbfcfc;
+  --trace-flame-grid: rgba(100, 116, 139, 0.12);
+  --trace-flame-agent-accent: #2563eb;
+  --trace-flame-harness-accent: #d97706;
+  --trace-flame-agent-layer-bg: #f7faff;
+  --trace-flame-harness-layer-bg: #fffbf2;
+  --trace-flame-agent-bar: #2563eb;
+  --trace-flame-agent-bar-text: #ffffff;
+  --trace-flame-harness-bar: #f59e0b;
+  --trace-flame-harness-bar-text: #4b2b00;
+  --trace-flame-tool-bar: #0f9f8f;
+  --trace-flame-tool-bar-text: #ffffff;
+  --trace-flame-file-bar: #38a3a5;
+  --trace-flame-file-bar-text: #ffffff;
+  --trace-flame-llm-call-bar: #2563eb;
+  --trace-flame-llm-call-bar-text: #ffffff;
+  --trace-flame-llm-request-bar: #4f46e5;
+  --trace-flame-llm-request-bar-text: #ffffff;
+  --trace-flame-llm-response-bar: #60a5fa;
+  --trace-flame-llm-response-bar-text: #102a56;
+  --trace-flame-tool-call-bar: #0f9f8f;
+  --trace-flame-tool-call-bar-text: #ffffff;
+  --trace-flame-tool-result-bar: #5eead4;
+  --trace-flame-tool-result-bar-text: #134e4a;
+  --trace-flame-process-bar: #a855f7;
+  --trace-flame-process-bar-text: #ffffff;
+  --trace-flame-protocol-bar: #64748b;
+  --trace-flame-protocol-bar-text: #ffffff;
+  --trace-flame-error-hatch: #ff4d6d;
+  --trace-flame-layer-shadow: 0 8px 24px rgba(15, 23, 42, 0.035);
 }
 
 .stats-theme {

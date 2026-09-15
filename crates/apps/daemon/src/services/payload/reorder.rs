@@ -315,6 +315,7 @@ mod tests {
             original_size: 1,
             captured_size: 1,
             operation_id: sequence,
+            operation_chunk_index: 0,
             operation_offset: 0,
             operation_original_size: 1,
             operation_captured_size: 1,

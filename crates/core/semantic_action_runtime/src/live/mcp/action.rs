@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
+    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
     attr_keys as attrs, evidence_roles,
 };
 use serde_json::Value;
@@ -106,7 +106,6 @@ impl LiveMcpProjector {
             buffered.direction,
             &response_key.request_id,
         );
-        self.track_unattributed_mcp_tool_call(&tool_call);
         self.correlation.open_calls.insert(
             request_key.clone(),
             McpOpenCall {
@@ -187,7 +186,6 @@ impl LiveMcpProjector {
             attrs::mcp::STDIN_ACTION_ID.to_string(),
             Self::child_action_id(&open.action.action_id, "stdin"),
         );
-        self.track_unattributed_mcp_tool_call(&open.action);
         let response = self.child_action(
             &open.action,
             SemanticActionKind::McpResponse,
@@ -270,12 +268,11 @@ impl LiveMcpProjector {
                 stream_key.to_string(),
             ),
         ]);
-        let server_name = self
+        if let Some(server_name) = self
             .servers
             .get(session)
             .and_then(|state| state.name.as_ref())
-            .cloned();
-        if let Some(server_name) = &server_name {
+        {
             attributes.insert(attrs::mcp::SERVER_NAME.to_string(), server_name.clone());
         }
         if let Some(parent) = self.parent_process(session) {
@@ -284,15 +281,6 @@ impl LiveMcpProjector {
                 parent.get().to_string(),
             );
             insert_parent_identity_attributes(&mut attributes, parent);
-        }
-        if let Some(server_name) = server_name {
-            self.apply_llm_proposal_attributes(
-                session.trace_id,
-                &server_name,
-                tool_name,
-                message.observed_at,
-                &mut attributes,
-            );
         }
         SemanticAction {
             action_id: Self::tool_call_action_id(request_key, server_process),
@@ -427,7 +415,7 @@ impl LiveMcpProjector {
             parent_action_id: parent.action_id.clone(),
             child_action_id: child.action_id.clone(),
             role,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: child.evidence.clone(),
             attributes: BTreeMap::new(),

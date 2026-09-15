@@ -120,6 +120,8 @@ pub enum ControlReply {
     TrackRemoved,
     TraceList(Vec<TraceListItem>),
     Doctor(DoctorReply),
+    TurnLifecycleRecorded,
+    UserInteractionRecorded,
     PluginList(Vec<PluginInstanceStatus>),
     PluginStatus(PluginInstanceStatus),
     PluginCommand(PluginCommandReply),

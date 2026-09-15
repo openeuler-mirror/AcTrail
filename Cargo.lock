@@ -505,6 +505,7 @@ dependencies = [
 name = "control_contract"
 version = "0.7.1"
 dependencies = [
+ "idle_contract",
  "model_core",
  "plugin_system",
 ]
@@ -688,6 +689,7 @@ dependencies = [
  "clap",
  "config_core",
  "control_contract",
+ "idle_contract",
  "libc",
  "linux_platform",
  "model_core",
@@ -717,6 +719,8 @@ dependencies = [
  "export_factory",
  "gateway_ingest_runtime",
  "getrandom 0.3.4",
+ "idle_contract",
+ "idle_detector",
  "ingest_runtime",
  "jsonschema",
  "libc",
@@ -1346,6 +1350,22 @@ name = "id-arena"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
+
+[[package]]
+name = "idle_contract"
+version = "0.7.1"
+dependencies = [
+ "model_core",
+]
+
+[[package]]
+name = "idle_detector"
+version = "0.7.1"
+dependencies = [
+ "idle_contract",
+ "model_core",
+ "semantic_action",
+]
 
 [[package]]
 name = "idna"
@@ -2480,6 +2500,7 @@ dependencies = [
 name = "semantic_action_runtime"
 version = "0.7.1"
 dependencies = [
+ "base64",
  "config_core",
  "flate2",
  "libc",
@@ -2487,6 +2508,7 @@ dependencies = [
  "plugin_system",
  "semantic_action",
  "serde_json",
+ "sha1",
  "sha2",
  "tracing",
 ]
@@ -2551,6 +2573,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]
@@ -2620,9 +2653,11 @@ version = "0.7.1"
 dependencies = [
  "alert_contract",
  "bincode",
+ "idle_contract",
  "model_core",
  "rusqlite",
  "semantic_action",
+ "serde",
  "serde_json",
  "sha2",
  "storage_core",
@@ -2646,6 +2681,7 @@ name = "storage_core"
 version = "0.7.1"
 dependencies = [
  "alert_contract",
+ "idle_contract",
  "model_core",
  "semantic_action",
  "store_read_contract",
@@ -2976,6 +3012,7 @@ name = "uds_control_transport"
 version = "0.7.1"
 dependencies = [
  "control_contract",
+ "idle_contract",
  "model_core",
  "plugin_system",
 ]
@@ -3523,12 +3560,14 @@ dependencies = [
  "config_core",
  "control_contract",
  "flate2",
+ "idle_contract",
  "model_core",
  "plugin_system",
  "rusqlite",
  "semantic_action",
  "serde",
  "serde_json",
+ "sqlite_storage",
  "storage_core",
  "storage_factory",
  "toml",

@@ -2,10 +2,11 @@
 
 mod current;
 mod error;
+pub(in crate::semantic_actions) mod evidence_role;
 pub(in crate::semantic_actions) mod sqlite;
 
 use semantic_action::{
-    SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkConfidence,
+    SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkOrigin,
     SemanticActionLinkRole, SemanticActionStatus, SemanticEvidenceKind,
 };
 
@@ -37,7 +38,7 @@ pub(crate) struct SemanticActionCodebook {
     pub(crate) action_completeness: ActionCompletenessCodes,
     pub(crate) evidence_kind: EvidenceKindCodes,
     pub(crate) link_role: LinkRoleCodes,
-    pub(crate) link_confidence: LinkConfidenceCodes,
+    pub(crate) link_origin: LinkOriginCodes,
 }
 
 impl SemanticActionCodebook {
@@ -50,10 +51,7 @@ impl SemanticActionCodebook {
         )?;
         validate_unique("semantic_evidence_kind", &self.evidence_kind.entries())?;
         validate_unique("semantic_action_link_role", &self.link_role.entries())?;
-        validate_unique(
-            "semantic_action_link_confidence",
-            &self.link_confidence.entries(),
-        )
+        validate_unique("semantic_action_link_origin", &self.link_origin.entries())
     }
 }
 
@@ -265,6 +263,7 @@ pub(crate) struct ActionCompletenessCodes {
     pub(crate) complete: i16,
     pub(crate) partial: i16,
     pub(crate) inferred: i16,
+    pub(crate) capture_limited: i16,
 }
 
 impl ActionCompletenessCodes {
@@ -272,6 +271,7 @@ impl ActionCompletenessCodes {
         match value {
             SemanticActionCompleteness::Complete => self.complete,
             SemanticActionCompleteness::Partial => self.partial,
+            SemanticActionCompleteness::CaptureLimited => self.capture_limited,
             SemanticActionCompleteness::Inferred => self.inferred,
         }
     }
@@ -282,6 +282,9 @@ impl ActionCompletenessCodes {
         match code {
             value if value == self.complete => Ok(SemanticActionCompleteness::Complete),
             value if value == self.partial => Ok(SemanticActionCompleteness::Partial),
+            value if value == self.capture_limited => {
+                Ok(SemanticActionCompleteness::CaptureLimited)
+            }
             value if value == self.inferred => Ok(SemanticActionCompleteness::Inferred),
             _ => Err(CodebookError::unknown(
                 "semantic_action_completeness_code",
@@ -290,10 +293,14 @@ impl ActionCompletenessCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 3] {
+    fn entries(self) -> [(&'static str, i16); 4] {
         [
             (SemanticActionCompleteness::Complete.as_str(), self.complete),
             (SemanticActionCompleteness::Partial.as_str(), self.partial),
+            (
+                SemanticActionCompleteness::CaptureLimited.as_str(),
+                self.capture_limited,
+            ),
             (SemanticActionCompleteness::Inferred.as_str(), self.inferred),
         ]
     }
@@ -628,27 +635,27 @@ impl LinkRoleCodes {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct LinkConfidenceCodes {
+pub(crate) struct LinkOriginCodes {
     pub(crate) observed: i16,
     pub(crate) derived: i16,
 }
 
-impl LinkConfidenceCodes {
-    pub(crate) const fn code(self, value: SemanticActionLinkConfidence) -> i16 {
+impl LinkOriginCodes {
+    pub(crate) const fn code(self, value: SemanticActionLinkOrigin) -> i16 {
         match value {
-            SemanticActionLinkConfidence::Observed => self.observed,
-            SemanticActionLinkConfidence::Derived => self.derived,
+            SemanticActionLinkOrigin::Observed => self.observed,
+            SemanticActionLinkOrigin::Derived => self.derived,
         }
     }
 
-    pub(crate) fn decode(self, code: i64) -> Result<SemanticActionLinkConfidence, CodebookError> {
+    pub(crate) fn decode(self, code: i64) -> Result<SemanticActionLinkOrigin, CodebookError> {
         let code = i16::try_from(code)
-            .map_err(|_| CodebookError::unknown("semantic_action_link_confidence_code", code))?;
+            .map_err(|_| CodebookError::unknown("semantic_action_link_origin_code", code))?;
         match code {
-            value if value == self.observed => Ok(SemanticActionLinkConfidence::Observed),
-            value if value == self.derived => Ok(SemanticActionLinkConfidence::Derived),
+            value if value == self.observed => Ok(SemanticActionLinkOrigin::Observed),
+            value if value == self.derived => Ok(SemanticActionLinkOrigin::Derived),
             _ => Err(CodebookError::unknown(
-                "semantic_action_link_confidence_code",
+                "semantic_action_link_origin_code",
                 code,
             )),
         }
@@ -656,11 +663,8 @@ impl LinkConfidenceCodes {
 
     fn entries(self) -> [(&'static str, i16); 2] {
         [
-            (
-                SemanticActionLinkConfidence::Observed.as_str(),
-                self.observed,
-            ),
-            (SemanticActionLinkConfidence::Derived.as_str(), self.derived),
+            (SemanticActionLinkOrigin::Observed.as_str(), self.observed),
+            (SemanticActionLinkOrigin::Derived.as_str(), self.derived),
         ]
     }
 }

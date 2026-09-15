@@ -140,7 +140,8 @@ docker exec actrail-auto-both-manual \
 ### 脚本行为与预期结果
 
 launch 必须输出 `host_ebpf:enabled,seccomp_notify:enabled`，trace profile 为
-`container-auto-ebpf-on-notify-on`。trace 必须包含 TLS payload、eBPF event 和
+`container-auto-ebpf-on-notify-on`。trace 必须包含 TLS payload 和 eBPF event。纯观测字段已有
+eBPF provider 且 workload 未触发同步治理或 pre-exec 观测需求时，可以不产生
 `process-seccomp` event；容器必须非 privileged、非 host PID、无额外 capability。
 
 ## 步骤5：host eBPF enabled + seccomp notify disabled
@@ -204,8 +205,8 @@ docker exec actrail-auto-notify-only-manual \
 ### 脚本行为与预期结果
 
 launch 必须输出 `host_ebpf:disabled,seccomp_notify:enabled`，trace profile 为
-`container-auto-ebpf-off-notify-on`。trace 必须包含 `process-seccomp` event，不得
-包含 eBPF event。
+`container-auto-ebpf-off-notify-on`。trace 不得包含 eBPF event；若 workload 未触发同步治理或
+pre-exec 观测需求，可以不产生 `process-seccomp` event。
 
 ## 步骤8：host eBPF disabled + seccomp notify disabled
 

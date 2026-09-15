@@ -8,7 +8,8 @@ use semantic_action::{
 use serde_json::Value;
 
 use crate::llm_pipeline::provider::driver::{
-    ParsedSseResponseAccumulator, extract_token_usage_from_values, qualified_response_tool_name,
+    ParsedSseResponseAccumulator, ToolCallAssembler, extract_token_usage_from_values,
+    qualified_response_tool_name,
 };
 
 const OPENAI_RESPONSES_PROVIDER_ID: &str = "openai-responses";
@@ -131,6 +132,11 @@ impl OpenAiResponsesResponseParser {
         let Some(item) = value.get("item").and_then(Value::as_object) else {
             return Vec::new();
         };
+        if item.get("type").and_then(Value::as_str) == Some("custom_tool_call") {
+            let mut assembler = ToolCallAssembler::default();
+            assembler.apply_openai_response_custom_tool_call(item);
+            return assembler.into_calls();
+        }
         if item.get("type").and_then(Value::as_str) != Some("function_call") {
             return Vec::new();
         }

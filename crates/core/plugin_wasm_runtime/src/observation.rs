@@ -316,7 +316,7 @@ fn observation_envelope(batch: &ObservationBatch<'_>) -> Result<String, PluginRu
                 "captured_size": segment.captured_size,
                 "original_size": segment.original_size,
                 "redaction": format!("{:?}", segment.redaction),
-                "truncation": format!("{:?}", segment.truncation),
+                "truncation": segment.truncation.as_str(),
             })
         }).collect::<Vec<_>>(),
         "actions": batch.semantic_actions.iter().map(|action| {

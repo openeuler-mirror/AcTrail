@@ -108,6 +108,27 @@ static __always_inline void actrail_launch_binding_decrement(__u64 *pending_coun
     }
 }
 
+static __always_inline int actrail_launch_binding_observe_current(
+    __u32 current_host_tgid,
+    __u64 *trace_id,
+    __u64 *generation
+) {
+    struct actrail_launch_binding_adapter_lookup lookup = {};
+    __u64 *pending_count = actrail_launch_binding_pending_count();
+
+    if (!current_host_tgid || !trace_id || !generation || !pending_count ||
+        *pending_count == 0 ||
+        !actrail_launch_binding_adapter_lookup_current(current_host_tgid, &lookup) ||
+        !lookup.binding || !lookup.binding->counted ||
+        actrail_launch_binding_adapter_match_current(&lookup) !=
+            ACTRAIL_LAUNCH_BINDING_MATCH) {
+        return 0;
+    }
+    *trace_id = lookup.binding->trace_id;
+    *generation = lookup.binding->generation;
+    return *trace_id != 0 && *generation != 0;
+}
+
 static __always_inline int actrail_launch_binding_install_suppressed_fds(
     const struct actrail_pending_exec_binding *binding,
     __u32 pid

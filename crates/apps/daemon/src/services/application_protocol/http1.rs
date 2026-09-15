@@ -190,7 +190,7 @@ impl Http1Analyzer {
             ),
             (
                 "payload.truncation".to_string(),
-                format!("{:?}", segment.truncation).to_ascii_lowercase(),
+                segment.truncation.as_str().to_string(),
             ),
         ]);
         Ok(vec![ApplicationEventDraft::partial(payload)])

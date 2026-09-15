@@ -8,7 +8,8 @@ use model_core::ids::TraceId;
 use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 use crate::decode::{
-    self, decode_file_path, decode_observation, decode_socket_fd_release, decode_socket_payload,
+    self, decode_file_path, decode_observation, decode_process_exec_failure,
+    decode_process_fork_result, decode_socket_fd_release, decode_socket_payload,
     decode_socket_payload_completion, decode_tls_capture_request, decode_tls_completion,
     decode_tls_diagnostic, decode_tls_direct_capture,
 };
@@ -78,7 +79,7 @@ impl EbpfCollector {
             if let KernelEvent::Observation(observation) = &event {
                 self.promote_pending_launch_after_exec(observation)?;
             }
-            self.handle_control_event(event);
+            self.handle_control_event(event)?;
         }
         Ok(())
     }
@@ -122,7 +123,7 @@ impl EbpfCollector {
         Ok(batch)
     }
 
-    fn handle_control_event(&mut self, event: KernelEvent) {
+    fn handle_control_event(&mut self, event: KernelEvent) -> Result<(), CollectorError> {
         match event {
             KernelEvent::TlsCompletion(event) => {
                 self.tls_completions.push(decode_tls_completion(event));
@@ -146,8 +147,19 @@ impl EbpfCollector {
                 self.socket_completions
                     .push(decode_socket_payload_completion(event));
             }
+            KernelEvent::ProcessExecAttempt(event) => {
+                self.seed_pending_launch_from_exec_attempt(&event)?;
+                self.process_exec.observe_attempt(event);
+            }
+            KernelEvent::ProcessExecArg(event) => {
+                self.process_exec.observe_arg(event);
+            }
+            KernelEvent::ProcessForkAttempt(event) => {
+                self.process_fork.observe_attempt(event);
+            }
             _ => {}
         }
+        Ok(())
     }
 
     fn handle_batch_event(
@@ -156,7 +168,14 @@ impl EbpfCollector {
         batch: &mut CollectorPollBatch,
     ) -> Result<(), CollectorError> {
         match event {
-            KernelEvent::Observation(event) => {
+            KernelEvent::Observation(mut event) => {
+                if let KernelObservationPayload::Exec(payload) = &mut event.payload {
+                    payload.exec_attempt = self.process_exec.take_success(
+                        event.common.trace_id,
+                        event.common.subject.binding_tgid(),
+                        payload.attempt_id,
+                    );
+                }
                 self.promote_pending_launch_after_exec(&event)?;
                 if self.is_superseded_fork_event(&event) {
                     return Ok(());
@@ -231,12 +250,88 @@ impl EbpfCollector {
                 }
             }
             KernelEvent::SocketPayload(event) => {
+                if event.flags & 2 != 0 {
+                    self.socket_total_limit_partials =
+                        self.socket_total_limit_partials.saturating_add(1);
+                }
+                if event.flags & 4 != 0 {
+                    self.socket_chunk_limit_partials =
+                        self.socket_chunk_limit_partials.saturating_add(1);
+                }
+                if event.flags & 8 != 0 {
+                    self.socket_iovec_limit_partials =
+                        self.socket_iovec_limit_partials.saturating_add(1);
+                }
                 batch.payload_segments.push(
                     decode_socket_payload(event, &self.bindings)
                         .map_err(|error| CollectorError::new(error.stage, error.message))?,
                 );
             }
-            other => self.handle_control_event(other),
+            KernelEvent::ProcessExecAttempt(event) => {
+                self.seed_pending_launch_from_exec_attempt(&event)?;
+                self.process_exec.observe_attempt(event);
+            }
+            KernelEvent::ProcessExecArg(event) => {
+                self.process_exec.observe_arg(event);
+            }
+            KernelEvent::ProcessExecResult(event) => {
+                let attempt = self.process_exec.take_failure(&event);
+                batch.observations.push(
+                    decode_process_exec_failure(event, attempt, &self.bindings)
+                        .map_err(|error| CollectorError::new(error.stage, error.message))?,
+                );
+            }
+            KernelEvent::ProcessForkAttempt(event) => {
+                self.process_fork.observe_attempt(event);
+            }
+            KernelEvent::ProcessForkResult(event) => {
+                let attempt = self.process_fork.take_result(&event);
+                batch.observations.push(
+                    decode_process_fork_result(event, attempt, &self.bindings)
+                        .map_err(|error| CollectorError::new(error.stage, error.message))?,
+                );
+            }
+            other => self.handle_control_event(other)?,
+        }
+        Ok(())
+    }
+
+    fn seed_pending_launch_from_exec_attempt(
+        &mut self,
+        event: &crate::loader::KernelProcessExecAttemptEvent,
+    ) -> Result<(), CollectorError> {
+        let Some(pending) = self.pending_launches.get(&event.trace_id) else {
+            return Ok(());
+        };
+        if event.host_pid == 0 {
+            return Err(CollectorError::new(
+                "pending_launch_exec_attempt",
+                format!(
+                    "trace {} exec attempt did not report kernel TGID",
+                    event.trace_id
+                ),
+            ));
+        }
+        if event.pid_generation == 0 || event.pid_generation != pending.generation {
+            return Err(CollectorError::new(
+                "pending_launch_exec_attempt",
+                format!(
+                    "trace {} exec attempt generation {} does not match armed generation {}",
+                    event.trace_id, event.pid_generation, pending.generation
+                ),
+            ));
+        }
+        if self
+            .bindings
+            .tracked_event_observation(event.trace_id, event.host_pid, event.pid_generation)
+            .is_none()
+        {
+            self.bindings.track_with_kernel_tgid(
+                event.trace_id,
+                pending.root_observation.clone(),
+                event.host_pid,
+                event.pid_generation,
+            );
         }
         Ok(())
     }

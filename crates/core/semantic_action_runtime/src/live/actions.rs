@@ -58,8 +58,21 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
         start_time: event.envelope.observed_at,
         end_time: Some(event.envelope.observed_at),
         process: event.envelope.process.clone(),
-        status: SemanticActionStatus::Success,
-        completeness: SemanticActionCompleteness::Complete,
+        status: payload
+            .metadata
+            .get("result")
+            .and_then(|value| value.parse::<i32>().ok())
+            .map(|result| status_from_result(Some(result)))
+            .unwrap_or(SemanticActionStatus::Success),
+        completeness: if payload
+            .metadata
+            .get("args_truncated")
+            .is_some_and(|value| value == "true")
+        {
+            SemanticActionCompleteness::Partial
+        } else {
+            SemanticActionCompleteness::Complete
+        },
         attributes: process_event_attributes(event),
         evidence: vec![event_evidence(
             event,
@@ -185,8 +198,19 @@ pub(super) fn process_fork_attempt_action(event: &DomainEvent) -> SemanticAction
         start_time: event.envelope.observed_at,
         end_time: Some(event.envelope.observed_at),
         process: event.envelope.process.clone(),
-        status: SemanticActionStatus::Success,
-        completeness: SemanticActionCompleteness::Complete,
+        status: match attributes
+            .get("result")
+            .and_then(|value| value.parse::<i64>().ok())
+        {
+            Some(value) if value >= 0 => SemanticActionStatus::Success,
+            Some(_) => SemanticActionStatus::Error,
+            None => SemanticActionStatus::Unknown,
+        },
+        completeness: if attributes.contains_key("fork.capture_flags") {
+            SemanticActionCompleteness::Partial
+        } else {
+            SemanticActionCompleteness::Complete
+        },
         attributes,
         evidence: vec![event_evidence(event, evidence_roles::process::FORK_ATTEMPT)],
     }
@@ -302,7 +326,13 @@ pub(super) fn http_message_action(event: &DomainEvent) -> SemanticAction {
         end_time: Some(event.envelope.observed_at),
         process: event.envelope.process.clone(),
         status: SemanticActionStatus::Success,
-        completeness: if event.envelope.flags.metadata_partial {
+        completeness: if payload
+            .metadata
+            .get("payload.truncation")
+            .is_some_and(|state| state == "policy_limited")
+        {
+            SemanticActionCompleteness::CaptureLimited
+        } else if event.envelope.flags.metadata_partial {
             SemanticActionCompleteness::Partial
         } else {
             SemanticActionCompleteness::Complete

@@ -284,10 +284,6 @@ impl ProjectionCoordinator {
                 attrs::llm_call::HTTP_RESPONSE_ACTION_ID.to_string(),
                 matched.response.action_id.clone(),
             );
-            if response.status == SemanticActionStatus::Error {
-                llm_call.status = SemanticActionStatus::Error;
-                llm_call.completeness = SemanticActionCompleteness::Partial;
-            }
             self.push_recorded_action(llm_call, &mut output);
             return Some(output);
         }

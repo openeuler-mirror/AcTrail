@@ -1,6 +1,6 @@
 //! Query-side mapping from rows to storage-contract results.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::params;
 use store_read_contract::ReadError;
@@ -16,8 +16,13 @@ use store_snapshot_contract::lease::{
 use store_snapshot_contract::view::{SnapshotStore, SnapshotView};
 
 use crate::SqliteStorage;
+use crate::config::{
+    SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
+};
 use crate::records::{
-    decode_trace_health, diagnostic_from_row, event_from_row, membership_from_row,
+    PAYLOAD_DIRECTION_MASK, decode_event_kind, decode_event_record_block,
+    decode_event_record_block_kind_counts, decode_event_record_frame, decode_trace_health,
+    diagnostic_from_row, event_from_row, event_kind_name, membership_from_row,
     payload_segment_from_row, trace_from_row,
 };
 
@@ -269,26 +274,96 @@ impl SqliteStorage {
         let connection = self.connection().borrow();
         let mut statement = connection
             .prepare(
-                "SELECT payload_variant, COUNT(*) AS count
+                "SELECT kind_code, COUNT(*) AS count
                  FROM events
                  WHERE trace_id = ?1
-                 GROUP BY payload_variant",
+                 GROUP BY kind_code",
             )
             .map_err(|error| ReadError::new("prepare_event_variant_counts", error.to_string()))?;
         let rows = statement
             .query_map(params![trace_id.get()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(|error| ReadError::new("query_event_variant_counts", error.to_string()))?;
         let mut counts = std::collections::BTreeMap::new();
         for row in rows {
-            let (variant, count) =
+            let (kind_code, count) =
                 row.map_err(|error| ReadError::new("map_event_variant_counts", error.to_string()))?;
+            let variant = event_kind_name(
+                decode_event_kind(kind_code)
+                    .map_err(|error| ReadError::new("decode_event_variant", error.to_string()))?,
+            )
+            .to_string();
             counts.insert(
                 variant,
                 usize::try_from(count)
                     .map_err(|error| ReadError::new("event_variant_count", error.to_string()))?,
             );
+        }
+        let mut statement = connection
+            .prepare("SELECT kind_counts FROM event_record_blocks WHERE trace_id = ?1")
+            .map_err(|error| {
+                ReadError::new("prepare_event_block_variant_counts", error.to_string())
+            })?;
+        let rows = statement
+            .query_map(params![trace_id.get()], |row| row.get::<_, Vec<u8>>(0))
+            .map_err(|error| {
+                ReadError::new("query_event_block_variant_counts", error.to_string())
+            })?;
+        for row in rows {
+            let encoded = row.map_err(|error| {
+                ReadError::new("map_event_block_variant_counts", error.to_string())
+            })?;
+            let block_counts =
+                decode_event_record_block_kind_counts(&encoded).map_err(|error| {
+                    ReadError::new("decode_event_block_variant_counts", error.to_string())
+                })?;
+            for (kind_code, count) in block_counts.into_iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let variant =
+                    event_kind_name(decode_event_kind(kind_code as i64).map_err(|error| {
+                        ReadError::new("decode_event_block_variant", error.to_string())
+                    })?)
+                    .to_string();
+                let count = usize::try_from(count).map_err(|error| {
+                    ReadError::new("event_block_variant_count", error.to_string())
+                })?;
+                let total = counts.entry(variant).or_default();
+                *total = total.saturating_add(count);
+            }
+        }
+        let mut statement = connection
+            .prepare(
+                "SELECT kind_code, COUNT(*) AS count
+                 FROM event_record_pending
+                 WHERE trace_id = ?1
+                 GROUP BY kind_code",
+            )
+            .map_err(|error| {
+                ReadError::new("prepare_pending_event_variant_counts", error.to_string())
+            })?;
+        let rows = statement
+            .query_map(params![trace_id.get()], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|error| {
+                ReadError::new("query_pending_event_variant_counts", error.to_string())
+            })?;
+        for row in rows {
+            let (kind_code, count) = row.map_err(|error| {
+                ReadError::new("map_pending_event_variant_counts", error.to_string())
+            })?;
+            let variant = event_kind_name(decode_event_kind(kind_code).map_err(|error| {
+                ReadError::new("decode_pending_event_variant", error.to_string())
+            })?)
+            .to_string();
+            let count = usize::try_from(count).map_err(|error| {
+                ReadError::new("pending_event_variant_count", error.to_string())
+            })?;
+            let total = counts.entry(variant).or_default();
+            *total = total.saturating_add(count);
         }
         Ok(counts)
     }
@@ -355,15 +430,175 @@ fn read_events(
     trace_id: model_core::ids::TraceId,
 ) -> Result<Vec<model_core::event::DomainEvent>, SnapshotError> {
     let mut statement = connection
-        .prepare("SELECT * FROM events WHERE trace_id = ?1 ORDER BY observed_at ASC, event_id ASC")
+        .prepare(
+            "SELECT event.*,
+                    COALESCE(event.payload_inline, dictionary.payload) AS payload,
+                    path.path_text AS payload_path
+             FROM events event
+             LEFT JOIN event_payload_dictionary dictionary
+              ON dictionary.payload_id = event.payload_id
+              AND dictionary.trace_id = event.trace_id
+             LEFT JOIN file_paths path
+               ON path.path_id = event.payload_path_id
+              AND path.trace_id = event.trace_id
+             WHERE event.trace_id = ?1
+             ORDER BY event.observed_at ASC, event.event_id ASC",
+        )
         .map_err(|error| SnapshotError::new("prepare_events", error.to_string()))?;
     let rows = statement
         .query_map(params![trace_id.get()], |row| {
             event_from_row(connection, row)
         })
         .map_err(|error| SnapshotError::new("query_events", error.to_string()))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| SnapshotError::new("map_events", error.to_string()))
+    let mut events = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| SnapshotError::new("map_events", error.to_string()))?;
+    let has_encoded_records = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM event_record_blocks WHERE trace_id = ?1
+                UNION ALL
+                SELECT 1 FROM event_record_pending WHERE trace_id = ?1
+             )",
+            params![trace_id.get()],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| SnapshotError::new("find_encoded_event_records", error.to_string()))?;
+    if !has_encoded_records {
+        return Ok(events);
+    }
+    let mut paths = HashMap::<i64, String>::new();
+    let mut path_statement = connection
+        .prepare("SELECT path_text FROM file_paths WHERE trace_id = ?1 AND path_id = ?2")
+        .map_err(|error| SnapshotError::new("prepare_event_path", error.to_string()))?;
+    let mut resolve_path = |path_id: i64| -> Result<String, rusqlite::Error> {
+        if let Some(path) = paths.get(&path_id) {
+            return Ok(path.clone());
+        }
+        let path = path_statement.query_row(params![trace_id.get(), path_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        paths.insert(path_id, path.clone());
+        Ok(path)
+    };
+    let mut statement = connection
+        .prepare(
+            "SELECT codec_version, event_count, uncompressed_bytes,
+                    length(encoded_bytes), encoded_bytes
+             FROM event_record_blocks
+             WHERE trace_id = ?1
+             ORDER BY min_observed_at ASC, first_event_id ASC",
+        )
+        .map_err(|error| SnapshotError::new("prepare_event_record_blocks", error.to_string()))?;
+    let mut rows = statement
+        .query(params![trace_id.get()])
+        .map_err(|error| SnapshotError::new("query_event_record_blocks", error.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| SnapshotError::new("read_event_record_block", error.to_string()))?
+    {
+        let codec_version = row
+            .get::<_, i64>(0)
+            .map_err(|error| SnapshotError::new("read_event_record_block", error.to_string()))?;
+        let event_count = row
+            .get::<_, usize>(1)
+            .map_err(|error| SnapshotError::new("read_event_record_block", error.to_string()))?;
+        let uncompressed_bytes = row
+            .get::<_, usize>(2)
+            .map_err(|error| SnapshotError::new("read_event_record_block", error.to_string()))?;
+        let encoded_length = row
+            .get::<_, usize>(3)
+            .map_err(|error| SnapshotError::new("read_event_record_block", error.to_string()))?;
+        if event_count == 0
+            || event_count > SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS
+            || uncompressed_bytes == 0
+            || uncompressed_bytes > SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES
+        {
+            return Err(SnapshotError::new(
+                "read_event_record_block",
+                "block metadata exceeds the codec safety boundary",
+            ));
+        }
+        if encoded_length > zstd::zstd_safe::compress_bound(uncompressed_bytes) {
+            return Err(SnapshotError::new(
+                "read_event_record_block",
+                "compressed block exceeds the codec bound",
+            ));
+        }
+        let encoded = row
+            .get::<_, Vec<u8>>(4)
+            .map_err(|error| SnapshotError::new("read_event_record_block", error.to_string()))?;
+        if encoded.len() != encoded_length {
+            return Err(SnapshotError::new(
+                "read_event_record_block",
+                "compressed block length changed while reading",
+            ));
+        }
+        events.extend(
+            decode_event_record_block(
+                trace_id.get(),
+                codec_version,
+                event_count,
+                uncompressed_bytes,
+                &encoded,
+                &mut resolve_path,
+            )
+            .map_err(|error| SnapshotError::new("decode_event_record_block", error.to_string()))?,
+        );
+    }
+    drop(rows);
+    drop(statement);
+    let mut statement = connection
+        .prepare(
+            "SELECT length(encoded_frame), encoded_frame
+             FROM event_record_pending
+             WHERE trace_id = ?1
+             ORDER BY event_id ASC",
+        )
+        .map_err(|error| SnapshotError::new("prepare_pending_events", error.to_string()))?;
+    let mut rows = statement
+        .query(params![trace_id.get()])
+        .map_err(|error| SnapshotError::new("query_pending_events", error.to_string()))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| SnapshotError::new("read_pending_event", error.to_string()))?
+    {
+        let encoded_length = row
+            .get::<_, usize>(0)
+            .map_err(|error| SnapshotError::new("read_pending_event", error.to_string()))?;
+        if encoded_length == 0 || encoded_length > SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES
+        {
+            return Err(SnapshotError::new(
+                "read_pending_event",
+                "pending event exceeds the codec safety boundary",
+            ));
+        }
+        let encoded = row
+            .get::<_, Vec<u8>>(1)
+            .map_err(|error| SnapshotError::new("read_pending_event", error.to_string()))?;
+        if encoded.len() != encoded_length {
+            return Err(SnapshotError::new(
+                "read_pending_event",
+                "pending event length changed while reading",
+            ));
+        }
+        events.push(
+            decode_event_record_frame(trace_id.get(), &encoded, &mut resolve_path)
+                .map_err(|error| SnapshotError::new("decode_pending_event", error.to_string()))?,
+        );
+    }
+    events.sort_by(|left, right| {
+        left.envelope
+            .observed_at
+            .cmp(&right.envelope.observed_at)
+            .then_with(|| {
+                left.envelope
+                    .event_id
+                    .get()
+                    .cmp(&right.envelope.event_id.get())
+            })
+    });
+    Ok(events)
 }
 
 fn read_payload_segments(
@@ -373,14 +608,14 @@ fn read_payload_segments(
 ) -> Result<Vec<model_core::payload::PayloadSegment>, SnapshotError> {
     let direction = query
         .direction
-        .map(crate::records::encode_payload_direction);
+        .map(crate::records::PayloadSegmentMeta::direction_bits);
     let segment_id = query.segment_id.map(|value| value.get());
     let (order_direction, row_limit, reverse_rows) = payload_segment_query_limit(query.limit)?;
     let sql = format!(
         "SELECT * FROM payload_segments
          WHERE trace_id = ?1
            AND (?2 IS NULL OR segment_id = ?2)
-           AND (?3 IS NULL OR direction = ?3)
+           AND (?3 IS NULL OR (segment_meta & {PAYLOAD_DIRECTION_MASK}) = ?3)
          ORDER BY observed_at {order_direction}, segment_id {order_direction}
          LIMIT ?4"
     );

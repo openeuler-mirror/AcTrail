@@ -7,7 +7,7 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
+    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
     evidence_roles,
 };
 
@@ -200,7 +200,7 @@ fn command_exec_link(
         parent_action_id: action.action_id.clone(),
         child_action_id: process_action.action_id.clone(),
         role: SemanticActionLinkRole::CommandContainsProcessExec,
-        confidence: SemanticActionLinkConfidence::Observed,
+        origin: SemanticActionLinkOrigin::Observed,
         valid: true,
         evidence: action.evidence.clone(),
         attributes: BTreeMap::new(),

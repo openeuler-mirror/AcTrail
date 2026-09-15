@@ -13,6 +13,9 @@ use model_core::event::{
     ProcessPayload, ResourceAccountingCoverage, ResourceAccountingMethod, ResourcePayload,
     ResourceSampleKind, StdioPayload,
 };
+
+use super::key_codes::MetadataKeyCodebook;
+use super::value_codes::{value_code, value_for_code};
 use model_core::process::ProcessIdentity;
 
 use super::EventPayloadCodec;
@@ -20,69 +23,6 @@ use super::EventPayloadCodec;
 const UNKNOWN_KEY: u8 = 0xFF;
 const RESOURCE_LEGACY_TAG: u8 = 6;
 const RESOURCE_V2_TAG: u8 = 11;
-
-/// Static metadata-key dictionary, assigned 1-based codes in declaration order.
-/// Keys missing here fall back to `UNKNOWN_KEY` + inline string, so nothing is
-/// ever dropped.
-const KNOWN_KEYS: &[&str] = &[
-    "content_length",
-    "content_type",
-    "data_preview",
-    "data_preview_omitted",
-    "data_preview_truncated",
-    "data_size",
-    "data_truncated",
-    "direction",
-    "endpoint_source",
-    "endpoint_unresolved",
-    "event",
-    "exec_filename",
-    "exec_filename_truncated",
-    "executable",
-    "exit_code",
-    "fd",
-    "flags",
-    "frame_type",
-    "frame_type_id",
-    "h2",
-    "host",
-    "http.body_json_state",
-    "length",
-    "method",
-    "operation",
-    "payload.captured_size",
-    "payload.omitted_size",
-    "payload.original_size",
-    "payload.summary.protocol",
-    "payload.summary.reason",
-    "payload.truncation",
-    "payload_segment_id",
-    "payload_sequence",
-    "reason",
-    "requested_size",
-    "result",
-    "signal",
-    "source_boundary",
-    "status_code",
-    "stream_id",
-    "stream_key",
-    "syscall_family",
-    "target",
-    "target_group",
-    "target_pid",
-    "transfer_encoding",
-];
-
-fn key_code(key: &str) -> Option<u8> {
-    KNOWN_KEYS
-        .binary_search(&key)
-        .ok()
-        .map(|index| u8::try_from(index + 1).expect("metadata key count fits u8"))
-}
-
-fn key_for_code(code: u8) -> Option<&'static str> {
-    KNOWN_KEYS.get(usize::from(code).checked_sub(1)?).copied()
-}
 
 pub struct ManualCodec;
 
@@ -327,6 +267,24 @@ fn decode_application(bytes: &[u8], c: &mut usize) -> Result<ApplicationPayload,
 }
 
 fn decode_resource_legacy(bytes: &[u8], c: &mut usize) -> Result<ResourcePayload, String> {
+    let mut optimized_cursor = *c;
+    if let Ok(payload) = decode_resource_legacy_optimized(bytes, &mut optimized_cursor) {
+        if optimized_cursor == bytes.len() {
+            *c = optimized_cursor;
+            return Ok(payload);
+        }
+    }
+
+    let mut pre_optimized_cursor = *c;
+    let payload = decode_resource_legacy_pre_optimized(bytes, &mut pre_optimized_cursor)?;
+    *c = pre_optimized_cursor;
+    Ok(payload)
+}
+
+fn decode_resource_legacy_optimized(
+    bytes: &[u8],
+    c: &mut usize,
+) -> Result<ResourcePayload, String> {
     Ok(ResourcePayload {
         scope: read_string(bytes, c)?,
         subject: read_string(bytes, c)?,
@@ -334,6 +292,21 @@ fn decode_resource_legacy(bytes: &[u8], c: &mut usize) -> Result<ResourcePayload
         rss_kb: read_option_u64(bytes, c)?,
         virtual_memory_kb: read_option_u64(bytes, c)?,
         metadata: read_map(bytes, c)?,
+        ..ResourcePayload::default()
+    })
+}
+
+fn decode_resource_legacy_pre_optimized(
+    bytes: &[u8],
+    c: &mut usize,
+) -> Result<ResourcePayload, String> {
+    Ok(ResourcePayload {
+        scope: read_legacy_string(bytes, c)?,
+        subject: read_legacy_string(bytes, c)?,
+        cpu_percent_millis: read_option_u64(bytes, c)?,
+        rss_kb: read_option_u64(bytes, c)?,
+        virtual_memory_kb: read_option_u64(bytes, c)?,
+        metadata: read_legacy_map(bytes, c)?,
         ..ResourcePayload::default()
     })
 }
@@ -406,7 +379,12 @@ fn decode_enforcement(bytes: &[u8], c: &mut usize) -> Result<EnforcementPayload,
 // ---- primitives ----
 
 fn write_string(out: &mut Vec<u8>, value: &str) {
-    write_bytes(out, value.as_bytes());
+    if let Some(code) = value_code(value) {
+        write_varint(out, (u64::from(code) << 1) | 1);
+    } else {
+        write_varint(out, (value.len() as u64) << 1);
+        out.extend_from_slice(value.as_bytes());
+    }
 }
 
 fn write_bytes(out: &mut Vec<u8>, value: &[u8]) {
@@ -515,7 +493,7 @@ fn write_bool(out: &mut Vec<u8>, value: bool) {
 fn write_map(out: &mut Vec<u8>, map: &BTreeMap<String, String>) {
     write_varint(out, map.len() as u64);
     for (key, value) in map {
-        match key_code(key) {
+        match MetadataKeyCodebook::code(key) {
             Some(code) => out.push(code),
             None => {
                 out.push(UNKNOWN_KEY);
@@ -577,6 +555,23 @@ fn read_bytes(bytes: &[u8], c: &mut usize) -> Result<Vec<u8>, String> {
 }
 
 fn read_string(bytes: &[u8], c: &mut usize) -> Result<String, String> {
+    let token = read_varint(bytes, c)?;
+    if token & 1 == 1 {
+        let code = u8::try_from(token >> 1).map_err(|_| "value code overflow")?;
+        return value_for_code(code)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("unknown payload value code {code}"));
+    }
+    let len = usize::try_from(token >> 1).map_err(|_| "length overflow")?;
+    let end = c.checked_add(len).ok_or("length overflow")?;
+    let value = bytes.get(*c..end).ok_or("unexpected end of payload")?;
+    *c = end;
+    std::str::from_utf8(value)
+        .map(str::to_owned)
+        .map_err(|_| "invalid utf8 in payload".to_string())
+}
+
+fn read_legacy_string(bytes: &[u8], c: &mut usize) -> Result<String, String> {
     String::from_utf8(read_bytes(bytes, c)?).map_err(|_| "invalid utf8 in payload".to_string())
 }
 
@@ -706,11 +701,29 @@ fn read_map(bytes: &[u8], c: &mut usize) -> Result<BTreeMap<String, String>, Str
         let key = if code == UNKNOWN_KEY {
             read_string(bytes, c)?
         } else {
-            key_for_code(code)
+            MetadataKeyCodebook::key(code)
                 .ok_or_else(|| format!("unknown metadata key code {code}"))?
                 .to_string()
         };
         let value = read_string(bytes, c)?;
+        map.insert(key, value);
+    }
+    Ok(map)
+}
+
+fn read_legacy_map(bytes: &[u8], c: &mut usize) -> Result<BTreeMap<String, String>, String> {
+    let count = usize::try_from(read_varint(bytes, c)?).map_err(|_| "map length overflow")?;
+    let mut map = BTreeMap::new();
+    for _ in 0..count {
+        let code = read_u8(bytes, c)?;
+        let key = if code == UNKNOWN_KEY {
+            read_legacy_string(bytes, c)?
+        } else {
+            MetadataKeyCodebook::key(code)
+                .ok_or_else(|| format!("unknown metadata key code {code}"))?
+                .to_string()
+        };
+        let value = read_legacy_string(bytes, c)?;
         map.insert(key, value);
     }
     Ok(map)
@@ -749,6 +762,32 @@ mod tests {
         assert_eq!(payload.rss_kb, Some(64));
         assert_eq!(payload.virtual_memory_kb, None);
         assert_eq!(payload.memory_current_bytes, None);
+        assert_eq!(
+            payload.metadata.get("future_key").map(String::as_str),
+            Some("kept")
+        );
+    }
+
+    #[test]
+    fn optimized_legacy_resource_fixture_remains_readable() {
+        let mut fixture = vec![RESOURCE_LEGACY_TAG];
+        write_string(&mut fixture, "process");
+        write_string(&mut fixture, "pid:42");
+        write_option_u64(&mut fixture, Some(1_250));
+        write_option_u64(&mut fixture, Some(64));
+        write_option_u64(&mut fixture, None);
+        write_map(
+            &mut fixture,
+            &BTreeMap::from([("future_key".to_string(), "kept".to_string())]),
+        );
+
+        let decoded = ManualCodec.decode(&fixture).unwrap();
+        let EventPayload::Resource(payload) = decoded else {
+            panic!("expected resource payload");
+        };
+        assert_eq!(payload.scope, "process");
+        assert_eq!(payload.subject, "pid:42");
+        assert_eq!(payload.rss_kb, Some(64));
         assert_eq!(
             payload.metadata.get("future_key").map(String::as_str),
             Some("kept")

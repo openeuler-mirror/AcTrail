@@ -35,6 +35,7 @@ pub const SOCKET_PAYLOAD_SYSCALL_RECVFROM: u32 = 4;
 pub const SOCKET_PAYLOAD_SYSCALL_WRITEV: u32 = 5;
 pub const SOCKET_PAYLOAD_SYSCALL_SENDMSG: u32 = 6;
 const SOCKET_PAYLOAD_FLAG_TRUNCATED: u32 = 1;
+const SOCKET_PAYLOAD_FLAG_POLICY_LIMITED: u32 = 32;
 const TLS_PAYLOAD_COMPLETION_FAILED: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,6 +119,7 @@ pub struct SocketPayloadCompletion {
     pub trace_id: TraceId,
     pub observed_at: SystemTime,
     pub sequence: u64,
+    pub operation_id: u64,
     pub direction: u32,
     pub fd: u32,
     pub syscall: u32,
@@ -153,6 +155,7 @@ pub fn decode_stdio_payload(
         original_size: u64::from(event.original_size),
         captured_size: u64::from(event.captured_size),
         operation_id: event.sequence,
+        operation_chunk_index: 0,
         operation_offset: 0,
         operation_original_size: u64::from(event.original_size),
         operation_captured_size: u64::from(event.captured_size),
@@ -191,10 +194,11 @@ pub fn decode_socket_payload(
         sequence: event.sequence,
         original_size: u64::from(event.original_size),
         captured_size: u64::from(event.captured_size),
-        operation_id: event.sequence,
-        operation_offset: 0,
-        operation_original_size: u64::from(event.original_size),
-        operation_captured_size: u64::from(event.captured_size),
+        operation_id: event.operation_id,
+        operation_chunk_index: event.operation_chunk_index,
+        operation_offset: event.operation_offset,
+        operation_original_size: event.operation_original_size,
+        operation_captured_size: event.operation_captured_size,
         operation_completion_state: PayloadOperationCompletionState::Success,
         truncation: socket_truncation(event.flags),
         library: "socket-syscall".to_string(),
@@ -234,6 +238,7 @@ pub fn decode_socket_payload_completion(
         trace_id: event.trace_id,
         observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
         sequence: event.sequence,
+        operation_id: event.operation_id,
         direction: event.direction,
         fd: event.fd,
         syscall: event.syscall,
@@ -406,7 +411,11 @@ fn stdio_truncation(flags: u32) -> PayloadTruncationState {
 }
 
 fn socket_truncation(flags: u32) -> PayloadTruncationState {
-    if flags & SOCKET_PAYLOAD_FLAG_TRUNCATED == SOCKET_PAYLOAD_FLAG_TRUNCATED {
+    let truncated = flags & SOCKET_PAYLOAD_FLAG_TRUNCATED == SOCKET_PAYLOAD_FLAG_TRUNCATED;
+    if truncated && flags & SOCKET_PAYLOAD_FLAG_POLICY_LIMITED == SOCKET_PAYLOAD_FLAG_POLICY_LIMITED
+    {
+        PayloadTruncationState::PolicyLimited
+    } else if truncated {
         PayloadTruncationState::Truncated
     } else {
         PayloadTruncationState::Complete

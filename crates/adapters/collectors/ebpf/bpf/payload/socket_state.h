@@ -152,7 +152,7 @@ static __always_inline void socket_payload_track_fd(__u32 pid, __u32 fd) {
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
     __u32 generation;
 
-    if (!config || !config->enabled || !trace_id) {
+    if (!config || !config->enabled || !trace_id || !process_observation_is_detailed(pid)) {
         return;
     }
     socket_payload_release_fd(pid, fd);
@@ -188,22 +188,17 @@ static __always_inline void socket_payload_track_accept_exit(
 }
 
 static __always_inline void socket_payload_dup_enter(
-    struct trace_event_raw_sys_enter *ctx,
-    __u32 source_fd_arg,
-    __u32 target_fd_arg,
+    __u32 source_fd,
+    __u32 target_fd,
     __u32 mode
 ) {
     __u64 pid_tgid = current_pid_tgid();
     __u32 tgid = pid_tgid >> 32;
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_dup_op op = {};
-    __u32 source_fd = (__u32)ctx->args[source_fd_arg];
-    __u32 target_fd = target_fd_arg < ACTRAIL_SYSCALL_ARG_MISSING
-        ? (__u32)ctx->args[target_fd_arg]
-        : 0;
     struct actrail_socket_payload_fd_state *source_state;
 
-    if (!tgid || !config || !config->enabled) {
+    if (!tgid || !process_observation_is_detailed(tgid) || !config || !config->enabled) {
         return;
     }
     op.source_fd = source_fd;
@@ -211,7 +206,7 @@ static __always_inline void socket_payload_dup_enter(
     source_state = socket_payload_fd_state(tgid, source_fd);
     op.source_generation = source_state ? source_state->generation : 0;
     op.source_flags = source_state ? source_state->flags : 0;
-    op.target_generation = target_fd_arg < ACTRAIL_SYSCALL_ARG_MISSING
+    op.target_generation = mode == ACTRAIL_SOCKET_DUP_TARGET_FD
         ? socket_payload_fd_generation(tgid, target_fd)
         : 0;
     op.mode = mode;
@@ -230,9 +225,8 @@ static __always_inline void socket_payload_fcntl_enter(
         return;
     }
     socket_payload_dup_enter(
-        ctx,
+        (__u32)ctx->args[0],
         0,
-        ACTRAIL_SYSCALL_ARG_MISSING,
         ACTRAIL_SOCKET_DUP_RET_FD
     );
 }

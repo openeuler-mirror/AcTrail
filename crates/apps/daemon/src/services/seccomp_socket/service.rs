@@ -243,7 +243,8 @@ impl SeccompSocketService {
                         chunk.len() as u64
                     },
                     captured_size: chunk.len() as u64,
-                    operation_id: completion.sequence,
+                    operation_id: completion.operation_id,
+                    operation_chunk_index: index as u32,
                     operation_offset: offset as u64,
                     operation_original_size,
                     operation_captured_size,

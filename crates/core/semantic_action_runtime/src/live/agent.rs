@@ -216,8 +216,13 @@ impl AgentProjector {
         }
         let key = action_key(event.envelope.trace_id, &event.envelope.process);
         self.clear_pending_execs(&key);
-        if self.process_exits.contains_key(&key) {
-            return Vec::new();
+        if let Some(previous) = self.process_exits.get(&key) {
+            // A late exec observation can arrive after the process exit was
+            // already projected, re-opening the detector's synthetic
+            // process:<id> protection. Replay the original lifecycle action
+            // so the idle projection can deliver an idempotent cleanup
+            // signal without creating a second durable exit identity.
+            return vec![process_exit_action(previous)];
         }
         self.process_exits.insert(key.clone(), event.clone());
         let mut actions = vec![process_exit_action(event)];

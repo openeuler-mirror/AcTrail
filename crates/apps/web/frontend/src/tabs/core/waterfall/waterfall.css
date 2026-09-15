@@ -233,7 +233,16 @@
 .waterfall-legend {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+}
+
+.wf-navigation-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .waterfall-bottlenecks {
@@ -545,6 +554,14 @@
   opacity: 0.4;
 }
 
+.wf-chip-idle {
+  --wf-color: #6b7280;
+  border-color: #4b5563;
+  background: #e5e7eb;
+  color: #374151;
+  cursor: default;
+}
+
 .wf-chip-dot {
   width: 10px;
   height: 10px;
@@ -664,6 +681,55 @@
   z-index: 1;
   filter: brightness(1.15);
   outline: 1px solid var(--text);
+}
+
+.waterfall-idle-lanes {
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.wf-idle-lane {
+  display: grid;
+  grid-template-columns: var(--wf-gutter-width) minmax(0, 1fr);
+  min-height: 26px;
+}
+
+.wf-idle-lane .wf-gutter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: 5px;
+  color: #4b5563;
+}
+
+.wf-idle-lane .wf-gutter small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.wf-idle-track {
+  position: relative;
+  min-height: 26px;
+  overflow: hidden;
+}
+
+.wf-idle-segment {
+  position: absolute;
+  inset-block: 3px;
+  min-width: 2px;
+  border-radius: 4px;
+  background: #6b7280;
+  box-shadow: inset 0 0 0 1px #4b5563;
+}
+
+.wf-idle-segment.live {
+  background-image: repeating-linear-gradient(
+    45deg,
+    #9ca3af 0,
+    #9ca3af 4px,
+    transparent 4px,
+    transparent 8px
+  );
 }
 
 .lane-category-agent_side {

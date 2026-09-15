@@ -19,8 +19,8 @@ wit_bindgen::generate!({
 });
 
 use actrail::plugin::types::{
-    AlertDraft, AlertWriteRequest, CommandExecutionRecord, ConfigReadStatus, LlmExchangeRecord,
-    TraceActivityContext,
+    AlertDraft, AlertWriteRequest, CommandExecutionRecord, ConfigReadStatus,
+    LlmActionCompleteness, LlmExchangeRecord, TraceActivityContext,
 };
 use exports::actrail::plugin::observation_consumer::{
     Guest as ObservationGuest, ObservationBatch, ObservationReport,
@@ -508,14 +508,22 @@ impl<'a> GrowthDetector<'a> {
         if !self.rule.enabled {
             return;
         }
-        let (complete, observed_bytes, action_id) = match direction {
+        let (profiling_usable, observed_bytes, action_id) = match direction {
             GrowthDirection::Request => (
-                exchange.request_complete,
+                matches!(
+                    exchange.request_completeness,
+                    LlmActionCompleteness::Complete | LlmActionCompleteness::CaptureLimited
+                ),
                 Some(exchange.request_body_bytes),
                 Some(exchange.request_action_id.as_str()),
             ),
             GrowthDirection::Response => (
-                exchange.response_complete,
+                exchange.response_completeness.as_ref().is_some_and(|completeness| {
+                    matches!(
+                        completeness,
+                        LlmActionCompleteness::Complete | LlmActionCompleteness::CaptureLimited
+                    )
+                }),
                 exchange.response_body_bytes,
                 exchange.response_action_id.as_deref(),
             ),
@@ -523,7 +531,7 @@ impl<'a> GrowthDetector<'a> {
         let (Some(observed_bytes), Some(action_id)) = (observed_bytes, action_id) else {
             return;
         };
-        if !complete {
+        if !profiling_usable {
             return;
         }
         let group = GrowthGroup {

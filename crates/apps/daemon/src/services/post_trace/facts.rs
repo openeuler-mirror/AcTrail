@@ -11,8 +11,8 @@ use plugin_system::{
     TraceLlmExchange, TraceLlmResponseStatus,
 };
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkRole, SemanticActionStatus, attr_keys,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
+    SemanticActionStatus, attr_keys,
 };
 use storage_core::StorageBackend;
 
@@ -136,7 +136,7 @@ pub(super) fn project_llm_exchanges(
                 request,
                 attr_keys::llm_request::RAW_PAYLOAD_BYTES,
             )?,
-            request_complete: action_complete(request),
+            request_completeness: request.completeness,
             response_body_bytes: response
                 .map(|action| {
                     required_u64_attribute(action, attr_keys::llm_response::PAYLOAD_BYTES)
@@ -148,7 +148,7 @@ pub(super) fn project_llm_exchanges(
                 })
                 .transpose()?
                 .flatten(),
-            response_complete: response.is_some_and(action_complete),
+            response_completeness: response.map(|action| action.completeness),
             response_status: response_status(call, response),
         });
     }
@@ -167,9 +167,6 @@ fn response_status(
             SemanticActionStatus::Unknown => TraceLlmResponseStatus::Unknown,
         };
     };
-    if !action_complete(response) {
-        return TraceLlmResponseStatus::Pending;
-    }
     match response.status {
         SemanticActionStatus::Success => TraceLlmResponseStatus::Success,
         SemanticActionStatus::Error => TraceLlmResponseStatus::Error,
@@ -294,11 +291,6 @@ fn command_exit_status(exit: &ExitStatus) -> SemanticActionStatus {
         Some(_) => SemanticActionStatus::Error,
         None => SemanticActionStatus::Unknown,
     }
-}
-
-fn action_complete(action: &SemanticAction) -> bool {
-    action.completeness == SemanticActionCompleteness::Complete
-        && action.status != SemanticActionStatus::InProgress
 }
 
 fn required_attribute<'a>(

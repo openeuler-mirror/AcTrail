@@ -16,12 +16,16 @@ mod file;
 mod launch_binding;
 #[path = "loader/program/object.rs"]
 mod object;
+#[path = "loader/process.rs"]
+mod process;
 #[path = "loader/ring_decode.rs"]
 mod ring_decode;
 #[path = "loader/runtime/implementation.rs"]
 mod runtime_implementation;
 #[path = "loader/runtime/link_teardown.rs"]
 mod runtime_link_teardown;
+#[path = "loader/runtime/observation_depth.rs"]
+mod runtime_observation_depth;
 #[path = "loader/runtime/process_identity.rs"]
 mod runtime_process_identity;
 #[path = "loader/socket.rs"]
@@ -43,7 +47,9 @@ use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig};
+use config_core::daemon::{
+    EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig, ProcessSeccompConfig,
+};
 use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
@@ -60,7 +66,9 @@ pub use ring_decode::{
     KernelEndpoint, KernelEndpointRole, KernelEndpointWithRole, KernelEvent, KernelEventIdentity,
     KernelExecPayload, KernelExitPayload, KernelFdIoOperation, KernelFdIoPayload,
     KernelFilePathEvent, KernelForkPayload, KernelNetworkOperation, KernelNetworkPayload,
-    KernelObservationCommon, KernelObservationEvent, KernelObservationPayload, KernelSignalPayload,
+    KernelObservationCommon, KernelObservationEvent, KernelObservationPayload,
+    KernelProcessExecArgEvent, KernelProcessExecAttemptEvent, KernelProcessExecResultEvent,
+    KernelProcessForkAttemptEvent, KernelProcessForkResultEvent, KernelSignalPayload,
     KernelSocketFdReleasePayload, KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
     KernelStdioPayloadCompletionEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
     KernelTlsCompletionEvent, KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
@@ -129,6 +137,7 @@ pub(crate) struct ResolvedProcessIdentity {
 pub struct EbpfProgramLoader {
     config: EbpfCollectorConfig,
     payload: PayloadConfig,
+    process: ProcessSeccompConfig,
     file_bulk_read_fast_path: FileBulkReadFastPathConfig,
 }
 
@@ -165,6 +174,7 @@ pub struct EbpfRuntime {
     attached_programs: Vec<String>,
     attached_capabilities: BTreeSet<Capability>,
     tracked_traces: MapHandle,
+    process_observation_depths: MapHandle,
     process_identities: MapHandle,
     process_identity_resolutions: MapHandle,
     trace_namespace_thread_identities: MapHandle,
@@ -199,11 +209,13 @@ impl EbpfProgramLoader {
     pub fn new(
         config: EbpfCollectorConfig,
         payload: PayloadConfig,
+        process: ProcessSeccompConfig,
         file_bulk_read_fast_path: FileBulkReadFastPathConfig,
     ) -> Self {
         Self {
             config,
             payload,
+            process,
             file_bulk_read_fast_path,
         }
     }
@@ -227,6 +239,7 @@ impl EbpfProgramLoader {
         tls::validate_payload_config(&self.payload.tls)?;
         stdio::validate_payload_config(&self.payload.stdio)?;
         socket::validate_payload_config(&self.payload.socket)?;
+        process::validate_config(&self.process)?;
         suppressed_fd::validate_config(&self.config)?;
         let effective_payload = effective_config_for_attach_plan(&self.payload, attach_plan);
         environment::ensure_tracefs_control()?;
@@ -242,6 +255,11 @@ impl EbpfProgramLoader {
         resize_map(
             &mut open_object,
             "tracked_traces",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "process_observation_depths",
             self.config.tracked_process_max_entries,
         )?;
         resize_map(
@@ -287,6 +305,36 @@ impl EbpfProgramLoader {
             &mut open_object,
             "pending_net_ops",
             self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_process_exec_ops",
+            self.process.pending_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_process_exec_tgid_index",
+            self.process.pending_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "process_exec_sequences",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "pending_process_fork_ops",
+            self.process.pending_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "process_fork_sequences",
+            self.config.tracked_process_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
+            "payload_socket_operation_sequence",
+            self.config.tracked_process_max_entries,
         )?;
         resize_map(
             &mut open_object,
@@ -444,6 +492,7 @@ impl EbpfProgramLoader {
             object,
             &self.config,
             &effective_payload,
+            &self.process,
             attach_plan,
             static_link_teardown,
         )
@@ -476,6 +525,8 @@ struct EventTransportDiagnostics {
     socket_sequence_update_fail: u64,
     process_identity_cache_miss: u64,
     process_identity_cleanup_fail: u64,
+    socket_read_user_fail: u64,
+    socket_reserve_fail: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -529,6 +580,12 @@ impl EventTransportDiagnostics {
             process_identity_cleanup_fail: self
                 .process_identity_cleanup_fail
                 .saturating_sub(baseline.process_identity_cleanup_fail),
+            socket_read_user_fail: self
+                .socket_read_user_fail
+                .saturating_sub(baseline.socket_read_user_fail),
+            socket_reserve_fail: self
+                .socket_reserve_fail
+                .saturating_sub(baseline.socket_reserve_fail),
         }
     }
 }
@@ -540,9 +597,9 @@ fn read_event_transport_diagnostics(
     // lookup returns all entries in one syscall instead of separate lookups.
     // This runs twice per drain cycle, so the saving is material.
     let mut diagnostics = EventTransportDiagnostics::default();
-    let mut seen = [false; 10];
+    let mut seen = [false; 12];
     let batch = map
-        .lookup_batch(10, MapFlags::ANY, MapFlags::ANY)
+        .lookup_batch(12, MapFlags::ANY, MapFlags::ANY)
         .map_err(|error| LoaderError::new("event_transport_diagnostics", error.to_string()))?;
     for item in batch {
         let (key, value) = item;
@@ -579,10 +636,12 @@ fn read_event_transport_diagnostics(
             7 => diagnostics.socket_sequence_update_fail = count,
             8 => diagnostics.process_identity_cache_miss = count,
             9 => diagnostics.process_identity_cleanup_fail = count,
+            10 => diagnostics.socket_read_user_fail = count,
+            11 => diagnostics.socket_reserve_fail = count,
             _ => {}
         }
     }
-    for counter_id in [0_u32, 1, 2, 4, 5, 6, 7, 8, 9] {
+    for counter_id in [0_u32, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11] {
         if !seen[counter_id as usize] {
             return Err(LoaderError::new(
                 "event_transport_diagnostics",

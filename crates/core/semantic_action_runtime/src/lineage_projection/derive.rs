@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use model_core::process::ProcessMembership;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, attr_keys as attrs,
 };
 
@@ -184,7 +184,7 @@ fn invalidate_stale_lineage_links(
                 parent_action_id: link.parent_action_id.clone(),
                 child_action_id: link.child_action_id.clone(),
                 role: link.role,
-                confidence: SemanticActionLinkConfidence::Derived,
+                origin: SemanticActionLinkOrigin::Derived,
                 valid: false,
                 evidence,
                 attributes: BTreeMap::from([(
@@ -208,7 +208,7 @@ fn lineage_link(
         parent_action_id: parent_action_id.to_string(),
         child_action_id: child.action_id.clone(),
         role,
-        confidence: SemanticActionLinkConfidence::Derived,
+        origin: SemanticActionLinkOrigin::Derived,
         valid: true,
         evidence: child.evidence.clone(),
         attributes,
@@ -220,7 +220,7 @@ fn observed_parent_keys(trace_id: TraceId, links: &[SemanticActionLink]) -> BTre
         .iter()
         .filter(|link| {
             link.trace_id == trace_id
-                && link.confidence == SemanticActionLinkConfidence::Observed
+                && link.origin == SemanticActionLinkOrigin::Observed
                 && valid_link(link)
         })
         .map(|link| ChildRoleKey {

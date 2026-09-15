@@ -73,7 +73,7 @@ impl StorageAttachService {
                 trace_runtime,
                 std::mem::take(&mut output.llm_pipeline_diagnostics),
             );
-            let batch = SemanticActionBatch::from_action_output(
+            let mut batch = SemanticActionBatch::from_action_output(
                 output.actions,
                 output.links,
                 output.file_observation_paths,
@@ -84,8 +84,19 @@ impl StorageAttachService {
                 output.payload_segments,
             );
             if !batch.actions().is_empty() || !batch.links().is_empty() {
-                let persisted = self.write_semantic_action_batch(batch)?;
-                self.publish_live_export_actions(trace_runtime, identity.trace_id, persisted)?;
+                let agents = Self::recognized_agent_processes(&batch);
+                let idle_update = self
+                    .idle_runtime
+                    .prepare_batch(&mut batch, close.observed_at);
+                let export_batch = batch.clone();
+                RecordingWriter::new(self.storage.as_mut())
+                    .persist_semantic_actions_with_additional_write(batch, |storage| {
+                        idle_update.persist(storage)
+                    })
+                    .map_err(recording_error_to_control)?;
+                self.idle_runtime.commit(idle_update);
+                self.apply_agent_observation_depths(trace_runtime, agents);
+                self.publish_live_export_actions(trace_runtime, identity.trace_id, export_batch)?;
             }
         }
         Ok(())
@@ -114,7 +125,7 @@ impl StorageAttachService {
         let raw_segment_count = admitted.len();
         let mut resolved_segments = Vec::with_capacity(admitted.len());
         let mut process_records = BTreeMap::new();
-        let mut membership_trace_ids = BTreeSet::new();
+        let mut dirty_memberships = BTreeMap::<TraceId, BTreeSet<ProcessIdentity>>::new();
         for admitted in admitted {
             let raw = admitted.segment;
             let (process, record) = self.resolve_process_observation(raw.process.clone())?;
@@ -133,7 +144,10 @@ impl StorageAttachService {
                     .map_err(|error| {
                         ControlError::new("payload_membership", format!("{error:?}"))
                     })?;
-                membership_trace_ids.insert(raw.trace_id);
+                dirty_memberships
+                    .entry(raw.trace_id)
+                    .or_default()
+                    .insert(process);
             }
             resolved_segments.push(ResolvedRawPayloadSegment {
                 raw,
@@ -141,12 +155,14 @@ impl StorageAttachService {
                 discontinuity_before: admitted.discontinuity_before,
             });
         }
-        let membership_trace_states = membership_trace_ids
+        let membership_trace_states = dirty_memberships
             .into_iter()
-            .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
+            .map(|(trace_id, membership_ids)| {
+                self.trace_state_record_for_memberships(trace_runtime, trace_id, &membership_ids)
+            })
             .collect::<Result<Vec<_>, _>>()?;
+        let trace_state_count = membership_trace_states.len();
         let traces = LiveTraceRecordLookup::new(trace_runtime);
-        let next_diagnostic_id = &mut self.next_diagnostic_id;
         let semantic_action_count;
         let semantic_link_count;
         let mut mcp_stdio_diagnostics = Vec::new();
@@ -154,7 +170,7 @@ impl StorageAttachService {
         let mut retained_payload_transaction = RetainedPayloadTransaction::default();
         let semantic_flush_diagnostics = self.workload_diagnostics.clone();
         let started = crate::services::workload_diagnostics::now();
-        let result = {
+        let (result, payload_persisted, agents) = {
             let mut context = PayloadTransactionContext {
                 trace_runtime,
                 payload_body_retention_gate: &mut self.payload_body_retention_gate,
@@ -194,13 +210,19 @@ impl StorageAttachService {
                 resolved_segments,
                 &mut export_batch,
             );
+            let agents = Self::recognized_agent_processes(&export_batch);
             semantic_action_count = export_batch.actions().len();
             semantic_link_count = export_batch.links().len();
-            let result = RecordingWriter::new(self.storage.as_mut())
-                .write_session_then_export(
+            let observed_at = SystemTime::now();
+            let idle_update = self
+                .idle_runtime
+                .prepare_batch(&mut export_batch, observed_at);
+            let next_diagnostic_id = &mut self.next_diagnostic_id;
+            let (result, persisted) = RecordingWriter::new(self.storage.as_mut())
+                .write_session_then_export_with_additional_write(
                     &self.export_runtime,
                     &traces,
-                    SystemTime::now(),
+                    observed_at,
                     || {
                         next_diagnostic_id_from_seed(next_diagnostic_id)
                             .map_err(control_error_to_recording)
@@ -213,6 +235,7 @@ impl StorageAttachService {
                             semantic_action_count + semantic_link_count,
                         );
                     },
+                    |storage| idle_update.persist(storage),
                     |session| {
                         let prepared = prepared.map_err(control_error_to_recording)?;
                         for record in process_records.into_values() {
@@ -225,12 +248,17 @@ impl StorageAttachService {
                             .persist_prepared_payload_segments(session, prepared)
                             .map_err(control_error_to_recording)
                     },
-                )
-                .map_err(recording_error_to_control);
-            result
+                );
+            if persisted {
+                self.idle_runtime.commit(idle_update);
+            }
+            let result = result.map_err(recording_error_to_control);
+            (result, persisted, agents)
         };
-        retained_payload_transaction
-            .apply_result(&mut self.retained_payload_bytes_by_trace, &result);
+        retained_payload_transaction.apply_result(
+            &mut self.retained_payload_bytes_by_trace,
+            &payload_persisted.then_some(()).ok_or(()),
+        );
         self.workload_diagnostics.record_storage_batch(
             started.elapsed(),
             0,
@@ -238,10 +266,16 @@ impl StorageAttachService {
             0,
             semantic_action_count,
             semantic_link_count,
-            0,
+            trace_state_count,
             result.is_ok(),
         );
         self.persist_llm_pipeline_diagnostics_fail_local(trace_runtime, llm_pipeline_diagnostics);
+        let agents = if result.is_ok() {
+            agents
+        } else {
+            self.persisted_agent_processes_after_failure(agents)
+        };
+        self.apply_agent_observation_depths(trace_runtime, agents);
         result?;
         self.persist_mcp_stdio_diagnostics_impl(trace_runtime, mcp_stdio_diagnostics)
     }
@@ -373,22 +407,21 @@ impl PayloadTransactionContext<'_> {
         segment.redaction = redaction;
         segment.bytes = bytes;
         let stream_identity = PayloadStreamIdentity::from_segment(&segment);
-        let operation_capture_ended = segment
-            .operation_offset
-            .saturating_add(segment.captured_size)
-            >= segment.operation_captured_size;
-        let operation_incomplete = operation_capture_ended
-            && (segment.truncation == model_core::payload::PayloadTruncationState::Truncated
-                || matches!(
-                    segment.operation_completion_state,
-                    model_core::payload::PayloadOperationCompletionState::Partial
-                        | model_core::payload::PayloadOperationCompletionState::Failed
-                )
-                || segment.operation_original_size != segment.operation_captured_size);
-        let incomplete_http1_message = (operation_incomplete && !discontinuity_before)
+        let operation_capture_state = segment.operation_capture_state();
+        let capture_policy_limited = matches!(
+            operation_capture_state,
+            Some(model_core::payload::PayloadCaptureState::PolicyLimited)
+        );
+        let operation_abnormally_incomplete = matches!(
+            operation_capture_state,
+            Some(model_core::payload::PayloadCaptureState::Incomplete)
+        );
+        let operation_capture_incomplete =
+            capture_policy_limited || operation_abnormally_incomplete;
+        let incomplete_http1_message = (operation_capture_incomplete && !discontinuity_before)
             .then(|| self.application_protocol.incomplete_http1_message(&segment))
             .flatten();
-        if discontinuity_before || operation_incomplete {
+        if discontinuity_before || operation_capture_incomplete {
             self.application_protocol.forget_stream(&stream_identity);
             self.payload_body_retention_gate
                 .forget_stream(&stream_identity);
@@ -396,7 +429,7 @@ impl PayloadTransactionContext<'_> {
         let mut boundary_semantic_actions = SemanticActionBatch::default();
         if discontinuity_before {
             boundary_semantic_actions.extend(self.observe_payload_gap(&segment));
-        } else if operation_incomplete {
+        } else if operation_abnormally_incomplete {
             match incomplete_http1_message {
                 Some(IncompleteHttp1Message::Request {
                     sequence,
@@ -431,7 +464,7 @@ impl PayloadTransactionContext<'_> {
             let started = crate::services::workload_diagnostics::now();
             let mut semantic_actions = boundary_semantic_actions;
             semantic_actions.extend(self.observe_payload_semantics(&segment, false));
-            if operation_incomplete {
+            if operation_abnormally_incomplete {
                 let finalized = match incomplete_http1_message {
                     Some(IncompleteHttp1Message::Response { .. }) => {
                         self.finish_incomplete_http1_response(&segment)
@@ -453,7 +486,7 @@ impl PayloadTransactionContext<'_> {
                 application_events: Vec::new(),
             }));
         }
-        let body_retention: PayloadBodyRetentionDecision = if operation_incomplete {
+        let body_retention: PayloadBodyRetentionDecision = if operation_capture_incomplete {
             PayloadBodyRetentionGate::discontinuity_decision()
         } else {
             self.payload_body_retention_gate.decide(&segment)
@@ -501,7 +534,7 @@ impl PayloadTransactionContext<'_> {
         let mut semantic_actions = boundary_semantic_actions;
         semantic_actions
             .extend(self.observe_payload_semantics(&analysis_segment, retain_payload_segment));
-        if operation_incomplete {
+        if operation_abnormally_incomplete {
             let finalized = match incomplete_http1_message {
                 Some(IncompleteHttp1Message::Response { .. }) => {
                     self.finish_incomplete_http1_response(&analysis_segment)
@@ -520,7 +553,7 @@ impl PayloadTransactionContext<'_> {
         let started = crate::services::workload_diagnostics::now();
         let mut application_drafts =
             if application_protocol_requested(self.trace_runtime, raw.trace_id)? {
-                let result = if operation_incomplete {
+                let result = if operation_capture_incomplete {
                     self.application_protocol
                         .analyze_incomplete_http1_head_with_semantic_context(
                             &analysis_segment,

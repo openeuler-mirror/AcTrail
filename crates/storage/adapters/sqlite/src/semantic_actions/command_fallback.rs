@@ -9,8 +9,7 @@ use crate::SqliteStorage;
 use crate::records::encode_time;
 use crate::semantic_actions::codebook::sqlite::action_kind_code;
 use crate::semantic_actions::store::{
-    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, read_evidence_shared,
-    resolve_file_paths,
+    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row,
 };
 use crate::semantic_actions::tree_metadata::{
     display_parent_link_absence_predicate, display_parent_link_value_count,
@@ -68,7 +67,7 @@ impl SqliteStorage {
             })?;
         let mut children = Vec::new();
         for row in rows {
-            let mut action = row.map_err(|error| {
+            let action = row.map_err(|error| {
                 SemanticActionStoreError::new(
                     "map_semantic_action_command_fallback_child",
                     error.to_string(),
@@ -77,8 +76,6 @@ impl SqliteStorage {
             if invalidated_action_attrs(&action.attributes) {
                 continue;
             }
-            action.evidence = read_evidence_shared(&connection, &action.action_id)?;
-            resolve_file_paths(&connection, &mut action)?;
             children.push(action);
         }
         Ok(children)

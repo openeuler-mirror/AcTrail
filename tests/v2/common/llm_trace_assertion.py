@@ -21,11 +21,22 @@ class LLMTraceAssertion:
     _REQUEST_CONTENT_STATE_ATTRIBUTE = "llm.request.content_state"
     _REQUEST_CONTENT_HASH_ATTRIBUTE = "llm.request.canonical_body_hash"
     _REQUEST_CONTENT_BYTES_ATTRIBUTE = "llm.request.canonical_body_bytes"
+    _CAPTURE_LIMITED_ROUTES = frozenset(
+        {
+            "/chat/completions",
+            "/v1/chat/completions",
+            "/api/v2/chat/completions",
+            "/responses",
+            "/v1/responses",
+            "/messages",
+            "/v1/messages",
+        }
+    )
 
     def __init__(
         self,
         runtime: ActrailRuntime,
-        marker: str,
+        marker: str | None = None,
     ):
         self._runtime = runtime
         self._marker = marker
@@ -58,6 +69,8 @@ class LLMTraceAssertion:
         launch: CommandResult,
         agent_name: str,
     ) -> None:
+        if self._marker is None:
+            raise AssertionError("answer marker validation was not configured")
         if self._marker not in launch.stdout:
             raise AssertionError(
                 f"{agent_name} stdout answer does not contain marker {self._marker}"
@@ -126,8 +139,10 @@ class LLMTraceAssertion:
         calls = [action for action in actions if action.get("kind") == "llm.call"]
         requests = [action for action in actions if action.get("kind") == "llm.request"]
         responses = [action for action in actions if action.get("kind") == "llm.response"]
-        if not requests or not responses:
-            raise AssertionError("trace has no LLM request/response")
+        if not requests:
+            raise AssertionError("trace has no LLM request")
+        if not responses:
+            raise AssertionError("trace has no LLM response")
         if len(calls) != len(requests):
             raise AssertionError(
                 "LLM call/request count mismatch: "
@@ -140,7 +155,10 @@ class LLMTraceAssertion:
             requests,
             responses,
         )
-        self._require_marker_exchange(pairs)
+        if self._marker is None:
+            self._require_successful_exchange(pairs)
+        else:
+            self._require_marker_exchange(pairs)
         return len(requests), len(responses)
 
     def _llm_actions(self, document: dict) -> list[dict]:
@@ -175,10 +193,32 @@ class LLMTraceAssertion:
                 and finalized_on_close
             ):
                 continue
+            if (
+                kind in self._LLM_ACTION_KINDS
+                and status == "success"
+                and completeness == "capture_limited"
+                and not finalized_on_close
+            ):
+                if kind == "llm.request":
+                    self._require_capture_limited_request_metadata(action)
+                continue
             raise AssertionError(
                 f"{action.get('action_id')} ({kind}) has invalid terminal state "
                 f"status={status} completeness={completeness} "
                 f"finalized_on_trace_close={finalized_on_close}"
+            )
+
+    def _require_capture_limited_request_metadata(self, action: dict) -> None:
+        attributes = action.get("attributes", {})
+        if (
+            attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE) != "unavailable"
+            or self._REQUEST_CONTENT_HASH_ATTRIBUTE in attributes
+            or attributes.get("http.request.method", "").upper() != "POST"
+            or attributes.get("url.path") not in self._CAPTURE_LIMITED_ROUTES
+        ):
+            raise AssertionError(
+                f"{action.get('action_id')} has invalid capture-limited "
+                "request metadata"
             )
 
     def _require_one_to_one_call_links(
@@ -228,7 +268,8 @@ class LLMTraceAssertion:
             if call_responses:
                 paired_responses.update(call_responses)
                 response_id = next(iter(call_responses))
-                pairs.append((request, responses_by_id[response_id]))
+                response = responses_by_id[response_id]
+                pairs.append((request, response))
                 continue
             self._require_failed_http_probe(
                 calls_by_id[call_id],
@@ -334,6 +375,8 @@ class LLMTraceAssertion:
         return stream_key, method.upper(), path
 
     def _require_marker_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
+        if self._marker is None:
+            raise AssertionError("marker exchange validation was not configured")
         for request, response in pairs:
             request_attributes = request.get("attributes", {})
             request_has_canonical_content = (
@@ -351,14 +394,41 @@ class LLMTraceAssertion:
                 )
                 > 0
             )
+            request_has_capture_limited_metadata = (
+                request.get("status") == "success"
+                and request.get("completeness") == "capture_limited"
+                and request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
+                == "unavailable"
+                and self._REQUEST_CONTENT_HASH_ATTRIBUTE not in request_attributes
+                and request_attributes.get("http.request.method", "").upper()
+                == "POST"
+                and request_attributes.get("url.path")
+                in self._CAPTURE_LIMITED_ROUTES
+            )
             response_attributes = response.get("attributes", {})
             response_contains_marker = any(
                 self._marker in response_attributes.get(key, "")
                 for key in self._RESPONSE_OUTPUT_ATTRIBUTES
             )
-            if request_has_canonical_content and response_contains_marker:
+            if (
+                request_has_canonical_content
+                or request_has_capture_limited_metadata
+            ) and response_contains_marker:
                 return
         raise AssertionError(
-            "no LLM call links a canonical-content request to a normalized "
-            f"response containing {self._marker}"
+            "no LLM call links a canonical or capture-limited metadata request "
+            f"to a normalized response containing {self._marker}"
         )
+
+    def _require_successful_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
+        for request, response in pairs:
+            if (
+                request.get("status") == "success"
+                and request.get("completeness")
+                in {"complete", "capture_limited"}
+                and response.get("status") == "success"
+                and response.get("completeness")
+                in {"complete", "capture_limited"}
+            ):
+                return
+        raise AssertionError("trace has no successful usable LLM exchange")

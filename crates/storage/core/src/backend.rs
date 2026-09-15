@@ -7,6 +7,7 @@ use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDraft, AlertId, AlertListLimit, AlertStoreError,
     AlertView,
 };
+use idle_contract::{IdleInterval, IdleStoreError, IdleStoreOp};
 use model_core::diagnostics::{DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
@@ -103,6 +104,7 @@ pub trait StorageBackend {
     fn next_event_id_seed(&self) -> Result<u64, StorageError>;
     fn next_diagnostic_id_seed(&self) -> Result<u64, StorageError>;
     fn next_payload_segment_id_seed(&self) -> Result<u64, StorageError>;
+    fn next_idle_interval_id_seed(&self) -> Result<u64, StorageError>;
     fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), StorageError>;
     fn upsert_process_record(&mut self, record: ProcessRecord) -> Result<(), StorageError>;
     fn get_process_record(
@@ -198,6 +200,12 @@ pub trait StorageBackend {
         trace_id: TraceId,
         limit: AlertListLimit,
     ) -> Result<Vec<AlertView>, AlertStoreError>;
+
+    fn apply_idle_ops(&mut self, ops: &[IdleStoreOp]) -> Result<(), IdleStoreError>;
+    fn idle_intervals_for_trace(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<IdleInterval>, IdleStoreError>;
 
     fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
     fn upsert_semantic_action_link(&mut self, link: SemanticActionLink)

@@ -8,6 +8,7 @@ license = "MulanPSL-2.0"
 clap = { version = "4.6", features = ["derive"] }
 config_core = { path = "../../core/config" }
 control_contract = { path = "../../contracts/control_plane" }
+idle_contract = { path = "../../contracts/idle" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }

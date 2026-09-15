@@ -47,11 +47,14 @@ static __always_inline int emit_tls_payload_completion(
         bpf_map_lookup_elem(&pending_tls_payload_ops, &host_pid_tgid);
     struct actrail_tls_completion_event *event;
 
-    tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_TOTAL);
     if (!op) {
         __u32 lookup_flags = 0;
         __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
 
+        if (trace_id && !process_observation_is_detailed(kernel_pid_tgid >> 32)) {
+            return 0;
+        }
+        tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_TOTAL);
         if (trace_id) {
             namespace_pid_tgid = current_trace_pid_tgid(*trace_id);
         }
@@ -70,6 +73,7 @@ static __always_inline int emit_tls_payload_completion(
         bpf_map_delete_elem(&tls_pending_ns, &namespace_pid_tgid);
         return 0;
     }
+    tls_diag_inc(ACTRAIL_TLS_DIAG_COMPLETION_TOTAL);
     namespace_pid_tgid = current_trace_pid_tgid(op->trace_id);
     if (!namespace_pid_tgid) {
         namespace_pid_tgid = host_pid_tgid;

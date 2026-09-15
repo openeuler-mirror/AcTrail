@@ -336,7 +336,7 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
 fn render_span_link(trace_id: &str, link: &SemanticActionLink) -> String {
     let attrs = [
         string_attr("actrail.link.role", link.role.as_str()),
-        string_attr("actrail.link.confidence", link.confidence.as_str()),
+        string_attr("actrail.link.origin", link.origin.as_str()),
     ];
     format!(
         "{{\"traceId\":{},\"spanId\":{},\"attributes\":[{}]}}",
@@ -396,7 +396,7 @@ mod tests {
     use model_core::ids::TraceId;
     use model_core::process::ProcessIdentity;
     use semantic_action::{
-        SemanticActionCompleteness, SemanticActionLinkConfidence, SemanticActionStatus,
+        SemanticActionCompleteness, SemanticActionLinkOrigin, SemanticActionStatus,
     };
 
     use super::*;
@@ -421,7 +421,7 @@ mod tests {
             parent_action_id: "tool-call".to_string(),
             child_action_id: action.action_id.clone(),
             role: SemanticActionLinkRole::LlmToolCallResult,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: Vec::new(),
             attributes: BTreeMap::new(),

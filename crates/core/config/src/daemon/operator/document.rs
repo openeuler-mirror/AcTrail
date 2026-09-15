@@ -7,7 +7,10 @@ use std::time::Duration;
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::ProfileName;
 use serde::{Deserialize, Serialize};
-use storage_factory::StorageConfig;
+use storage_factory::{
+    EventRecordLayout, SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
+    SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES, StorageConfig,
+};
 
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
@@ -80,6 +83,8 @@ mod file;
 mod hand_observation;
 #[path = "document/helpers.rs"]
 mod helpers;
+#[path = "document/idle.rs"]
+mod idle;
 #[path = "document/network.rs"]
 mod network;
 #[path = "document/payload.rs"]
@@ -103,6 +108,7 @@ use command::*;
 use file::*;
 use hand_observation::*;
 use helpers::*;
+use idle::*;
 use network::*;
 use payload::*;
 use plugin::*;
@@ -131,6 +137,7 @@ pub(super) struct OperatorDocument {
     process_seccomp: ProcessSeccompDocument,
     agent_invocation: AgentInvocationDocument,
     semantic_retention: SemanticRetentionDocument,
+    idle_detection: IdleDetectionDocument,
     file_observation: FileObservationDocument,
     application: ApplicationDocument,
     resource_metrics: ResourceMetricsDocument,
@@ -161,6 +168,7 @@ impl Default for OperatorDocument {
             process_seccomp: ProcessSeccompDocument::default(),
             agent_invocation: AgentInvocationDocument::default(),
             semantic_retention: SemanticRetentionDocument::default(),
+            idle_detection: IdleDetectionDocument::default(),
             file_observation: FileObservationDocument::default(),
             application: ApplicationDocument::default(),
             resource_metrics: ResourceMetricsDocument::default(),
@@ -214,6 +222,26 @@ impl OperatorDocument {
                     .storage
                     .sqlite_cold_field_compression_min_bytes(),
                 cold_field_zstd_level: config.storage.sqlite_cold_field_zstd_level(),
+                event_payload_dictionary_cache_bytes: config
+                    .storage
+                    .sqlite_event_payload_dictionary_cache_bytes(),
+                event_path_dictionary_cache_bytes: config
+                    .storage
+                    .sqlite_event_path_dictionary_cache_bytes(),
+                event_record_layout: config
+                    .storage
+                    .sqlite_event_record_layout()
+                    .as_str()
+                    .to_string(),
+                event_record_block_max_events: config
+                    .storage
+                    .sqlite_event_record_block_max_events(),
+                event_record_block_max_uncompressed_bytes: config
+                    .storage
+                    .sqlite_event_record_block_max_uncompressed_bytes(),
+                event_record_block_zstd_level: config
+                    .storage
+                    .sqlite_event_record_block_zstd_level(),
             },
             retention: StorageRetentionDocument::from_config(&config.storage_retention),
         };
@@ -300,6 +328,9 @@ impl OperatorDocument {
             sandbox_alerts: SandboxAlertsDocument::from_config(&config.sandbox_alerts),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
+                agent_descendant_observation_depth: config
+                    .capture_profile
+                    .agent_descendant_observation_depth,
                 capabilities: required,
                 opportunistic_capabilities: opportunistic,
                 disabled_capabilities: disabled,
@@ -337,6 +368,7 @@ impl OperatorDocument {
                     .collect(),
                 max_args: config.process_seccomp.max_args,
                 max_arg_bytes: config.process_seccomp.max_arg_bytes,
+                max_total_arg_bytes: config.process_seccomp.max_total_arg_bytes,
                 pending_max_entries: config.process_seccomp.pending_max_entries,
             },
             agent_invocation: AgentInvocationDocument {
@@ -446,6 +478,7 @@ impl OperatorDocument {
                 shutdown_wait_ms: config.shutdown_wait_ms,
                 poll_interval_ms: config.supervision_poll_interval_ms,
             },
+            idle_detection: IdleDetectionDocument::from_config(&config.idle_detection),
         }
     }
 
@@ -579,6 +612,9 @@ impl OperatorDocument {
             capture_profile: CaptureProfile::new(
                 ProfileName::new(self.capture.profile_name.clone()),
                 capabilities,
+            )
+            .with_agent_descendant_observation_depth(
+                self.capture.agent_descendant_observation_depth()?,
             ),
             ebpf_config,
             payload_config,
@@ -586,6 +622,7 @@ impl OperatorDocument {
             process_seccomp,
             agent_invocation: self.agent_invocation.to_config(),
             semantic_retention: self.semantic_retention.to_config()?,
+            idle_detection: self.idle_detection.to_config()?,
             file_observation: self.file_observation.to_config()?,
             application_protocol,
             resource_metrics,

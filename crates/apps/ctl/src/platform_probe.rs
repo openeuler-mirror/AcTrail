@@ -242,7 +242,7 @@ fn recommended_launch_note(report: &LaunchPlatformReport) -> Option<String> {
     }
     if report.tls_sync_ready() {
         return Some(
-            "seccomp-notify unavailable; use --seccomp-notify auto (default) to select a non-notify deployment"
+            "seccomp-notify unavailable; the default launch keeps it disabled, or use --seccomp-notify auto after enabling it in operator config"
                 .to_string(),
         );
     }

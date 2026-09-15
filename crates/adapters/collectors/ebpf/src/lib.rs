@@ -11,6 +11,10 @@ mod collector_events;
 mod collector_instance_impl;
 #[path = "collector/net_aggregation.rs"]
 mod collector_net_aggregation;
+#[path = "collector/process_exec.rs"]
+mod collector_process_exec;
+#[path = "collector/process_fork.rs"]
+mod collector_process_fork;
 #[path = "collector/runtime.rs"]
 mod collector_runtime;
 #[path = "collector/stdio_payload.rs"]
@@ -35,7 +39,9 @@ use collector_binding::{
 use collector_event::RawCollectorEvent;
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
 use collector_stats::{CollectorStats, DropCounter};
-use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig};
+use config_core::daemon::{
+    EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig, ProcessSeccompConfig,
+};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{
@@ -61,6 +67,8 @@ use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
 use collector_net_aggregation::NetAggregator;
+use collector_process_exec::ProcessExecAssembler;
+use collector_process_fork::ProcessForkAssembler;
 use collector_stdio_payload::StdioPayloadAssembler;
 
 pub struct EbpfCollector {
@@ -78,6 +86,8 @@ pub struct EbpfCollector {
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     launch_binding_failures: Vec<LaunchBindingFailure>,
     socket_completions: Vec<SocketPayloadCompletion>,
+    process_exec: ProcessExecAssembler,
+    process_fork: ProcessForkAssembler,
     stdio_payloads: StdioPayloadAssembler,
     net_aggregator: NetAggregator,
     net_aggregation_enabled: Arc<AtomicBool>,
@@ -86,6 +96,9 @@ pub struct EbpfCollector {
     pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
     binding_gap_drops: u64,
     binding_gap_lifecycle_skips: u64,
+    socket_total_limit_partials: u64,
+    socket_chunk_limit_partials: u64,
+    socket_iovec_limit_partials: u64,
     clock_ticks_per_second: Option<u64>,
 }
 
@@ -192,6 +205,7 @@ impl EbpfCollector {
     pub fn new(
         config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
+        process_config: ProcessSeccompConfig,
         file_bulk_read_fast_path: FileBulkReadFastPathConfig,
     ) -> Self {
         let mut probe_result = probe();
@@ -202,6 +216,7 @@ impl EbpfCollector {
         let mcp_stdio_enabled = payload_config.mcp.enabled
             && payload_config.stdio.enabled
             && payload_config.stdio.capture_stdin;
+        let process_pending_max_entries = process_config.pending_max_entries;
         let file_tracker = FileTracker::new(config.ipc_lineage, mcp_stdio_enabled);
         let probe_result = probe_result_for_config(probe_result, &config, &payload_config);
         let net_aggregation_enabled = Arc::new(AtomicBool::new(config.net_send_recv_aggregation));
@@ -210,6 +225,7 @@ impl EbpfCollector {
             loader: EbpfProgramLoader::new(
                 config,
                 payload_config.clone(),
+                process_config,
                 file_bulk_read_fast_path.clone(),
             ),
             bindings: BindingStateMap::default(),
@@ -224,6 +240,8 @@ impl EbpfCollector {
             tls_diagnostic_events: Vec::new(),
             launch_binding_failures: Vec::new(),
             socket_completions: Vec::new(),
+            process_exec: ProcessExecAssembler::new(process_pending_max_entries),
+            process_fork: ProcessForkAssembler::new(process_pending_max_entries),
             stdio_payloads: StdioPayloadAssembler::new(
                 payload_config.stdio.pending_operation_max_entries,
             ),
@@ -234,6 +252,9 @@ impl EbpfCollector {
             pending_launches: BTreeMap::new(),
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,
+            socket_total_limit_partials: 0,
+            socket_chunk_limit_partials: 0,
+            socket_iovec_limit_partials: 0,
             clock_ticks_per_second: clock_ticks_per_second(),
         }
     }
@@ -316,6 +337,7 @@ fn supported_required_capability(
     matches!(
         capability,
         Capability::ProcLifecycle
+            | Capability::ProcExecContext
             | Capability::NetTransport
             | Capability::FsAccessBasic
             | Capability::FsMmap

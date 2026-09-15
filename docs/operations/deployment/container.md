@@ -30,13 +30,20 @@ flowchart LR
 
 ## 1. 选择 Docker seccomp 模式
 
-| 模式 | `--seccomp-notify auto` | 用途 |
+| 模式 | seccomp-notify 行为 | 用途 |
 | --- | --- | --- |
 | Docker 默认 profile | notify 不可用时明确降级，TLS sync 仍可用 | 最小权限 |
 | `deploy/container-auto/seccomp/actrail-notify.json` | 启用 notify，同时保留 Docker 外层 syscall 过滤 | 需要完整 launch-time seccomp 的推荐模式 |
 | `seccomp=unconfined` | notify 可用，但关闭 Docker 外层过滤 | 仅限可信排障环境 |
 
-`auto` 允许该权限轴降级；`required` 在能力不可用时失败；`disabled` 保证不启用它。严格证据覆盖需要使用 `required`，自动降级不代表完整采集。
+默认启动等价于 `--seccomp-notify disabled`。启用 notify 需要 operator 配置和 CLI 同时显式 opt-in：
+
+```toml
+[seccomp_notify]
+enabled = true
+```
+
+随后使用 `--seccomp-notify auto` 或 `required`；`auto` 允许该权限轴降级，`required` 在能力不可用时失败，`disabled` 保证不启用它。严格证据覆盖需要使用 `required`，自动降级不代表完整采集。
 
 ## 2. 创建 workload 容器
 
@@ -62,7 +69,7 @@ docker run -d --name actrail-agent \
 docker exec actrail-agent actrailctl probe \
   --config /etc/actrail/actraild.conf \
   --host-ebpf auto \
-  --seccomp-notify auto \
+  --seccomp-notify disabled \
   --json
 ```
 
@@ -76,7 +83,7 @@ docker exec actrail-agent actrailctl \
   launch \
   --name container-agent \
   --host-ebpf auto \
-  --seccomp-notify auto \
+  --seccomp-notify disabled \
   -- \
   /usr/local/bin/agent-runtime
 ```

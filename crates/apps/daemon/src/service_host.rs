@@ -33,6 +33,7 @@ pub trait AttachService {
     fn resolve_launch_tls_plan(
         &mut self,
         command: &control_contract::command::ResolveLaunchTlsPlanCommand,
+        path_view_pid: u32,
     ) -> Result<LaunchTlsPlanReply, ControlError>;
     fn attach_existing(
         &mut self,
@@ -70,6 +71,14 @@ pub trait AttachService {
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: control_contract::command::RegisterSeccompListenerCommand,
+    ) -> Result<(), ControlError>;
+    fn report_turn_lifecycle(
+        &mut self,
+        event: idle_contract::TurnLifecycleEvent,
+    ) -> Result<(), ControlError>;
+    fn report_user_interaction(
+        &mut self,
+        event: idle_contract::UserInteractionEvent,
     ) -> Result<(), ControlError>;
     fn plugin_statuses(&self) -> Vec<PluginInstanceStatus>;
     fn load_plugin(
@@ -309,7 +318,8 @@ where
             _ => None,
         };
 
-        let mut reply = self.handle_with_launch_pidfd(command, launch_pidfd)?;
+        let mut reply =
+            self.dispatch_with_launch_pidfd(command, launch_pidfd, peer.credentials.pid)?;
         if let (
             Some((peer_process, track_add_request_id)),
             ControlReply::LaunchPermissions(permissions),
@@ -348,13 +358,27 @@ where
     }
 
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError> {
-        self.handle_with_launch_pidfd(command, None)
+        self.dispatch_with_launch_pidfd(command, None, std::process::id())
     }
 
     fn handle_with_launch_pidfd(
         &mut self,
         command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> Result<ControlReply, ControlError> {
+        self.dispatch_with_launch_pidfd(command, launch_pidfd, std::process::id())
+    }
+}
+
+impl<A> DaemonServiceHost<A>
+where
+    A: AttachService,
+{
+    fn dispatch_with_launch_pidfd(
+        &mut self,
+        command: ControlCommand,
         mut launch_pidfd: Option<OwnedFd>,
+        path_view_pid: u32,
     ) -> Result<ControlReply, ControlError> {
         if launch_pidfd.is_some()
             && !matches!(
@@ -381,7 +405,7 @@ where
             ControlCommand::ResolveLaunchTlsPlan(command) => self
                 .wiring
                 .attach_service
-                .resolve_launch_tls_plan(&command)
+                .resolve_launch_tls_plan(&command, path_view_pid)
                 .map(ControlReply::LaunchTlsPlan),
             ControlCommand::TrackAdd(command) => {
                 let active_trace_count = self
@@ -476,6 +500,43 @@ where
                 loaded_policy_plugins: self.wiring.loaded_policy_plugins.clone(),
                 storage_ready: self.wiring.storage_ready,
             })),
+            ControlCommand::ReportTurnLifecycle(command) => {
+                if self
+                    .wiring
+                    .trace_runtime
+                    .get_trace(command.trace_id)
+                    .is_none()
+                {
+                    return Err(ControlError::new(
+                        "trace_missing",
+                        format!(
+                            "turn lifecycle references unknown trace {}",
+                            command.trace_id
+                        ),
+                    ));
+                }
+                self.wiring.attach_service.report_turn_lifecycle(
+                    idle_contract::TurnLifecycleEvent {
+                        trace_id: command.trace_id,
+                        task_id: command.task_id,
+                        kind: command.kind,
+                        observed_at: command.observed_at,
+                    },
+                )?;
+                Ok(ControlReply::TurnLifecycleRecorded)
+            }
+            ControlCommand::ReportUserInteraction(command) => {
+                self.wiring.attach_service.report_user_interaction(
+                    idle_contract::UserInteractionEvent {
+                        trace_id: command.trace_id,
+                        task_id: command.task_id,
+                        interaction_id: command.interaction_id,
+                        state: command.state,
+                        observed_at: command.observed_at,
+                    },
+                )?;
+                Ok(ControlReply::UserInteractionRecorded)
+            }
             ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(self.plugin_statuses())),
             ControlCommand::PluginStatus(command) => self
                 .plugin_status(&command.instance_id)
@@ -612,6 +673,12 @@ where
                 peer,
                 removed_trace.ok_or_else(|| peer_error("track remove trace was not resolved"))?,
             ),
+            ControlCommand::ReportTurnLifecycle(command) => {
+                self.authorize_trace_owner(peer, command.trace_id)
+            }
+            ControlCommand::ReportUserInteraction(command) => {
+                self.authorize_trace_owner(peer, command.trace_id)
+            }
             ControlCommand::ListTraces(_) | ControlCommand::Doctor(_) => Ok(()),
             ControlCommand::PluginList(_)
             | ControlCommand::PluginStatus(_)
@@ -694,6 +761,8 @@ fn control_command_name(command: &ControlCommand) -> &'static str {
         ControlCommand::TrackRemove(_) => "track_remove",
         ControlCommand::ListTraces(_) => "list_traces",
         ControlCommand::Doctor(_) => "doctor",
+        ControlCommand::ReportTurnLifecycle(_) => "report_turn_lifecycle",
+        ControlCommand::ReportUserInteraction(_) => "report_user_interaction",
         ControlCommand::PluginList(_) => "plugin_list",
         ControlCommand::PluginStatus(_) => "plugin_status",
         ControlCommand::PluginLoad(_) => "plugin_load",

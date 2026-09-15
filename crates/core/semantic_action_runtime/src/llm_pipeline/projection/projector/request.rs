@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use config_core::daemon::{LlmRequestContentRetention, SemanticRetentionConfig};
 use model_core::payload::{
-    PayloadOperationCompletionState, PayloadSegment, PayloadSourceBoundary, PayloadTruncationState,
+    PayloadCaptureState, PayloadOperationCompletionState, PayloadSegment, PayloadSourceBoundary,
 };
 use semantic_action::{
     LlmRequestContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
@@ -62,7 +62,12 @@ pub(super) fn project_stream_llm_request_action(
     mut http: HttpRequestParts,
     segments: &[&PayloadSegment],
 ) -> Option<ProjectedLlmRequestAction> {
-    let body = parse_llm_request_body(&http, codecs)?;
+    let completeness = llm_stream_completeness(http.complete, segments);
+    let body = if completeness == SemanticActionCompleteness::CaptureLimited {
+        CaptureLimitedHttpRequestClassifier::classify(&http)
+    } else {
+        parse_llm_request_body(&http, codecs)
+    }?;
     let first = *segments.first()?;
     let action_id = llm_stream_action_id(key, message_start, first, http.stream_id);
     http.scheme = plaintext_transport_scheme(first.source_boundary);
@@ -120,7 +125,7 @@ pub(super) fn project_stream_llm_request_action(
             end_time: segments.last().map(|segment| segment.observed_at),
             process: first.process.clone(),
             status: llm_status(segments),
-            completeness: llm_stream_completeness(segments),
+            completeness,
             attributes,
             evidence,
         },
@@ -182,6 +187,13 @@ fn project_request_content(
     body: &LlmRequestBody,
 ) -> Result<RequestContentProjection, String> {
     if !config.llm_layer_enabled() {
+        return Ok(RequestContentProjection {
+            content: None,
+            metadata: None,
+            trajectory_history: None,
+        });
+    }
+    if !body.content_available {
         return Ok(RequestContentProjection {
             content: None,
             metadata: None,
@@ -298,7 +310,7 @@ fn llm_attributes(
     );
     attributes.insert(
         attrs::llm_request::PAYLOAD_BYTES.to_string(),
-        http.body.len().to_string(),
+        body.payload_bytes.to_string(),
     );
     if body.json_valid {
         attributes.insert(
@@ -487,11 +499,13 @@ fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'stati
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LlmRequestBody {
+    payload_bytes: usize,
     json_valid: bool,
     classifier_id: String,
     protocol_id: Option<String>,
     model: Option<String>,
     json: Option<Value>,
+    content_available: bool,
 }
 
 fn parse_llm_request_body(
@@ -519,6 +533,7 @@ impl LlmRequestBodyParser<'_> {
                     .map(|parsed| parsed.classifier_id.to_string())
             })?;
             return Some(LlmRequestBody {
+                payload_bytes: body.len(),
                 json_valid: true,
                 classifier_id,
                 protocol_id: decoded.protocol_id.or_else(|| {
@@ -529,32 +544,86 @@ impl LlmRequestBodyParser<'_> {
                 model: valid_model(decoded.model)
                     .or_else(|| parsed.and_then(|parsed| valid_model(parsed.model))),
                 json: Some(value),
+                content_available: true,
             });
         }
         if let Ok(value) = serde_json::from_slice::<Value>(body) {
             let input = LlmRequestParserInput { json: &value };
             let parsed = parse_json_request(&input)?;
             return Some(LlmRequestBody {
+                payload_bytes: body.len(),
                 json_valid: true,
                 classifier_id: parsed.classifier_id.to_string(),
                 protocol_id: parsed.protocol_id.map(ToString::to_string),
                 model: valid_model(parsed.model),
                 json: Some(value),
+                content_available: true,
             });
         }
         let text = String::from_utf8_lossy(body);
         let model = extract_json_string_lossy(&text, "model");
         if model.is_some() && lossy_text_has_llm_shape(&text) {
             Some(LlmRequestBody {
+                payload_bytes: body.len(),
                 json_valid: false,
                 classifier_id: "generic-json-request".to_string(),
                 protocol_id: None,
                 model,
                 json: None,
+                content_available: true,
             })
         } else {
             None
         }
+    }
+}
+
+struct CaptureLimitedHttpRequestClassifier;
+
+impl CaptureLimitedHttpRequestClassifier {
+    fn classify(http: &HttpRequestParts) -> Option<LlmRequestBody> {
+        if http.complete
+            || !http
+                .method
+                .as_deref()
+                .is_some_and(|method| method.eq_ignore_ascii_case("POST"))
+            || !http
+                .headers_text
+                .as_deref()
+                .is_some_and(Self::has_json_content_type)
+        {
+            return None;
+        }
+        let path = http.path.as_deref()?.split('?').next()?;
+        let classifier_id = match path {
+            "/chat/completions" | "/v1/chat/completions" | "/api/v2/chat/completions" => {
+                "openai-compatible-route"
+            }
+            "/responses" | "/v1/responses" => "openai-responses-route",
+            "/messages" | "/v1/messages" => "anthropic-messages-route",
+            _ => return None,
+        };
+        Some(LlmRequestBody {
+            payload_bytes: http.declared_body_len.unwrap_or(http.body.len()),
+            json_valid: false,
+            classifier_id: classifier_id.to_string(),
+            protocol_id: None,
+            model: None,
+            json: None,
+            content_available: false,
+        })
+    }
+
+    fn has_json_content_type(headers: &str) -> bool {
+        headers.split("\r\n").skip(1).any(|line| {
+            let Some((name, value)) = line.split_once(':') else {
+                return false;
+            };
+            name.eq_ignore_ascii_case("content-type")
+                && value.split(';').next().is_some_and(|media_type| {
+                    media_type.trim().eq_ignore_ascii_case("application/json")
+                })
+        })
     }
 }
 
@@ -594,21 +663,29 @@ fn valid_model(model: Option<String>) -> Option<String> {
     model.and_then(|value| validated_model_identifier(&value).map(ToOwned::to_owned))
 }
 
-fn llm_stream_completeness(segments: &[&PayloadSegment]) -> SemanticActionCompleteness {
-    if segments
-        .iter()
-        .all(|segment| segment_capture_is_complete(segment))
-    {
+fn llm_stream_completeness(
+    http_complete: bool,
+    segments: &[&PayloadSegment],
+) -> SemanticActionCompleteness {
+    if http_complete {
         SemanticActionCompleteness::Complete
+    } else if segments_capture_is_policy_limited(segments) {
+        SemanticActionCompleteness::CaptureLimited
     } else {
         SemanticActionCompleteness::Partial
     }
 }
 
-fn segment_capture_is_complete(segment: &PayloadSegment) -> bool {
-    segment.truncation == PayloadTruncationState::Complete
-        && segment.operation_completion_state == PayloadOperationCompletionState::Success
-        && segment.operation_original_size == segment.operation_captured_size
+fn segments_capture_is_policy_limited(segments: &[&PayloadSegment]) -> bool {
+    let mut policy_limited = false;
+    for segment in segments {
+        match segment.capture_state() {
+            PayloadCaptureState::PolicyLimited => policy_limited = true,
+            PayloadCaptureState::Incomplete => return false,
+            PayloadCaptureState::Complete => {}
+        }
+    }
+    policy_limited
 }
 
 fn llm_status(segments: &[&PayloadSegment]) -> SemanticActionStatus {

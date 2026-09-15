@@ -70,10 +70,7 @@ class ProbeXiaooLLMCase(TestCase):
                 "launch_validation",
                 "validating answer marker and trace id",
             )
-            assertion = LLMTraceAssertion(
-                runtime,
-                task.marker,
-            )
+            assertion = LLMTraceAssertion(runtime, task.marker)
             assertion.require_answer_marker(launch, "xiaoO")
             results["answer_marker"] = TestResult(
                 TestStatus.PASSED,

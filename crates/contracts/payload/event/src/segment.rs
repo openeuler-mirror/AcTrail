@@ -22,6 +22,7 @@ pub struct RawPayloadSegment {
     pub original_size: u64,
     pub captured_size: u64,
     pub operation_id: u64,
+    pub operation_chunk_index: u32,
     pub operation_offset: u64,
     pub operation_original_size: u64,
     pub operation_captured_size: u64,

@@ -427,10 +427,7 @@ jq -e \
       and ($roots | length) == 1
       and $roots[0].attributes["mcp.execution.status"] == "success"
       and $roots[0].attributes["mcp.tool.id"] == $tool
-      and ($roots[0].attributes["llm.response.action_id"] | length) > 0
-      and ($roots[0].attributes["llm.tool_call.id"] | length) > 0
-      and $roots[0].attributes["llm.tool_call.name"]
-        == ("mcp__" + $server + "__" + $tool)
+      and ($roots[0].attributes["mcp.request.id"] | length) > 0
       and ($links | length) == 5
       and (([$links[] | .role] | sort) == (
         [
@@ -442,7 +439,7 @@ jq -e \
         ] | sort
       ))
       and ($links | all(
-        .valid == true and .confidence == "observed"
+        .valid == true and .origin == "observed"
       ))
   ' "$CASE_DIR/actions.json" >/dev/null
 
@@ -460,9 +457,7 @@ jq '{
           server: .attributes["mcp.server.name"],
           tool: .attributes["mcp.tool.name"],
           transport: .attributes["mcp.transport"],
-          llm_response: .attributes["llm.response.action_id"],
-          llm_tool_id: .attributes["llm.tool_call.id"],
-          llm_tool_name: .attributes["llm.tool_call.name"]
+          request_id: .attributes["mcp.request.id"]
         }
     ]
   }' "$CASE_DIR/actions.json"

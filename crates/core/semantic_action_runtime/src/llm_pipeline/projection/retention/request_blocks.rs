@@ -26,6 +26,10 @@ pub(crate) fn canonical_json(value: &Value) -> (String, String) {
     (json, hash)
 }
 
+pub(crate) fn canonical_json_text(value: &Value) -> String {
+    canonical_json_string(value)
+}
+
 pub(in crate::llm_pipeline) struct CanonicalBody {
     pub(in crate::llm_pipeline) json: String,
     pub(in crate::llm_pipeline) hash: String,

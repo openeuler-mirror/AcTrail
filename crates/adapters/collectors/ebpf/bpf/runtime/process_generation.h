@@ -1,7 +1,9 @@
 #ifndef ACTRAIL_RUNTIME_PROCESS_GENERATION_H
 #define ACTRAIL_RUNTIME_PROCESS_GENERATION_H
 
-#include "trace_membership.h"
+#include "process_identity.h"
+#include "cas_compat.h"
+#include "../common/map_flags.h"
 
 struct actrail_process_identity {
     __u64 start_boottime_ns;
@@ -21,20 +23,6 @@ struct {
     __type(value, struct actrail_process_identity);
 } process_identities SEC(".maps");
 
-struct actrail_trace_namespace_thread_identity {
-    __u64 trace_id;
-    __u64 start_boottime_ns;
-    __u64 namespace_pid_tgid;
-};
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-    __uint(max_entries, 1);
-    __type(key, __u64);
-    __type(value, struct actrail_trace_namespace_thread_identity);
-} trace_namespace_thread_identities SEC(".maps");
-
 static __always_inline struct actrail_process_identity *lookup_process_identity(
     __u32 kernel_tgid
 ) {
@@ -44,23 +32,41 @@ static __always_inline struct actrail_process_identity *lookup_process_identity(
     return bpf_map_lookup_elem(&process_identities, &kernel_tgid);
 }
 
+#include "trace_membership.h"
+
+struct actrail_trace_namespace_thread_identity {
+    __u64 trace_id;
+    __u64 start_boottime_ns;
+    __u64 namespace_pid_tgid;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(map_flags, ACTRAIL_TRACE_HASH_MAP_FLAGS);
+    __uint(max_entries, 1);
+    __type(key, __u64);
+    __type(value, struct actrail_trace_namespace_thread_identity);
+} trace_namespace_thread_identities SEC(".maps");
+
 static __always_inline int claim_process_exit(
-    struct actrail_process_identity *identity
+    struct actrail_process_identity *identity,
+    __u32 kernel_tgid
 ) {
     __u64 observed;
 
-    if (!identity) {
+    if (!identity || !kernel_tgid) {
         return 0;
     }
     observed = identity->exit_state;
     if (observed >> 32) {
         return 0;
     }
-    return __sync_val_compare_and_swap(
+    return actrail_once_u64_claim(
         &identity->exit_state,
+        kernel_tgid,
         observed,
         observed | (1ULL << 32)
-    ) == observed;
+    );
 }
 
 /*
@@ -153,12 +159,16 @@ static __always_inline int set_process_identity(
     if (!kernel_tgid || !start_boottime_ns || !observer_namespace_tgid) {
         return -1;
     }
-    return bpf_map_update_elem(
+    int result = bpf_map_update_elem(
         &process_identities,
         &kernel_tgid,
         &identity,
         BPF_ANY
     );
+    if (result == 0) {
+        actrail_once_u64_release(kernel_tgid);
+    }
+    return result;
 }
 
 static __always_inline void set_process_start_time(__u32 pid, __u64 start_time) {

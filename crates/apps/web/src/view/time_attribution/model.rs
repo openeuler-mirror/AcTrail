@@ -197,9 +197,13 @@ pub(super) fn model_intervals(
         else {
             continue;
         };
-        let partial_observation = action.completeness != SemanticActionCompleteness::Complete
-            || response.completeness != SemanticActionCompleteness::Complete
-            || response.status == SemanticActionStatus::InProgress;
+        let partial_observation = matches!(
+            action.completeness,
+            SemanticActionCompleteness::Partial | SemanticActionCompleteness::Inferred
+        ) || matches!(
+            response.completeness,
+            SemanticActionCompleteness::Partial | SemanticActionCompleteness::Inferred
+        ) || response.status == SemanticActionStatus::InProgress;
         if finalized_on_trace_close {
             tracker.action_warning(
                 "llm_call_closed_on_trace_end",

@@ -19,7 +19,8 @@ sudo -E python3 tests/v2/regression/probe_xiaoo_llm/run_e2e.py
 4. 验证标准输出包含 marker，并提取唯一 trace id。
 5. 停止 daemon，等待事件排空和 trace finalization 完成。
 6. 从数据库验证 trace 为 `Exited/Clean`，并验证 LLM actions 完整配对，
-   response 包含 marker，request 具有 canonical content 证据。
+   response 包含 marker；完整 operation 为 `complete`，实际触发前缀限采的
+   operation 为成功的 `capture_limited`。
 
 # 手动测试
 
@@ -174,14 +175,17 @@ jq --arg marker "$CASE_MARKER" '
             child: .child_action_id
           }
       ],
-      canonical_requests: [
+      usable_requests: [
         $requests[]
         | select(
-            .attributes["llm.request.content_state"] == "canonical_blocks"
-            and ((.attributes["llm.request.canonical_body_hash"] // "")
-                 | startswith("sha256:"))
-            and (((.attributes["llm.request.canonical_body_bytes"] // "0")
-                  | tonumber) > 0)
+            (.attributes["llm.request.content_state"] == "canonical_blocks"
+             and ((.attributes["llm.request.canonical_body_hash"] // "")
+                  | startswith("sha256:"))
+             and (((.attributes["llm.request.canonical_body_bytes"] // "0")
+                   | tonumber) > 0))
+            or (.status == "success"
+                and .completeness == "capture_limited"
+                and .attributes["llm.request.content_state"] == "unavailable")
           )
         | .action_id
       ],
@@ -214,4 +218,6 @@ trace 为 `Exited/Clean`；call 与 request 计数相等且每个 call 恰好有
 request link。已有的 LLM response 必须各自拥有唯一 response link，不能复用。
 缺少 LLM response 的 call 只能是 trace-close 后的 terminal partial/error，并且其
 request 的 stream、method 和 path 必须与 `failed_http_requests` 中尚未使用的
-HTTP 4xx/5xx request 一致。`canonical_requests` 和 `marker_responses` 均非空。
+HTTP 4xx/5xx request 一致。`usable_requests` 和 `marker_responses` 均非空；默认
+`bpf-copy` 下完整抓取的 request/call 必须是 `success/complete`，只有实际超过
+采集上限的 request/call 才是 `success/capture_limited`。
