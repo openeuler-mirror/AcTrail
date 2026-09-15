@@ -9,20 +9,14 @@ use rusqlite::Error as SqlError;
 
 use super::event_codec::{
     EncodedEventPayload, PayloadBlock, event_payload_codec, join_large_fields, split_large_fields,
-    variant_str,
 };
 
 pub fn encode_event_payload(payload: &mut EventPayload) -> Result<EncodedEventPayload, SqlError> {
     let blocks = split_large_fields(payload);
-    let variant = variant_str(payload);
     let fields = event_payload_codec()
         .encode(payload)
         .map_err(|_| SqlError::InvalidQuery)?;
-    Ok(EncodedEventPayload {
-        variant,
-        fields,
-        blocks,
-    })
+    Ok(EncodedEventPayload { fields, blocks })
 }
 
 pub fn decode_event_payload(
@@ -32,8 +26,59 @@ pub fn decode_event_payload(
     let mut payload = event_payload_codec()
         .decode(fields)
         .map_err(|_| SqlError::InvalidQuery)?;
+    if !payload_blocks_match(&payload, blocks) {
+        return Err(SqlError::InvalidQuery);
+    }
     join_large_fields(&mut payload, blocks);
     Ok(payload)
+}
+
+fn payload_blocks_match(payload: &EventPayload, blocks: &[PayloadBlock]) -> bool {
+    if blocks.is_empty() {
+        return true;
+    }
+    if blocks.len() != 1 {
+        return false;
+    }
+    match (payload, blocks[0].kind) {
+        (EventPayload::Stdio(_), super::BlockKind::StdioData) => true,
+        (
+            EventPayload::Application(_),
+            super::BlockKind::HttpBodyText
+            | super::BlockKind::HttpBodyJson
+            | super::BlockKind::HttpBodyBase64,
+        ) => true,
+        _ => false,
+    }
+}
+
+pub(crate) fn take_shared_path(payload: &mut EventPayload) -> Option<String> {
+    match payload {
+        EventPayload::Process(payload) => payload.executable.take(),
+        EventPayload::File(payload) => payload.path.take(),
+        EventPayload::Enforcement(payload) => payload.path.take(),
+        _ => None,
+    }
+}
+
+pub(crate) fn restore_shared_path(
+    payload: &mut EventPayload,
+    path: Option<String>,
+) -> Result<(), SqlError> {
+    let target = match payload {
+        EventPayload::Process(payload) => &mut payload.executable,
+        EventPayload::File(payload) => &mut payload.path,
+        EventPayload::Enforcement(payload) => &mut payload.path,
+        _ if path.is_none() => return Ok(()),
+        _ => return Err(SqlError::InvalidQuery),
+    };
+    if target.is_some() && path.is_some() {
+        return Err(SqlError::InvalidQuery);
+    }
+    if path.is_some() {
+        *target = path;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -55,41 +100,21 @@ mod tests {
     #[test]
     fn sqlite_row_with_pre_change_resource_payload_remains_readable() {
         let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE events (
-                    event_id INTEGER NOT NULL,
-                    trace_id INTEGER NOT NULL,
-                    observed_at INTEGER NOT NULL,
-                    process_id INTEGER NOT NULL,
-                    collector TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    bootstrap_observed INTEGER NOT NULL,
-                    metadata_partial INTEGER NOT NULL,
-                    policy_modified INTEGER NOT NULL,
-                    payload BLOB NOT NULL,
-                    payload_blocks TEXT NOT NULL,
-                    policy_verdict TEXT NOT NULL,
-                    policy_note TEXT,
-                    policy_redactions TEXT NOT NULL,
-                    policy_truncations TEXT NOT NULL
-                );",
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO events VALUES (
-                    1, 2, 0, 3, 'resource-metrics', 'resource', 0, 0, 0,
-                    ?1, '', 'allow', NULL, '', ''
-                )",
-                params![LEGACY_RESOURCE_FIXTURE],
-            )
-            .unwrap();
-
         let event = connection
-            .query_row("SELECT * FROM events", [], |row| {
-                event_from_row(&connection, row)
-            })
+            .query_row(
+                "SELECT
+                    1 AS event_id,
+                    2 AS trace_id,
+                    0 AS observed_at,
+                    3 AS process_id,
+                    4 AS event_meta,
+                    6 AS kind_code,
+                    NULL AS payload_path_id,
+                    ?1 AS payload,
+                    NULL AS payload_path",
+                params![LEGACY_RESOURCE_FIXTURE],
+                |row| event_from_row(&connection, row),
+            )
             .unwrap();
         let EventPayload::Resource(payload) = event.payload else {
             panic!("expected resource payload");

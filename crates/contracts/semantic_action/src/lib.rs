@@ -21,7 +21,7 @@ pub use model::{
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, LlmRequestManifest,
     LlmTrajectoryStartReason, LlmTrajectoryTransition, McpJsonRpcContentPage,
     McpJsonRpcContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
-    SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionPage,
+    SemanticActionLink, SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionPage,
     SemanticActionStatus, SemanticEvidence, SemanticEvidenceKind,
     file_path_set_identity_for_overflow_scope, file_path_set_identity_for_paths,
 };

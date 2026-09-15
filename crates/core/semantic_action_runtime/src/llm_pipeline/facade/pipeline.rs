@@ -76,7 +76,7 @@ impl LiveLlmProjector {
                 &key,
                 segment,
                 AssemblyResetReason::ConfirmedGap,
-                usize::try_from(segment.original_size).unwrap_or(usize::MAX),
+                0,
             );
         let identity = PayloadStreamIdentity::from_segment(segment);
         let mut changed = self.projection.changed_actions(&self.config, output);
@@ -176,7 +176,7 @@ impl LiveLlmProjector {
         let mut missing_responses = LiveLlmOutput::default();
         for request in requests {
             let mut call = call::llm_call_from_request_response(&request, None);
-            ResponseFinalizer::finalize_partial(&mut call, reason, finished_at);
+            ResponseFinalizer::finalize_incomplete(&mut call, reason, finished_at);
             missing_responses.actions.push(call);
         }
         self.projection
@@ -303,7 +303,7 @@ impl LiveLlmProjector {
         );
         for request in self.projection.open_requests_for_trace(trace_id) {
             let mut call = call::llm_call_from_request_response(&request, None);
-            ResponseFinalizer::finalize_partial(
+            ResponseFinalizer::finalize_incomplete(
                 &mut call,
                 StreamFinalizationReason::TraceClosed,
                 finished_at,

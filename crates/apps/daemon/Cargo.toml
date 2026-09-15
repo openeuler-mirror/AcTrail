@@ -25,6 +25,8 @@ export_core = { path = "../../export/core" }
 export_factory = { path = "../../export/factory" }
 getrandom = "0.3"
 ingest_runtime = { path = "../../core/ingest_runtime" }
+idle_contract = { path = "../../contracts/idle" }
+idle_detector = { path = "../../core/idle_detector" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }

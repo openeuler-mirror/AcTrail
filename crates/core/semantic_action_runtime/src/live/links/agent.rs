@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
 };
 
@@ -131,7 +131,7 @@ impl AgentPerformedActionLinkProjector {
             parent_action_id,
             child_action_id: action.action_id.clone(),
             role: SemanticActionLinkRole::AgentPerformedAction,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: action.evidence.clone(),
             attributes,

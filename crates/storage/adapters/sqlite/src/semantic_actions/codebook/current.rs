@@ -2,10 +2,10 @@
 
 use super::{
     ActionCompletenessCodes, ActionKindCodes, ActionStatusCodes, EvidenceKindCodes,
-    LinkConfidenceCodes, LinkRoleCodes, SemanticActionCodebook,
+    LinkOriginCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 28;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 35;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
@@ -48,6 +48,7 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             complete: 301,
             partial: 302,
             inferred: 303,
+            capture_limited: 304,
         },
         evidence_kind: EvidenceKindCodes {
             event: 401,
@@ -83,8 +84,8 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             mcp_request_stdout: 520,
             mcp_response_stdin: 521,
         },
-        link_confidence: LinkConfidenceCodes {
-            observed: 601,
-            derived: 602,
+        link_origin: LinkOriginCodes {
+            observed: 0,
+            derived: 1,
         },
     };

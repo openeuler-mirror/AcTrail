@@ -177,7 +177,7 @@ fn build_link(trace_id: &[u8], link: &SemanticActionLink) -> span::Link {
             .to_vec(),
         attributes: vec![
             str_kv("actrail.link.role", link.role.as_str()),
-            str_kv("actrail.link.confidence", link.confidence.as_str()),
+            str_kv("actrail.link.origin", link.origin.as_str()),
         ],
         ..Default::default()
     }

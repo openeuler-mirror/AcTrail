@@ -26,8 +26,12 @@ static __always_inline int emit_rustls_internal_payload(
     __u64 q1 = 0;
     __u64 q2 = 0;
     __u64 q3 = 0;
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
 
-    if (!payload_ptr) {
+    if (!payload_ptr ||
+        !lookup_current_detailed_trace(&tgid, &tid, &lookup_flags)) {
         return 0;
     }
     if (bpf_probe_read_user(&q0, sizeof(q0), (void *)(unsigned long)payload_ptr) != 0 ||

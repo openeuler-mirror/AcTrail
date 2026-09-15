@@ -13,7 +13,6 @@ use rusqlite::{Error as SqlError, OptionalExtension, Row, params};
 
 use crate::SqliteStorage;
 use crate::records::{decode_time, encode_time};
-use crate::writer::append_event_to_connection;
 
 impl SqliteStorage {
     pub fn create_external_cgroup_binding(
@@ -170,10 +169,9 @@ impl SqliteStorage {
     ) -> Result<EventId, SqlError> {
         let trace_id = event.envelope.trace_id;
         let proposed_event_id = event.envelope.event_id;
-        let zstd_level = self.cold_field_compression.zstd_level;
-        let mut connection = self.connection().borrow_mut();
-        let transaction = connection.transaction()?;
-        let current = transaction
+        let current = self
+            .connection()
+            .borrow()
             .query_row(
                 "SELECT lifecycle_state, final_event_id
                  FROM trace_external_cgroup_bindings WHERE trace_id = ?1",
@@ -183,27 +181,26 @@ impl SqliteStorage {
             .optional()?;
         match current {
             Some((state, Some(event_id))) if state == "closed" => {
-                transaction.commit()?;
                 return Ok(EventId::new(event_id));
             }
             Some((state, None)) if matches!(state.as_str(), "active" | "stale") => {}
             _ => return Err(SqlError::InvalidQuery),
         }
-        append_event_to_connection(&transaction, zstd_level, event)
-            .map_err(|_| SqlError::InvalidQuery)?;
-        require_one(transaction.execute(
-            "UPDATE trace_external_cgroup_bindings
-             SET lifecycle_state = 'closed', closed_at = ?2,
-                 final_event_id = ?3, updated_at = ?2
-             WHERE trace_id = ?1 AND lifecycle_state IN ('active', 'stale')
-                   AND final_event_id IS NULL",
-            params![
-                trace_id.get(),
-                encode_time(closed_at),
-                proposed_event_id.get()
-            ],
-        )?)?;
-        transaction.commit()?;
+        self.append_event_atomically(event, |connection| {
+            require_one(connection.execute(
+                "UPDATE trace_external_cgroup_bindings
+                 SET lifecycle_state = 'closed', closed_at = ?2,
+                     final_event_id = ?3, updated_at = ?2
+                 WHERE trace_id = ?1 AND lifecycle_state IN ('active', 'stale')
+                       AND final_event_id IS NULL",
+                params![
+                    trace_id.get(),
+                    encode_time(closed_at),
+                    proposed_event_id.get()
+                ],
+            )?)
+        })
+        .map_err(|_| SqlError::InvalidQuery)?;
         Ok(proposed_event_id)
     }
 }
@@ -330,7 +327,7 @@ mod tests {
                 trace_id,
                 observed_at: UNIX_EPOCH + Duration::from_secs(40),
                 process: ProcessIdentity::new(3),
-                collector: CollectorName::new("resource-metrics"),
+                collector: CollectorName::new("resource-sampler"),
                 kind: EventKind::Loss,
                 flags: EventFlags::clean(),
             },

@@ -51,7 +51,7 @@ sudo actrailviewer actions --trace-id <TRACE_ID>
 sudo actrailviewer diagnostics --trace-id <TRACE_ID>
 ```
 
-运维人员应确认 application/HTTP/LLM semantic retention 层已启用。partial、truncated、方向容量溢出或缺少可信 message boundary 会只隔离受影响 stream/direction，并留下 diagnostic；这时不应把不完整 body 投影为完整请求。
+运维人员应确认 application/HTTP/LLM semantic retention 层已启用。完整采集模式中的 `partial`、`truncated`、方向容量溢出或缺少可信 message boundary 会只隔离受影响 stream/direction，并留下 diagnostic；这时不应把不完整 body 投影为完整请求。默认 `bpf-copy` 主动限采则记录为 payload `policy_limited` 和 semantic `capture_limited`，不属于错误；只有 POST、JSON Content-Type 和精确 LLM 路由足以确认请求时才会保留 metadata-only `llm.request`。
 
 ## CLI 看不到内容，但底层已采集
 

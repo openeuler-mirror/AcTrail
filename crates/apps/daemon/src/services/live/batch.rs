@@ -51,9 +51,10 @@ impl StorageAttachService {
                     .insert(record.identity, record.clone());
             }
             let parent = parent.map(|(identity, _)| identity);
-            let matched =
+            let applied =
                 RuntimeProcessEventApplier::new(trace_runtime, &mut self.process_registry)
                     .apply(&raw_event, process, parent)?;
+            let matched = applied.matched;
             if let Some(matched) = &matched {
                 self.attach_mcp_stdio_client_identity(
                     trace_runtime,
@@ -77,6 +78,13 @@ impl StorageAttachService {
 
             if let Some(trace_id) = matched_trace_id {
                 self.mark_semantic_projection_dirty(trace_id);
+                if let Some(process) = applied.changed_membership {
+                    batch
+                        .dirty_memberships
+                        .entry(trace_id)
+                        .or_default()
+                        .insert(process);
+                }
                 if outcome
                     .diagnostics
                     .iter()
@@ -226,7 +234,11 @@ impl StorageAttachService {
         trace_runtime: &TraceRuntime,
         batch: LiveEventBatch,
     ) -> Result<(), ControlError> {
-        let trace_states = self.trace_states_for_persistence(trace_runtime, batch.trace_ids)?;
+        let trace_states = self.trace_states_for_persistence(
+            trace_runtime,
+            batch.trace_ids,
+            batch.dirty_memberships,
+        )?;
         let result = self.persist_observed_batch_then_publish(
             trace_runtime,
             batch.events,
@@ -246,10 +258,14 @@ impl StorageAttachService {
         &self,
         trace_runtime: &TraceRuntime,
         trace_ids: BTreeSet<TraceId>,
+        mut dirty_memberships: BTreeMap<TraceId, BTreeSet<ProcessIdentity>>,
     ) -> Result<Vec<TraceStateRecord>, ControlError> {
         trace_ids
             .into_iter()
-            .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
+            .map(|trace_id| {
+                let membership_ids = dirty_memberships.remove(&trace_id).unwrap_or_default();
+                self.trace_state_record_for_memberships(trace_runtime, trace_id, &membership_ids)
+            })
             .collect()
     }
 
@@ -485,5 +501,6 @@ struct LiveEventBatch {
     llm_pipeline_diagnostics: Vec<LlmPipelineDiagnostic>,
     semantic_actions: SemanticActionBatch,
     trace_ids: BTreeSet<TraceId>,
+    dirty_memberships: BTreeMap<TraceId, BTreeSet<ProcessIdentity>>,
     process_records: BTreeMap<ProcessIdentity, ProcessRecord>,
 }

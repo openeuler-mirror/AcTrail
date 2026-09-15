@@ -18,6 +18,7 @@ fn is_ebpf_only_capability(capability: &Capability) -> bool {
     matches!(
         capability,
         Capability::ProcLifecycle
+            | Capability::ProcExecContext
             | Capability::FsAccessBasic
             | Capability::FsMmap
             | Capability::FsExecAccess
@@ -37,8 +38,7 @@ fn is_ebpf_only_capability(capability: &Capability) -> bool {
 fn is_seccomp_only_capability(capability: &Capability) -> bool {
     matches!(
         capability,
-        Capability::ProcExecContext
-            | Capability::EnforcementCommandExecutionSeccomp
+        Capability::EnforcementCommandExecutionSeccomp
             | Capability::EnforcementNetworkConnectSeccomp
     )
 }
@@ -53,6 +53,7 @@ pub enum FailureDisposition {
 pub struct CaptureProfile {
     pub name: ProfileName,
     pub capabilities: Vec<CapabilityRequest>,
+    pub agent_descendant_observation_depth: i32,
     pub classify_providers: bool,
     pub enable_payload_collectors: bool,
     pub identity_failure: FailureDisposition,
@@ -64,11 +65,17 @@ impl CaptureProfile {
         Self {
             name,
             capabilities,
+            agent_descendant_observation_depth: -1,
             classify_providers: false,
             enable_payload_collectors: false,
             identity_failure: FailureDisposition::DegradeTrace,
             runtime_loss: FailureDisposition::DegradeTrace,
         }
+    }
+
+    pub fn with_agent_descendant_observation_depth(mut self, depth: i32) -> Self {
+        self.agent_descendant_observation_depth = depth;
+        self
     }
 
     pub fn supports_host_ebpf_observation(&self) -> bool {

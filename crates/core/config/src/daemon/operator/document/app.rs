@@ -256,7 +256,7 @@ impl Default for EnforcementDocument {
             mark_strategy: "parent-directories".to_string(),
             audit_enabled: true,
             event_buffer_bytes: 65536,
-            seccomp_syscalls: vec!["mkdir".to_string(), "rmdir".to_string()],
+            seccomp_syscalls: Vec::new(),
             seccomp_path_max_bytes: 4096,
         }
     }

@@ -1,6 +1,17 @@
 #ifndef ACTRAIL_COMMON_HELPERS_H
 #define ACTRAIL_COMMON_HELPERS_H
 
+/*
+ * eBPF sources are compiled without the kernel-internal compiler headers and
+ * without glibc, so <linux/stddef.h> would otherwise install its userspace
+ * fallback (`__inline__`) and silently weaken forced inlining. Define the
+ * kernel semantics here before any system header is included; the UAPI header
+ * only defines its fallback under `#ifndef`.
+ */
+#ifndef __always_inline
+#define __always_inline inline __attribute__((__always_inline__))
+#endif
+
 #include <linux/bpf.h>
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -31,6 +42,7 @@
 #define ACTRAIL_BPF_FUNC_RINGBUF_RESERVE 131
 #define ACTRAIL_BPF_FUNC_RINGBUF_SUBMIT 132
 #define ACTRAIL_BPF_FUNC_RINGBUF_DISCARD 133
+#define ACTRAIL_BPF_FUNC_LOOP 181
 #define ACTRAIL_BPF_MAP_TYPE_RINGBUF 27
 
 struct actrail_bpf_pidns_info {
@@ -73,6 +85,10 @@ static long (*bpf_probe_read)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_FUNC_probe_read;
 static long (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)ACTRAIL_BPF_FUNC_PROBE_READ_KERNEL_STR;
+#ifdef ACTRAIL_BPF_LOOP
+static long (*bpf_loop)(__u32 nr_loops, void *callback_fn, void *callback_ctx, __u64 flags) =
+    (void *)ACTRAIL_BPF_FUNC_LOOP;
+#endif
 static long (*bpf_get_ns_current_pid_tgid)(
     __u64 dev,
     __u64 ino,

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, attr_keys as attrs,
 };
 
@@ -48,7 +48,7 @@ impl LlmExchangeLinkProjector {
             parent_action_id: call.action_id.clone(),
             child_action_id: child_action_id.to_string(),
             role,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: call.evidence.clone(),
             attributes: BTreeMap::new(),

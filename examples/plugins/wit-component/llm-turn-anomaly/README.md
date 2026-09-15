@@ -22,7 +22,7 @@
 
 ### 连续重试
 
-对分组内请求按时间顺序扫描，`response_complete` 为 `false`（即失败）且 `request_body_bytes >= min_request_bytes` 的请求计入连续段；非失败请求或请求体过小的请求会中断连续段。连续段长度达到 `consecutive_count` 时产生一条 finding，记录段首尾的 `request_action_id` 与开始时间。
+对分组内请求按时间顺序扫描，`response_status` 为 `error` 且 `request_body_bytes >= min_request_bytes` 的请求计入连续段；非失败请求或请求体过小的请求会中断连续段。连续段长度达到 `consecutive_count` 时产生一条 finding，记录段首尾的 `request_action_id` 与开始时间。
 
 ### 重复相似请求
 
@@ -36,7 +36,7 @@
 
 ### 错误率
 
-对分组内请求统计 `response_complete` 为 `false` 的比例（千分比）。请求总数达到 `minimum_exchanges` 且实际错误率不低于 `error_ratio_per_mille` 时产生一条 finding，记录 `total_exchanges`、`error_count` 和 `actual_ratio_per_mille`。
+对分组内请求统计 `response_status` 为 `error` 的比例（千分比）。请求总数达到 `minimum_exchanges` 且实际错误率不低于 `error_ratio_per_mille` 时产生一条 finding，记录 `total_exchanges`、`error_count` 和 `actual_ratio_per_mille`。
 
 ### 上下文快速膨胀
 

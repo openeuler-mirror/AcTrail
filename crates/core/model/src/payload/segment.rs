@@ -73,7 +73,25 @@ pub enum PayloadRedactionState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTruncationState {
     Complete,
+    PolicyLimited,
     Truncated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadCaptureState {
+    Complete,
+    PolicyLimited,
+    Incomplete,
+}
+
+impl PayloadTruncationState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PolicyLimited => "policy_limited",
+            Self::Truncated => "truncated",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,6 +137,32 @@ pub struct PayloadSegment {
     pub symbol: String,
     pub protocol_hint: Option<String>,
     pub bytes: Vec<u8>,
+}
+
+impl PayloadSegment {
+    fn operation_capture_ended(&self) -> bool {
+        self.operation_offset.saturating_add(self.captured_size) >= self.operation_captured_size
+    }
+
+    pub fn capture_state(&self) -> PayloadCaptureState {
+        if self.truncation == PayloadTruncationState::PolicyLimited
+            && self.operation_completion_state == PayloadOperationCompletionState::Success
+            && self.operation_original_size > self.operation_captured_size
+        {
+            PayloadCaptureState::PolicyLimited
+        } else if self.truncation == PayloadTruncationState::Complete
+            && self.operation_completion_state == PayloadOperationCompletionState::Success
+            && self.operation_original_size == self.operation_captured_size
+        {
+            PayloadCaptureState::Complete
+        } else {
+            PayloadCaptureState::Incomplete
+        }
+    }
+
+    pub fn operation_capture_state(&self) -> Option<PayloadCaptureState> {
+        self.operation_capture_ended().then(|| self.capture_state())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

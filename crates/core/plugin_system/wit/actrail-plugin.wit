@@ -310,6 +310,13 @@ interface types {
     unknown,
   }
 
+  enum llm-action-completeness {
+    complete,
+    capture-limited,
+    partial,
+    inferred,
+  }
+
   record llm-exchange-record {
     call-action-id: string,
     request-action-id: string,
@@ -322,10 +329,10 @@ interface types {
     completed-at: option<u64>,
     request-body-bytes: u64,
     request-raw-bytes: option<u64>,
-    request-complete: bool,
+    request-completeness: llm-action-completeness,
     response-body-bytes: option<u64>,
     response-raw-bytes: option<u64>,
-    response-complete: bool,
+    response-completeness: option<llm-action-completeness>,
     response-status: llm-response-status,
   }
 

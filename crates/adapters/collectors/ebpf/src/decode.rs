@@ -15,15 +15,14 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::{
-    HostProcessCoordinates, NamespaceProcessCoordinates, ProcessObservation,
-};
+use model_core::process::{HostProcessCoordinates, ProcessObservation};
 
 use crate::loader::{
     KernelEndpoint, KernelEndpointRole, KernelEndpointWithRole, KernelEventIdentity,
     KernelExecPayload, KernelExitPayload, KernelFdIoPayload, KernelForkPayload,
     KernelNetworkOperation, KernelNetworkPayload, KernelObservationCommon, KernelObservationEvent,
-    KernelObservationPayload, KernelSignalPayload,
+    KernelObservationPayload, KernelProcessExecAttemptEvent, KernelProcessExecResultEvent,
+    KernelProcessForkAttemptEvent, KernelProcessForkResultEvent, KernelSignalPayload,
 };
 use crate::maps::BindingStateMap;
 
@@ -103,13 +102,15 @@ pub(crate) fn decode_observation(
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let lifecycle_requested =
         bindings.trace_has_capability(event.common.trace_id, &Capability::ProcLifecycle);
+    let exec_context_requested =
+        bindings.trace_has_capability(event.common.trace_id, &Capability::ProcExecContext);
     match &event.payload {
         KernelObservationPayload::Fork(payload) => maybe_lifecycle_event(
             lifecycle_requested,
             decode_fork(&event.common, payload, bindings)?,
         ),
         KernelObservationPayload::Exec(payload) => maybe_lifecycle_event(
-            lifecycle_requested,
+            lifecycle_requested || exec_context_requested,
             decode_exec(&event.common, payload, bindings)?,
         ),
         KernelObservationPayload::Exit(payload) => maybe_lifecycle_event(
@@ -245,6 +246,11 @@ fn decode_exec(
             metadata.insert("exec_filename_truncated".to_string(), "true".to_string());
         }
     }
+    if let Some(attempt) = &payload.exec_attempt {
+        append_exec_attempt_metadata(&mut metadata, attempt);
+        metadata.insert("exec.result".to_string(), "success".to_string());
+        metadata.insert("result".to_string(), "0".to_string());
+    }
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
@@ -259,6 +265,177 @@ fn decode_exec(
             metadata,
         },
     }))
+}
+
+pub(crate) fn decode_process_exec_failure(
+    event: KernelProcessExecResultEvent,
+    attempt: Option<KernelProcessExecAttemptEvent>,
+    bindings: &BindingStateMap,
+) -> Result<RawCollectorEvent, DecodeError> {
+    let observation = resolve_event_observation(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("exec_identity", error))?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("exec.attempt_id".to_string(), event.attempt_id.to_string());
+    metadata.insert("exec.result".to_string(), "failed".to_string());
+    metadata.insert("result".to_string(), event.result.to_string());
+    metadata.insert(
+        "errno".to_string(),
+        event.result.saturating_neg().to_string(),
+    );
+    metadata.insert(
+        "syscall".to_string(),
+        exec_syscall_name(event.syscall).to_string(),
+    );
+    if let Some(attempt) = attempt {
+        append_exec_attempt_metadata(&mut metadata, &attempt);
+    }
+    Ok(RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
+            process: observation,
+            collector: CollectorName::new("ebpf"),
+        },
+        payload: RawObservationPayload::Process {
+            operation: "exec".to_string(),
+            parent: None,
+            metadata,
+        },
+    })
+}
+
+pub(crate) fn decode_process_fork_result(
+    event: KernelProcessForkResultEvent,
+    attempt: Option<KernelProcessForkAttemptEvent>,
+    bindings: &BindingStateMap,
+) -> Result<RawCollectorEvent, DecodeError> {
+    let observation = resolve_event_observation(
+        event.trace_id,
+        event.pid,
+        event.host_pid,
+        event.pid_generation,
+        bindings,
+    )
+    .map_err(|error| DecodeError::new("fork_identity", error))?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("fork.attempt_id".to_string(), event.attempt_id.to_string());
+    metadata.insert(
+        "syscall".to_string(),
+        fork_syscall_name(event.syscall).to_string(),
+    );
+    metadata.insert("result".to_string(), event.result.to_string());
+    if event.result < 0 {
+        metadata.insert(
+            "errno".to_string(),
+            event.result.saturating_neg().to_string(),
+        );
+    }
+    if let Some(attempt) = attempt {
+        metadata.insert("clone.flags".to_string(), attempt.flags.to_string());
+        metadata.insert("clone.thread".to_string(), "false".to_string());
+        if attempt.syscall == 6 {
+            metadata.insert(
+                "clone3.args_ptr".to_string(),
+                attempt.clone3_args_ptr.to_string(),
+            );
+            metadata.insert(
+                "clone3.args_size".to_string(),
+                attempt.clone3_args_size.to_string(),
+            );
+        }
+        if attempt.capture_flags != 0 {
+            metadata.insert(
+                "fork.capture_flags".to_string(),
+                attempt.capture_flags.to_string(),
+            );
+        }
+    } else {
+        metadata.insert(
+            "fork.capture_flags".to_string(),
+            "attempt_missing".to_string(),
+        );
+    }
+    Ok(RawCollectorEvent {
+        envelope: RawEventEnvelope {
+            trace_id: Some(event.trace_id),
+            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
+            process: observation,
+            collector: CollectorName::new("ebpf"),
+        },
+        payload: RawObservationPayload::Process {
+            operation: "fork_attempt".to_string(),
+            parent: None,
+            metadata,
+        },
+    })
+}
+
+fn append_exec_attempt_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    attempt: &KernelProcessExecAttemptEvent,
+) {
+    metadata.insert(
+        "exec.attempt_id".to_string(),
+        attempt.attempt_id.to_string(),
+    );
+    metadata.insert(
+        "syscall".to_string(),
+        exec_syscall_name(attempt.syscall).to_string(),
+    );
+    if !attempt.path.is_empty() {
+        metadata.insert("executable".to_string(), attempt.path.clone());
+        metadata.insert("exec.path".to_string(), attempt.path.clone());
+    }
+    if !attempt.argv.is_empty() {
+        metadata.insert("argv".to_string(), attempt.argv.join("\n"));
+        metadata.insert("argv_count".to_string(), attempt.argv.len().to_string());
+        metadata.insert("command_line".to_string(), attempt.argv.join(" "));
+    }
+    if attempt.syscall == 2 {
+        metadata.insert(
+            "execveat.dirfd".to_string(),
+            attempt.execveat_dirfd.to_string(),
+        );
+        metadata.insert(
+            "execveat.flags".to_string(),
+            attempt.execveat_flags.to_string(),
+        );
+    }
+    metadata.insert("env_captured".to_string(), "false".to_string());
+    metadata.insert(
+        "args_truncated".to_string(),
+        (attempt.capture_flags != 0).to_string(),
+    );
+    if attempt.capture_flags != 0 {
+        metadata.insert(
+            "exec.capture_flags".to_string(),
+            attempt.capture_flags.to_string(),
+        );
+    }
+}
+
+fn exec_syscall_name(syscall: u32) -> &'static str {
+    match syscall {
+        1 => "execve",
+        2 => "execveat",
+        _ => "unknown",
+    }
+}
+
+fn fork_syscall_name(syscall: u32) -> &'static str {
+    match syscall {
+        3 => "fork",
+        4 => "vfork",
+        5 => "clone",
+        6 => "clone3",
+        _ => "unknown",
+    }
 }
 
 fn decode_exit(
@@ -638,9 +815,10 @@ pub(crate) fn resolve_event_observation(
     {
         return Ok(observation);
     }
-    let namespace = bindings
-        .trace_pid_namespace(trace_id)
-        .ok_or_else(|| format!("trace {} has no PID namespace binding", trace_id.get()))?;
-    let namespace = NamespaceProcessCoordinates::new(namespace.clone(), namespace_pid, 0);
-    Ok(ProcessObservation::namespace(namespace))
+    Err(format!(
+        "trace {} has no exact process binding for kernel TGID {} generation {}",
+        trace_id.get(),
+        kernel_tgid,
+        kernel_start_time
+    ))
 }

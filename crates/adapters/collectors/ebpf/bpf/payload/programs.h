@@ -21,7 +21,7 @@ int handle_sys_enter_write(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_exit_write")
 int handle_sys_exit_write(struct trace_event_raw_sys_exit *ctx) {
     emit_stdio_payload_op(ctx);
-    emit_socket_payload_op(ctx);
+    emit_socket_payload_op(ctx, 0);
     return emit_pending_net_op(ctx);
 }
 
@@ -43,7 +43,7 @@ int handle_sys_enter_read(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_exit_read")
 int handle_sys_exit_read(struct trace_event_raw_sys_exit *ctx) {
     emit_stdio_payload_op(ctx);
-    emit_socket_payload_op(ctx);
+    emit_socket_payload_op(ctx, 0);
     if (emit_file_bulk_read_fast_read_op(ctx)) {
         return 0;
     }

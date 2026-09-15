@@ -501,7 +501,8 @@ def verify_payload_markers(
                     SELECT COUNT(*)
                     FROM payload_segments
                     WHERE trace_id = ?
-                      AND direction = 'outbound'
+                      -- schema-v35 segment_meta bit 0: outbound=0, inbound=1.
+                      AND (segment_meta & 1) = 0
                       AND CAST(bytes AS TEXT) LIKE ?
                     """,
                     (trace_id, f"%{marker}%"),

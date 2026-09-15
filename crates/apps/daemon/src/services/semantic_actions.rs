@@ -7,11 +7,12 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
-use model_core::process::ProcessRecord;
+use model_core::process::{ProcessIdentity, ProcessRecord};
 use model_core::trace::TraceRecord;
 use recording_runtime::{
     RecordingError, RecordingWriter, SemanticActionBatch, TraceRecordLookup, TraceStateRecord,
 };
+use semantic_action::SemanticActionKind;
 use semantic_action::SemanticActionLink;
 use semantic_action_runtime::derive_lineage_links;
 use trace_runtime::registry::TraceRuntime;
@@ -20,48 +21,141 @@ use crate::services::attach::StorageAttachService;
 use crate::services::live::next_diagnostic_id_from_seed;
 
 impl StorageAttachService {
-    pub(super) fn write_semantic_action_batch(
+    pub(super) fn recognized_agent_processes(
+        batch: &SemanticActionBatch,
+    ) -> Vec<(TraceId, ProcessIdentity)> {
+        batch
+            .actions()
+            .iter()
+            .filter(|action| action.kind == SemanticActionKind::AgentIdentity)
+            .map(|action| (action.trace_id, action.process))
+            .collect()
+    }
+
+    pub(super) fn apply_agent_observation_depths(
         &mut self,
-        batch: SemanticActionBatch,
-    ) -> Result<SemanticActionBatch, ControlError> {
-        RecordingWriter::new(self.storage.as_mut())
-            .persist_semantic_actions(batch)
-            .map_err(recording_error_to_control)
+        trace_runtime: &TraceRuntime,
+        agents: Vec<(TraceId, ProcessIdentity)>,
+    ) {
+        for (trace_id, process) in agents {
+            let Some(depth) = trace_runtime
+                .get_trace(trace_id)
+                .map(|entry| entry.profile_snapshot.agent_descendant_observation_depth)
+            else {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    "Agent observation depth update skipped because trace state is missing"
+                );
+                continue;
+            };
+            if depth == -1 {
+                continue;
+            }
+            let Some(host) = self
+                .process_registry
+                .record(process)
+                .and_then(|record| record.host.as_ref())
+            else {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    process_id = process.get(),
+                    "Agent observation depth update skipped because observer TGID is missing"
+                );
+                continue;
+            };
+            let observer_tgid = host.pid;
+            let expected_start_boottime_ns = host.start_boottime_ns;
+            let expected_start_time_ticks = host.start_time_ticks;
+            if let Err(error) = self.collector.set_agent_descendant_observation_depth(
+                trace_id,
+                observer_tgid,
+                expected_start_boottime_ns,
+                expected_start_time_ticks,
+                depth,
+            ) {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    process_id = process.get(),
+                    observer_tgid,
+                    stage = %error.stage,
+                    message = %error.message,
+                    "Agent observation depth update failed locally"
+                );
+            }
+        }
+    }
+
+    pub(super) fn persisted_agent_processes_after_failure(
+        &self,
+        agents: Vec<(TraceId, ProcessIdentity)>,
+    ) -> Vec<(TraceId, ProcessIdentity)> {
+        agents
+            .into_iter()
+            .filter(
+                |(trace_id, process)| match self.storage.list_semantic_actions(*trace_id) {
+                    Ok(actions) => actions.iter().any(|action| {
+                        action.kind == SemanticActionKind::AgentIdentity
+                            && action.process == *process
+                    }),
+                    Err(error) => {
+                        tracing::warn!(
+                            trace_id = trace_id.get(),
+                            process_id = process.get(),
+                            stage = %error.stage,
+                            message = %error.message,
+                            "Agent observation depth persistence check failed locally"
+                        );
+                        false
+                    }
+                },
+            )
+            .collect()
     }
 
     pub(super) fn persist_observed_batch_then_publish(
         &mut self,
         trace_runtime: &TraceRuntime,
         events: Vec<DomainEvent>,
-        diagnostics: Vec<DiagnosticRecord>,
-        semantic_actions: SemanticActionBatch,
+        mut diagnostics: Vec<DiagnosticRecord>,
+        mut semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
         process_records: Vec<ProcessRecord>,
     ) -> Result<(), ControlError> {
+        let observed_at = SystemTime::now();
+        let idle_update = self
+            .idle_runtime
+            .prepare_batch(&mut semantic_actions, observed_at);
+        diagnostics.extend(
+            self.idle_attribution_diagnostics(idle_update.ambiguous_traces(), observed_at)?,
+        );
         let event_count = events.len();
         let diagnostic_count = diagnostics.len();
         let semantic_action_count = semantic_actions.actions().len();
         let semantic_link_count = semantic_actions.links().len();
         let trace_state_count = trace_states.len();
         let traces = LiveTraceRecordLookup::new(trace_runtime);
-        let next_diagnostic_id = &mut self.next_diagnostic_id;
         let started = crate::services::workload_diagnostics::now();
-        let result = RecordingWriter::new(self.storage.as_mut())
-            .persist_live_events_then_export(
+        let next_diagnostic_id = &mut self.next_diagnostic_id;
+        let (result, persisted) = RecordingWriter::new(self.storage.as_mut())
+            .persist_live_events_then_export_with_additional_write(
                 &self.export_runtime,
                 events,
                 diagnostics,
                 semantic_actions,
                 trace_states,
                 process_records,
+                |storage| idle_update.persist(storage),
                 &traces,
-                SystemTime::now(),
+                observed_at,
                 || {
                     next_diagnostic_id_from_seed(next_diagnostic_id)
                         .map_err(control_error_to_recording)
                 },
-            )
-            .map_err(recording_error_to_control);
+            );
+        if persisted {
+            self.idle_runtime.commit(idle_update);
+        }
+        let result = result.map_err(recording_error_to_control);
         self.workload_diagnostics.record_storage_batch(
             started.elapsed(),
             event_count,
@@ -107,24 +201,41 @@ impl StorageAttachService {
         trace_id: TraceId,
         finished_at: std::time::SystemTime,
     ) -> Result<(), ControlError> {
-        let (semantic_actions, llm_pipeline_diagnostics) =
+        // Attribute final trace actions before projecting and persisting them.
+        let (mut semantic_actions, llm_pipeline_diagnostics) =
             self.finalize_semantic_actions_for_trace(trace_id, finished_at);
+        let idle_update =
+            self.idle_runtime
+                .prepare_terminal_batch(&mut semantic_actions, finished_at, trace_id);
         let mut export_batch = semantic_actions.clone();
         let mut errors = Vec::new();
-
-        match self.write_semantic_action_batch(semantic_actions) {
-            Ok(_) => match self.rebuild_lineage_semantic_links(trace_id) {
-                Ok(lineage_links) => {
-                    export_batch.extend(SemanticActionBatch::from_parts(Vec::new(), lineage_links));
+        let mut final_batch_persisted = false;
+        match RecordingWriter::new(self.storage.as_mut())
+            .persist_semantic_actions_with_additional_write(semantic_actions, |storage| {
+                idle_update.persist(storage)
+            })
+            .map_err(recording_error_to_control)
+        {
+            Ok(()) => {
+                final_batch_persisted = true;
+                self.idle_runtime.commit(idle_update);
+                match self.rebuild_lineage_semantic_links(trace_id) {
+                    Ok(lineage_links) => {
+                        export_batch
+                            .extend(SemanticActionBatch::from_parts(Vec::new(), lineage_links));
+                    }
+                    Err(error) => errors.push(error),
                 }
-                Err(error) => errors.push(error),
-            },
+            }
             Err(error) => errors.push(error),
         }
 
-        if let Err(error) = self.publish_live_export_actions(trace_runtime, trace_id, export_batch)
-        {
-            errors.push(error);
+        if final_batch_persisted {
+            if let Err(error) =
+                self.publish_live_export_actions(trace_runtime, trace_id, export_batch)
+            {
+                errors.push(error);
+            }
         }
 
         self.persist_llm_pipeline_diagnostics_fail_local(trace_runtime, llm_pipeline_diagnostics);

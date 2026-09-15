@@ -184,9 +184,13 @@ static __always_inline int store_tls_payload_op_args(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    __u64 *trace_id;
     struct actrail_pending_tls_payload_op op = {};
 
+    trace_id = lookup_current_trace(&tgid, &tid, &lookup_flags);
+    if (trace_id && !process_observation_is_detailed(current_kernel_tgid())) {
+        return 0;
+    }
     tls_diag_inc(ACTRAIL_TLS_DIAG_ENTER_TOTAL);
     if (lookup_flags & ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_TRACE_LOOKUP_HOST_FALLBACK);

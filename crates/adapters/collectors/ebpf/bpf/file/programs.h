@@ -7,9 +7,8 @@
 SEC("tracepoint/syscalls/sys_enter_pipe")
 int handle_sys_enter_pipe(struct trace_event_raw_sys_enter *ctx) {
     return store_pending_ipc_fd_pair_op(
-        ctx,
         ACTRAIL_FILE_IPC_FD_PIPE,
-        0,
+        (__u64)ctx->args[0],
         0,
         0
     );
@@ -23,9 +22,8 @@ int handle_sys_exit_pipe(struct trace_event_raw_sys_exit *ctx) {
 SEC("tracepoint/syscalls/sys_enter_pipe2")
 int handle_sys_enter_pipe2(struct trace_event_raw_sys_enter *ctx) {
     return store_pending_ipc_fd_pair_op(
-        ctx,
         ACTRAIL_FILE_IPC_FD_PIPE,
-        0,
+        (__u64)ctx->args[0],
         0,
         (__u32)ctx->args[1]
     );
@@ -39,9 +37,8 @@ int handle_sys_exit_pipe2(struct trace_event_raw_sys_exit *ctx) {
 SEC("tracepoint/syscalls/sys_enter_socketpair")
 int handle_sys_enter_socketpair(struct trace_event_raw_sys_enter *ctx) {
     return store_pending_ipc_fd_pair_op(
-        ctx,
         ACTRAIL_FILE_IPC_FD_UNIX_SOCKET,
-        3,
+        (__u64)ctx->args[3],
         (__u32)ctx->args[0],
         (__u32)ctx->args[1]
     );
@@ -79,6 +76,13 @@ int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
 SEC("tracepoint/syscalls/sys_enter_openat2")
 int handle_sys_enter_openat2(struct trace_event_raw_sys_enter *ctx) {
     struct actrail_open_how how = {};
+    __u32 tgid = 0;
+    __u32 tid = 0;
+    __u32 lookup_flags = 0;
+
+    if (!lookup_current_detailed_trace(&tgid, &tid, &lookup_flags)) {
+        return 0;
+    }
     read_file_open_how(ctx, &how);
     fd_open_enter(ctx, how.flags);
     return emit_file_openat2_enter(ctx, &how);

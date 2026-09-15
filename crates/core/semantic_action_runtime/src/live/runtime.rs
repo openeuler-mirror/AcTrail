@@ -420,11 +420,10 @@ impl LiveSemanticActionRuntime {
                     .retain(|evidence| evidence.kind == SemanticEvidenceKind::Event);
             }
         }
-        let mut mcp_actions = self.mcp.observe_llm_actions(&llm_output.actions);
         let projected_llm = self.observe_llm_batch(llm_output);
         let (mcp_output, mcp_stdio_diagnostics) =
             self.mcp.observe_payload_segment(segment, retain_evidence);
-        mcp_actions.extend(mcp_output.actions);
+        let mcp_actions = mcp_output.actions;
         let mut output = if projected_llm.actions.is_empty() && mcp_actions.is_empty() {
             LiveSemanticActionOutput::default()
         } else {

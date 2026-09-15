@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import socket
 import threading
 import time
 from collections import deque
@@ -218,6 +219,12 @@ class _JsonRpcServer(ThreadingHTTPServer):
     ):
         self.receiver = receiver
         super().__init__(address, _JsonRpcRequestHandler)
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        connection, address = super().get_request()
+        # Each action is one small HTTP/1.1 exchange; avoid delayed-ACK stalls.
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return connection, address
 
 
 class _JsonRpcRequestHandler(BaseHTTPRequestHandler):

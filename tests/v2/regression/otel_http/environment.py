@@ -193,6 +193,10 @@ class OtelHttpEnvironment(PluginTestEnvironment):
                 "\n[semantic_retention.l0_llm_call]\n"
                 'request_content = "canonical_blocks"\n'
                 'request_body_export = "canonical_json"\n'
+                "\n[payload.socket]\n"
+                'capture_backend = "bpf-copy-seccomp-fallback"\n'
+                "\n[seccomp_notify]\n"
+                "enabled = true\n"
             )
 
     @staticmethod

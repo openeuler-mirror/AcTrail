@@ -426,7 +426,7 @@ impl Default for PayloadSocketDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            capture_backend: "bpf-copy-seccomp-fallback".to_string(),
+            capture_backend: "bpf-copy".to_string(),
             max_segment_bytes: 4095,
             max_operation_bytes: 4194304,
             ring_buffer_bytes: 8388608,

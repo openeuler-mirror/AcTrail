@@ -84,7 +84,7 @@ WASM core module 观测插件收到的 batch envelope 是一个 JSON object。�
 | `captured_size` | number | 已捕获字节数。 |
 | `original_size` | number | 原始字节数。 |
 | `redaction` | string | 脱敏状态摘要。 |
-| `truncation` | string | 截断状态摘要。 |
+| `truncation` | string | 采集完整性：`complete`、性能模式预期限采 `policy_limited`，或异常 `truncated`。 |
 
 `actions` 中的元素当前包含：
 
@@ -146,6 +146,8 @@ analyze: func(task: post-trace-task) -> result<_, string>
 | `alert-write` | 无读取能力；向独立告警队列提交 manifest 已声明的告警 | 请求必须携带当前 trace 授权 token；`alert-draft.deduplication-key` 非空时，相同 trace、告警定义和 key 只持久化一次。 |
 
 `trace-activity-read` 将已经持久化的 `llm.call`、request 和可选 response 组合为一条 LLM exchange，并提供命令行、起止时间、Agent 顶层子命令标记和容器归属。实时 observation worker 调用时，宿主从 batch 携带的 trace 上下文确定唯一可读的 trace ID；插件不能把 hostcall 切换到其他 trace。
+
+LLM exchange 使用 `request-completeness` 和可选的 `response-completeness` 保留 `complete`、`capture-limited`、`partial`、`inferred` 四种语义。`capture-limited` 表示请求或响应因已配置的采集上限而只保留部分原始字节，但该状态可用于性能剖析；`partial` 表示非预期缺失。对于带有已校验 `Content-Length` 的 `capture-limited` HTTP 请求，`request-body-bytes` 是声明的完整 body 长度，`request-raw-bytes` 仍是实际保留的原始字节数。
 
 这些 hostcall 仅处理当前授权 trace，不在被观测进程的同步路径上，也不支持跨 trace 查询。`trace-analysis-read` 和 `trace-file-state-read` 仍只在终态 `analyze` 调用中可用。
 

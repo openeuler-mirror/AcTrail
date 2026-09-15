@@ -62,6 +62,13 @@ pub fn probe() -> EbpfProbeResult {
                     )],
                 ),
                 CapabilityDescriptor::new(
+                    Capability::ProcExecContext,
+                    vec![CapabilityField::new(
+                        "exec_attempt_argv_result",
+                        GuaranteeClass::AvailableWhenMetadataObservable,
+                    )],
+                ),
+                CapabilityDescriptor::new(
                     Capability::NetTransport,
                     vec![
                         CapabilityField::new(

@@ -12,10 +12,12 @@ struct actrail_process_fork_event {
     __u32 parent_observer_namespace_tgid;
     __u32 parent_kernel_tgid;
     __u64 parent_start_boottime_ns;
+    __u64 attempt_id;
 } __attribute__((packed));
 
 struct actrail_process_exec_event {
     struct actrail_event_header header;
+    __u64 attempt_id;
     __u32 filename_size;
     __u32 filename_flags;
     char filename[ACTRAIL_EXEC_FILENAME_ABI_MAX_BYTES];

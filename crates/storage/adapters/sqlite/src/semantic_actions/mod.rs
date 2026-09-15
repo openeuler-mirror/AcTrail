@@ -5,6 +5,7 @@ mod attribute_codes;
 pub(crate) mod codebook;
 mod cold_fields;
 mod command_fallback;
+mod evidence;
 mod llm_request_content;
 mod llm_request_lineage;
 mod mcp_jsonrpc_content;

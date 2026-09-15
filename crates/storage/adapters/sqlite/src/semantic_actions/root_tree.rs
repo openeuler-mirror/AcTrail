@@ -12,13 +12,13 @@ use semantic_action::{
 
 use crate::SqliteStorage;
 use crate::semantic_actions::codebook::sqlite::{
-    action_kind_code, decode_link_confidence, decode_link_role, link_role_code,
-    link_role_code_from_str,
+    action_kind_code, decode_link_origin, decode_link_role, link_role_code, link_role_code_from_str,
 };
 use crate::semantic_actions::cold_fields::decode_attributes_from_row;
+use crate::semantic_actions::evidence;
 use crate::semantic_actions::store::{
     ACTION_SELECT_COLUMNS, LINK_SELECT_COLUMNS, action_cold_field_join, action_from_row,
-    link_cold_field_join, read_link_evidence, resolve_file_paths,
+    link_cold_field_join,
 };
 use crate::semantic_actions::tree::SemanticActionChildPageQuery;
 use crate::semantic_actions::tree_metadata::{
@@ -174,10 +174,9 @@ fn read_actions(
         })?;
     let mut actions = BTreeMap::new();
     for row in rows {
-        let mut action = row.map_err(|error| {
+        let action = row.map_err(|error| {
             SemanticActionStoreError::new("map_semantic_action_root_action", error.to_string())
         })?;
-        resolve_file_paths(connection, &mut action)?;
         actions.insert(action.action_id.clone(), action);
     }
     Ok(actions)
@@ -207,7 +206,7 @@ fn read_root_links(
          WHERE link.trace_id = ?
            AND child_ids.action_id IN ({})
            AND link.role_code IN ({})
-           AND link.link_valid_code = 1
+           AND link.valid = 1
            AND parent.action_valid_code = 1
            AND child.action_valid_code = 1
            AND NOT (
@@ -242,10 +241,9 @@ fn read_root_links(
         })?;
     let mut links = BTreeMap::new();
     for row in rows {
-        let mut link = row.map_err(|error| {
+        let link = row.map_err(|error| {
             SemanticActionStoreError::new("map_semantic_action_root_link", error.to_string())
         })?;
-        link.evidence = read_link_evidence(connection, &link)?;
         links.entry(link.child_action_id.clone()).or_insert(link);
     }
     Ok(links)
@@ -399,9 +397,9 @@ fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Err
         parent_action_id: row.get("parent_action_id")?,
         child_action_id: row.get("child_action_id")?,
         role: decode_link_role(row.get::<_, i64>("role_code")?)?,
-        confidence: decode_link_confidence(row.get::<_, i64>("confidence_code")?)?,
+        origin: decode_link_origin(row.get::<_, i64>("origin_code")?)?,
         valid: row.get("valid")?,
-        evidence: Vec::new(),
+        evidence: evidence::decode(&row.get::<_, Vec<u8>>("evidence_blob")?)?,
         attributes: decode_attributes_from_row(row)?,
     })
 }

@@ -6,7 +6,104 @@ use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
 use crate::services::identity::SeccompNotificationIdentityRegistrar;
+use crate::services::process_seccomp::ProcessSeccompExecCandidate;
 use crate::services::tls_sync::ExecTlsPlanMode;
+use crate::services::tls_sync::TlsSyncService;
+
+fn prepare_exec_tls(
+    candidate: &ProcessSeccompExecCandidate,
+    tls_sync: &TlsSyncService,
+    collector: &mut ebpf_collector::EbpfCollector,
+) -> Result<(), ControlError> {
+    if candidate.path_truncated {
+        return Ok(());
+    }
+    let Some(path) = candidate.path.as_deref() else {
+        return Ok(());
+    };
+    let Some(host_path) = crate::services::process_seccomp::host_exec_path(
+        candidate.pid,
+        path,
+        candidate.execveat_dirfd,
+    ) else {
+        return Ok(());
+    };
+    if candidate.trace_id.is_some() {
+        match tls_sync.resolve_exec_plan(&host_path) {
+            Ok(resolution) => {
+                let cache_hit = resolution.reply.cache_hit;
+                let elapsed_micros = resolution.reply.resolve_elapsed_micros;
+                match resolution.reply.status {
+                    LaunchTlsPlanStatus::Found(plans)
+                        if resolution.mode == ExecTlsPlanMode::Direct =>
+                    {
+                        for plan in plans {
+                            let provider = plan.provider.clone();
+                            let source = plan.source.clone();
+                            let dynamic_plan = DynamicTlsProbePlan {
+                                target: plan.target,
+                                target_identity: plan.target_identity,
+                                binary: plan.binary,
+                                binary_identity: plan.binary_identity,
+                                provider: plan.provider,
+                                points: plan.points,
+                            };
+                            match collector.attach_dynamic_tls_plan(&dynamic_plan) {
+                                Ok(()) => tracing::info!(
+                                    target: "actrail::tls_sync",
+                                    pid = candidate.pid,
+                                    binary = %host_path.display(),
+                                    provider,
+                                    source,
+                                    cache_hit,
+                                    elapsed_micros,
+                                    "attached pre-resume TLS plan for exec candidate"
+                                ),
+                                Err(error) => tracing::warn!(
+                                    target: "actrail::tls_sync",
+                                    pid = candidate.pid,
+                                    binary = %host_path.display(),
+                                    provider,
+                                    error = %error.message,
+                                    "failed to attach pre-resume TLS plan; continuing exec"
+                                ),
+                            }
+                        }
+                    }
+                    LaunchTlsPlanStatus::Found(plans) => tracing::debug!(
+                        target: "actrail::tls_sync",
+                        pid = candidate.pid,
+                        binary = %host_path.display(),
+                        plan_count = plans.len(),
+                        cache_hit,
+                        elapsed_micros,
+                        "resolved pre-resume sync TLS plan for exec candidate"
+                    ),
+                    LaunchTlsPlanStatus::Unsupported { reason } => tracing::debug!(
+                        target: "actrail::tls_sync",
+                        pid = candidate.pid,
+                        binary = %host_path.display(),
+                        reason,
+                        cache_hit,
+                        elapsed_micros,
+                        "exec candidate has no supported TLS plan"
+                    ),
+                }
+            }
+            Err(error) => tracing::warn!(
+                target: "actrail::tls_sync",
+                pid = candidate.pid,
+                binary = %host_path.display(),
+                error_code = %error.code,
+                error = %error.message,
+                "failed to resolve pre-resume TLS plan; continuing exec"
+            ),
+        }
+    }
+    collector
+        .attach_dynamic_go_tls(&host_path)
+        .map_err(|error| ControlError::new(error.stage, error.message))
+}
 
 impl StorageAttachService {
     pub(super) fn drain_seccomp_notifications_impl(
@@ -45,175 +142,88 @@ impl StorageAttachService {
             let control_plugins = &self.control_plugins;
             let enforcement = &mut self.enforcement;
             let identity_reader = &self.identity_reader;
-            seccomp_notify.drain_notifications(|listener_trace_id, notification, continuation| {
-                if let Some(outcome) = enforcement.handle_seccomp_notification(
-                    trace_runtime,
-                    process_registry,
-                    identity_reader,
-                    control_plugins,
-                    notification,
-                    continuation,
-                )? {
-                    enforcement_outcomes.push(outcome);
-                }
-                if continuation.is_finished() {
-                    return Ok(());
-                }
-                let prepared_process = if command_control.requires_notification_identity(
-                    trace_runtime,
-                    listener_trace_id,
-                    notification,
-                ) || network_control.requires_notification_identity(
-                    trace_runtime,
-                    listener_trace_id,
-                    notification,
-                )
-                {
-                    SeccompNotificationIdentityRegistrar::new(
+            seccomp_notify.drain_notifications(
+                |listener_trace_id, notification, continuation| {
+                    if let Some(outcome) = enforcement.handle_seccomp_notification(
+                        trace_runtime,
                         process_registry,
                         identity_reader,
-                        storage,
-                        process_id_block_size,
-                    )
-                    .ensure(trace_runtime, listener_trace_id, notification.pid)
-                    .map(|preparation| preparation.resolved)
-                    .map_err(|error| format!("{}: {}", error.code, error.message))
-                } else {
-                    Err("command control identity was not requested".to_string())
-                };
-                command_enforcement_outcomes.extend(command_control.handle_notification(
-                    listener_trace_id,
-                    trace_runtime,
-                    process_registry,
-                    prepared_process.clone(),
-                    control_plugins,
-                    notification,
-                    continuation,
-                )?);
-                if continuation.is_finished() {
-                    return Ok(());
-                }
-                network_events.extend(network_control.handle_notification(
-                    listener_trace_id,
-                    trace_runtime,
-                    process_registry,
-                    prepared_process,
-                    notification,
-                    continuation,
-                    control_plugins,
-                )?);
-                pending_process_observations.extend(process_seccomp.handle_notification(
-                    trace_runtime,
-                    process_registry,
-                    identity_reader,
-                    notification,
-                    continuation,
-                    &mut |candidate| {
-                        if candidate.path_truncated {
-                            return Ok(());
-                        }
-                        let Some(path) = candidate.path.as_deref() else {
-                            return Ok(());
-                        };
-                        let Some(host_path) = crate::services::process_seccomp::host_exec_path(
-                            candidate.pid,
-                            path,
-                            candidate.execveat_dirfd,
-                        ) else {
-                            return Ok(());
-                        };
-                        if candidate.trace_id.is_some() {
-                            match tls_sync.resolve_exec_plan(&host_path) {
-                                Ok(resolution) => {
-                                    let cache_hit = resolution.reply.cache_hit;
-                                    let elapsed_micros = resolution.reply.resolve_elapsed_micros;
-                                    match resolution.reply.status {
-                                        LaunchTlsPlanStatus::Found(plans)
-                                            if resolution.mode == ExecTlsPlanMode::Direct =>
-                                        {
-                                            for plan in plans {
-                                                let provider = plan.provider.clone();
-                                                let source = plan.source.clone();
-                                                let dynamic_plan = DynamicTlsProbePlan {
-                                                    target: plan.target,
-                                                    target_identity: plan.target_identity,
-                                                    binary: plan.binary,
-                                                    binary_identity: plan.binary_identity,
-                                                    provider: plan.provider,
-                                                    points: plan.points,
-                                                };
-                                                match collector.attach_dynamic_tls_plan(
-                                                    &dynamic_plan,
-                                                ) {
-                                                    Ok(()) => tracing::info!(
-                                                        target: "actrail::tls_sync",
-                                                        pid = candidate.pid,
-                                                        binary = %host_path.display(),
-                                                        provider,
-                                                        source,
-                                                        cache_hit,
-                                                        elapsed_micros,
-                                                        "attached pre-resume TLS plan for exec candidate"
-                                                    ),
-                                                    Err(error) => tracing::warn!(
-                                                        target: "actrail::tls_sync",
-                                                        pid = candidate.pid,
-                                                        binary = %host_path.display(),
-                                                        provider,
-                                                        error = %error.message,
-                                                        "failed to attach pre-resume TLS plan; continuing exec"
-                                                    ),
-                                                }
-                                            }
-                                        }
-                                        LaunchTlsPlanStatus::Found(plans) => tracing::debug!(
-                                            target: "actrail::tls_sync",
-                                            pid = candidate.pid,
-                                            binary = %host_path.display(),
-                                            plan_count = plans.len(),
-                                            cache_hit,
-                                            elapsed_micros,
-                                            "resolved pre-resume sync TLS plan for exec candidate"
-                                        ),
-                                        LaunchTlsPlanStatus::Unsupported { reason } => {
-                                            tracing::debug!(
-                                                target: "actrail::tls_sync",
-                                                pid = candidate.pid,
-                                                binary = %host_path.display(),
-                                                reason,
-                                                cache_hit,
-                                                elapsed_micros,
-                                                "exec candidate has no supported TLS plan"
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(error) => tracing::warn!(
-                                    target: "actrail::tls_sync",
-                                    pid = candidate.pid,
-                                    binary = %host_path.display(),
-                                    error_code = %error.code,
-                                    error = %error.message,
-                                    "failed to resolve pre-resume TLS plan; continuing exec"
-                                ),
-                            }
-                        }
-                        collector
-                            .attach_dynamic_go_tls(&host_path)
-                            .map_err(|error| ControlError::new(error.stage, error.message))
-                    },
-                )?);
-                let tls_consumed = seccomp_tls.handle_notification(collector, notification)?;
-                if !tls_consumed {
-                    seccomp_socket.handle_notification(
-                        collector,
+                        control_plugins,
+                        notification,
+                        continuation,
+                    )? {
+                        enforcement_outcomes.push(outcome);
+                    }
+                    if continuation.is_finished() {
+                        return Ok(());
+                    }
+                    let prepared_process = if command_control.requires_notification_identity(
+                        trace_runtime,
+                        listener_trace_id,
+                        notification,
+                    ) || network_control.requires_notification_identity(
+                        trace_runtime,
+                        listener_trace_id,
+                        notification,
+                    ) {
+                        SeccompNotificationIdentityRegistrar::new(
+                            process_registry,
+                            identity_reader,
+                            storage,
+                            process_id_block_size,
+                        )
+                        .ensure(trace_runtime, listener_trace_id, notification.pid)
+                        .map(|preparation| preparation.resolved)
+                        .map_err(|error| format!("{}: {}", error.code, error.message))
+                    } else {
+                        Err("command control identity was not requested".to_string())
+                    };
+                    process_seccomp.prepare_exec_notification(
                         trace_runtime,
                         process_registry,
                         notification,
+                        &mut |candidate| prepare_exec_tls(candidate, tls_sync, collector),
                     )?;
-                }
-                Ok(())
-            })?;
+                    command_enforcement_outcomes.extend(command_control.handle_notification(
+                        listener_trace_id,
+                        trace_runtime,
+                        process_registry,
+                        prepared_process.clone(),
+                        control_plugins,
+                        notification,
+                        continuation,
+                    )?);
+                    if continuation.is_finished() {
+                        return Ok(());
+                    }
+                    network_events.extend(network_control.handle_notification(
+                        listener_trace_id,
+                        trace_runtime,
+                        process_registry,
+                        prepared_process,
+                        notification,
+                        continuation,
+                        control_plugins,
+                    )?);
+                    pending_process_observations.extend(process_seccomp.handle_notification(
+                        trace_runtime,
+                        process_registry,
+                        identity_reader,
+                        notification,
+                        continuation,
+                    )?);
+                    let tls_consumed = seccomp_tls.handle_notification(collector, notification)?;
+                    if !tls_consumed {
+                        seccomp_socket.handle_notification(
+                            collector,
+                            trace_runtime,
+                            process_registry,
+                            notification,
+                        )?;
+                    }
+                    Ok(())
+                },
+            )?;
         }
         self.persist_enforcement_outcomes(
             trace_runtime,

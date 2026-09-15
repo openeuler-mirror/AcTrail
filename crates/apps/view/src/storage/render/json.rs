@@ -118,7 +118,7 @@ fn link_json(link: &SemanticActionLink) -> Value {
         "parent_action_id": &link.parent_action_id,
         "child_action_id": &link.child_action_id,
         "role": link.role.as_str(),
-        "confidence": link.confidence.as_str(),
+        "origin": link.origin.as_str(),
         "valid": link.valid,
         "attributes": &link.attributes,
         "evidence": link.evidence.iter().map(evidence_json).collect::<Vec<_>>(),

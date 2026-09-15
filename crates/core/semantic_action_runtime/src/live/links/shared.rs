@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
 };
 
@@ -31,7 +31,7 @@ pub(super) fn invalidate_child_links(
             parent_action_id: key.parent_action_id.clone(),
             child_action_id: key.child_action_id.clone(),
             role,
-            confidence: SemanticActionLinkConfidence::Derived,
+            origin: SemanticActionLinkOrigin::Derived,
             valid: false,
             evidence: evidence.to_vec(),
             attributes: BTreeMap::new(),

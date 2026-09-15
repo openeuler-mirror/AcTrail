@@ -48,6 +48,10 @@ BUSINESS_TRACE_NAMES = (
     "container-a-release-summary",
     "container-b-security-review",
 )
+EVENT_COLLECTOR_MASK = 0x0F
+EVENT_COLLECTOR_EBPF = 1
+EVENT_KIND_PROCESS = 0
+EVENT_KIND_NET = 2
 
 
 @dataclass(frozen=True)
@@ -701,12 +705,17 @@ def verify_nonleader_exec_lifecycle(
                 SELECT traces.trace_id, COUNT(events.event_id)
                 FROM traces
                 LEFT JOIN events ON events.trace_id = traces.trace_id
-                  AND events.collector = 'ebpf'
-                  AND events.kind = 'process'
+                  AND (events.event_meta & ?) = ?
+                  AND events.kind_code = ?
                 WHERE traces.display_name = ?
                 GROUP BY traces.trace_id
                 """,
-                (NONLEADER_EXEC_TRACE_NAME,),
+                (
+                    EVENT_COLLECTOR_MASK,
+                    EVENT_COLLECTOR_EBPF,
+                    EVENT_KIND_PROCESS,
+                    NONLEADER_EXEC_TRACE_NAME,
+                ),
             ).fetchone()
         if last_row is not None and int(last_row[1]) >= 2:
             return
@@ -945,6 +954,7 @@ def wait_for_trace_evidence(
                 trace_id = trace_by_workload[workload.suffix]
                 require_ebpf_evidence(database, trace_id)
                 require_llm_response(actrailviewer, config, trace_id)
+                require_sse_application_event(actrailviewer, config, trace_id)
                 require_file_actions(actrailviewer, config, trace_id, workload)
             return trace_by_workload
         except RuntimeError as error:
@@ -1002,18 +1012,29 @@ def identify_traces_by_response_marker(
 def require_ebpf_evidence(database: Path, trace_id: int) -> None:
     with sqlite3.connect(database) as connection:
         process_count = connection.execute(
-            "SELECT COUNT(*) FROM events WHERE trace_id = ? AND collector = 'ebpf' AND kind = 'process'",
-            (trace_id,),
+            "SELECT COUNT(*) FROM events WHERE trace_id = ? "
+            "AND (event_meta & ?) = ? AND kind_code = ?",
+            (
+                trace_id,
+                EVENT_COLLECTOR_MASK,
+                EVENT_COLLECTOR_EBPF,
+                EVENT_KIND_PROCESS,
+            ),
         ).fetchone()[0]
         network_count = connection.execute(
             """
             SELECT COUNT(*)
             FROM events
             WHERE trace_id = ?
-              AND collector = 'ebpf'
-              AND kind IN ('net', 'network')
+              AND (event_meta & ?) = ?
+              AND kind_code = ?
             """,
-            (trace_id,),
+            (
+                trace_id,
+                EVENT_COLLECTOR_MASK,
+                EVENT_COLLECTOR_EBPF,
+                EVENT_KIND_NET,
+            ),
         ).fetchone()[0]
     if process_count < 1 or network_count < 1:
         raise RuntimeError(
@@ -1068,6 +1089,59 @@ def positive_integer(value: object) -> bool:
         return int(str(value)) > 0
     except (TypeError, ValueError):
         return False
+
+
+def require_sse_application_event(
+    actrailviewer: Path,
+    config: Path,
+    trace_id: int,
+) -> None:
+    for event in load_trace_events(actrailviewer, config, trace_id):
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if (
+            event.get("collector") != "application-protocol-analyzer"
+            or event.get("variant") != "application"
+            or payload.get("protocol") != "sse"
+            or payload.get("operation") != "event"
+            or payload.get("summary") != "message"
+            or payload.get("body") is not None
+            or metadata.get("event") != "message"
+            or not positive_integer(metadata.get("data_size"))
+        ):
+            continue
+        return
+    raise RuntimeError(
+        f"trace-{trace_id} missing complete SSE application event evidence"
+    )
+
+
+def load_trace_events(
+    actrailviewer: Path,
+    config: Path,
+    trace_id: int,
+) -> list[dict[str, object]]:
+    output = run_checked(
+        [
+            str(actrailviewer),
+            "--config",
+            str(config),
+            "--output-format",
+            "json",
+            "events",
+            "--trace-id",
+            f"trace-{trace_id}",
+        ]
+    )
+    document = json.loads(output)
+    events = document.get("events")
+    if not isinstance(events, list):
+        raise RuntimeError(f"trace-{trace_id} viewer output has no events array")
+    return events
 
 
 def load_trace_actions(

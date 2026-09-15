@@ -50,7 +50,7 @@ pub struct CommandControlConfig {
 impl Default for CommandControlConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             rules_path: PathBuf::from("/etc/actrail/command-control.rules"),
             default_decision: EnforcementDecision::Allow,
             failure_decision: EnforcementDecision::Deny,

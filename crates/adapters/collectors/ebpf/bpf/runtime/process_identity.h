@@ -2,6 +2,7 @@
 #define ACTRAIL_RUNTIME_PROCESS_IDENTITY_H
 
 #include "../common/kernel_types.h"
+#include "cas_compat.h"
 
 #define ACTRAIL_MAX_PID_NAMESPACE_LEVEL 32
 
@@ -109,7 +110,8 @@ static __always_inline __u32 observer_tgid_for_task(struct task_struct *task) {
         return 0;
     }
 
-    cached_level_plus_one = observer->level_plus_one;
+    cached_level_plus_one =
+        actrail_once_u64_get(&observer->level_plus_one, config_key);
     if (cached_level_plus_one) {
         __u32 cached_level = (__u32)(cached_level_plus_one - 1);
 
@@ -138,7 +140,11 @@ static __always_inline __u32 observer_tgid_for_task(struct task_struct *task) {
                 level,
                 observer->ino,
                 &observer_pid)) {
-            __sync_val_compare_and_swap(&observer->level_plus_one, 0, level + 1);
+            actrail_once_u64_fill(
+                &observer->level_plus_one,
+                config_key,
+                (__u64)level + 1
+            );
             observer_pid_diag_inc(ACTRAIL_OBSERVER_PID_LEVEL_DISCOVERY);
             return observer_pid;
         }

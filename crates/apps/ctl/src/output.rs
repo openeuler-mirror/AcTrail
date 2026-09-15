@@ -65,6 +65,8 @@ pub fn format_reply(reply: &ControlReply) -> String {
             reply.loaded_policy_plugins.join(","),
             reply.storage_ready
         ),
+        ControlReply::TurnLifecycleRecorded => "turn lifecycle recorded".to_string(),
+        ControlReply::UserInteractionRecorded => "user interaction recorded".to_string(),
         ControlReply::PluginList(items) => items
             .iter()
             .map(|item| {

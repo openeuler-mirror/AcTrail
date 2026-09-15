@@ -190,7 +190,7 @@ reserved_listener_fd = 253
 enabled = true
 syscalls = ["execve", "execveat", "fork", "vfork", "clone", "clone3"]
 max_args = 64
-max_arg_bytes = 4096
+max_arg_bytes = 4095
 pending_max_entries = 1024
 
 [network_control]

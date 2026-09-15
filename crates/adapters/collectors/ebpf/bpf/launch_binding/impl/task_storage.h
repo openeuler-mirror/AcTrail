@@ -1,6 +1,8 @@
 #ifndef ACTRAIL_LAUNCH_BINDING_TASK_STORAGE_H
 #define ACTRAIL_LAUNCH_BINDING_TASK_STORAGE_H
 
+#include "../../common/map_flags.h"
+
 #define ACTRAIL_BPF_MAP_TYPE_TASK_STORAGE 29
 #define ACTRAIL_BPF_FUNC_TASK_STORAGE_GET 156
 #define ACTRAIL_BPF_FUNC_TASK_STORAGE_DELETE 157
@@ -31,7 +33,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __uint(map_flags, ACTRAIL_TRACE_HASH_MAP_FLAGS);
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, struct actrail_pending_exec_binding);

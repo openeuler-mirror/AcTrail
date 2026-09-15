@@ -59,4 +59,16 @@ impl ProjectionBatch {
                 .map(|action| action.action_id.clone()),
         );
     }
+
+    pub(in crate::llm_pipeline) fn mark_non_reusable_response_actions(
+        &mut self,
+        actions: &[SemanticAction],
+    ) {
+        self.non_reusable_response_ids.extend(
+            actions
+                .iter()
+                .filter(|action| action.kind == SemanticActionKind::LlmResponse)
+                .map(|action| action.action_id.clone()),
+        );
+    }
 }

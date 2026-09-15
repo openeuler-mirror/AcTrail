@@ -3,9 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use model_core::payload::{
-    PayloadOperationCompletionState, PayloadSegment, PayloadTruncationState,
-};
+use model_core::payload::{PayloadCaptureState, PayloadOperationCompletionState, PayloadSegment};
 
 #[derive(Default)]
 pub(in crate::llm_pipeline) struct EvidenceTracker {
@@ -35,6 +33,8 @@ pub(in crate::llm_pipeline) struct EvidenceSnapshot {
     pub(in crate::llm_pipeline) operation_ids: BTreeSet<u64>,
     pub(in crate::llm_pipeline) any_operation_failed: bool,
     pub(in crate::llm_pipeline) all_capture_complete: bool,
+    any_capture_policy_limited: bool,
+    any_capture_abnormal: bool,
     seen_segment_ids: BTreeSet<u64>,
     operation_states: BTreeMap<u64, OperationEvidenceState>,
 }
@@ -80,6 +80,10 @@ impl EvidenceSnapshot {
             })
     }
 
+    pub(in crate::llm_pipeline) fn capture_is_policy_limited(&self) -> bool {
+        !self.all_capture_complete && self.any_capture_policy_limited && !self.any_capture_abnormal
+    }
+
     fn observe(&mut self, segment: &PayloadSegment) {
         if !self.seen_segment_ids.insert(segment.segment_id.get()) {
             return;
@@ -94,9 +98,10 @@ impl EvidenceSnapshot {
         self.operation_ids.insert(segment.operation_id);
         self.any_operation_failed |=
             segment.operation_completion_state == PayloadOperationCompletionState::Failed;
-        self.all_capture_complete &= segment.truncation == PayloadTruncationState::Complete
-            && segment.operation_completion_state == PayloadOperationCompletionState::Success
-            && segment.operation_original_size == segment.operation_captured_size;
+        let capture_state = segment.capture_state();
+        self.any_capture_policy_limited |= capture_state == PayloadCaptureState::PolicyLimited;
+        self.any_capture_abnormal |= capture_state == PayloadCaptureState::Incomplete;
+        self.all_capture_complete &= capture_state == PayloadCaptureState::Complete;
         let operation = self
             .operation_states
             .entry(segment.operation_id)

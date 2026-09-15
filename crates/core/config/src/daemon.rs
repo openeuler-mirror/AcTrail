@@ -19,6 +19,8 @@ mod command;
 mod enforcement;
 #[path = "daemon/observation/file.rs"]
 mod file_observation;
+#[path = "daemon/idle.rs"]
+mod idle;
 #[path = "daemon/logging/config.rs"]
 mod logging;
 #[path = "daemon/network.rs"]
@@ -90,6 +92,9 @@ pub use file_observation::{
     DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadFastPathConfig, FileBulkReadMode,
     FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
     FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+};
+pub use idle::{
+    DEFAULT_IDLE_DETECTION_THRESHOLD, DEFAULT_OPENCODE_PLUGIN_DIR, IdleDetectionConfig,
 };
 pub use logging::{
     DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,

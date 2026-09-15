@@ -153,10 +153,130 @@ class ActivityAnomalyTask:
             raise AssertionError(
                 "captured LLM actions have no complete call/request/response link"
             )
+        self._assert_capture_outcomes(actions)
         serialized = json.dumps(actions, ensure_ascii=False)
         for evidence in (marker, "ACTRAIL_ACTIVITY_WARMUP", "long-running-command.sh"):
             if evidence not in serialized:
                 raise AssertionError(f"captured actions omitted scenario evidence {evidence}")
+
+    @staticmethod
+    def _assert_capture_outcomes(actions: list[dict[str, Any]]) -> None:
+        http_messages = [
+            action for action in actions if action.get("kind") == "http.message"
+        ]
+        complete_probe = next(
+            (
+                action
+                for action in http_messages
+                if isinstance(action.get("attributes"), dict)
+                and action["attributes"].get("method") == "GET"
+                and action["attributes"].get("target")
+                == "/v1/chat/completions/models"
+            ),
+            None,
+        )
+        if complete_probe is None:
+            raise AssertionError("bpf-copy trace omitted the complete provider probe")
+        probe_attributes = complete_probe["attributes"]
+        if (
+            complete_probe.get("status") != "success"
+            or complete_probe.get("completeness") != "complete"
+            or probe_attributes.get("source_boundary") != "Syscall"
+            or any(
+                key in probe_attributes
+                for key in (
+                    "payload.capture_incomplete",
+                    "payload.operation_original_size",
+                    "payload.operation_captured_size",
+                    "payload.truncation",
+                )
+            )
+        ):
+            raise AssertionError(
+                "fully captured bpf-copy provider probe was not retained as Complete"
+            )
+        limited_posts = [
+            action
+            for action in http_messages
+            if isinstance(action.get("attributes"), dict)
+            and action["attributes"].get("method") == "POST"
+            and action["attributes"].get("target") == "/v1/chat/completions"
+        ]
+        if len(limited_posts) < 3:
+            raise AssertionError(
+                f"expected three capture-limited provider requests, found {len(limited_posts)}"
+            )
+        for request in limited_posts:
+            attributes = request["attributes"]
+            try:
+                original_size = int(str(attributes["payload.operation_original_size"]))
+                captured_size = int(str(attributes["payload.operation_captured_size"]))
+            except (KeyError, TypeError, ValueError) as error:
+                raise AssertionError(
+                    "capture-limited HTTP request has no valid operation lengths"
+                ) from error
+            if (
+                request.get("status") != "success"
+                or request.get("completeness") != "capture_limited"
+                or attributes.get("source_boundary") != "Syscall"
+                or attributes.get("payload.capture_incomplete") != "true"
+                or attributes.get("payload.operation_completion_state") != "success"
+                or attributes.get("payload.truncation") != "policy_limited"
+                or original_size <= captured_size
+            ):
+                raise AssertionError(
+                    "truncated bpf-copy request did not retain CaptureLimited semantics"
+                )
+        requests = [action for action in actions if action.get("kind") == "llm.request"]
+        responses = [action for action in actions if action.get("kind") == "llm.response"]
+        calls = [action for action in actions if action.get("kind") == "llm.call"]
+        if not requests or not responses or not calls:
+            raise AssertionError("captured LLM exchange is incomplete")
+        for request in requests:
+            if (
+                request.get("status") != "success"
+                or request.get("completeness") != "capture_limited"
+            ):
+                raise AssertionError(
+                    "bpf-copy request did not retain success/capture_limited semantics"
+                )
+            attributes = request.get("attributes")
+            if not isinstance(attributes, dict):
+                raise AssertionError("capture-limited LLM request has no attributes")
+            try:
+                payload_bytes = int(str(attributes["llm.request.payload_bytes"]))
+                raw_payload_bytes = int(
+                    str(attributes["llm.request.raw_payload_bytes"])
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise AssertionError(
+                    "capture-limited LLM request has no valid payload lengths"
+                ) from error
+            if payload_bytes <= raw_payload_bytes or raw_payload_bytes <= 0:
+                raise AssertionError(
+                    "capture-limited LLM request did not retain declared and captured lengths"
+                )
+            if (
+                attributes.get("llm.request.content_state") != "unavailable"
+                or "llm.request.canonical_body_hash" in attributes
+            ):
+                raise AssertionError(
+                    "capture-limited LLM request invented unavailable body content"
+                )
+        if any(
+            call.get("status") != "success"
+            or call.get("completeness") != "capture_limited"
+            for call in calls
+        ):
+            raise AssertionError("capture-limited request did not propagate to llm.call")
+        if any(
+            response.get("status") != "success"
+            or response.get("completeness") != "complete"
+            for response in responses
+        ):
+            raise AssertionError(
+                "fully captured bpf-copy response was not retained as Complete"
+            )
 
     def _wait_for_stable_alerts(
         self,

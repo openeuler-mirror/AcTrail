@@ -5,5 +5,6 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+idle_contract = { path = "../idle" }
 model_core = { path = "../../core/model" }
 plugin_system = { path = "../../core/plugin_system" }

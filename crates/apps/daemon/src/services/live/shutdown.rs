@@ -132,6 +132,9 @@ impl StorageAttachService {
         if let Err(error) = alert_result {
             failures.push(format!("alert drain: {}: {}", error.code, error.message));
         }
+        if let Err(error) = self.drain_idle_detector_ops() {
+            failures.push(format!("idle drain: {}: {}", error.code, error.message));
+        }
         self.alert_forwarding.shutdown();
         if failures.is_empty() {
             Ok(())
@@ -522,6 +525,9 @@ impl StorageAttachService {
                 self.network_control.forget_trace(trace_id),
                 "network_control_forget_trace",
             );
+            if let Some(detector) = self.idle_runtime.detector.as_mut() {
+                detector.forget_trace(trace_id);
+            }
             trace_runtime.forget_trace(trace_id);
             finalized_this_cycle += 1;
             self.log_diagnostic(
