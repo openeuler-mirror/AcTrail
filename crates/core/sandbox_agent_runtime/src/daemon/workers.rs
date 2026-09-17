@@ -9,7 +9,7 @@ use sandbox_observation::Observation;
 
 use crate::delivery::{DeliveryCounts, DeliveryOutcome, DeliveryPipeline};
 use crate::status::DaemonMetrics;
-use crate::{GuestPressureSource, GuestResourceSource, ProcessIoSource};
+use crate::{GuestPressureSource, GuestResourceSource, ProcessIoSource, WorkloadCgroupSource};
 
 pub(crate) struct BaselineRequest {
     pub(crate) publication_generation: Option<u64>,
@@ -130,6 +130,43 @@ pub(crate) fn spawn_resource_worker(
                             DeliveryOutcome::Dropped => (0, 1),
                         };
                         metrics.record_observations(false, accepted, dropped);
+                    }
+                    Err(_) => metrics.record_source_failure(),
+                }
+                thread::park_timeout(interval);
+            }
+        })
+}
+
+pub(crate) fn spawn_workload_worker(
+    stack_size: usize,
+    stop: Arc<AtomicBool>,
+    metrics: Arc<DaemonMetrics>,
+    delivery: DeliveryPipeline,
+    interval: Duration,
+    mut source: Box<dyn WorkloadCgroupSource>,
+) -> io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("actrail-sb-workload".to_string())
+        .stack_size(stack_size)
+        .spawn(move || {
+            thread::park_timeout(interval);
+            while !stop.load(Ordering::Acquire) {
+                let generation = delivery.capture_workload_generation();
+                match source.sample() {
+                    Ok(snapshots) => {
+                        for snapshot in snapshots {
+                            let outcome = match generation {
+                                Some(generation) => delivery
+                                    .publish_for(generation, Observation::WorkloadCgroup(snapshot)),
+                                None => DeliveryOutcome::Dropped,
+                            };
+                            let (accepted, dropped) = match outcome {
+                                DeliveryOutcome::Accepted => (1, 0),
+                                DeliveryOutcome::Dropped => (0, 1),
+                            };
+                            metrics.record_observations(false, accepted, dropped);
+                        }
                     }
                     Err(_) => metrics.record_source_failure(),
                 }

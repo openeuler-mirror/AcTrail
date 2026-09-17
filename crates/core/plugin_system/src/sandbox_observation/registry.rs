@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -241,7 +241,7 @@ impl RegistrySnapshot {
         Self {
             generation: SandboxRegistryGeneration::INITIAL,
             endpoints: BTreeMap::new(),
-            consumers_by_kind: [Box::new([]), Box::new([]), Box::new([]), Box::new([])],
+            consumers_by_kind: std::array::from_fn(|_| Box::<[SandboxConsumerId]>::default()),
         }
     }
 
@@ -258,13 +258,15 @@ struct RegistryState {
 
 impl RegistryState {
     fn snapshot(&self) -> RegistrySnapshot {
-        let mut consumers_by_kind = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        let mut consumers_by_kind: [Vec<SandboxConsumerId>; SandboxObservationKind::COUNT] =
+            std::array::from_fn(|_| Vec::new());
         let mut endpoints = BTreeMap::new();
         for (consumer_id, runtime) in &self.consumers {
             for kind in [
                 SandboxObservationKind::ProcessIo,
                 SandboxObservationKind::GuestResource,
                 SandboxObservationKind::OomVictim,
+                SandboxObservationKind::WorkloadCgroup,
                 SandboxObservationKind::GuestPressure,
             ] {
                 if runtime.endpoint.selector.matches(kind) {

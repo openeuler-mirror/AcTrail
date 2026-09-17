@@ -1,19 +1,22 @@
 use sandbox_evidence_store::sandbox_observation::{
     CpuSnapshot, GuestBootId, GuestPressureSnapshot, GuestResourceSnapshot, MemorySnapshot,
-    Observation, OomVictimAttribution, OomVictimObservation, ProcessIoCounters, ProcessMarker,
-    PsiAverages,
+    NormalizedContainerId, Observation, OomVictimAttribution, OomVictimObservation,
+    ProcessIoCounters, ProcessMarker, PsiAverages, SandboxContainerRuntime, WorkloadCgroupCounters,
+    WorkloadCgroupId, WorkloadCgroupResourceSnapshot,
 };
 
 const PROCESS_IO_KIND: u8 = 1;
 const GUEST_RESOURCE_KIND: u8 = 2;
 const OOM_VICTIM_KIND: u8 = 3;
 const GUEST_PRESSURE_KIND: u8 = 4;
+const WORKLOAD_CGROUP_KIND: u8 = 5;
+const WORKLOAD_CGROUP_BYTES: usize = 320;
 
 pub(super) struct ObservationCodec;
 
 impl ObservationCodec {
     pub(super) fn encode(observation: &Observation) -> (u8, Vec<u8>) {
-        let mut bytes = Vec::with_capacity(104);
+        let mut bytes = Vec::with_capacity(WORKLOAD_CGROUP_BYTES);
         match observation {
             Observation::ProcessIo(value) => {
                 bytes.extend_from_slice(value.guest_boot_id.as_bytes());
@@ -85,6 +88,10 @@ impl ObservationCodec {
                     bytes.extend_from_slice(&avg.avg300_millipercent.to_be_bytes());
                 }
                 (GUEST_PRESSURE_KIND, bytes)
+            }
+            Observation::WorkloadCgroup(value) => {
+                encode_workload_cgroup(&mut bytes, value);
+                (WORKLOAD_CGROUP_KIND, bytes)
             }
         }
     }
@@ -179,6 +186,9 @@ impl ObservationCodec {
                     avg300_millipercent: cursor.u32()?,
                 },
             }),
+            WORKLOAD_CGROUP_KIND => {
+                Observation::WorkloadCgroup(decode_workload_cgroup(&mut cursor)?)
+            }
             _ => return Err(format!("unknown sandbox evidence observation kind {kind}")),
         };
         if cursor.remaining() != 0 {
@@ -186,6 +196,155 @@ impl ObservationCodec {
         }
         Ok(observation)
     }
+}
+
+fn encode_workload_cgroup(output: &mut Vec<u8>, value: &WorkloadCgroupResourceSnapshot) {
+    let slots = workload_cgroup_slots(&value.counters);
+    let presence = presence_bitmap(&slots);
+    output.push(1);
+    output.push(value.runtime.code());
+    output.push(if value.container_id.is_some() {
+        NormalizedContainerId::HEX_LENGTH as u8
+    } else {
+        0
+    });
+    output.push(0);
+    output.extend_from_slice(&presence.to_be_bytes());
+    output.extend_from_slice(value.guest_boot_id.as_bytes());
+    output.extend_from_slice(&value.sampled_at_ms.to_be_bytes());
+    output.extend_from_slice(value.workload_id.as_bytes());
+    output.extend_from_slice(&value.representative_root.pid.to_be_bytes());
+    output.extend_from_slice(&value.monitored_root_count.to_be_bytes());
+    output.extend_from_slice(&value.representative_root.start_time_ticks.to_be_bytes());
+    output.extend_from_slice(&value.representative_root.executable_name);
+    match value.container_id {
+        Some(id) => output.extend_from_slice(id.to_lower_hex().as_bytes()),
+        None => output.extend_from_slice(&[0; 64]),
+    }
+    output.extend_from_slice(&value.counters.memory_current_bytes.to_be_bytes());
+    for slot in slots {
+        output.extend_from_slice(&slot.unwrap_or(0).to_be_bytes());
+    }
+}
+
+fn decode_workload_cgroup(
+    cursor: &mut PayloadCursor<'_>,
+) -> Result<WorkloadCgroupResourceSnapshot, String> {
+    if cursor.u8()? != 1 {
+        return Err("invalid stored workload cgroup payload version".to_string());
+    }
+    let runtime = SandboxContainerRuntime::from_code(cursor.u8()?)
+        .ok_or_else(|| "invalid stored workload cgroup runtime code".to_string())?;
+    let container_id_length = cursor.u8()?;
+    if container_id_length != 0 && container_id_length != NormalizedContainerId::HEX_LENGTH as u8 {
+        return Err("invalid stored workload cgroup container ID length".to_string());
+    }
+    if cursor.u8()? != 0 {
+        return Err("non-zero stored workload cgroup reserved byte".to_string());
+    }
+    let presence = cursor.u32()?;
+    if presence >> 19 != 0 {
+        return Err("stored workload cgroup presence bits exceed 19 slots".to_string());
+    }
+    let guest_boot_id = GuestBootId::new(cursor.array()?);
+    let sampled_at_ms = cursor.u64()?;
+    let workload_id = WorkloadCgroupId::from_bytes(cursor.array()?);
+    let representative_pid = cursor.u32()?;
+    let monitored_root_count = cursor.u32()?;
+    let representative_root = ProcessMarker {
+        pid: representative_pid,
+        start_time_ticks: cursor.u64()?,
+        executable_name: cursor.array()?,
+    };
+    let container_bytes: [u8; 64] = cursor.array()?;
+    let container_id = if container_bytes.iter().all(|byte| *byte == 0) {
+        None
+    } else {
+        let raw = std::str::from_utf8(&container_bytes)
+            .map_err(|_| "stored workload cgroup container ID is not UTF-8".to_string())?;
+        Some(NormalizedContainerId::from_lower_hex(raw)?)
+    };
+    if (container_id_length == 0) != container_id.is_none() {
+        return Err(
+            "stored workload cgroup container ID length does not match payload".to_string(),
+        );
+    }
+    let memory_current_bytes = cursor.u64()?;
+    let mut slots = [None::<u64>; 19];
+    for (index, slot) in slots.iter_mut().enumerate() {
+        let value = cursor.u64()?;
+        if presence & (1 << index) != 0 {
+            *slot = Some(value);
+        }
+    }
+    let counters = WorkloadCgroupCounters {
+        memory_current_bytes,
+        memory_peak_bytes: slots[0],
+        memory_anon_bytes: slots[1],
+        memory_file_bytes: slots[2],
+        memory_swap_current_bytes: slots[3],
+        memory_low: slots[4],
+        memory_high: slots[5],
+        memory_max: slots[6],
+        memory_oom: slots[7],
+        memory_oom_kill: slots[8],
+        memory_oom_group_kill: slots[9],
+        cpu_usage_usec: slots[10],
+        cpu_user_usec: slots[11],
+        cpu_system_usec: slots[12],
+        cpu_nr_throttled: slots[13],
+        cpu_throttled_usec: slots[14],
+        io_read_bytes: slots[15],
+        io_write_bytes: slots[16],
+        pids_current: slots[17],
+        pids_peak: slots[18],
+    };
+    let snapshot = WorkloadCgroupResourceSnapshot {
+        guest_boot_id,
+        sampled_at_ms,
+        workload_id,
+        representative_root,
+        monitored_root_count,
+        runtime,
+        container_id,
+        counters,
+    };
+    snapshot.validate()?;
+    Ok(snapshot)
+}
+
+fn workload_cgroup_slots(counters: &WorkloadCgroupCounters) -> [Option<u64>; 19] {
+    [
+        counters.memory_peak_bytes,
+        counters.memory_anon_bytes,
+        counters.memory_file_bytes,
+        counters.memory_swap_current_bytes,
+        counters.memory_low,
+        counters.memory_high,
+        counters.memory_max,
+        counters.memory_oom,
+        counters.memory_oom_kill,
+        counters.memory_oom_group_kill,
+        counters.cpu_usage_usec,
+        counters.cpu_user_usec,
+        counters.cpu_system_usec,
+        counters.cpu_nr_throttled,
+        counters.cpu_throttled_usec,
+        counters.io_read_bytes,
+        counters.io_write_bytes,
+        counters.pids_current,
+        counters.pids_peak,
+    ]
+}
+
+fn presence_bitmap(slots: &[Option<u64>; 19]) -> u32 {
+    let mut bitmap = 0_u32;
+    for (index, slot) in slots.iter().enumerate() {
+        if slot.is_some() {
+            bitmap |= 1 << index;
+        }
+    }
+    bitmap
 }
 
 struct PayloadCursor<'a> {
@@ -236,6 +395,51 @@ impl<'a> PayloadCursor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use sandbox_evidence_store::sandbox_observation::GuestBootId;
+
+    const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn snapshot() -> WorkloadCgroupResourceSnapshot {
+        WorkloadCgroupResourceSnapshot {
+            guest_boot_id: GuestBootId::new([0x11; 16]),
+            sampled_at_ms: 42,
+            workload_id: WorkloadCgroupId::from_bytes([0x22; 32]),
+            representative_root: ProcessMarker {
+                pid: 7,
+                start_time_ticks: 8,
+                executable_name: [0; 16],
+            },
+            monitored_root_count: 1,
+            runtime: SandboxContainerRuntime::Containerd,
+            container_id: Some(NormalizedContainerId::from_lower_hex(ID).unwrap()),
+            counters: WorkloadCgroupCounters {
+                memory_current_bytes: 100,
+                memory_peak_bytes: Some(200),
+                cpu_usage_usec: Some(300),
+                ..WorkloadCgroupCounters::default()
+            },
+        }
+    }
+
+    #[test]
+    fn workload_cgroup_kind_round_trips_through_storage_codec() {
+        let (kind, payload) = ObservationCodec::encode(&Observation::WorkloadCgroup(snapshot()));
+        assert_eq!(kind, WORKLOAD_CGROUP_KIND);
+        assert_eq!(payload.len(), 320);
+        let decoded = ObservationCodec::decode(kind, &payload).unwrap();
+        assert_eq!(decoded, Observation::WorkloadCgroup(snapshot()));
+    }
+
+    #[test]
+    fn workload_cgroup_storage_decode_rejects_unknown_kind() {
+        let (_, payload) = ObservationCodec::encode(&Observation::WorkloadCgroup(snapshot()));
+        assert!(ObservationCodec::decode(9, &payload).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pressure_tests {
     use super::*;
 
     fn pressure() -> GuestPressureSnapshot {

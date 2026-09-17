@@ -38,6 +38,9 @@ Bindings are durable and revalidated on restart. Identity loss or repeated read
 failure makes a binding stale; fallback is labelled. Require applies at admission,
 not as a policy to kill a workload after later counter failure. Final events and
 binding closure are stored atomically; retention removes the associated registry.
+Identity loss degrades trace health and persists a warning, including on startup.
+Procfs fallback verifies saved process start times before and after memory reads;
+a reused PID cannot contribute metrics to the old trace.
 Main SQLite schema 28 upgrades baseline 26, upstream 27 and host-PR 27 databases
 and preserves upstream HTTP-link role 527 and its index.
 
@@ -67,3 +70,5 @@ Missing prerequisites are reported as a skip (exit 77), not a pass.
 The restart test stops the container and requires the **original recovered trace**
 to complete with exactly one final event, including after a second daemon restart.
 It also verifies RSS-only alerts and live explicit-removal finalization.
+See the [validation record](../designs/resource-metrics-validation.md) for results
+and format limitations.

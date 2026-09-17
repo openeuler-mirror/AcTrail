@@ -2394,6 +2394,9 @@ version = "0.7.1"
 dependencies = [
  "rusqlite",
  "sandbox_evidence_store",
+ "sandbox_linux_collector",
+ "sandbox_vsock_contract",
+ "tempfile",
 ]
 
 [[package]]
@@ -2411,12 +2414,17 @@ dependencies = [
  "libbpf-rs",
  "libbpf_tracepoint_attach",
  "libc",
+ "linux_cgroup",
  "sandbox_observation",
+ "tempfile",
 ]
 
 [[package]]
 name = "sandbox_observation"
 version = "0.7.1"
+dependencies = [
+ "sha2",
+]
 
 [[package]]
 name = "sandbox_plugin_delivery"

@@ -41,7 +41,7 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
         patch = patch.replace(f'cgroup_root = "{self._cgroup}"',
                               f'cgroup_root = "{self._inputs.work_dir / "unavailable-managed-root"}"')
         return patch.replace('memory_alert_rss_kb = "1"',
-                             'existing_container_cgroups = "require"\nmemory_alert_rss_kb = "1"')
+                             'existing_container_cgroups = "require"\nmemory_alert_rss_kb = "1"') + '\n[sandbox_evidence]\nschema_version = 2\n'
 
     def exercise(self, image: str) -> None:
         self._prepare_config()

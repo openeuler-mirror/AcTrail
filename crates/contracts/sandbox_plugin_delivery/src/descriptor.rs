@@ -6,10 +6,11 @@ pub enum SandboxObservationKind {
     GuestResource,
     OomVictim,
     GuestPressure,
+    WorkloadCgroup,
 }
 
 impl SandboxObservationKind {
-    pub const COUNT: usize = 4;
+    pub const COUNT: usize = 5;
 
     pub const fn index(self) -> usize {
         match self {
@@ -17,6 +18,7 @@ impl SandboxObservationKind {
             Self::GuestResource => 1,
             Self::OomVictim => 2,
             Self::GuestPressure => 3,
+            Self::WorkloadCgroup => 4,
         }
     }
 
@@ -26,6 +28,7 @@ impl SandboxObservationKind {
             Observation::GuestResource(_) => Self::GuestResource,
             Observation::OomVictim(_) => Self::OomVictim,
             Observation::GuestPressure(_) => Self::GuestPressure,
+            Observation::WorkloadCgroup(_) => Self::WorkloadCgroup,
         }
     }
 }
@@ -105,6 +108,6 @@ mod tests {
             SandboxObservationKind::GuestPressure
         );
         assert_eq!(SandboxObservationKind::GuestPressure.index(), 3);
-        assert_eq!(SandboxObservationKind::COUNT, 4);
+        assert_eq!(SandboxObservationKind::COUNT, 5);
     }
 }

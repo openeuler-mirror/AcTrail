@@ -4,6 +4,14 @@ const MAGIC: u16 = 0xac71;
 const VERSION: u8 = 1;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const HEADER_BYTES: usize = 8;
+const SB_WELCOME_WORKLOAD_CGROUP: u32 = 1 << 31;
+const SB_WELCOME_ID_MASK: u32 = !SB_WELCOME_WORKLOAD_CGROUP;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SbWelcome {
+    pub sb_id: u32,
+    pub workload_cgroup_observations: bool,
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +105,37 @@ impl Frame {
         }
     }
 
+    /// Encode receiver capabilities without changing the four-byte V1 welcome
+    /// payload. The capability bits are part of the assigned ID so legacy
+    /// agents expose the same ID that the gateway uses when forwarding data.
+    pub fn sb_welcome(sb_id: u32, workload_cgroup_observations: bool) -> Result<Self, WireError> {
+        if sb_id == 0 || sb_id & !SB_WELCOME_ID_MASK != 0 {
+            return Err(WireError::new(
+                "SB ID must fit the capability-aware welcome payload",
+            ));
+        }
+        let encoded = if workload_cgroup_observations {
+            sb_id | SB_WELCOME_WORKLOAD_CGROUP
+        } else {
+            sb_id
+        };
+        Ok(Self::numeric_id(FrameCode::SbWelcome, encoded))
+    }
+
+    pub fn decode_sb_welcome(&self) -> Result<SbWelcome, WireError> {
+        if self.code != FrameCode::SbWelcome {
+            return Err(WireError::new("frame is not an SB welcome"));
+        }
+        let encoded = self.decode_numeric_id()?;
+        if encoded & SB_WELCOME_ID_MASK == 0 {
+            return Err(WireError::new("SB welcome contains reserved ID zero"));
+        }
+        Ok(SbWelcome {
+            sb_id: encoded,
+            workload_cgroup_observations: encoded & SB_WELCOME_WORKLOAD_CGROUP != 0,
+        })
+    }
+
     pub fn decode_numeric_id(&self) -> Result<u32, WireError> {
         let bytes: [u8; 4] = self
             .payload
@@ -118,5 +157,36 @@ impl Frame {
         bytes.extend_from_slice(&header);
         bytes.extend_from_slice(&self.payload);
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn welcome_round_trips_id_and_workload_capability_in_v1_payload() {
+        let frame = Frame::sb_welcome(17, true).unwrap();
+        assert_eq!(frame.payload.len(), 4);
+        assert_eq!(
+            frame.decode_sb_welcome().unwrap(),
+            SbWelcome {
+                sb_id: 17 | SB_WELCOME_WORKLOAD_CGROUP,
+                workload_cgroup_observations: true,
+            }
+        );
+        assert_ne!(frame.decode_numeric_id().unwrap(), 0);
+    }
+
+    #[test]
+    fn legacy_welcome_decodes_without_new_capabilities() {
+        let frame = Frame::numeric_id(FrameCode::SbWelcome, 23);
+        assert_eq!(
+            frame.decode_sb_welcome().unwrap(),
+            SbWelcome {
+                sb_id: 23,
+                workload_cgroup_observations: false,
+            }
+        );
     }
 }

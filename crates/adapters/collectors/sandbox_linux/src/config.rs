@@ -132,6 +132,10 @@ impl SandboxLinuxConfig {
         &self.procfs_root
     }
 
+    pub fn root_process_names(&self) -> &[[u8; 16]] {
+        &self.root_process_names
+    }
+
     fn encode_process_name(name: &str) -> Result<[u8; 16], SandboxLinuxError> {
         let raw = name.as_bytes();
         if raw.is_empty() || raw.len() > 15 || raw.contains(&0) {
