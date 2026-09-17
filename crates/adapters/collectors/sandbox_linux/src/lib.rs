@@ -5,6 +5,7 @@ mod config;
 mod ebpf;
 mod error;
 mod procfs;
+mod psi;
 mod resource;
 
 pub use collector::{
@@ -13,4 +14,5 @@ pub use collector::{
 };
 pub use config::SandboxLinuxConfig;
 pub use error::SandboxLinuxError;
+pub use psi::PsiReader;
 pub use resource::LinuxResourceReader;

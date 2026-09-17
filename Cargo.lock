@@ -1595,6 +1595,7 @@ dependencies = [
  "config_core",
  "libc",
  "linux_cgroup",
+ "model_core",
  "tempfile",
 ]
 

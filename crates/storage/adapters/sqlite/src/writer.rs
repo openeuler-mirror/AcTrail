@@ -5,7 +5,7 @@ use model_core::event::DomainEvent;
 use model_core::payload::PayloadSegment;
 use model_core::process::ProcessMembership;
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use store_write_contract::WriteError;
 use store_write_contract::diagnostics::DiagnosticWriteStore;
 use store_write_contract::events::EventWriteStore;
@@ -192,8 +192,20 @@ impl MembershipWriteStore for SqliteStorage {
 
 impl EventWriteStore for SqliteStorage {
     fn append_event(&mut self, event: DomainEvent) -> Result<(), WriteError> {
+        self.append_event_atomically(event, |_| Ok(()))
+    }
+}
+
+impl SqliteStorage {
+    pub(crate) fn append_event_atomically(
+        &mut self,
+        event: DomainEvent,
+        side_effect: impl FnOnce(&Connection) -> Result<(), rusqlite::Error>,
+    ) -> Result<(), WriteError> {
         if !self.connection().borrow().is_autocommit() {
-            return self.append_event_record(event);
+            self.append_event_record(event)?;
+            return side_effect(&self.connection().borrow())
+                .map_err(|error| WriteError::new("append_event_side_effect", error.to_string()));
         }
         self.connection()
             .borrow_mut()
@@ -216,11 +228,17 @@ impl EventWriteStore for SqliteStorage {
         self.event_path_dictionary()
             .borrow_mut()
             .begin_transaction();
-        let append_result = self.append_event_record(event).and_then(|()| {
-            self.event_record_blocks()
-                .borrow()
-                .persist_transaction_state(&self.connection().borrow())
-        });
+        let append_result = self
+            .append_event_record(event)
+            .and_then(|()| {
+                side_effect(&self.connection().borrow())
+                    .map_err(|error| WriteError::new("append_event_side_effect", error.to_string()))
+            })
+            .and_then(|()| {
+                self.event_record_blocks()
+                    .borrow()
+                    .persist_transaction_state(&self.connection().borrow())
+            });
         match append_result {
             Ok(()) => {
                 let release_result = self
@@ -282,9 +300,7 @@ impl EventWriteStore for SqliteStorage {
             }
         }
     }
-}
 
-impl SqliteStorage {
     fn write_with_terminal_event_tail(
         &mut self,
         trace_id: u64,

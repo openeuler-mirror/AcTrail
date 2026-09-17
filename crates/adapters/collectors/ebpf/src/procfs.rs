@@ -262,9 +262,11 @@ pub fn parse_container_identity(cgroup_file: &str) -> Option<ContainerIdentity> 
 }
 
 /// Scope prefixes used by systemd cgroup drivers: `<prefix><id>.scope`.
-const SCOPE_RUNTIMES: [(&str, ContainerRuntime); 2] = [
+const SCOPE_RUNTIMES: [(&str, ContainerRuntime); 4] = [
     ("docker-", ContainerRuntime::Docker),
     ("cri-containerd-", ContainerRuntime::Containerd),
+    ("crio-", ContainerRuntime::Crio),
+    ("libpod-", ContainerRuntime::Podman),
 ];
 
 fn container_identity_from_path(path: &str) -> Option<ContainerIdentity> {
@@ -487,4 +489,29 @@ pub fn read_process_cwd(pid: u32) -> Option<String> {
 
 fn proc_entry_gone(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
+#[cfg(test)]
+mod container_identity_tests {
+    use super::*;
+
+    const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn parses_all_supported_systemd_container_scopes() {
+        for (scope, expected) in [
+            (format!("docker-{ID}.scope"), ContainerRuntime::Docker),
+            (
+                format!("cri-containerd-{ID}.scope"),
+                ContainerRuntime::Containerd,
+            ),
+            (format!("crio-{ID}.scope"), ContainerRuntime::Crio),
+            (format!("libpod-{ID}.scope"), ContainerRuntime::Podman),
+        ] {
+            let identity = parse_container_identity(&format!("0::/system.slice/{scope}\n"))
+                .expect("supported runtime scope should resolve");
+            assert_eq!(identity.runtime, expected);
+            assert_eq!(identity.container_id(), ID);
+        }
+    }
 }

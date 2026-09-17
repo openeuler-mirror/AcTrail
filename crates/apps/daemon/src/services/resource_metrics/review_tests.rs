@@ -2,6 +2,110 @@ use super::*;
 use linux_platform::cgroup_v2::TraceScopePaths;
 use std::fs;
 
+#[test]
+fn stale_identity_emits_failure_while_allowing_fallback_for_live_and_recovered_traces() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut sampler, _) = fixture(temp.path());
+    for recovered in [false, true] {
+        let id = TraceId::new(if recovered { 2 } else { 1 });
+        let mut drafts = Vec::new();
+        let mut failures = Vec::new();
+        for _ in 0..2 {
+            assert!(!sampler.record_external_outcome(
+                id,
+                recovered,
+                Ok(ExternalSampleOutcome::BecameStale),
+                &mut drafts,
+                &mut failures
+            ));
+        }
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].recovered, recovered);
+        assert!(failures[0].message.contains("identity lost"));
+    }
+}
+
+#[test]
+fn procfs_fallback_rejects_reused_or_unverified_process_identity() {
+    use model_core::process::{HostProcessCoordinates, ProcessObservation, ProcessRecord};
+    let temp = tempfile::tempdir().unwrap();
+    let (mut sampler, _) = fixture(temp.path());
+    let pid = std::process::id();
+    let ticks = read_proc_stat(pid).unwrap().unwrap().start_time_ticks;
+    let process = ProcessIdentity::new(1);
+    for recovered in [false, true] {
+        for (start, should_sample) in [(ticks, true), (ticks + 1, false), (0, false)] {
+            let registry = ProcessIdentityManager::with_reserved_block(
+                2,
+                3,
+                [ProcessRecord::new(
+                    process,
+                    ProcessObservation::host(HostProcessCoordinates::new(pid, start)),
+                )],
+            )
+            .unwrap();
+            let units = sampler.units().unwrap();
+            let sample = sampler
+                .collect_procfs_sample(
+                    TraceId::new(1),
+                    process,
+                    vec![process],
+                    &registry,
+                    Instant::now(),
+                    SystemTime::now(),
+                    units,
+                    recovered,
+                    Some("stale".into()),
+                )
+                .unwrap();
+            assert_eq!(sample.is_some(), should_sample);
+        }
+    }
+}
+
+#[test]
+fn live_and_recovered_external_outcomes_share_retry_and_fallback_semantics() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut sampler, _) = fixture(temp.path());
+    for recovered in [false, true] {
+        let id = TraceId::new(if recovered { 2 } else { 1 });
+        let mut drafts = Vec::new();
+        let mut failures = Vec::new();
+        for _ in 0..2 {
+            assert!(sampler.record_external_outcome(
+                id,
+                recovered,
+                Ok(ExternalSampleOutcome::Failed("retry".into())),
+                &mut drafts,
+                &mut failures
+            ));
+        }
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].recovered, recovered);
+        assert!(!sampler.record_external_outcome(
+            id,
+            recovered,
+            Ok(ExternalSampleOutcome::BecameStale),
+            &mut drafts,
+            &mut failures
+        ));
+        assert!(drafts.is_empty());
+    }
+}
+
+#[test]
+fn forgotten_trace_drops_retained_barrier_and_fallback_reason() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut sampler, _) = fixture(temp.path());
+    sampler.finalized_barriers.insert(TraceId::new(1));
+    sampler
+        .trace_fallback_reasons
+        .insert(TraceId::new(1), "fallback".to_string());
+    sampler.prune_forgotten(&trace_runtime::TraceRuntime::new(Vec::new(), 1));
+    assert!(sampler.finalized_barriers.is_empty());
+    assert!(sampler.trace_fallback_reasons.is_empty());
+}
+
 fn fixture(root: &std::path::Path) -> (ResourceMetricsSampler, TraceScopePaths) {
     let mut storage = storage_factory::open_storage_backend(
         &storage_factory::StorageConfig::sqlite_path(root.join("test.sqlite")),

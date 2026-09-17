@@ -3,6 +3,7 @@
 pub mod alerts;
 pub mod backend;
 pub mod config;
+mod external_cgroups;
 pub mod idle;
 pub mod query;
 pub mod records;

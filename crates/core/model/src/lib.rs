@@ -5,6 +5,7 @@ pub mod capability;
 pub mod container;
 pub mod diagnostics;
 pub mod event;
+pub mod external_cgroup;
 pub mod ids;
 pub mod payload;
 pub mod policy;

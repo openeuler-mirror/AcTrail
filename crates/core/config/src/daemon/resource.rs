@@ -36,10 +36,45 @@ impl FromStr for ResourceMetricsMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExistingContainerCgroups {
+    #[default]
+    Disabled,
+    Prefer,
+    Require,
+}
+
+impl ExistingContainerCgroups {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Prefer => "prefer",
+            Self::Require => "require",
+        }
+    }
+}
+
+impl FromStr for ExistingContainerCgroups {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "disabled" => Ok(Self::Disabled),
+            "prefer" => Ok(Self::Prefer),
+            "require" => Ok(Self::Require),
+            other => Err(format!(
+                "invalid existing container cgroup policy {other}; expected disabled, prefer, or require"
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceMetricsConfig {
     pub enabled: bool,
     pub mode: ResourceMetricsMode,
+    pub existing_container_cgroups: ExistingContainerCgroups,
+    pub external_cgroup_failure_threshold: u32,
     pub interval_ms: u64,
     pub include_children: bool,
     pub include_system: bool,
@@ -56,6 +91,8 @@ impl Default for ResourceMetricsConfig {
         Self {
             enabled: true,
             mode: ResourceMetricsMode::Procfs,
+            existing_container_cgroups: ExistingContainerCgroups::Disabled,
+            external_cgroup_failure_threshold: 3,
             interval_ms: 1_000,
             include_children: true,
             include_system: true,

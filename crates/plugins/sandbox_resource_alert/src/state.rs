@@ -14,8 +14,10 @@ struct SourceState {
     last_seen: u64,
     guest_boot_id: Option<GuestBootId>,
     last_cpu: Option<CpuSnapshot>,
+    available_bytes: Option<u64>,
     cpu_risk_active: bool,
     memory_risk_active: bool,
+    pressure_risk_active: bool,
 }
 
 impl SourceStateTable {
@@ -52,8 +54,10 @@ impl SourceStateTable {
             last_seen: next_clock,
             guest_boot_id: None,
             last_cpu: None,
+            available_bytes: None,
             cpu_risk_active: false,
             memory_risk_active: false,
+            pressure_risk_active: false,
         });
         state.last_seen = next_clock;
         self.recency.insert((next_clock, source));
@@ -121,14 +125,57 @@ impl SourceStateTable {
         state.memory_risk_active = is_risk;
         Ok(entered)
     }
+
+    pub(super) fn update_pressure_risk(
+        &mut self,
+        source: SandboxSource,
+        is_risk: bool,
+    ) -> Result<bool, StateError> {
+        let state = self
+            .states
+            .get_mut(&source)
+            .ok_or(StateError::InvariantViolation)?;
+        let entered = is_risk && !state.pressure_risk_active;
+        state.pressure_risk_active = is_risk;
+        Ok(entered)
+    }
+
+    pub(super) fn update_memory_available(
+        &mut self,
+        source: SandboxSource,
+        guest_boot_id: GuestBootId,
+        available_bytes: u64,
+    ) -> Result<(), StateError> {
+        let state = self
+            .states
+            .get_mut(&source)
+            .ok_or(StateError::InvariantViolation)?;
+        if state.guest_boot_id == Some(guest_boot_id) {
+            state.available_bytes = Some(available_bytes);
+        }
+        Ok(())
+    }
+
+    pub(super) fn memory_available(
+        &self,
+        source: SandboxSource,
+    ) -> Result<Option<u64>, StateError> {
+        Ok(self
+            .states
+            .get(&source)
+            .ok_or(StateError::InvariantViolation)?
+            .available_bytes)
+    }
 }
 
 impl SourceState {
     fn reset_for_boot(&mut self, guest_boot_id: GuestBootId, cpu: CpuSnapshot) {
         self.guest_boot_id = Some(guest_boot_id);
         self.last_cpu = Some(cpu);
+        self.available_bytes = None;
         self.cpu_risk_active = false;
         self.memory_risk_active = false;
+        self.pressure_risk_active = false;
     }
 }
 

@@ -480,6 +480,9 @@ impl StorageAttachService {
             if !self.resource_metrics.resource_barrier_ready(trace_id) {
                 continue;
             }
+            if !self.resource_metrics.external_barrier_ready(trace_id) {
+                continue;
+            }
             if !self.post_trace_coordinator.barrier_ready(trace_id) {
                 let finished_at = terminal_trace_finished_at(trace_runtime, trace_id)?;
                 self.finalize_semantic_projection_for_trace(trace_runtime, trace_id, finished_at)?;

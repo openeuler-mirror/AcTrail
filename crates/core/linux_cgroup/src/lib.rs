@@ -458,9 +458,7 @@ impl ManagedCgroupV2 {
     /// Returns every process currently charged anywhere below a managed aggregate.
     pub fn read_subtree_pids(&self, aggregate: &Path) -> Result<Vec<u32>, CgroupError> {
         self.verify_descendant(aggregate)?;
-        let mut pids = BTreeSet::new();
-        collect_subtree_pids_recursive(aggregate, &mut pids)?;
-        Ok(pids.into_iter().collect())
+        read_cgroup_subtree_pids(aggregate)
     }
 
     pub fn create_managed_hierarchy(&self) -> Result<(), CgroupError> {
@@ -1138,6 +1136,14 @@ fn remove_cgroup_subtree(directory: &Path) -> Result<(), CgroupError> {
     }
 }
 
+/// Read-only membership enumeration; does not require managed hierarchy ownership.
+pub fn read_cgroup_subtree_pids(directory: &Path) -> Result<Vec<u32>, CgroupError> {
+    require_real_directory(directory)?;
+    let mut pids = BTreeSet::new();
+    collect_subtree_pids_recursive(directory, &mut pids)?;
+    Ok(pids.into_iter().collect())
+}
+
 fn collect_subtree_pids_recursive(
     directory: &Path,
     pids: &mut BTreeSet<u32>,
@@ -1267,10 +1273,6 @@ fn create_checked_directory(path: &Path) -> Result<(), CgroupError> {
 
 fn create_new_directory(path: &Path) -> Result<(), CgroupError> {
     fs::create_dir(path).map_err(|source| io_error("create directory", path, source))
-}
-
-fn remove_directory(path: &Path) -> Result<(), CgroupError> {
-    fs::remove_dir(path).map_err(|source| io_error("remove directory", path, source))
 }
 
 fn write_control_file(path: &Path, value: &[u8]) -> Result<(), CgroupError> {

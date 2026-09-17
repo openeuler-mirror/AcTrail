@@ -1,6 +1,7 @@
 use sandbox_observation::{
-    CpuSnapshot, GuestBootId, GuestResourceSnapshot, MemorySnapshot, Observation, ObservationBatch,
-    OomVictimAttribution, OomVictimObservation, ProcessIoCounters, ProcessMarker,
+    CpuSnapshot, GuestBootId, GuestPressureSnapshot, GuestResourceSnapshot, MemorySnapshot,
+    Observation, ObservationBatch, OomVictimAttribution, OomVictimObservation, ProcessIoCounters,
+    ProcessMarker, PsiAverages,
 };
 
 use crate::WireError;
@@ -8,9 +9,11 @@ use crate::WireError;
 const PROCESS_IO_CODE: u8 = 1;
 const RESOURCE_CODE: u8 = 2;
 const OOM_VICTIM_CODE: u8 = 3;
+const PRESSURE_CODE: u8 = 4;
 const PROCESS_IO_BYTES: usize = 108;
 const RESOURCE_BYTES: usize = 74;
 const OOM_VICTIM_BYTES: usize = 77;
+const PRESSURE_BYTES: usize = 48;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ObservationBatchCodec;
@@ -45,6 +48,11 @@ impl ObservationBatchCodec {
                     output.extend_from_slice(&(OOM_VICTIM_BYTES as u16).to_be_bytes());
                     self.encode_oom_victim(&mut output, value);
                 }
+                Observation::GuestPressure(value) => {
+                    output.push(PRESSURE_CODE);
+                    output.extend_from_slice(&(PRESSURE_BYTES as u16).to_be_bytes());
+                    self.encode_pressure(&mut output, value);
+                }
             }
         }
         Ok(output)
@@ -69,7 +77,10 @@ impl ObservationBatchCodec {
                 OOM_VICTIM_CODE if length == OOM_VICTIM_BYTES => {
                     Observation::OomVictim(self.decode_oom_victim(body)?)
                 }
-                PROCESS_IO_CODE | RESOURCE_CODE | OOM_VICTIM_CODE => {
+                PRESSURE_CODE if length == PRESSURE_BYTES => {
+                    Observation::GuestPressure(self.decode_pressure(body)?)
+                }
+                PROCESS_IO_CODE | RESOURCE_CODE | OOM_VICTIM_CODE | PRESSURE_CODE => {
                     return Err(WireError::new(format!(
                         "invalid observation body length {length} for code {code}"
                     )));
@@ -207,6 +218,35 @@ impl ObservationBatchCodec {
         .validate()
         .map_err(WireError::new)
     }
+
+    fn encode_pressure(&self, output: &mut Vec<u8>, value: &GuestPressureSnapshot) {
+        output.extend_from_slice(value.guest_boot_id.as_bytes());
+        output.extend_from_slice(&value.sampled_at_ms.to_be_bytes());
+        output.extend_from_slice(&value.memory_some.avg10_millipercent.to_be_bytes());
+        output.extend_from_slice(&value.memory_some.avg60_millipercent.to_be_bytes());
+        output.extend_from_slice(&value.memory_some.avg300_millipercent.to_be_bytes());
+        output.extend_from_slice(&value.memory_full.avg10_millipercent.to_be_bytes());
+        output.extend_from_slice(&value.memory_full.avg60_millipercent.to_be_bytes());
+        output.extend_from_slice(&value.memory_full.avg300_millipercent.to_be_bytes());
+    }
+
+    fn decode_pressure(&self, bytes: &[u8]) -> Result<GuestPressureSnapshot, WireError> {
+        let mut cursor = Cursor::new(bytes);
+        Ok(GuestPressureSnapshot {
+            guest_boot_id: GuestBootId::new(cursor.array()?),
+            sampled_at_ms: cursor.u64()?,
+            memory_some: PsiAverages {
+                avg10_millipercent: cursor.u32()?,
+                avg60_millipercent: cursor.u32()?,
+                avg300_millipercent: cursor.u32()?,
+            },
+            memory_full: PsiAverages {
+                avg10_millipercent: cursor.u32()?,
+                avg60_millipercent: cursor.u32()?,
+                avg300_millipercent: cursor.u32()?,
+            },
+        })
+    }
 }
 
 struct Cursor<'a> {
@@ -256,5 +296,49 @@ impl<'a> Cursor<'a> {
         self.take(N)?
             .try_into()
             .map_err(|_| WireError::new("invalid fixed-width wire field"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pressure() -> GuestPressureSnapshot {
+        GuestPressureSnapshot {
+            guest_boot_id: GuestBootId::new([9; 16]),
+            sampled_at_ms: 1_234,
+            memory_some: PsiAverages {
+                avg10_millipercent: 2_350,
+                avg60_millipercent: 1_100,
+                avg300_millipercent: 500,
+            },
+            memory_full: PsiAverages {
+                avg10_millipercent: 100_000,
+                avg60_millipercent: 0,
+                avg300_millipercent: 42_000,
+            },
+        }
+    }
+
+    #[test]
+    fn pressure_observation_round_trips() {
+        let codec = ObservationBatchCodec;
+        let batch = ObservationBatch::new(7, vec![Observation::GuestPressure(pressure())]);
+        let encoded = codec.encode(&batch).expect("encode pressure");
+        assert_eq!(encoded.len(), 10 + 3 + PRESSURE_BYTES);
+        assert_eq!(encoded[10], PRESSURE_CODE);
+        assert_eq!(codec.decode(&encoded).expect("decode pressure"), batch);
+    }
+
+    #[test]
+    fn pressure_rejects_wrong_body_length() {
+        let codec = ObservationBatchCodec;
+        let mut encoded = codec
+            .encode(&ObservationBatch::new(1, vec![Observation::GuestPressure(pressure())]))
+            .expect("encode pressure");
+        // Corrupt the body length so it no longer matches PRESSURE_BYTES.
+        encoded[11] = 0;
+        encoded[12] = (PRESSURE_BYTES + 1) as u8;
+        assert!(codec.decode(&encoded).is_err());
     }
 }

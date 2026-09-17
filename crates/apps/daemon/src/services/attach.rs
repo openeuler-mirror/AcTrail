@@ -54,7 +54,7 @@ use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityError;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
-use recording_runtime::{RecordingWriter, TraceStateRecord};
+use recording_runtime::RecordingWriter;
 use semantic_action_runtime::LiveSemanticActionRuntime;
 use storage_core::StorageBackend;
 use trace_runtime::commands::TrackTraceRequest;
@@ -347,13 +347,17 @@ impl StorageAttachService {
             ControlError::new("trace_missing", "trace disappeared after activation")
         })?;
         let trace = entry.trace.clone();
-        let trace_state = TraceStateRecord::new(
+        let memberships = entry.memberships.memberships().cloned().collect::<Vec<_>>();
+        if let Err(error) = persist_admitted_trace(
+            self.storage.as_mut(),
             trace.clone(),
-            entry.memberships.memberships().cloned().collect(),
-        );
-        RecordingWriter::new(self.storage.as_mut())
-            .persist_trace_state_with_process_records(trace_state, process_records)
-            .map_err(recording_error_to_control)?;
+            memberships,
+            process_records,
+            self.resource_metrics.external_binding(trace_id),
+        ) {
+            self.resource_metrics.finish_external_finalization(trace_id);
+            return Err(ControlError::new(error.stage, error.message));
+        }
         if emit_bootstrap_diagnostic {
             let diagnostic = DiagnosticRecord::new(
                 self.next_diagnostic_id()?,
@@ -530,6 +534,24 @@ impl StorageAttachService {
                 }
                 let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
                 return Err(ControlError::new(error.stage, error.message));
+            }
+        }
+
+        if pending_resource_scope.is_none() && !command.launch_mode {
+            if let Some(coordinates) = bootstrap.root_observation.host.as_ref() {
+                let entry = trace_runtime.get_trace(bootstrap.trace_id).ok_or_else(|| {
+                    ControlError::new("trace_missing", "trace disappeared during bootstrap")
+                })?;
+                if let Err(error) = self
+                    .resource_metrics
+                    .admit_external_container(entry, coordinates)
+                {
+                    if uses_ebpf_collector {
+                        let _ = self.collector.unbind_trace(bootstrap.trace_id);
+                    }
+                    let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
+                    return Err(error);
+                }
             }
         }
 
@@ -1063,6 +1085,36 @@ fn contract_permission_mode(mode: PermissionMode) -> DeploymentPermissionMode {
     }
 }
 
+fn persist_admitted_trace(
+    storage: &mut dyn storage_core::StorageBackend,
+    trace: model_core::trace::TraceRecord,
+    memberships: Vec<model_core::process::ProcessMembership>,
+    processes: Vec<ProcessRecord>,
+    binding: Option<model_core::external_cgroup::ExternalCgroupBinding>,
+) -> Result<(), storage_core::StorageError> {
+    let transaction = storage.begin()?;
+    let result = (|| {
+        for record in processes {
+            storage.upsert_process_record(record)?;
+        }
+        storage.create_trace(trace)?;
+        for membership in memberships {
+            storage.upsert_membership(membership)?;
+        }
+        if let Some(binding) = binding {
+            storage.create_external_cgroup_binding(binding)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => transaction.commit(),
+        Err(error) => {
+            transaction.rollback()?;
+            Err(error)
+        }
+    }
+}
+
 fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {
     ControlError::new(error.stage, error.message)
 }
@@ -1116,5 +1168,78 @@ fn min_optional_timeout(left: Option<Duration>, right: Option<Duration>) -> Opti
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use model_core::container::{ContainerRuntime, NormalizedContainerId};
+    use model_core::external_cgroup::{ExternalCgroupBinding, HostBootId};
+    use model_core::ids::{OtelTraceId, ProfileName, TraceId, TraceName};
+    use model_core::process::{HostProcessCoordinates, ProcessMembership};
+    use model_core::trace::{TraceAlertToken, TraceRecord};
+
+    #[test]
+    fn binding_failure_rolls_back_trace_processes_and_memberships_then_retry_commits() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut storage = storage_factory::open_storage_backend(
+            &storage_factory::StorageConfig::sqlite_path(temp.path().join("admission.sqlite")),
+            storage_core::StorageOpenMode::ReadWrite,
+        )
+        .unwrap();
+        let id = TraceId::new(1);
+        let process = ProcessIdentity::new(1);
+        let trace = TraceRecord::new(
+            id,
+            OtelTraceId::from_bytes([1; 16]).unwrap(),
+            TraceAlertToken::new([0; 32]),
+            process,
+            TraceName::new("atomic"),
+            ProfileName::new("test"),
+            SystemTime::now(),
+        );
+        let record = ProcessRecord::new(
+            process,
+            ProcessObservation::host(HostProcessCoordinates::new(42, 900)),
+        );
+        let member = ProcessMembership::root(id, process, SystemTime::now());
+        let mut binding = ExternalCgroupBinding::active(
+            id,
+            ContainerRuntime::Unknown,
+            NormalizedContainerId::from_lower_hex(&"ab".repeat(32)).unwrap(),
+            format!("docker/{}", "ab".repeat(32)),
+            1,
+            2,
+            HostBootId::from_bytes([1; 16]),
+            SystemTime::now(),
+        );
+        assert!(
+            persist_admitted_trace(
+                storage.as_mut(),
+                trace.clone(),
+                vec![member.clone()],
+                vec![record.clone()],
+                Some(binding.clone())
+            )
+            .is_err()
+        );
+        assert!(storage.get_trace(id).unwrap().is_none());
+        assert!(storage.get_process_record(process).unwrap().is_none());
+        assert!(storage.trace_memberships(id).unwrap().is_empty());
+        assert!(storage.get_external_cgroup_binding(id).unwrap().is_none());
+        binding.runtime = ContainerRuntime::Docker;
+        persist_admitted_trace(
+            storage.as_mut(),
+            trace,
+            vec![member],
+            vec![record],
+            Some(binding),
+        )
+        .unwrap();
+        assert!(storage.get_trace(id).unwrap().is_some());
+        assert!(storage.get_external_cgroup_binding(id).unwrap().is_some());
+        storage.discard_orphan_external_binding(id).unwrap();
+        assert!(storage.get_external_cgroup_binding(id).unwrap().is_some());
     }
 }

@@ -1,6 +1,7 @@
 # AcTrail 文档
 
 - [Host cgroup resource accounting](operations/resource-metrics-host.md)
+- [Existing container resource accounting](operations/resource-metrics-containers.md)
 - [Resource metrics three-PR delivery plan](designs/resource-metrics-pr-split-plan.md)
 
 > 本文按实际任务提供 AcTrail 入门、操作、参考、架构与规范文档的统一入口。

@@ -12,6 +12,7 @@ Scope: Guest-local 观测语义与 daemon 路由
 
 - 每个 root lineage 的 read/write 操作次数和字节数增量，包括失败次数；
 - 整个 Guest 的 CPU 与内存累计快照；
+- 整个 Guest 的 memory PSI（`/proc/pressure/memory` 的 `some` 与 `full`，三个窗口以 millipercent 表示，允许 `>100%`）；
 - 带三态归因和可选 monitored root 的 OOM victim 事件。
 
 它不得包含文件或网络内容、syscall payload、脑侧进程身份、trace ID 或 semantic action。**Root lineage** 是匹配到的根进程及其通过 fork、vfork 或 clone 创建的后代；在一次 Guest boot 内由根 PID、启动时间和发现时匹配的 Linux `comm` 名共同标识。后代在 exec 后仍属原 lineage，进程退出后移除；PID 复用不得把观测错误归到旧根进程。
@@ -19,6 +20,8 @@ Scope: Guest-local 观测语义与 daemon 路由
 成功的 `read` 和 `write` 增加操作次数及实际返回字节数；负返回值只增加对应失败次数。内核采集必须聚合计数，不得复制用户缓冲区、计算内容哈希或逐 syscall 发送事件。
 
 Guest 资源快照不依赖目标进程是否存在。CPU consumer 通过相邻累计快照计算区间利用率。`vmstat` 的 `oom_kill` 只是累计资源指标，本身不生成 `OomKilled`；具体 victim 由 OOM tracepoint observation 表达。
+
+Guest pressure 快照同样不依赖目标进程是否存在，只反映整个 Guest 的 memory PSI。缺少 PSI 的 Guest 内核（无 `CONFIG_PSI` 或 `psi=0` 时没有 `/proc/pressure/memory`）不产生该 observation，且不得因此阻止 daemon 启动或其余观测路径。
 
 ## 有界发布
 

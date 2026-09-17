@@ -123,7 +123,7 @@ pub use payload::{
     PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
-pub use resource::{ResourceMetricsConfig, ResourceMetricsMode};
+pub use resource::{ExistingContainerCgroups, ResourceMetricsConfig, ResourceMetricsMode};
 pub use trace_finalization::{
     DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
     DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,

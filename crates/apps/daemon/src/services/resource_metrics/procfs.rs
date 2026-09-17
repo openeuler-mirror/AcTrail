@@ -37,6 +37,7 @@ impl SystemUnits {
 }
 
 pub(super) struct ProcStat {
+    pub exited: bool,
     pub comm: String,
     pub total_cpu_ticks: u64,
     pub threads: u64,
@@ -150,6 +151,7 @@ fn parse_proc_stat(raw: &str) -> Result<ProcStat, String> {
     let threads = parse_u64(fields[PROC_STAT_THREADS_INDEX], "num_threads")?;
     let start_time_ticks = parse_u64(fields[PROC_STAT_START_TIME_INDEX], "starttime")?;
     Ok(ProcStat {
+        exited: matches!(fields[0], "Z" | "X" | "x"),
         comm,
         total_cpu_ticks: utime.saturating_add(stime),
         threads,

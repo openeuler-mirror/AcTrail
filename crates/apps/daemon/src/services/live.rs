@@ -391,10 +391,11 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
-        let drain = match self
-            .resource_metrics
-            .drain_due(trace_runtime, &self.process_registry)
-        {
+        let drain = match self.resource_metrics.drain_due(
+            trace_runtime,
+            &self.process_registry,
+            self.storage.as_mut(),
+        ) {
             Ok(d) => d,
             Err(error) => {
                 tracing::warn!(
@@ -451,7 +452,7 @@ impl StorageAttachService {
                 DiagnosticKind::RuntimeFailure,
                 DiagnosticSeverity::Warning,
                 SystemTime::now(),
-                "required cgroup resource counter read failed",
+                "verified cgroup resource accounting unavailable",
             )
             .with_metadata("error", failure.message);
             RecordingWriter::new(self.storage.as_mut())
@@ -461,7 +462,39 @@ impl StorageAttachService {
                 self.persist_trace_state(trace_runtime, failure.trace_id)?;
             }
         }
-        self.drain_resource_finalizations_impl(trace_runtime)
+        self.drain_resource_finalizations_impl(trace_runtime)?;
+        self.drain_external_finalizations_impl(trace_runtime)
+    }
+
+    fn drain_external_finalizations_impl(
+        &mut self,
+        trace_runtime: &mut trace_runtime::TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let drafts = self.resource_metrics.poll_external_finalizations(
+            trace_runtime,
+            &self.process_registry,
+            self.storage.as_mut(),
+        )?;
+        for draft in drafts {
+            let event = DomainEvent::new(
+                EventEnvelope {
+                    event_id: self.next_event_id()?,
+                    trace_id: draft.trace_id,
+                    observed_at: draft.observed_at,
+                    process: draft.process,
+                    collector: CollectorName::new(RESOURCE_METRICS_COLLECTOR_NAME),
+                    kind: EventKind::Resource,
+                    flags: EventFlags::clean(),
+                },
+                EventPayload::Resource(draft.payload),
+            );
+            self.storage
+                .append_final_event_and_close_external_binding(event, SystemTime::now())
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+            self.resource_metrics
+                .finish_external_finalization(draft.trace_id);
+        }
+        Ok(())
     }
 
     fn drain_resource_finalizations_impl(

@@ -10,6 +10,7 @@ use alert_contract::{
 use idle_contract::{IdleInterval, IdleStoreError, IdleStoreOp};
 use model_core::diagnostics::{DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::DomainEvent;
+use model_core::external_cgroup::{ExternalBindingStaleReason, ExternalCgroupBinding};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
@@ -145,6 +146,42 @@ pub trait StorageBackend {
         final_event_id: Option<model_core::ids::EventId>,
         updated_at: SystemTime,
     ) -> Result<(), StorageError>;
+
+    fn create_external_cgroup_binding(
+        &mut self,
+        binding: ExternalCgroupBinding,
+    ) -> Result<(), StorageError>;
+    fn get_external_cgroup_binding(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<ExternalCgroupBinding>, StorageError>;
+    fn list_live_external_cgroup_bindings(
+        &self,
+    ) -> Result<Vec<ExternalCgroupBinding>, StorageError>;
+    fn record_external_cgroup_success(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: SystemTime,
+    ) -> Result<(), StorageError>;
+    fn record_external_cgroup_failure(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: SystemTime,
+    ) -> Result<u32, StorageError>;
+    fn mark_external_cgroup_stale(
+        &mut self,
+        trace_id: TraceId,
+        reason: ExternalBindingStaleReason,
+        updated_at: SystemTime,
+    ) -> Result<(), StorageError>;
+    /// Discard a legacy interrupted admission only if its trace does not exist.
+    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError>;
+
+    fn append_final_event_and_close_external_binding(
+        &mut self,
+        event: DomainEvent,
+        closed_at: SystemTime,
+    ) -> Result<model_core::ids::EventId, StorageError>;
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError>;
     fn list_events(&self, trace_id: TraceId) -> Result<Vec<DomainEvent>, StorageError>;

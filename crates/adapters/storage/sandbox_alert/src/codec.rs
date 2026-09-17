@@ -6,6 +6,7 @@ const OOM_KILLED: u8 = 2;
 const OOM_RISK: u8 = 3;
 const HIGH_READ: u8 = 4;
 const HIGH_WRITE: u8 = 5;
+const OOM_IMMINENT: u8 = 6;
 
 pub(super) struct AlertCodec;
 
@@ -53,6 +54,22 @@ impl AlertCodec {
                 append_u64(&mut payload, available_bytes);
                 append_u64(&mut payload, threshold_bytes);
                 (OOM_RISK, payload)
+            }
+            SandboxAlertKind::OomImminent {
+                guest_boot_id,
+                some_avg10_millipercent,
+                threshold_millipercent,
+                available_bytes,
+                threshold_bytes,
+                ..
+            } => {
+                let mut payload = Vec::with_capacity(40);
+                payload.extend_from_slice(guest_boot_id.as_bytes());
+                payload.extend_from_slice(&some_avg10_millipercent.to_be_bytes());
+                payload.extend_from_slice(&threshold_millipercent.to_be_bytes());
+                append_u64(&mut payload, available_bytes);
+                append_u64(&mut payload, threshold_bytes);
+                (OOM_IMMINENT, payload)
             }
             SandboxAlertKind::HighRead {
                 guest_boot_id,
@@ -116,6 +133,14 @@ impl AlertCodec {
             OOM_RISK => SandboxAlertKind::OomRisk {
                 guest_boot_id,
                 sampled_at_ms: detected_at_ms,
+                available_bytes: decoder.u64()?,
+                threshold_bytes: decoder.u64()?,
+            },
+            OOM_IMMINENT => SandboxAlertKind::OomImminent {
+                guest_boot_id,
+                sampled_at_ms: detected_at_ms,
+                some_avg10_millipercent: decoder.u32()?,
+                threshold_millipercent: decoder.u32()?,
                 available_bytes: decoder.u64()?,
                 threshold_bytes: decoder.u64()?,
             },

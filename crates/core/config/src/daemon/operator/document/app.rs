@@ -127,6 +127,8 @@ impl Default for Http2ApplicationDocument {
 pub(super) struct ResourceMetricsDocument {
     pub enabled: bool,
     pub mode: String,
+    pub existing_container_cgroups: String,
+    pub external_cgroup_failure_threshold: u32,
     pub interval_ms: u64,
     pub include_children: bool,
     pub include_system: bool,
@@ -143,6 +145,8 @@ impl Default for ResourceMetricsDocument {
         Self {
             enabled: true,
             mode: ResourceMetricsMode::Procfs.as_str().to_string(),
+            existing_container_cgroups: ExistingContainerCgroups::Disabled.as_str().to_string(),
+            external_cgroup_failure_threshold: 3,
             interval_ms: 1000,
             include_children: true,
             include_system: true,
@@ -161,6 +165,14 @@ impl ResourceMetricsDocument {
         Ok(ResourceMetricsConfig {
             enabled: self.enabled,
             mode: parse_value("resource_metrics.mode", &self.mode)?,
+            existing_container_cgroups: parse_value(
+                "resource_metrics.existing_container_cgroups",
+                &self.existing_container_cgroups,
+            )?,
+            external_cgroup_failure_threshold: require_positive_u32(
+                "resource_metrics.external_cgroup_failure_threshold",
+                self.external_cgroup_failure_threshold,
+            )?,
             interval_ms: require_positive_u64("resource_metrics.interval_ms", self.interval_ms)?,
             include_children: self.include_children,
             include_system: self.include_system,

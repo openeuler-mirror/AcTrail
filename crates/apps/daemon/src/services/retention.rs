@@ -220,6 +220,7 @@ impl StorageAttachService {
             return Ok(());
         };
         if report.purged_traces > 0 || report.skipped_active_leases > 0 {
+            self.resource_metrics.prune_forgotten(trace_runtime);
             tracing::info!(
                 purged_traces = report.purged_traces,
                 skipped_active_leases = report.skipped_active_leases,
