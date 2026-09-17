@@ -50,6 +50,14 @@ pub enum SandboxAlertKind {
         available_bytes: u64,
         threshold_bytes: u64,
     },
+    OomImminent {
+        guest_boot_id: GuestBootId,
+        sampled_at_ms: u64,
+        some_avg10_millipercent: u32,
+        threshold_millipercent: u32,
+        available_bytes: u64,
+        threshold_bytes: u64,
+    },
     HighRead {
         guest_boot_id: GuestBootId,
         process: ProcessMarker,
@@ -71,9 +79,9 @@ pub enum SandboxAlertKind {
 impl SandboxAlertKind {
     pub const fn detected_at_ms(self) -> u64 {
         match self {
-            Self::HighCpu { sampled_at_ms, .. } | Self::OomRisk { sampled_at_ms, .. } => {
-                sampled_at_ms
-            }
+            Self::HighCpu { sampled_at_ms, .. }
+            | Self::OomRisk { sampled_at_ms, .. }
+            | Self::OomImminent { sampled_at_ms, .. } => sampled_at_ms,
             Self::OomKilled { detected_at_ms, .. } => detected_at_ms,
             Self::HighRead {
                 sample_ended_ms, ..

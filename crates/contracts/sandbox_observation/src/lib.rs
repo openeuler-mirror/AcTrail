@@ -2,10 +2,12 @@
 
 mod observation;
 mod oom;
+mod pressure;
 mod process;
 mod resource;
 
 pub use observation::{Observation, ObservationBatch};
 pub use oom::{OomVictimAttribution, OomVictimObservation};
+pub use pressure::{GuestPressureSnapshot, PsiAverages};
 pub use process::{GuestBootId, ProcessIoCounters, ProcessMarker};
 pub use resource::{CpuSnapshot, GuestResourceSnapshot, MemorySnapshot};

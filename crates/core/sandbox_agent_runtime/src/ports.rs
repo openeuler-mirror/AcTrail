@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 
 use sandbox_control::SandboxEndpoint;
-use sandbox_observation::{GuestResourceSnapshot, Observation};
+use sandbox_observation::{GuestPressureSnapshot, GuestResourceSnapshot, Observation};
 
 pub trait ProcessIoSource: Send + 'static {
     fn establish_baseline(&mut self) -> io::Result<()>;
@@ -13,6 +13,10 @@ pub trait ProcessIoSource: Send + 'static {
 
 pub trait GuestResourceSource: Send + 'static {
     fn sample(&mut self) -> io::Result<GuestResourceSnapshot>;
+}
+
+pub trait GuestPressureSource: Send + 'static {
+    fn sample(&mut self) -> io::Result<GuestPressureSnapshot>;
 }
 
 pub trait SandboxConnection: Read + Write + Send + 'static {}

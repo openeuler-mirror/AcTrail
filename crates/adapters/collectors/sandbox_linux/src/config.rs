@@ -23,6 +23,7 @@ pub struct SandboxLinuxConfig {
     pub(crate) oom_event_capacity: u32,
     pub(crate) require_initial_root: bool,
     pub(crate) root_refresh_interval: Duration,
+    pub(crate) pressure_enabled: bool,
 }
 
 impl SandboxLinuxConfig {
@@ -59,6 +60,7 @@ impl SandboxLinuxConfig {
             oom_event_capacity: DEFAULT_OOM_EVENT_CAPACITY,
             require_initial_root: true,
             root_refresh_interval: DEFAULT_ROOT_REFRESH_INTERVAL,
+            pressure_enabled: true,
         })
     }
 
@@ -98,6 +100,15 @@ impl SandboxLinuxConfig {
     pub fn with_initial_root_required(mut self, required: bool) -> Self {
         self.require_initial_root = required;
         self
+    }
+
+    pub fn with_pressure_enabled(mut self, enabled: bool) -> Self {
+        self.pressure_enabled = enabled;
+        self
+    }
+
+    pub fn pressure_enabled(&self) -> bool {
+        self.pressure_enabled
     }
 
     pub fn with_root_refresh_interval(
