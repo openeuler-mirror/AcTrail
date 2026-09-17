@@ -10,6 +10,7 @@ members = [
     "crates/apps/sb",
     "crates/core/model",
     "crates/core/linux_platform",
+    "crates/core/linux_cgroup",
     "crates/core/config",
     "crates/core/semantic_action_runtime",
     "crates/core/trace_runtime",

@@ -718,6 +718,7 @@ dependencies = [
  "export_core",
  "export_factory",
  "gateway_ingest_runtime",
+ "getrandom 0.3.4",
  "idle_contract",
  "idle_detector",
  "ingest_runtime",
@@ -749,6 +750,7 @@ dependencies = [
  "sha2",
  "storage_core",
  "storage_factory",
+ "tempfile",
  "tls_payload_core",
  "tls_payload_sync",
  "tls_probe_point_finder",
@@ -1579,11 +1581,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "linux_cgroup"
+version = "0.7.1"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "linux_platform"
 version = "0.7.1"
 dependencies = [
  "config_core",
  "libc",
+ "linux_cgroup",
+ "model_core",
+ "tempfile",
 ]
 
 [[package]]
@@ -2654,6 +2667,7 @@ dependencies = [
  "store_snapshot_contract",
  "store_tx_contract",
  "store_write_contract",
+ "tempfile",
  "zstd",
 ]
 

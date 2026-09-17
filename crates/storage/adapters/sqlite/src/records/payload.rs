@@ -80,3 +80,54 @@ pub(crate) fn restore_shared_path(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use model_core::event::{
+        EventPayload, ResourceAccountingCoverage, ResourceAccountingMethod, ResourceSampleKind,
+    };
+    use rusqlite::{Connection, params};
+
+    use crate::records::event_from_row;
+
+    // A tag-6 resource payload written before ResourceV2 was introduced.
+    const LEGACY_RESOURCE_FIXTURE: &[u8] = &[
+        6, 7, b'p', b'r', b'o', b'c', b'e', b's', b's', 6, b'p', b'i', b'd', b':', b'4', b'2', 1,
+        0xe2, 0x04, 0, 0, 0, 0, 0, 0, 1, 0x40, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, 10, b'f', b'u',
+        b't', b'u', b'r', b'e', b'_', b'k', b'e', b'y', 4, b'k', b'e', b'p', b't',
+    ];
+
+    #[test]
+    fn sqlite_row_with_pre_change_resource_payload_remains_readable() {
+        let connection = Connection::open_in_memory().unwrap();
+        let event = connection
+            .query_row(
+                "SELECT
+                    1 AS event_id,
+                    2 AS trace_id,
+                    0 AS observed_at,
+                    3 AS process_id,
+                    4 AS event_meta,
+                    6 AS kind_code,
+                    NULL AS payload_path_id,
+                    ?1 AS payload,
+                    NULL AS payload_path",
+                params![LEGACY_RESOURCE_FIXTURE],
+                |row| event_from_row(&connection, row),
+            )
+            .unwrap();
+        let EventPayload::Resource(payload) = event.payload else {
+            panic!("expected resource payload");
+        };
+        assert_eq!(
+            payload.accounting_method,
+            ResourceAccountingMethod::ProcfsRssSum
+        );
+        assert_eq!(
+            payload.accounting_coverage,
+            ResourceAccountingCoverage::Partial
+        );
+        assert_eq!(payload.sample_kind, ResourceSampleKind::Periodic);
+        assert_eq!(payload.rss_kb, Some(64));
+    }
+}

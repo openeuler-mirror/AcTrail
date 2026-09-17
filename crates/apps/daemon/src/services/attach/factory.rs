@@ -192,6 +192,7 @@ impl StorageAttachService {
             storage.as_mut(),
             alert_forwarding.plugin(),
         )?;
+        let resource_metrics = ResourceMetricsSampler::new(resource_metrics, storage.as_mut())?;
         let idle_detector = if idle_detection.enabled {
             let idle_interval_id_seed = storage
                 .next_idle_interval_id_seed()
@@ -254,7 +255,7 @@ impl StorageAttachService {
                 application_protocol,
                 semantic_retention.clone(),
             ),
-            resource_metrics: ResourceMetricsSampler::new(resource_metrics),
+            resource_metrics,
             storage_retention: StorageRetentionService::new(storage_retention_config),
             enforcement,
             control_plugins: ControlPluginRuntime::new(),

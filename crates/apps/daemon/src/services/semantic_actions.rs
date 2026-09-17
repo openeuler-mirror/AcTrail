@@ -112,7 +112,6 @@ impl StorageAttachService {
             .collect()
     }
 
-
     pub(super) fn persist_observed_batch_then_publish(
         &mut self,
         trace_runtime: &TraceRuntime,

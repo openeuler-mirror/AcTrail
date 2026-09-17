@@ -10,9 +10,11 @@ use model_core::diagnostics::{
     LlmPipelineDiagnosticSeverity, LlmPipelineDiagnosticStage,
 };
 use model_core::event::DomainEvent;
+use model_core::external_cgroup::{ExternalBindingStaleReason, ExternalCgroupBinding};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
+use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
@@ -146,6 +148,122 @@ impl StorageBackend for SqliteStorage {
 
     fn trace_memberships(&self, trace_id: TraceId) -> Result<Vec<ProcessMembership>, StorageError> {
         SqliteStorage::trace_memberships(self, trace_id).map_err(StorageError::from)
+    }
+
+    fn create_resource_scope(&mut self, scope: TraceResourceScope) -> Result<(), StorageError> {
+        SqliteStorage::create_resource_scope(self, &scope)
+            .map_err(|error| StorageError::new("create_resource_scope", error.to_string()))
+    }
+
+    fn get_resource_scope(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<TraceResourceScope>, StorageError> {
+        SqliteStorage::get_resource_scope(self, trace_id)
+            .map_err(|error| StorageError::new("get_resource_scope", error.to_string()))
+    }
+
+    fn list_resource_scopes(&self) -> Result<Vec<TraceResourceScope>, StorageError> {
+        SqliteStorage::list_resource_scopes(self)
+            .map_err(|error| StorageError::new("list_resource_scopes", error.to_string()))
+    }
+
+    fn update_resource_scope_state(
+        &mut self,
+        trace_id: TraceId,
+        lifecycle_state: ResourceScopeLifecycleState,
+        final_event_id: Option<model_core::ids::EventId>,
+        updated_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::update_resource_scope_state(
+            self,
+            trace_id,
+            lifecycle_state,
+            final_event_id,
+            updated_at,
+        )
+        .map_err(|error| StorageError::new("update_resource_scope_state", error.to_string()))
+    }
+
+    fn create_external_cgroup_binding(
+        &mut self,
+        binding: ExternalCgroupBinding,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::create_external_cgroup_binding(self, &binding)
+            .map_err(|error| StorageError::new("create_external_cgroup_binding", error.to_string()))
+    }
+
+    fn get_external_cgroup_binding(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<ExternalCgroupBinding>, StorageError> {
+        SqliteStorage::get_external_cgroup_binding(self, trace_id)
+            .map_err(|error| StorageError::new("get_external_cgroup_binding", error.to_string()))
+    }
+
+    fn list_live_external_cgroup_bindings(
+        &self,
+    ) -> Result<Vec<ExternalCgroupBinding>, StorageError> {
+        SqliteStorage::list_live_external_cgroup_bindings(self).map_err(|error| {
+            StorageError::new("list_live_external_cgroup_bindings", error.to_string())
+        })
+    }
+
+    fn record_external_cgroup_success(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::record_external_cgroup_success(self, trace_id, observed_at)
+            .map_err(|error| StorageError::new("record_external_cgroup_success", error.to_string()))
+    }
+
+    fn record_external_cgroup_failure(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: std::time::SystemTime,
+    ) -> Result<u32, StorageError> {
+        SqliteStorage::record_external_cgroup_failure(self, trace_id, observed_at)
+            .map_err(|error| StorageError::new("record_external_cgroup_failure", error.to_string()))
+    }
+
+    fn mark_external_cgroup_stale(
+        &mut self,
+        trace_id: TraceId,
+        reason: ExternalBindingStaleReason,
+        updated_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::mark_external_cgroup_stale(self, trace_id, reason, updated_at)
+            .map_err(|error| StorageError::new("mark_external_cgroup_stale", error.to_string()))
+    }
+
+    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError> {
+        self.connection()
+            .borrow_mut()
+            .execute(
+                "DELETE FROM trace_external_cgroup_bindings
+             WHERE trace_id=?1 AND lifecycle_state IN ('active','stale')
+             AND NOT EXISTS (SELECT 1 FROM traces WHERE trace_id=?1)",
+                rusqlite::params![trace_id.get()],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                StorageError::new("discard_orphan_external_binding", error.to_string())
+            })
+    }
+
+    fn append_final_event_and_close_external_binding(
+        &mut self,
+        event: DomainEvent,
+        closed_at: std::time::SystemTime,
+    ) -> Result<model_core::ids::EventId, StorageError> {
+        SqliteStorage::append_final_event_and_close_external_binding(self, event, closed_at)
+            .map_err(|error| {
+                StorageError::new(
+                    "append_final_event_and_close_external_binding",
+                    error.to_string(),
+                )
+            })
     }
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError> {

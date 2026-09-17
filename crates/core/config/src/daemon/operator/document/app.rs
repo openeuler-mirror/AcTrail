@@ -126,22 +126,36 @@ impl Default for Http2ApplicationDocument {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct ResourceMetricsDocument {
     pub enabled: bool,
+    pub mode: String,
+    pub existing_container_cgroups: String,
+    pub external_cgroup_failure_threshold: u32,
     pub interval_ms: u64,
     pub include_children: bool,
     pub include_system: bool,
+    pub cgroup_root: String,
+    pub finalization_timeout_ms: u64,
+    pub orphan_limit: u32,
     pub cpu_alert_percent_millis: String,
     pub memory_alert_rss_kb: String,
+    pub memory_alert_current_bytes: String,
 }
 
 impl Default for ResourceMetricsDocument {
     fn default() -> Self {
         Self {
             enabled: true,
+            mode: ResourceMetricsMode::Procfs.as_str().to_string(),
+            existing_container_cgroups: ExistingContainerCgroups::Disabled.as_str().to_string(),
+            external_cgroup_failure_threshold: 3,
             interval_ms: 1000,
             include_children: true,
             include_system: true,
+            cgroup_root: "/sys/fs/cgroup/actrail".to_string(),
+            finalization_timeout_ms: 30_000,
+            orphan_limit: 1_024,
             cpu_alert_percent_millis: "disabled".to_string(),
             memory_alert_rss_kb: "disabled".to_string(),
+            memory_alert_current_bytes: "disabled".to_string(),
         }
     }
 }
@@ -150,9 +164,27 @@ impl ResourceMetricsDocument {
     pub(super) fn to_config(&self) -> Result<ResourceMetricsConfig, String> {
         Ok(ResourceMetricsConfig {
             enabled: self.enabled,
+            mode: parse_value("resource_metrics.mode", &self.mode)?,
+            existing_container_cgroups: parse_value(
+                "resource_metrics.existing_container_cgroups",
+                &self.existing_container_cgroups,
+            )?,
+            external_cgroup_failure_threshold: require_positive_u32(
+                "resource_metrics.external_cgroup_failure_threshold",
+                self.external_cgroup_failure_threshold,
+            )?,
             interval_ms: require_positive_u64("resource_metrics.interval_ms", self.interval_ms)?,
             include_children: self.include_children,
             include_system: self.include_system,
+            cgroup_root: PathBuf::from(required_non_empty(
+                "resource_metrics.cgroup_root",
+                &self.cgroup_root,
+            )?),
+            finalization_timeout_ms: require_positive_u64(
+                "resource_metrics.finalization_timeout_ms",
+                self.finalization_timeout_ms,
+            )?,
+            orphan_limit: require_positive_u32("resource_metrics.orphan_limit", self.orphan_limit)?,
             cpu_alert_percent_millis: parse_disabled_or_positive_u64(
                 "resource_metrics.cpu_alert_percent_millis",
                 &self.cpu_alert_percent_millis,
@@ -160,6 +192,10 @@ impl ResourceMetricsDocument {
             memory_alert_rss_kb: parse_disabled_or_positive_u64(
                 "resource_metrics.memory_alert_rss_kb",
                 &self.memory_alert_rss_kb,
+            )?,
+            memory_alert_current_bytes: parse_disabled_or_positive_u64(
+                "resource_metrics.memory_alert_current_bytes",
+                &self.memory_alert_current_bytes,
             )?,
         })
     }
