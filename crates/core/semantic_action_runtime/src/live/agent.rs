@@ -28,6 +28,7 @@ pub(super) struct AgentProjector {
     pending_exec_max_entries: usize,
     next_pending_exec_sequence: u64,
     pending_exec_evictions: u64,
+    process_executables: BTreeMap<ProcessActionKey, String>,
     agent_identities: BTreeMap<ProcessActionKey, SemanticAction>,
     process_exits: BTreeMap<ProcessActionKey, DomainEvent>,
     user_input_by_process: BTreeMap<ProcessActionKey, UserInputState>,
@@ -83,6 +84,7 @@ impl AgentProjector {
             pending_exec_max_entries,
             next_pending_exec_sequence: 0,
             pending_exec_evictions: 0,
+            process_executables: BTreeMap::new(),
             agent_identities: BTreeMap::new(),
             process_exits: BTreeMap::new(),
             user_input_by_process: BTreeMap::new(),
@@ -204,6 +206,11 @@ impl AgentProjector {
         if let Some(intent) = self.take_matching_exec_intent(&key, &action) {
             intent.apply_to(&mut action);
         }
+        if let Some(executable) = action.attributes.get(attrs::process::EXECUTABLE) {
+            self.process_executables.insert(key, executable.to_string());
+        } else {
+            self.process_executables.remove(&key);
+        }
         vec![action]
     }
 
@@ -216,6 +223,7 @@ impl AgentProjector {
         }
         let key = action_key(event.envelope.trace_id, &event.envelope.process);
         self.clear_pending_execs(&key);
+        self.process_executables.remove(&key);
         if let Some(previous) = self.process_exits.get(&key) {
             // A late exec observation can arrive after the process exit was
             // already projected, re-opening the detector's synthetic
@@ -242,7 +250,10 @@ impl AgentProjector {
         if self.agent_identities.contains_key(&key) {
             return Vec::new();
         }
-        let identity = agent_identity_action(action);
+        let identity = agent_identity_action(
+            action,
+            self.process_executables.get(&key).map(String::as_str),
+        );
         self.agent_identities.insert(key.clone(), identity.clone());
         let mut actions = vec![identity.clone()];
         if let Some(exit) = self.process_exits.get(&key) {
@@ -262,6 +273,8 @@ impl AgentProjector {
             self.clear_pending_execs(&key);
         }
         self.agent_identities
+            .retain(|(candidate, _), _| *candidate != trace_id);
+        self.process_executables
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.process_exits
             .retain(|(candidate, _), _| *candidate != trace_id);
@@ -505,4 +518,98 @@ impl PendingExecIntent {
 
 fn action_key(trace_id: TraceId, process: &ProcessIdentity) -> ProcessActionKey {
     (trace_id, process.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use model_core::event::{
+        DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload, ProcessPayload,
+    };
+    use model_core::ids::{CollectorName, EventId};
+    use semantic_action::{SemanticActionCompleteness, SemanticActionStatus};
+
+    use super::*;
+
+    #[test]
+    fn agent_identity_carries_the_executable_from_the_same_trace_process() {
+        let trace_id = TraceId::new(7);
+        let process = ProcessIdentity::new(11);
+        let mut projector = AgentProjector::new(false, 8);
+
+        let exec = process_exec_event(trace_id, process.clone(), "/root/.cargo/bin/xiaoo");
+        projector.observe_process_exec(&exec);
+
+        let identities = projector.observe_llm_request(&llm_request(trace_id, process));
+
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].kind, SemanticActionKind::AgentIdentity);
+        assert_eq!(identities[0].trace_id, trace_id);
+        assert_eq!(
+            identities[0]
+                .attributes
+                .get(attrs::process::EXECUTABLE)
+                .map(String::as_str),
+            Some("/root/.cargo/bin/xiaoo")
+        );
+    }
+
+    #[test]
+    fn agent_identity_does_not_borrow_an_executable_from_another_trace() {
+        let process = ProcessIdentity::new(11);
+        let mut projector = AgentProjector::new(false, 8);
+
+        let exec = process_exec_event(TraceId::new(7), process.clone(), "/usr/bin/codex");
+        projector.observe_process_exec(&exec);
+
+        let identities = projector.observe_llm_request(&llm_request(TraceId::new(8), process));
+
+        assert_eq!(identities.len(), 1);
+        assert!(
+            !identities[0]
+                .attributes
+                .contains_key(attrs::process::EXECUTABLE)
+        );
+    }
+
+    fn process_exec_event(
+        trace_id: TraceId,
+        process: ProcessIdentity,
+        executable: &str,
+    ) -> DomainEvent {
+        DomainEvent::new(
+            EventEnvelope {
+                event_id: EventId::new(1),
+                trace_id,
+                observed_at: SystemTime::UNIX_EPOCH,
+                process,
+                collector: CollectorName::new(E_BPF_COLLECTOR),
+                kind: EventKind::Process,
+                flags: EventFlags::clean(),
+            },
+            EventPayload::Process(ProcessPayload {
+                operation: "exec".to_string(),
+                parent: None,
+                executable: Some(executable.to_string()),
+                metadata: BTreeMap::new(),
+            }),
+        )
+    }
+
+    fn llm_request(trace_id: TraceId, process: ProcessIdentity) -> SemanticAction {
+        SemanticAction {
+            action_id: format!("llm-request-{}", trace_id.get()),
+            trace_id,
+            kind: SemanticActionKind::LlmRequest,
+            title: "LLM request".to_string(),
+            start_time: SystemTime::UNIX_EPOCH,
+            end_time: Some(SystemTime::UNIX_EPOCH),
+            process,
+            status: SemanticActionStatus::Success,
+            completeness: SemanticActionCompleteness::Complete,
+            attributes: BTreeMap::new(),
+            evidence: Vec::new(),
+        }
+    }
 }

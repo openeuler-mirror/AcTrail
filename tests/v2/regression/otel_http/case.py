@@ -28,6 +28,10 @@ class OtelHttpCase(TestCase):
         "actrail.process.id",
         "actrail.action.valid",
         "process.parent.identity_state",
+        "process.executable",
+        "agent.identity.status",
+        "agent.identity.source",
+        "agent.identity.evidence_action_id",
         "llm.request.trajectory_id",
         "llm.request.trajectory_inference_version",
     }
@@ -71,11 +75,11 @@ class OtelHttpCase(TestCase):
             )
 
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "llm.request"}
+                {"process.exec", "process.exit", "agent.identity", "llm.request"}
             )
             results["outbound-policy"] = TestResult(
                 TestStatus.PASSED,
-                "explicit process/request allow-list and metadata-only mode accepted",
+                "explicit process/identity/request allow-list and metadata-only mode accepted",
             )
 
             marker = f"OTEL_HTTP_V2_{secrets.token_hex(8)}"
@@ -93,7 +97,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             spans = self._wait_for_marker_spans(
                 marker,
-                {"process.exec", "process.exit", "llm.request"},
+                {"process.exec", "process.exit", "agent.identity", "llm.request"},
             )
             results["shutdown-tail"] = TestResult(
                 TestStatus.PASSED,
@@ -123,8 +127,18 @@ class OtelHttpCase(TestCase):
                 f"OTLP traceId {otel_trace_id} matches the persisted 16-byte identity",
             )
 
+            identity_binary = self._require_agent_identity_correlation(
+                spans,
+                otel_trace_id,
+                xiaoo,
+            )
+            results["agent-identity-correlation"] = TestResult(
+                TestStatus.PASSED,
+                f"agent.identity binds {identity_binary} to OTLP traceId",
+            )
+
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "llm.request"},
+                {"process.exec", "process.exit", "agent.identity", "llm.request"},
                 attribute_mode="full",
             )
             body_marker = f"REQUEST_BODY_V2_{secrets.token_hex(8)}"
@@ -143,7 +157,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             full_spans = self._wait_for_marker_spans(
                 full_marker,
-                {"process.exec", "process.exit", "llm.request"},
+                {"process.exec", "process.exit", "agent.identity", "llm.request"},
             )
             full_counts = self._require_terminal_one_shot(full_spans)
             if full_counts["llm.request"] < 1:
@@ -270,6 +284,39 @@ class OtelHttpCase(TestCase):
                 f"wire={wire_id}, sqlite={row!r}"
             )
         return wire_id
+
+    def _require_agent_identity_correlation(
+        self,
+        spans: list[dict[str, Any]],
+        otel_trace_id: str,
+        agent_binary: Path,
+    ) -> str:
+        identities = [
+            span
+            for span in spans
+            if self._attribute(span, "actrail.action.kind") == "agent.identity"
+        ]
+        if len(identities) != 1:
+            raise AssertionError(
+                f"expected one agent.identity span, found {len(identities)}"
+            )
+        identity = identities[0]
+        if identity.get("traceId") != otel_trace_id:
+            raise AssertionError(
+                "agent.identity does not share the trace OTLP identity: "
+                f"{identity.get('traceId')!r} != {otel_trace_id!r}"
+            )
+        executable = self._attribute(identity, "process.executable")
+        if not executable:
+            raise AssertionError("agent.identity has no process.executable")
+        if Path(executable).name != agent_binary.name:
+            raise AssertionError(
+                f"agent.identity executable {executable!r} does not identify "
+                f"the launched agent {str(agent_binary)!r}"
+            )
+        if not self._attribute(identity, "actrail.process.id"):
+            raise AssertionError("agent.identity has no process identity")
+        return executable
 
     def _wait_for_terminal_trace(self, trace_id: int) -> None:
         last_state = "<missing>"

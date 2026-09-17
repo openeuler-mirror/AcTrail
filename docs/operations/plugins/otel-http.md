@@ -66,6 +66,13 @@ sudo target/release/actraild --config operator.conf plugin status \
 `active`，同时 `last_error`、retry 和 dropped batch 指标报告交付失败。卸载会触发
 consumer `finish`，在 `shutdown_flush_deadline_ms` 内尝试发送尾批次，不会重启 daemon。
 
+## 关联 Agent 二进制与 trace
+
+当某个进程首次产生 `llm.request` 时，AcTrail 会输出一个 `agent.identity` span。
+该 span 的 `process.executable` 是同一 `(trace_id, process)` 最近一次完成 exec 的二进制，
+并与其他 span 共用 OTLP `traceId`；消费者可用 `traceId` 和 `actrail.process.id` 将 Agent
+身份关联回具体进程。`metadata-only` 模式会保留这几个身份关联字段，但仍会删除正文类属性。
+
 ## 排错
 
 | 现象 | 原因或处理 |

@@ -19,7 +19,10 @@ use plugin_system::{
     ObservationConsumer, ObservationEventFamily, PluginDroppedRecord, PluginOperationalMetrics,
     PluginOperationalMetricsSource, PluginRuntimeError, PluginRuntimeKind,
 };
-use semantic_action::attr_keys::{llm_request, process_parent};
+use semantic_action::{
+    SemanticActionKind,
+    attr_keys::{agent, llm_request, process, process_parent},
+};
 
 use crate::config::{
     Endpoint, OtelAttributeMode, OtelCompression, OtelEncoding, OtelHttpExporterConfig,
@@ -444,13 +447,21 @@ fn metadata_only_action(
     // Titles are often derived from command lines, paths, tool names, or LLM
     // previews. Use the stable kind as the span name at the safe boundary.
     sanitized.title = action.kind.as_str().to_string();
+    let agent_identity = action.kind == SemanticActionKind::AgentIdentity;
     sanitized.attributes.retain(|key, _| {
         matches!(
             key.as_str(),
             process_parent::IDENTITY_STATE
                 | llm_request::TRAJECTORY_ID
                 | llm_request::TRAJECTORY_INFERENCE_VERSION
-        )
+        ) || agent_identity
+            && matches!(
+                key.as_str(),
+                agent::IDENTITY_STATUS
+                    | agent::IDENTITY_SOURCE
+                    | agent::IDENTITY_EVIDENCE_ACTION_ID
+                    | process::EXECUTABLE
+            )
     });
     sanitized
 }
@@ -1475,7 +1486,7 @@ mod request_body_export_tests {
     use plugin_system::{ObservationBatch, ObservationConsumer};
     use semantic_action::{
         SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-        attr_keys::{llm_request, llm_tool_result},
+        attr_keys::{agent, llm_request, llm_tool_result, process},
     };
 
     use super::{build_otel_http_observation_consumer, metadata_only_action};
@@ -1655,6 +1666,71 @@ mod request_body_export_tests {
                 .attributes
                 .contains_key(llm_tool_result::CONTENT_JSON)
         );
+    }
+
+    #[test]
+    fn metadata_only_mode_keeps_agent_identity_correlation_fields() {
+        let action = SemanticAction {
+            action_id: "agent-identity".to_string(),
+            trace_id: TraceId::new(7),
+            kind: SemanticActionKind::AgentIdentity,
+            title: "agent identity process-100".to_string(),
+            start_time: UNIX_EPOCH,
+            end_time: Some(UNIX_EPOCH),
+            process: ProcessIdentity::new(100),
+            status: SemanticActionStatus::Success,
+            completeness: SemanticActionCompleteness::Complete,
+            attributes: BTreeMap::from([
+                (agent::IDENTITY_STATUS.to_string(), "observed".to_string()),
+                (
+                    agent::IDENTITY_SOURCE.to_string(),
+                    "llm.request".to_string(),
+                ),
+                (
+                    agent::IDENTITY_EVIDENCE_ACTION_ID.to_string(),
+                    "llm-request-7".to_string(),
+                ),
+                (
+                    process::EXECUTABLE.to_string(),
+                    "/root/.cargo/bin/xiaoo".to_string(),
+                ),
+                ("secret.content".to_string(), "do not export".to_string()),
+            ]),
+            evidence: Vec::new(),
+        };
+
+        let sanitized = metadata_only_action(&action);
+
+        assert_eq!(sanitized.title, "agent.identity");
+        assert_eq!(
+            sanitized
+                .attributes
+                .get(process::EXECUTABLE)
+                .map(String::as_str),
+            Some("/root/.cargo/bin/xiaoo")
+        );
+        assert_eq!(
+            sanitized
+                .attributes
+                .get(agent::IDENTITY_STATUS)
+                .map(String::as_str),
+            Some("observed")
+        );
+        assert_eq!(
+            sanitized
+                .attributes
+                .get(agent::IDENTITY_SOURCE)
+                .map(String::as_str),
+            Some("llm.request")
+        );
+        assert_eq!(
+            sanitized
+                .attributes
+                .get(agent::IDENTITY_EVIDENCE_ACTION_ID)
+                .map(String::as_str),
+            Some("llm-request-7")
+        );
+        assert!(!sanitized.attributes.contains_key("secret.content"));
     }
 
     #[test]
