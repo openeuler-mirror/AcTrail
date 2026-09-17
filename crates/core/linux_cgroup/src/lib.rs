@@ -762,6 +762,33 @@ pub fn parse_cgroup2_mount(mountinfo: &str) -> Result<(PathBuf, PathBuf), Cgroup
     found.ok_or_else(|| CgroupError::Unsupported("cgroup v2 mount not found".to_string()))
 }
 
+/// Shared helper staged for the sandbox PR's guest workload identity. The host
+/// managed-scope sampler does not need a mount ID.
+pub fn parse_cgroup2_mount_id(mountinfo: &str) -> Result<u64, CgroupError> {
+    for (line_index, line) in mountinfo.lines().enumerate() {
+        let Some((prefix, suffix)) = line.split_once(" - ") else {
+            continue;
+        };
+        let mut suffix_fields = suffix.split_whitespace();
+        if suffix_fields.next() != Some("cgroup2") {
+            continue;
+        }
+        let prefix_fields = prefix.split_whitespace().collect::<Vec<_>>();
+        if prefix_fields.len() < 5 {
+            return malformed("mountinfo", line_index, "missing cgroup2 mount fields");
+        }
+        return prefix_fields[0]
+            .parse::<u64>()
+            .map_err(|_| CgroupError::Malformed {
+                file: "mountinfo",
+                detail: format!("line {}: invalid cgroup2 mount id", line_index + 1),
+            });
+    }
+    Err(CgroupError::Unsupported(
+        "cgroup v2 mount not found".to_string(),
+    ))
+}
+
 pub fn parse_unified_process_cgroup(raw: &str) -> Result<PathBuf, CgroupError> {
     let mut found = None;
     for (line_index, line) in raw.lines().enumerate() {
