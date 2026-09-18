@@ -8,14 +8,14 @@ use sandbox_control::{SandboxControlPort, SandboxControlStatus};
 
 use super::{
     SandboxAgentControlHandle, WorkerSet, spawn_io_worker, spawn_pressure_worker,
-    spawn_resource_worker,
+    spawn_resource_worker, spawn_workload_worker,
 };
 use crate::delivery::{ConnectionGate, DeliveryPipeline, DeliveryQueue};
 use crate::session::{SessionOwner, SessionWake, SharedSessionStatus};
 use crate::status::DaemonMetrics;
 use crate::{
     GuestPressureSource, GuestResourceSource, ProcessIoSource, SandboxAgentConfig,
-    SandboxAgentSnapshot, SandboxTransportFactory,
+    SandboxAgentSnapshot, SandboxTransportFactory, WorkloadCgroupSource,
 };
 
 pub struct SandboxAgentDaemon {
@@ -33,6 +33,7 @@ impl SandboxAgentDaemon {
         mut io_source: Box<dyn ProcessIoSource>,
         mut resource_source: Box<dyn GuestResourceSource>,
         pressure_source: Option<Box<dyn GuestPressureSource>>,
+        workload_source: Option<Box<dyn WorkloadCgroupSource>>,
         transport: Arc<dyn SandboxTransportFactory>,
     ) -> io::Result<Self> {
         config.validate()?;
@@ -80,9 +81,20 @@ impl SandboxAgentDaemon {
                 config.worker_thread_stack_bytes,
                 Arc::clone(&stop),
                 Arc::clone(&metrics),
-                delivery,
+                delivery.clone(),
                 config.pressure_poll_interval,
                 pressure_source,
+            )?);
+        }
+
+        if let Some(workload_source) = workload_source {
+            workers.push(spawn_workload_worker(
+                config.worker_thread_stack_bytes,
+                Arc::clone(&stop),
+                Arc::clone(&metrics),
+                delivery,
+                config.workload_poll_interval,
+                workload_source,
             )?);
         }
 

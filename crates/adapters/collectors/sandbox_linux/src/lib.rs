@@ -7,6 +7,7 @@ mod error;
 mod procfs;
 mod psi;
 mod resource;
+mod workload;
 
 pub use collector::{
     CollectionCycle, KernelCollectionDiagnostics, ProcessIoCycle, SandboxLinuxCollector,
@@ -16,3 +17,4 @@ pub use config::SandboxLinuxConfig;
 pub use error::SandboxLinuxError;
 pub use psi::PsiReader;
 pub use resource::LinuxResourceReader;
+pub use workload::WorkloadCgroupCollector;

@@ -1,13 +1,16 @@
 use crate::{
     GuestPressureSnapshot, GuestResourceSnapshot, OomVictimObservation, ProcessIoCounters,
+    WorkloadCgroupResourceSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Observation {
     ProcessIo(ProcessIoCounters),
     GuestResource(GuestResourceSnapshot),
     OomVictim(OomVictimObservation),
     GuestPressure(GuestPressureSnapshot),
+    WorkloadCgroup(WorkloadCgroupResourceSnapshot),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

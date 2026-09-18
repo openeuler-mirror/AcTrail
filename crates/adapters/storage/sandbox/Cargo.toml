@@ -7,3 +7,8 @@ license = "MulanPSL-2.0"
 [dependencies]
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 sandbox_evidence_store = { path = "../../../contracts/sandbox_evidence_store" }
+
+[dev-dependencies]
+sandbox_vsock_contract = { path = "../../../contracts/sandbox_link/vsock" }
+sandbox_linux_collector = { path = "../../collectors/sandbox_linux" }
+tempfile = "3"

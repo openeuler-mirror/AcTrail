@@ -1,7 +1,9 @@
 use std::io::{self, Read, Write};
 
 use sandbox_control::SandboxEndpoint;
-use sandbox_observation::{GuestPressureSnapshot, GuestResourceSnapshot, Observation};
+use sandbox_observation::{
+    GuestPressureSnapshot, GuestResourceSnapshot, Observation, WorkloadCgroupResourceSnapshot,
+};
 
 pub trait ProcessIoSource: Send + 'static {
     fn establish_baseline(&mut self) -> io::Result<()>;
@@ -17,6 +19,10 @@ pub trait GuestResourceSource: Send + 'static {
 
 pub trait GuestPressureSource: Send + 'static {
     fn sample(&mut self) -> io::Result<GuestPressureSnapshot>;
+}
+
+pub trait WorkloadCgroupSource: Send + 'static {
+    fn sample(&mut self) -> io::Result<Vec<WorkloadCgroupResourceSnapshot>>;
 }
 
 pub trait SandboxConnection: Read + Write + Send + 'static {}

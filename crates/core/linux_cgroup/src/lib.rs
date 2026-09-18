@@ -762,8 +762,7 @@ pub fn parse_cgroup2_mount(mountinfo: &str) -> Result<(PathBuf, PathBuf), Cgroup
     found.ok_or_else(|| CgroupError::Unsupported("cgroup v2 mount not found".to_string()))
 }
 
-/// Shared helper staged for the sandbox PR's guest workload identity. The host
-/// managed-scope sampler does not need a mount ID.
+/// Parse the mount identity used by sandbox workload observations.
 pub fn parse_cgroup2_mount_id(mountinfo: &str) -> Result<u64, CgroupError> {
     for (line_index, line) in mountinfo.lines().enumerate() {
         let Some((prefix, suffix)) = line.split_once(" - ") else {

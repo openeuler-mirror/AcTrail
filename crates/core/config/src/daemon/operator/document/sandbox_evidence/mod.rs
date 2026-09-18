@@ -30,7 +30,7 @@ impl Default for SandboxEvidenceDocument {
     fn default() -> Self {
         Self {
             path: "/var/lib/actrail/sandbox-evidence.sqlite".to_string(),
-            schema_version: 2,
+            schema_version: 3,
             create_parent_directory: true,
             busy_timeout_ms: 5_000,
             writer_queue_capacity: 1_024,
@@ -78,8 +78,10 @@ impl SandboxEvidenceDocument {
         if !path.is_absolute() || path.file_name().is_none() {
             return Err("sandbox_evidence.path must be an absolute file path".to_string());
         }
-        if self.schema_version != 2 {
-            return Err("sandbox_evidence.schema_version must be 2".to_string());
+        if !matches!(self.schema_version, 2 | 3) {
+            return Err(
+                "sandbox_evidence.schema_version must be 2 (upgraded to 3) or 3".to_string(),
+            );
         }
         let writer_queue_capacity = require_positive_u32(
             "sandbox_evidence.writer_queue_capacity",
@@ -111,7 +113,9 @@ impl SandboxEvidenceDocument {
         };
         Ok(SandboxEvidenceConfig {
             path,
-            schema_version: self.schema_version,
+            // Baseline generated documents explicitly request 2. Normalize before
+            // database initialization so the existing 2 -> 3 migration can run.
+            schema_version: 3,
             create_parent_directory: self.create_parent_directory,
             busy_timeout_ms: require_positive_u64(
                 "sandbox_evidence.busy_timeout_ms",
@@ -150,5 +154,44 @@ impl SandboxEvidenceDocument {
                 self.read_limit_max,
             )?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_generated_schema_setting_normalizes_and_round_trips_as_current() {
+        for version in [2, 3] {
+            let document: SandboxEvidenceDocument =
+                toml::from_str(&format!("schema_version = {version}\n")).unwrap();
+            let config = document.to_config().unwrap();
+            assert_eq!(config.schema_version, 3);
+            assert_eq!(
+                SandboxEvidenceDocument::from_config(&config).schema_version,
+                3
+            );
+        }
+        for version in [0, 1, 4] {
+            let document = SandboxEvidenceDocument {
+                schema_version: version,
+                ..Default::default()
+            };
+            assert!(document.to_config().is_err());
+        }
+    }
+
+    #[test]
+    fn full_generated_operator_config_accepts_previous_explicit_schema() {
+        use super::super::OperatorDocument;
+        let generated = OperatorDocument::default_toml().unwrap();
+        assert!(generated.contains("schema_version = 3"));
+        let legacy = generated.replace("schema_version = 3", "schema_version = 2");
+        let config = OperatorDocument::parse(&legacy)
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(config.sandbox_evidence.schema_version, 3);
     }
 }

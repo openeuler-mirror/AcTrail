@@ -42,6 +42,7 @@ struct ActiveSession {
     endpoint: SandboxEndpoint,
     generation: ConnectionGeneration,
     sb_id: u32,
+    workload_cgroup_observations: bool,
     connection: Box<dyn SandboxConnection>,
     next_sequence: u64,
     last_write: Instant,
@@ -219,7 +220,11 @@ impl SessionOwner {
         }
         while self.pending.len() < self.config.batch_max_observations {
             match self.delivery.try_recv() {
-                Ok(envelope) => self.admit(active.generation, envelope),
+                Ok(envelope) => self.admit(
+                    active.generation,
+                    active.workload_cgroup_observations,
+                    envelope,
+                ),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.stop.store(true, Ordering::Release);
@@ -317,7 +322,7 @@ impl SessionOwner {
             .connect(endpoint)
             .map_err(EstablishError::Connect)?;
         self.ensure_current_attempt()?;
-        let sb_id = self
+        let welcome = self
             .protocol
             .handshake(&mut *connection)
             .map_err(EstablishError::Handshake)?;
@@ -330,7 +335,8 @@ impl SessionOwner {
         Ok(ActiveSession {
             endpoint,
             generation,
-            sb_id,
+            sb_id: welcome.sb_id,
+            workload_cgroup_observations: welcome.workload_cgroup_observations,
             connection,
             next_sequence: 1,
             last_write: Instant::now(),
@@ -369,7 +375,8 @@ impl SessionOwner {
             self.metrics.set_sb_id(0);
             return Err(error);
         }
-        self.gate.enable(active.generation);
+        self.gate
+            .enable(active.generation, active.workload_cgroup_observations);
         self.status
             .connected(active.endpoint, active.sb_id, active.generation.get());
         if self.stop.load(Ordering::Acquire) {
@@ -418,8 +425,16 @@ impl SessionOwner {
         self.delivery.discard_all();
     }
 
-    fn admit(&mut self, generation: ConnectionGeneration, envelope: DeliveryEnvelope) {
-        if envelope.generation == generation {
+    fn admit(
+        &mut self,
+        generation: ConnectionGeneration,
+        workload_cgroup_observations: bool,
+        envelope: DeliveryEnvelope,
+    ) {
+        if envelope.generation == generation
+            && (workload_cgroup_observations
+                || !matches!(&envelope.observation, Observation::WorkloadCgroup(_)))
+        {
             self.pending.push(envelope.observation);
         }
     }

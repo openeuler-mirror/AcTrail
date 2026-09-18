@@ -39,6 +39,8 @@ struct CollectorSection {
 #[serde(deny_unknown_fields)]
 struct SamplerSection {
     poll_interval_ms: u64,
+    #[serde(default)]
+    workload_cgroups: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -87,6 +89,7 @@ pub(crate) struct ValidatedSbDaemonConfig {
     pub(crate) pressure_enabled: bool,
     pub(crate) pressure_procfs_root: PathBuf,
     pub(crate) runtime: SandboxAgentConfig,
+    pub(crate) workload_cgroups: bool,
     pub(crate) sender_io_timeout: Duration,
     pub(crate) control: ValidatedControlConfig,
     pub(crate) diagnostics_interval: Option<Duration>,
@@ -167,6 +170,7 @@ impl SbDaemonConfig {
         let runtime = SandboxAgentConfig {
             io_poll_interval: Duration::from_millis(self.collector.poll_interval_ms),
             resource_poll_interval: Duration::from_millis(self.sampler.poll_interval_ms),
+            workload_poll_interval: Duration::from_millis(self.sampler.poll_interval_ms),
             pressure_poll_interval: Duration::from_millis(self.pressure.poll_interval_ms),
             max_silence_interval: Duration::from_millis(self.sender.max_silence_interval_ms),
             reconnect_interval: Duration::from_millis(self.sender.reconnect_interval_ms),
@@ -215,6 +219,7 @@ impl SbDaemonConfig {
             pressure_enabled: self.pressure.enabled,
             pressure_procfs_root: self.collector.procfs_root,
             runtime,
+            workload_cgroups: self.sampler.workload_cgroups,
             sender_io_timeout,
             control: ValidatedControlConfig {
                 socket_path: self.control.socket_path,
@@ -278,6 +283,7 @@ impl SbDaemonConfig {
             },
             sampler: SamplerSection {
                 poll_interval_ms: 1_000,
+                workload_cgroups: false,
             },
             pressure: PressureSection {
                 enabled: true,

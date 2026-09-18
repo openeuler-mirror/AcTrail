@@ -131,6 +131,7 @@ impl SandboxResourceAlertPlugin {
                         &mut alerts,
                     );
                 }
+                Observation::WorkloadCgroup(_) => {}
                 Observation::GuestPressure(pressure) => {
                     self.observe_pressure(
                         &mut states,
@@ -219,7 +220,8 @@ impl SandboxResourceAlertPlugin {
         pressure: &GuestPressureSnapshot,
         alerts: &mut Vec<SandboxAlertRecord>,
     ) -> Result<(), SandboxConsumeError> {
-        let Some(available_bytes) = states.memory_available(source).map_err(Self::state_error)? else {
+        let Some(available_bytes) = states.memory_available(source).map_err(Self::state_error)?
+        else {
             return Ok(());
         };
         let pressure_risk = pressure.memory_some.avg10_millipercent
@@ -237,7 +239,8 @@ impl SandboxResourceAlertPlugin {
                     guest_boot_id: pressure.guest_boot_id,
                     sampled_at_ms: pressure.sampled_at_ms,
                     some_avg10_millipercent: pressure.memory_some.avg10_millipercent,
-                    threshold_millipercent: config.memory_pressure_some_avg10_threshold_millipercent,
+                    threshold_millipercent: config
+                        .memory_pressure_some_avg10_threshold_millipercent,
                     available_bytes,
                     threshold_bytes: config.memory_available_threshold_bytes,
                 },

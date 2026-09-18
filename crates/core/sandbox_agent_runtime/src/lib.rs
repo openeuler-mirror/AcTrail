@@ -11,6 +11,6 @@ pub use config::SandboxAgentConfig;
 pub use daemon::{SandboxAgentControlHandle, SandboxAgentDaemon};
 pub use ports::{
     GuestPressureSource, GuestResourceSource, ProcessIoSource, SandboxConnection,
-    SandboxTransportFactory,
+    SandboxTransportFactory, WorkloadCgroupSource,
 };
 pub use status::SandboxAgentSnapshot;

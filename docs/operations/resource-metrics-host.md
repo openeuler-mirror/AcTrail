@@ -42,7 +42,8 @@ counter reads are bounded by the finalization timeout even when the scope is emp
 Nested empty directories are cleaned with retry after partial progress. Archived
 databases can be opened read-only without first running a writable migration.
 
-See the [review fixes and staged contract fields](../designs/resource-metrics-host-review-fixes.md).
+See the [validation record](../designs/resource-metrics-validation.md) and
+[review fixes and staged contract fields](../designs/resource-metrics-host-review-fixes.md).
 
 ## Verification
 
