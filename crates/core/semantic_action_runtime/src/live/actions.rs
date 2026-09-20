@@ -81,7 +81,10 @@ pub(super) fn process_exec_action(event: &DomainEvent) -> SemanticAction {
     }
 }
 
-pub(super) fn agent_identity_action(request: &SemanticAction) -> SemanticAction {
+pub(super) fn agent_identity_action(
+    request: &SemanticAction,
+    executable: Option<&str>,
+) -> SemanticAction {
     let mut attributes = std::collections::BTreeMap::new();
     attributes.insert(
         ATTR_AGENT_IDENTITY_STATUS.to_string(),
@@ -95,6 +98,12 @@ pub(super) fn agent_identity_action(request: &SemanticAction) -> SemanticAction 
         ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID.to_string(),
         request.action_id.clone(),
     );
+    if let Some(executable) = executable {
+        attributes.insert(
+            attrs::process::EXECUTABLE.to_string(),
+            executable.to_string(),
+        );
+    }
     let evidence = request
         .evidence
         .iter()
