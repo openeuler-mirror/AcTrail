@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::SystemTime;
 
 use model_core::payload::{
-    PayloadDirection, PayloadSegment, PayloadStreamKey, PayloadTruncationState,
+    PayloadDirection, PayloadSegment, PayloadSegmentId, PayloadStreamKey, PayloadTruncationState,
 };
 use serde_json::Value;
 
@@ -48,14 +48,15 @@ pub(super) struct ConnectionObservation {
 
 impl WebSocketConnection {
     pub(super) fn new(
+        handshake_segment_id: PayloadSegmentId,
         outbound_stream_key: PayloadStreamKey,
         inbound_stream_key: PayloadStreamKey,
         path: String,
         extensions: NegotiatedExtensions,
         max_response_bytes: usize,
     ) -> Self {
-        let synthetic_stream_key_prefix =
-            format!("websocket:{outbound_stream_key}:{inbound_stream_key}:exchange");
+        // Rustls addresses can be reused across independent handshakes.
+        let synthetic_stream_key_prefix = format!("websocket:{handshake_segment_id}:exchange");
         Self {
             stream_keys: BTreeSet::from([outbound_stream_key, inbound_stream_key]),
             observed_frame_stream: false,

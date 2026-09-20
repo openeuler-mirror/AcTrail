@@ -19,6 +19,13 @@ enum actrail_process_exec_abi {
     ACTRAIL_PROCESS_EXEC_ARG_MAX = 128,
 };
 
+#ifndef ACTRAIL_BPF_LOOP
+/* Each tail-call invocation scans at most this many argv entries. Eight is
+ * the largest bounded loop that the Linux 5.10 verifier accepted for the
+ * argv-processing state machine on the current target. */
+#define ACTRAIL_PROCESS_EXEC_ARG_CHUNK 8
+#endif
+
 enum actrail_process_exec_syscall {
     ACTRAIL_PROCESS_EXECVE = 1,
     ACTRAIL_PROCESS_EXECVEAT = 2,
@@ -69,6 +76,16 @@ struct actrail_pending_process_exec {
     __u32 host_pid;
     __u32 host_tid;
     __u32 syscall;
+#ifndef ACTRAIL_BPF_LOOP
+    /* argv cursor used by the pre-5.17 bounded tail-call state machine. */
+    __u64 argv_ptr;
+    __u32 argv_index;
+    __u32 argv_captured_total;
+    __u32 argv_max_args;
+    __u32 argv_max_arg_bytes;
+    __u32 argv_max_total_arg_bytes;
+    __u32 argv_stopped;
+#endif
 };
 
 struct actrail_process_exec_attempt_event {
@@ -198,6 +215,15 @@ struct {
     __type(key, __u64);
     __type(value, struct actrail_pending_process_exec);
 } pending_process_exec_ops SEC(".maps");
+
+#ifndef ACTRAIL_BPF_LOOP
+struct {
+    __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} process_exec_argv_tail_calls SEC(".maps");
+#endif
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

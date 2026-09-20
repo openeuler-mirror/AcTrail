@@ -108,3 +108,8 @@ Rustls versions and compiler output shapes are modeled as independent candidates
 
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 48 bytes: `fd 7b bc a9 f8 5f 01 a9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 17 84 41 f9 08 00 f0 d2 f5 03 02 aa f3 03 01 aa f4 03 00 aa 08 84 01 f9 ff 02 08 eb`
 - `rustls_take_received_plaintext`, `CommonState::take_received_plaintext`, 56 bytes: `fd 7b bd a9 f6 57 01 a9 f4 4f 02 a9 fd 03 00 91 36 50 40 a9 09 00 f0 d2 33 08 40 f9 f5 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb 81 02 00 54 d3 00 f8 b6 e0 03 1f aa`
+
+The independent `common-state-pair-52-64-x22` candidate supports the stripped Codex 0.155.1 aarch64 musl executable. Its entry code uses `x22` for the tag temporary. Both functions retain the existing entry ABI: `x0` carries the CommonState pointer and `x1` carries the payload object pointer. Both complete signatures must match uniquely:
+
+- `rustls_buffer_plaintext`, 52 bytes: `ff 83 01 d1 fd 7b 02 a9 f8 5f 03 a9 f6 57 04 a9 f4 4f 05 a9 fd 83 00 91 16 84 41 f9 08 00 f0 d2 f4 03 02 aa f3 03 01 aa f5 03 00 aa 08 84 01 f9 df 02 08 eb`
+- `rustls_take_received_plaintext`, 64 bytes: `fd 7b bc a9 f7 0b 00 f9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 36 50 40 a9 09 00 f0 d2 33 08 40 f9 f5 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb a1 00 00 54 73 01 f8 b6 e0 03 1f aa e1 03 13 aa`

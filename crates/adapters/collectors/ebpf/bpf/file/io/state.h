@@ -74,10 +74,13 @@ struct {
     __type(key, __u32);
     __type(value, struct actrail_file_io_config);
 } file_io_config SEC(".maps");
+/* Per-thread token counters, keyed by kernel_pid_tgid like the process exec,
+ * fork, and socket sequences. A single global counter would need BPF_ATOMIC
+ * cmpxchg, which kernel 5.10 rejects with "BPF_STX uses reserved fields". */
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1);
-    __type(key, __u32);
+    __type(key, __u64);
     __type(value, __u64);
 } file_io_sequence SEC(".maps");
 struct {

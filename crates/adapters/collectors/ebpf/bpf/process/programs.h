@@ -3,10 +3,20 @@
 
 #include "../fd/lifecycle.h"
 #include "../file/observe.h"
+#include "../file/io/state.h"
 #include "../payload/socket_types.h"
 #include "observe.h"
 
-static __noinline int emit_process_exec_attempt(
+#ifdef ACTRAIL_BPF_LOOP
+#define ACTRAIL_PROCESS_EXEC_HELPER __noinline
+#else
+/* Tail calls are rejected on this kernel when the caller still has
+ * BPF-to-BPF calls. Inline the two exec helpers in the pre-5.17 fallback so
+ * the entry and continuation programs contain no subprogram calls. */
+#define ACTRAIL_PROCESS_EXEC_HELPER __always_inline
+#endif
+
+static ACTRAIL_PROCESS_EXEC_HELPER int emit_process_exec_attempt(
     struct trace_event_raw_sys_enter *ctx,
     struct actrail_pending_process_exec *pending,
     __u64 path_ptr,
@@ -90,7 +100,7 @@ enum actrail_process_exec_arg_marker {
     ACTRAIL_PROCESS_EXEC_ARG_MARK_TOTAL = 3,
 };
 
-static __noinline long emit_process_exec_arg(
+static ACTRAIL_PROCESS_EXEC_HELPER long emit_process_exec_arg(
     struct trace_event_raw_sys_enter *ctx,
     struct actrail_pending_process_exec *pending,
     __u32 index,
@@ -138,6 +148,7 @@ static __noinline long emit_process_exec_arg(
         return 0;
     }
 
+#ifdef ACTRAIL_BPF_LOOP
     /* Mask to u32 and clamp to the ABI maximum before the helper call; old
      * verifiers otherwise track the noinline parameter with a possibly
      * negative 64-bit range and reject the load. */
@@ -146,6 +157,13 @@ static __noinline long emit_process_exec_arg(
         bounded_read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
     }
     actrail_barrier_var(bounded_read_limit);
+#else
+    /* The fallback helper is inlined to avoid BPF-to-BPF calls in tail-call
+     * programs. A fixed upper bound keeps the verifier from tracking the
+     * caller's wrapped 32-bit arithmetic as an unbounded helper size. The
+     * output is still truncated to read_limit below. */
+    __u32 bounded_read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
+#endif
     arg_size = bpf_probe_read_user_str(
         event->arg,
         bounded_read_limit,
@@ -157,10 +175,16 @@ static __noinline long emit_process_exec_arg(
         return -1;
     }
     if (arg_size > 0) {
-        event->arg_size = (__u32)(arg_size - 1);
-        if ((__u32)arg_size == read_limit) {
-            event->capture_flags = ACTRAIL_PROCESS_EXEC_ARGV_TRUNCATED;
+        __u32 captured_size = (__u32)arg_size;
+#ifndef ACTRAIL_BPF_LOOP
+        if (captured_size > read_limit) {
+            captured_size = read_limit;
         }
+#endif
+        event->arg_size = captured_size ? captured_size - 1 : 0;
+    }
+    if ((__u32)arg_size >= read_limit) {
+        event->capture_flags = ACTRAIL_PROCESS_EXEC_ARGV_TRUNCATED;
     }
     __u64 event_size = __builtin_offsetof(struct actrail_process_exec_arg_event, arg)
         + (__u64)event->arg_size;
@@ -259,6 +283,116 @@ static long process_exec_arg_loop_callback(__u32 index, void *opaque) {
 }
 #endif
 
+#ifndef ACTRAIL_BPF_LOOP
+static __always_inline void process_exec_argv_chunk(
+    struct trace_event_raw_sys_enter *ctx,
+    struct actrail_pending_process_exec *pending
+) {
+    __u32 captured_total = pending->argv_captured_total;
+    __u32 chunk_index;
+
+#pragma clang loop unroll(disable)
+    for (chunk_index = 0; chunk_index < ACTRAIL_PROCESS_EXEC_ARG_CHUNK;
+         chunk_index++) {
+        __u32 index = pending->argv_index;
+        __u64 arg_ptr = 0;
+        __u32 remaining;
+        __u32 read_limit;
+        long arg_size;
+
+        if (index >= pending->argv_max_args ||
+            index >= ACTRAIL_PROCESS_EXEC_ARG_MAX) {
+            emit_process_exec_arg(
+                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT, 0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        if (captured_total >= pending->argv_max_total_arg_bytes) {
+            emit_process_exec_arg(
+                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_TOTAL, 0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        if (bpf_probe_read_user(
+                &arg_ptr,
+                sizeof(arg_ptr),
+                (void *)(unsigned long)(
+                    pending->argv_ptr + ((__u64)index * sizeof(__u64))
+                )
+            ) != 0) {
+            emit_process_exec_arg(
+                ctx,
+                pending,
+                index,
+                ACTRAIL_PROCESS_EXEC_ARG_MARK_READ_FAILED,
+                0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        if (!arg_ptr) {
+            emit_process_exec_arg(
+                ctx,
+                pending,
+                index,
+                ACTRAIL_PROCESS_EXEC_ARG_MARK_COMPLETE,
+                0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        remaining = pending->argv_max_total_arg_bytes - captured_total;
+        read_limit = pending->argv_max_arg_bytes;
+        if (read_limit > remaining) {
+            read_limit = remaining;
+        }
+        read_limit++;
+        if (read_limit > ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES) {
+            read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
+        }
+        arg_size = emit_process_exec_arg(ctx, pending, index, arg_ptr, read_limit);
+        if (arg_size <= 0) {
+            pending->argv_stopped = 1;
+            return;
+        }
+        captured_total += (__u32)arg_size - 1;
+        pending->argv_index = index + 1;
+        pending->argv_captured_total = captured_total;
+        if ((__u32)arg_size == read_limit) {
+            pending->argv_stopped = 1;
+            return;
+        }
+    }
+
+    if (pending->argv_index >= pending->argv_max_args ||
+        pending->argv_index >= ACTRAIL_PROCESS_EXEC_ARG_MAX) {
+        emit_process_exec_arg(
+            ctx,
+            pending,
+            pending->argv_index,
+            ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+            0
+        );
+        pending->argv_stopped = 1;
+    }
+}
+
+static __always_inline void process_exec_argv_persist_cursor(
+    struct actrail_pending_process_exec *target,
+    const struct actrail_pending_process_exec *source
+) {
+    target->argv_ptr = source->argv_ptr;
+    target->argv_index = source->argv_index;
+    target->argv_captured_total = source->argv_captured_total;
+    target->argv_stopped = source->argv_stopped;
+    target->argv_max_args = source->argv_max_args;
+    target->argv_max_arg_bytes = source->argv_max_arg_bytes;
+    target->argv_max_total_arg_bytes = source->argv_max_total_arg_bytes;
+}
+#endif
+
 static __always_inline void emit_process_exec_args(
     struct trace_event_raw_sys_enter *ctx,
     struct actrail_pending_process_exec *pending,
@@ -311,62 +445,82 @@ static __always_inline void emit_process_exec_args(
         );
     }
 #else
-    __u32 captured_total = 0;
-#pragma clang loop unroll(full)
-    for (__u32 index = 0; index < ACTRAIL_PROCESS_EXEC_ARG_MAX; index++) {
-        __u64 arg_ptr = 0;
-        __u32 remaining;
-        __u32 read_limit;
-        long arg_size;
+    pending->argv_ptr = argv_ptr;
+    pending->argv_index = 0;
+    pending->argv_captured_total = 0;
+    pending->argv_stopped = 0;
+    pending->argv_max_args = max_args;
+    pending->argv_max_arg_bytes = max_arg_bytes;
+    pending->argv_max_total_arg_bytes = max_total_arg_bytes;
 
-        if (index >= max_args) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT, 0
-            );
-            break;
-        }
-        if (bpf_probe_read_user(
-                &arg_ptr,
-                sizeof(arg_ptr),
-                (void *)(unsigned long)(argv_ptr + ((__u64)index * sizeof(__u64)))
-            ) != 0) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_READ_FAILED, 0
-            );
-            break;
-        }
-        if (!arg_ptr) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_COMPLETE, 0
-            );
-            break;
-        }
-        if (captured_total >= max_total_arg_bytes) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_TOTAL, 0
-            );
-            break;
-        }
-        remaining = max_total_arg_bytes - captured_total;
-        read_limit = max_arg_bytes;
-        if (read_limit > remaining) {
-            read_limit = remaining;
-        }
-        read_limit++;
-        if (read_limit > ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES) {
-            read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
-        }
-        arg_size = emit_process_exec_arg(ctx, pending, index, arg_ptr, read_limit);
-        if (arg_size <= 0) {
-            break;
-        }
-        captured_total += (__u32)arg_size - 1;
-        if ((__u32)arg_size == read_limit) {
-            break;
-        }
+    process_exec_argv_chunk(ctx, pending);
+    if (pending->argv_stopped) {
+        return;
     }
+
+    {
+        __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+        struct actrail_pending_process_exec *stored =
+            bpf_map_lookup_elem(&pending_process_exec_ops, &kernel_pid_tgid);
+
+        if (!stored) {
+            emit_process_exec_arg(
+                ctx,
+                pending,
+                pending->argv_index,
+                ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+                0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        process_exec_argv_persist_cursor(stored, pending);
+    }
+
+    {
+        __u32 tail_call_index = 0;
+        bpf_tail_call(ctx, &process_exec_argv_tail_calls, tail_call_index);
+    }
+    emit_process_exec_arg(
+        ctx,
+        pending,
+        pending->argv_index,
+        ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+        0
+    );
+    pending->argv_stopped = 1;
 #endif
 }
+
+#ifndef ACTRAIL_BPF_LOOP
+SEC("tracepoint/syscalls/sys_enter_execve")
+int handle_process_exec_argv_continue(struct trace_event_raw_sys_enter *ctx) {
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+    struct actrail_pending_process_exec *pending =
+        bpf_map_lookup_elem(&pending_process_exec_ops, &kernel_pid_tgid);
+
+    if (!pending || pending->argv_stopped) {
+        return 0;
+    }
+    process_exec_argv_chunk(ctx, pending);
+    if (pending->argv_stopped) {
+        return 0;
+    }
+    {
+        __u32 tail_call_index = 0;
+        bpf_tail_call(ctx, &process_exec_argv_tail_calls, tail_call_index);
+    }
+    emit_process_exec_arg(
+        ctx,
+        pending,
+        pending->argv_index,
+        ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+        0
+    );
+    pending->argv_stopped = 1;
+    return 0;
+}
+#endif
 
 static __always_inline int store_process_exec_attempt(
     struct trace_event_raw_sys_enter *ctx,

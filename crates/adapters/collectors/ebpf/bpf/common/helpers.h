@@ -89,6 +89,8 @@ static long (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsa
 static long (*bpf_loop)(__u32 nr_loops, void *callback_fn, void *callback_ctx, __u64 flags) =
     (void *)ACTRAIL_BPF_FUNC_LOOP;
 #endif
+static long (*bpf_tail_call)(void *ctx, void *map, __u32 index) =
+    (void *)BPF_FUNC_tail_call;
 static long (*bpf_get_ns_current_pid_tgid)(
     __u64 dev,
     __u64 ino,

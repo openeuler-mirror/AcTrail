@@ -2,25 +2,44 @@
 #define ACTRAIL_FILE_IO_OBJECTS_H
 
 #include "state.h"
+#include "../../runtime/fetch_add_compat.h"
 
 static __always_inline __u64 file_io_next_token(void) {
-    __u32 zero = 0;
-    __u64 *sequence = bpf_map_lookup_elem(&file_io_sequence, &zero);
-    if (!sequence) {
+    __u64 kernel_pid_tgid = bpf_get_current_pid_tgid();
+    __u64 initial = 1;
+    __u64 *sequence;
+    __u64 count;
+
+    if (!kernel_pid_tgid) {
+        file_io_diag(ACTRAIL_FILE_IO_OBJECT_INSERT_FAIL);
         return 0;
     }
-#pragma unroll
-    for (int attempt = 0; attempt < 8; attempt++) {
-        __u64 before = *sequence;
-        if (before == ~0ULL) {
-            file_io_diag(ACTRAIL_FILE_IO_COUNTER_OVERFLOW);
+    sequence = bpf_map_lookup_elem(&file_io_sequence, &kernel_pid_tgid);
+    if (!sequence) {
+        if (bpf_map_update_elem(
+                &file_io_sequence,
+                &kernel_pid_tgid,
+                &initial,
+                BPF_NOEXIST
+            ) == 0) {
+            return actrail_thread_sequence_id(kernel_pid_tgid, initial);
+        }
+        sequence = bpf_map_lookup_elem(&file_io_sequence, &kernel_pid_tgid);
+        if (!sequence) {
+            file_io_diag(ACTRAIL_FILE_IO_OBJECT_INSERT_FAIL);
             return 0;
         }
-        if (__sync_val_compare_and_swap(sequence, before, before + 1) == before) {
-            return before + 1;
-        }
     }
-    return 0;
+    count = actrail_fetch_add_next(sequence);
+    if (!count) {
+        file_io_diag(ACTRAIL_FILE_IO_OBJECT_INSERT_FAIL);
+        return 0;
+    }
+    if (count > 0xffffffffULL) {
+        file_io_diag(ACTRAIL_FILE_IO_COUNTER_OVERFLOW);
+        return 0;
+    }
+    return actrail_thread_sequence_id(kernel_pid_tgid, count);
 }
 
 static __always_inline struct actrail_file_io_object *file_io_object_get(

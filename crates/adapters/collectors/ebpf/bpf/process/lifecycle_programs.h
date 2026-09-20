@@ -248,6 +248,7 @@ int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
     bpf_map_delete_elem(&process_exec_sequences, &kernel_pid_tgid);
     bpf_map_delete_elem(&process_fork_sequences, &kernel_pid_tgid);
     bpf_map_delete_elem(&payload_socket_operation_sequence, &kernel_pid_tgid);
+    bpf_map_delete_elem(&file_io_sequence, &kernel_pid_tgid);
     if (!host_pid || !current_process_group_dead()) {
         discard_thread_exit_code(kernel_pid_tgid);
         return 0;

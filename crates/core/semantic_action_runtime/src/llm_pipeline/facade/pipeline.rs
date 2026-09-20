@@ -201,28 +201,36 @@ impl LiveLlmProjector {
         self.projection.forget_identity(identity);
     }
 
-    pub(super) fn forget_websocket_exchange_streams(
+    pub(super) fn finalize_websocket_exchange_streams(
         &mut self,
         trace_id: TraceId,
         process: &ProcessIdentity,
         prefixes: &[websocket::WebSocketExchangeStreamPrefix],
-    ) {
+        finished_at: SystemTime,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
         if prefixes.is_empty() {
-            return;
+            return output;
         }
         for prefix in prefixes {
             let streams =
                 self.websocket_stream_ownership
                     .take_prefix(trace_id, *process, prefix.as_str());
             for stream_key in streams {
-                self.forget_payload_stream(&PayloadStreamIdentity {
-                    trace_id,
-                    process: *process,
-                    source_boundary: PayloadSourceBoundary::TlsUserSpace,
-                    stream_key,
-                });
+                // Requests already projected on this connection must retain
+                // their call association even if no response was observed.
+                output.extend(self.finalize_payload_stream(
+                    &PayloadStreamIdentity {
+                        trace_id,
+                        process: *process,
+                        source_boundary: PayloadSourceBoundary::TlsUserSpace,
+                        stream_key,
+                    },
+                    finished_at,
+                ));
             }
         }
+        output
     }
 
     pub(super) fn forget_completed_websocket_exchange_streams(

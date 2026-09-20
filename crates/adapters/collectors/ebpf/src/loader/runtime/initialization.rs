@@ -221,6 +221,15 @@ impl EbpfProgramLoader {
         )?;
         resize_map(
             &mut open_object,
+            "file_io_sequence",
+            if attach_plan.file_io_summary_enabled() {
+                self.config.tracked_process_max_entries
+            } else {
+                1
+            },
+        )?;
+        resize_map(
+            &mut open_object,
             "pending_tls_payload_ops",
             effective_payload.tls.pending_operation_max_entries,
         )?;
@@ -416,6 +425,7 @@ impl EbpfRuntime {
                 && payload.tls.capture_backend
                     == config_core::daemon::PayloadTlsCaptureBackend::BpfCopy,
         )?;
+        process::configure_argv_tail_calls(&object)?;
         let direct_tls_ready = tls::DirectTlsBackend::validate_ready(&object, &payload.tls)?;
         let file_io_summaries = file_io::FileIoSummaryMap::from_object(
             &object,
@@ -485,6 +495,7 @@ impl EbpfRuntime {
             .map(|program| program.name().to_string_lossy().into_owned())
             .filter(|program_name| !tls::is_payload_tls_program(program_name))
             .filter(|program_name| program_name != "resolve_process_identities")
+            .filter(|program_name| program_name != process::PROCESS_EXEC_ARGV_CONTINUE_PROGRAM)
             .collect::<Vec<_>>();
         autoloaded_programs.sort_by_key(|program_name| attach_plan.attach_priority(program_name));
         let tracepoint_policy = tracepoint::TracepointAttachPolicy::new();

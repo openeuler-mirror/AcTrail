@@ -114,6 +114,11 @@ impl AttachPlan {
     }
 
     pub fn should_load_program(&self, program_name: &str) -> Result<bool, LoaderError> {
+        if program_name == "handle_process_exec_argv_continue" {
+            // The pre-5.17 argv fallback tail-call target must be loaded, but
+            // it is attached only through process_exec_argv_tail_calls.
+            return Ok(true);
+        }
         if tls::is_payload_tls_program(program_name) {
             return Ok(self.contains(&Capability::TlsPlaintextPayload)
                 || (self.dynamic_go_tls_enabled && tls::is_dynamic_tls_program(program_name)));
