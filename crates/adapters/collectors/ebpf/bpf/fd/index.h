@@ -33,6 +33,44 @@ static __always_inline __u64 fd_generation_next(void) {
     return generation ? generation : 1;
 }
 
+#ifdef ACTRAIL_BPF_LOOP
+struct actrail_fd_slot_allocate_ctx {
+    __u32 pid;
+    __u32 fd;
+    __u32 max_slots;
+    __u32 start;
+    __u64 generation;
+    __u32 allocated_slot;
+    __u32 found;
+};
+
+static long fd_slot_allocate_step(__u32 offset, void *opaque) {
+    struct actrail_fd_slot_allocate_ctx *ctx = opaque;
+    struct actrail_fd_index_slot_key key;
+    struct actrail_fd_index_slot value = {
+        .fd = ctx->fd,
+        .generation = ctx->generation,
+    };
+    __u32 candidate;
+
+    if (offset >= ctx->max_slots) {
+        return 1;
+    }
+    candidate = ctx->start + offset;
+    if (candidate >= ctx->max_slots) {
+        candidate -= ctx->max_slots;
+    }
+    key.pid = ctx->pid;
+    key.slot = candidate;
+    if (bpf_map_update_elem(&fd_index_slots, &key, &value, BPF_NOEXIST) == 0) {
+        ctx->allocated_slot = candidate;
+        ctx->found = 1;
+        return 1;
+    }
+    return 0;
+}
+#endif
+
 static __noinline int fd_slot_allocate(
     __u32 pid,
     __u32 fd,
@@ -40,13 +78,36 @@ static __noinline int fd_slot_allocate(
     __u32 *allocated_slot
 ) {
     __u32 max_slots = fd_slot_limit();
-    __u32 start;
-    __u32 offset;
 
     if (!max_slots || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {
         return 0;
     }
-    start = fd % max_slots;
+#ifdef ACTRAIL_BPF_LOOP
+    {
+        struct actrail_fd_slot_allocate_ctx ctx = {
+            .pid = pid,
+            .fd = fd,
+            .max_slots = max_slots,
+            .start = fd % max_slots,
+            .generation = generation,
+        };
+
+        if (bpf_loop(
+                ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES,
+                fd_slot_allocate_step,
+                &ctx,
+                0
+            ) < 0 ||
+            !ctx.found) {
+            return 0;
+        }
+        *allocated_slot = ctx.allocated_slot;
+        return 1;
+    }
+#else
+    __u32 start = fd % max_slots;
+    __u32 offset;
+
 #pragma clang loop unroll(disable)
     for (offset = 0; offset < ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES; offset++) {
         struct actrail_fd_index_slot_key key;
@@ -68,6 +129,7 @@ static __noinline int fd_slot_allocate(
         }
     }
     return 0;
+#endif
 }
 
 static __always_inline int fd_slot_release(

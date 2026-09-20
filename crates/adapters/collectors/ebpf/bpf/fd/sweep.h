@@ -131,10 +131,28 @@ static __noinline int fd_fork_seed_slot(
     return 1;
 }
 
+#ifdef ACTRAIL_BPF_LOOP
+struct actrail_fd_fork_seed_ctx {
+    __u32 parent_pid;
+    __u32 child_pid;
+    __u32 max_slots;
+    __u32 reserved;
+};
+
+static long fd_fork_seed_step(__u32 slot, void *opaque) {
+    struct actrail_fd_fork_seed_ctx *ctx = opaque;
+
+    if (slot >= ctx->max_slots) {
+        return 1;
+    }
+    fd_fork_seed_slot(ctx->parent_pid, ctx->child_pid, slot);
+    return 0;
+}
+#endif
+
 static __always_inline void fd_fork_seed(__u32 parent_pid, __u32 child_pid) {
     __u32 max_slots = fd_slot_limit();
     __u32 active_count = fd_process_active_count(parent_pid);
-    __u32 slot;
 
     if (!parent_pid || !child_pid || !active_count || !fd_tracking_enabled() || !max_slots
         || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {
@@ -143,6 +161,19 @@ static __always_inline void fd_fork_seed(__u32 parent_pid, __u32 child_pid) {
     if (!fd_process_active_count_seed_empty(child_pid)) {
         return;
     }
+#ifdef ACTRAIL_BPF_LOOP
+    {
+        struct actrail_fd_fork_seed_ctx ctx = {
+            .parent_pid = parent_pid,
+            .child_pid = child_pid,
+            .max_slots = max_slots,
+        };
+
+        bpf_loop(ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES, fd_fork_seed_step, &ctx, 0);
+    }
+#else
+    __u32 slot;
+
 #pragma clang loop unroll(disable)
     for (slot = 0; slot < ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES; slot++) {
         if (slot >= max_slots) {
@@ -150,6 +181,7 @@ static __always_inline void fd_fork_seed(__u32 parent_pid, __u32 child_pid) {
         }
         fd_fork_seed_slot(parent_pid, child_pid, slot);
     }
+#endif
     {
         __u32 *child_active_count =
             bpf_map_lookup_elem(&fd_process_active_counts, &child_pid);
@@ -192,18 +224,55 @@ static __noinline void fd_exec_cleanup_slot(
     }
 }
 
+#ifdef ACTRAIL_BPF_LOOP
+struct actrail_fd_exec_cleanup_ctx {
+    __u32 pid;
+    __u32 max_slots;
+    __u64 trace_id;
+    void *program_ctx;
+};
+
+static long fd_process_exec_cleanup_step(__u32 slot, void *opaque) {
+    struct actrail_fd_exec_cleanup_ctx *ctx = opaque;
+
+    if (slot >= ctx->max_slots) {
+        return 1;
+    }
+    fd_exec_cleanup_slot(ctx->pid, slot, ctx->trace_id, ctx->program_ctx);
+    return 0;
+}
+#endif
+
 static __always_inline void fd_process_exec_cleanup(
     __u32 pid,
     __u64 trace_id,
     void *ctx
 ) {
     __u32 max_slots = fd_slot_limit();
-    __u32 slot;
 
     if (!pid || !fd_process_active_count(pid) || !fd_tracking_enabled() || !max_slots
         || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {
         return;
     }
+#ifdef ACTRAIL_BPF_LOOP
+    {
+        struct actrail_fd_exec_cleanup_ctx loop_ctx = {
+            .pid = pid,
+            .max_slots = max_slots,
+            .trace_id = trace_id,
+            .program_ctx = ctx,
+        };
+
+        bpf_loop(
+            ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES,
+            fd_process_exec_cleanup_step,
+            &loop_ctx,
+            0
+        );
+    }
+#else
+    __u32 slot;
+
 #pragma clang loop unroll(disable)
     for (slot = 0; slot < ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES; slot++) {
         if (slot >= max_slots) {
@@ -211,6 +280,7 @@ static __always_inline void fd_process_exec_cleanup(
         }
         fd_exec_cleanup_slot(pid, slot, trace_id, ctx);
     }
+#endif
 }
 
 static __noinline void fd_exit_cleanup_slot(
@@ -229,13 +299,31 @@ static __noinline void fd_exit_cleanup_slot(
     }
 }
 
+#ifdef ACTRAIL_BPF_LOOP
+struct actrail_fd_exit_cleanup_ctx {
+    __u32 pid;
+    __u32 max_slots;
+    __u64 trace_id;
+    void *program_ctx;
+};
+
+static long fd_process_exit_cleanup_step(__u32 slot, void *opaque) {
+    struct actrail_fd_exit_cleanup_ctx *ctx = opaque;
+
+    if (slot >= ctx->max_slots) {
+        return 1;
+    }
+    fd_exit_cleanup_slot(ctx->pid, slot, ctx->trace_id, ctx->program_ctx);
+    return 0;
+}
+#endif
+
 static __always_inline void fd_process_exit_cleanup(
     __u32 pid,
     __u64 trace_id,
     void *ctx
 ) {
     __u32 max_slots = fd_slot_limit();
-    __u32 slot;
 
     if (!pid) {
         return;
@@ -247,6 +335,25 @@ static __always_inline void fd_process_exit_cleanup(
     if (!max_slots || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {
         return;
     }
+#ifdef ACTRAIL_BPF_LOOP
+    {
+        struct actrail_fd_exit_cleanup_ctx loop_ctx = {
+            .pid = pid,
+            .max_slots = max_slots,
+            .trace_id = trace_id,
+            .program_ctx = ctx,
+        };
+
+        bpf_loop(
+            ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES,
+            fd_process_exit_cleanup_step,
+            &loop_ctx,
+            0
+        );
+    }
+#else
+    __u32 slot;
+
 #pragma clang loop unroll(disable)
     for (slot = 0; slot < ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES; slot++) {
         if (slot >= max_slots) {
@@ -254,6 +361,7 @@ static __always_inline void fd_process_exit_cleanup(
         }
         fd_exit_cleanup_slot(pid, slot, trace_id, ctx);
     }
+#endif
 }
 
 struct actrail_fd_close_range_sweep {
@@ -302,6 +410,23 @@ static __noinline void fd_close_range_slot(
     }
 }
 
+#ifdef ACTRAIL_BPF_LOOP
+struct actrail_fd_close_range_loop_ctx {
+    struct actrail_fd_close_range_sweep sweep;
+    __u32 max_slots;
+};
+
+static long fd_close_range_dispatch_step(__u32 slot, void *opaque) {
+    struct actrail_fd_close_range_loop_ctx *ctx = opaque;
+
+    if (slot >= ctx->max_slots) {
+        return 1;
+    }
+    fd_close_range_slot(&ctx->sweep, slot);
+    return 0;
+}
+#endif
+
 static __always_inline void fd_close_range_dispatch(
     __u32 pid,
     __u32 first,
@@ -311,6 +436,32 @@ static __always_inline void fd_close_range_dispatch(
     void *ctx
 ) {
     __u32 max_slots = fd_slot_limit();
+
+    if (!max_slots || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {
+        return;
+    }
+#ifdef ACTRAIL_BPF_LOOP
+    {
+        struct actrail_fd_close_range_loop_ctx loop_ctx = {
+            .sweep = {
+                .trace_id = trace_id,
+                .program_ctx = ctx,
+                .pid = pid,
+                .first = first,
+                .last = last,
+                .flags = flags,
+            },
+            .max_slots = max_slots,
+        };
+
+        bpf_loop(
+            ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES,
+            fd_close_range_dispatch_step,
+            &loop_ctx,
+            0
+        );
+    }
+#else
     __u32 slot;
     struct actrail_fd_close_range_sweep sweep = {
         .trace_id = trace_id,
@@ -321,9 +472,6 @@ static __always_inline void fd_close_range_dispatch(
         .flags = flags,
     };
 
-    if (!max_slots || max_slots > ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES) {
-        return;
-    }
 #pragma clang loop unroll(disable)
     for (slot = 0; slot < ACTRAIL_FD_INDEX_HARD_MAX_ENTRIES; slot++) {
         if (slot >= max_slots) {
@@ -331,6 +479,7 @@ static __always_inline void fd_close_range_dispatch(
         }
         fd_close_range_slot(&sweep, slot);
     }
+#endif
 }
 
 #endif
