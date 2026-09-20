@@ -150,7 +150,7 @@ actraild stop
 然后输入：
 
 ```bash
-actraild init --force
+actrailctl init --force
 ```
 
 默认配置已经启用 fanotify enforcement、seccomp user notification，以及 `mkdir`/`rmdir` 目录操作控制。核对以下默认值，不需要另建专用配置：

@@ -16,7 +16,7 @@ sudo -E python3 tests/v2/regression/probe_claude_llm/run_e2e.py
 # 步骤摘要
 
 1. 检查 AcTrail release binaries 和 Claude 外部可用性。
-2. 执行 `actraild init -f → actraild stop → actrailctl clean → actraild start`。
+2. 执行 `actrailctl init -f → actraild stop → actrailctl clean → actraild start`。
 3. 生成随机 marker，并通过 `actrailctl launch` 请求 Claude 原样回答。
 4. 验证 Claude 标准输出包含 marker，并提取唯一 trace id。
 5. 安全停止 daemon，等待 trace 和 post-trace 数据排空。
@@ -59,7 +59,7 @@ test -n "$CLAUDE_BIN"
 ### 手动指令
 
 ```bash
-sudo -E target/release/actraild init -f
+sudo -E target/release/actrailctl init -f
 sudo -E target/release/actraild stop
 sudo -E target/release/actrailctl clean
 sudo -E target/release/actraild start
@@ -187,9 +187,10 @@ jq --arg marker "$CASE_MARKER" '
         $requests[]
         | select(
             .attributes["llm.request.content_state"] == "canonical_blocks"
-            and ((.attributes["llm.request.canonical_body_hash"] // "")
-                 | startswith("sha256:"))
-            and (((.attributes["llm.request.canonical_body_bytes"] // "0")
+            and .status == "success" and .completeness == "complete"
+            and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
+            and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
+            and (((.attributes["llm.request.payload_bytes"] // "0")
                   | tonumber) > 0)
           )
         | .action_id

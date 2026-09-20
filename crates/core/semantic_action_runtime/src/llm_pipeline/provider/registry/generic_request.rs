@@ -1,7 +1,6 @@
 //! Generic JSON LLM request parser.
 
 use semantic_action::LlmProviderMatch;
-use serde_json::Value;
 
 use super::{LlmRequestParser, LlmRequestParserInput, ParsedLlmRequest};
 
@@ -16,7 +15,7 @@ impl LlmRequestParser for GenericJsonRequestParser {
     }
 
     fn match_json_request(&self, input: &LlmRequestParserInput<'_>) -> LlmProviderMatch {
-        if generic_json_request(input.json) {
+        if input.facts.generic_match() {
             LlmProviderMatch::Plausible
         } else {
             LlmProviderMatch::NoMatch
@@ -30,21 +29,7 @@ impl LlmRequestParser for GenericJsonRequestParser {
         Some(ParsedLlmRequest {
             classifier_id: self.classifier_id(),
             protocol_id: None,
-            model: input
-                .json
-                .get("model")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
+            model: input.facts.model.clone(),
         })
     }
-}
-
-fn generic_json_request(value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    object.contains_key("model")
-        && (object.contains_key("messages")
-            || object.contains_key("prompt")
-            || object.contains_key("input"))
 }

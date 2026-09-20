@@ -136,7 +136,7 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         .collect::<Vec<_>>();
     let tools = tool_breakdown_shares(&workload_tool_intervals, &tool_calls, total_duration);
     let commands = command_breakdown_shares(&command_segments, total_duration);
-    let llm_call_count = segments
+    let attributed_llm_call_count = segments
         .iter()
         .filter(|segment| segment.category_value == Category::ModelSide)
         .flat_map(|segment| segment.action_ids.iter().cloned())
@@ -162,12 +162,16 @@ fn clip_terminal_projection(projection: &TraceAttribution, window: Interval) -> 
         bottlenecks: TraceBottlenecks::default(),
         coverage: TraceCoverage {
             llm_request_count: projection.coverage.llm_request_count,
+            llm_response_count: projection.coverage.llm_response_count,
             observed_llm_call_count: projection.coverage.observed_llm_call_count,
-            llm_call_count,
-            excluded_llm_call_count: projection
+            paired_llm_call_count: projection.coverage.paired_llm_call_count,
+            unpaired_llm_call_count: projection.coverage.unpaired_llm_call_count,
+            orphan_llm_response_count: projection.coverage.orphan_llm_response_count,
+            attributed_llm_call_count,
+            excluded_from_attribution_llm_call_count: projection
                 .coverage
-                .observed_llm_call_count
-                .saturating_sub(llm_call_count),
+                .paired_llm_call_count
+                .saturating_sub(attributed_llm_call_count),
             user_turn_count: projection
                 .rounds
                 .iter()

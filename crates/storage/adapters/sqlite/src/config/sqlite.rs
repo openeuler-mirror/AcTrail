@@ -40,6 +40,8 @@ impl EventRecordLayout {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SqliteStorageConfig {
+    pub payload_retention_limits: Option<storage_core::PayloadRetentionLimits>,
+    pub payload_retention_max_cached_traces: usize,
     pub path: PathBuf,
     pub busy_timeout_ms: u64,
     pub cold_field_compression_min_bytes: usize,
@@ -66,6 +68,8 @@ impl SqliteStorageConfig {
         let values = ConfigValues::new(entries)?;
         let default_compression = ColdFieldCompression::DEFAULT;
         Ok(Self {
+            payload_retention_limits: None,
+            payload_retention_max_cached_traces: 0,
             path: PathBuf::from(values.required("path")?),
             busy_timeout_ms: values.required_positive_u64("busy_timeout_ms")?,
             cold_field_compression_min_bytes: values
@@ -109,6 +113,8 @@ impl SqliteStorageConfig {
         let default_compression = ColdFieldCompression::DEFAULT;
         Self {
             path: path.as_ref().to_path_buf(),
+            payload_retention_limits: None,
+            payload_retention_max_cached_traces: 0,
             busy_timeout_ms: SQLITE_DEFAULT_BUSY_TIMEOUT_MS,
             cold_field_compression_min_bytes: default_compression.compression_min_bytes,
             cold_field_zstd_level: default_compression.zstd_level,

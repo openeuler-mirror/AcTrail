@@ -1,6 +1,5 @@
 //! Binary-analysis-cached TLS sync probe plan resolver.
 
-use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -8,11 +7,14 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::direct::{DirectDiscovery, DirectObject, DirectResolution, DirectWorker};
 use super::root_path::PeerRootHandle;
-use config_core::daemon::{PayloadTlsConfig, PayloadTlsLibraryPath};
+use config_core::daemon::{PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibraryPath};
 use control_contract::reply::{
     ControlError, LaunchTlsPlanDescriptor, LaunchTlsPlanReply, LaunchTlsPlanStatus,
+    LaunchTlsPlanUnavailableReason,
 };
+use std::os::fd::RawFd;
 use tls_payload_sync::{
     PlanLookupResponse, RuntimePlanDescriptor, encode_points, validate_native_backend_plan,
 };
@@ -25,8 +27,10 @@ use tls_probe_point_finder::{
 };
 
 pub(super) struct TlsSyncPlanResolver {
-    requests: Sender<PlanLookupJob>,
+    requests: Sender<WorkerRequest>,
+    direct: Option<DirectDiscovery>,
     dynamic_exec_plan_timeout: Duration,
+    launch_consumer: ProbeConsumer,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,10 +48,16 @@ struct PlanLookupJob {
     control_response: Option<Sender<LaunchPlanLookupOutcome>>,
 }
 
+enum WorkerRequest {
+    Lookup(PlanLookupJob),
+    Direct(DirectObject),
+}
+
 struct TlsSyncPlanWorker {
     analysis_cache: Rc<BinaryAnalysisCache>,
     config: PayloadTlsConfig,
     match_limit: usize,
+    direct: Option<DirectWorker>,
 }
 
 struct BinaryPlanRecord {
@@ -72,7 +82,7 @@ struct PlanLookupOutcome {
 }
 
 struct LaunchPlanLookupOutcome {
-    reply: LaunchTlsPlanReply,
+    reply: Result<LaunchTlsPlanReply, ControlError>,
 }
 
 impl TlsSyncPlanResolver {
@@ -81,6 +91,15 @@ impl TlsSyncPlanResolver {
         let cache_capacity = binary_analysis_cache_capacity(config)?;
         validate_library_candidates(config)?;
         let (requests, receiver) = mpsc::channel();
+        let (direct, direct_worker) = if config.capture_backend == PayloadTlsCaptureBackend::BpfCopy
+            && config.direct_dynamic_discovery_enabled
+        {
+            let (discovery, worker) =
+                DirectDiscovery::new(config.dynamic_discovery_capacity as usize)?;
+            (Some(discovery), Some(worker))
+        } else {
+            (None, None)
+        };
         let worker_config = config.clone();
         thread::Builder::new()
             .name("actrail-tls-plan-resolver".to_string())
@@ -93,14 +112,42 @@ impl TlsSyncPlanResolver {
                     analysis_cache,
                     config: worker_config,
                     match_limit,
+                    direct: direct_worker,
                 }
                 .run(receiver);
             })
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
         Ok(Self {
             requests,
+            direct,
             dynamic_exec_plan_timeout: Duration::from_millis(config.dynamic_exec_plan_timeout_ms),
+            launch_consumer: if config.capture_backend == PayloadTlsCaptureBackend::BpfCopy {
+                ProbeConsumer::Direct
+            } else {
+                ProbeConsumer::Daemon
+            },
         })
+    }
+
+    pub(super) fn direct_poll_fd(&self) -> Option<RawFd> {
+        self.direct.as_ref().map(DirectDiscovery::poll_fd)
+    }
+
+    pub(super) fn direct_discovery_enabled(&self) -> bool {
+        self.direct.is_some()
+    }
+
+    pub(super) fn submit_direct(&self, object: DirectObject) -> Option<DirectResolution> {
+        self.direct.as_ref()?.submit(object, |object| {
+            self.requests.send(WorkerRequest::Direct(object)).is_ok()
+        })
+    }
+
+    pub(super) fn drain_direct(&mut self) -> Vec<DirectResolution> {
+        self.direct
+            .as_mut()
+            .map(DirectDiscovery::drain)
+            .unwrap_or_default()
     }
 
     pub(super) fn submit_lookup(
@@ -110,14 +157,14 @@ impl TlsSyncPlanResolver {
         response: UnixStream,
     ) -> Result<(), ControlError> {
         self.requests
-            .send(PlanLookupJob {
+            .send(WorkerRequest::Lookup(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
                 consumer: ProbeConsumer::Sync,
                 peer_root: Some(peer_root),
                 pin_peer_path: false,
                 response: Some(response),
                 control_response: None,
-            })
+            }))
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
     }
 
@@ -126,10 +173,10 @@ impl TlsSyncPlanResolver {
         binary: &Path,
         peer_root: Result<PeerRootHandle, String>,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
-        self.submit_control_lookup(binary, ProbeConsumer::Daemon, Some(peer_root), true)?
+        self.submit_control_lookup(binary, self.launch_consumer, Some(peer_root), true)?
             .recv()
-            .map(|outcome| outcome.reply)
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))
+            .and_then(|outcome| outcome.reply)
     }
 
     pub(super) fn resolve_exec_plan(
@@ -141,7 +188,7 @@ impl TlsSyncPlanResolver {
             .submit_control_lookup(binary, consumer.probe_consumer(), None, false)?
             .recv_timeout(self.dynamic_exec_plan_timeout)
         {
-            Ok(outcome) => Ok(outcome.reply),
+            Ok(outcome) => outcome.reply,
             Err(RecvTimeoutError::Timeout) => Err(ControlError::new(
                 "tls_sync_exec_plan_timeout",
                 format!(
@@ -166,14 +213,14 @@ impl TlsSyncPlanResolver {
     ) -> Result<Receiver<LaunchPlanLookupOutcome>, ControlError> {
         let (sender, receiver) = mpsc::channel();
         self.requests
-            .send(PlanLookupJob {
+            .send(WorkerRequest::Lookup(PlanLookupJob {
                 runtime_binary: binary.to_path_buf(),
                 consumer,
                 peer_root,
                 pin_peer_path,
                 response: None,
                 control_response: Some(sender),
-            })
+            }))
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
         Ok(receiver)
     }
@@ -189,8 +236,24 @@ impl ExecPlanConsumer {
 }
 
 impl TlsSyncPlanWorker {
-    fn run(mut self, receiver: Receiver<PlanLookupJob>) {
-        for mut job in receiver {
+    fn run(mut self, receiver: Receiver<WorkerRequest>) {
+        for request in receiver {
+            let mut job = match request {
+                WorkerRequest::Lookup(job) => job,
+                WorkerRequest::Direct(object) => {
+                    if let Some(worker) = &mut self.direct {
+                        worker.resolve(object, &self.analysis_cache, self.match_limit);
+                    }
+                    continue;
+                }
+            };
+            if job.consumer == ProbeConsumer::Direct {
+                let reply = self.lookup_direct(&job.runtime_binary, job.peer_root);
+                if let Some(sender) = job.control_response {
+                    let _ = sender.send(LaunchPlanLookupOutcome { reply });
+                }
+                continue;
+            }
             let outcome = self.lookup(
                 &job.runtime_binary,
                 job.consumer,
@@ -200,13 +263,15 @@ impl TlsSyncPlanWorker {
             let Some(response_stream) = job.response.as_mut() else {
                 if let Some(sender) = job.control_response {
                     let _ = sender.send(LaunchPlanLookupOutcome {
-                        reply: launch_reply_for_outcome(outcome),
+                        reply: Ok(launch_reply_for_outcome(outcome)),
                     });
                 }
                 continue;
             };
-            if let Err(error) = response_stream.write_all(
-                &tls_payload_sync::encode_plan_lookup_response(&outcome.response),
+            if let Err(error) = tls_payload_sync::FrameCodec::write_lookup_response(
+                response_stream,
+                &outcome.response,
+                self.config.sync_max_frame_bytes as usize,
             ) {
                 tracing::warn!(
                     target: "actrail::tls_sync",
@@ -216,6 +281,75 @@ impl TlsSyncPlanWorker {
                 );
             }
         }
+    }
+
+    fn lookup_direct(
+        &mut self,
+        runtime_binary: &Path,
+        peer_root: Option<Result<PeerRootHandle, String>>,
+    ) -> Result<LaunchTlsPlanReply, ControlError> {
+        let started = Instant::now();
+        let root = peer_root
+            .ok_or_else(|| ControlError::new("tls_sync_plan_root", ""))?
+            .map_err(|error| ControlError::new("tls_sync_plan_root", error))?;
+        let pinned = root
+            .pin_path(runtime_binary)
+            .map_err(|error| ControlError::new("tls_sync_plan_root", error))?;
+        let startup_object = DirectObject::open_startup(&pinned.path());
+        let before = self.analysis_cache.stats();
+        let resolved = self.resolve_plans(&pinned.path(), runtime_binary, ProbeConsumer::Direct);
+        if let (Some(worker), Some(object), Ok(plans)) = (&self.direct, startup_object, &resolved) {
+            // A successful Auto/All pass completed the executable branches.
+            // Only the pinned root's facts belong in its single-object cache entry.
+            let root_plans = plans.iter().filter(|plan| {
+                plan.source == "executable"
+                    && plan.target == runtime_binary
+                    && plan.binary == runtime_binary
+            });
+            if root_plans
+                .clone()
+                .all(|plan| matches!(plan.provider.as_str(), "openssl" | "rustls"))
+            {
+                worker.seed_startup(
+                    object,
+                    root_plans.map(|plan| {
+                        (
+                            plan.binary_identity.clone(),
+                            plan.provider.clone(),
+                            plan.points.clone(),
+                        )
+                    }),
+                );
+            }
+        }
+        let status = match resolved {
+            Ok(plans) if plans.is_empty() => LaunchTlsPlanStatus::Unsupported {
+                reason: LaunchTlsPlanUnavailableReason::NoProbePoints,
+            },
+            Ok(plans) => LaunchTlsPlanStatus::Found(
+                plans
+                    .into_iter()
+                    .map(|plan| LaunchTlsPlanDescriptor {
+                        target: plan.target,
+                        binary: plan.binary,
+                        target_identity: plan.target_identity,
+                        binary_identity: plan.binary_identity,
+                        provider: plan.provider,
+                        source: plan.source,
+                        points: plan.points,
+                    })
+                    .collect(),
+            ),
+            Err(_) => LaunchTlsPlanStatus::Unsupported {
+                reason: LaunchTlsPlanUnavailableReason::AnalysisRejected,
+            },
+        };
+        let after = self.analysis_cache.stats();
+        Ok(LaunchTlsPlanReply {
+            status,
+            cache_hit: after.misses == before.misses && after.hits > before.hits,
+            resolve_elapsed_micros: duration_micros(started.elapsed()),
+        })
     }
 
     fn lookup(
@@ -327,7 +461,7 @@ impl TlsSyncPlanWorker {
             Rc::clone(&self.analysis_cache),
         )
         .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-        if resolution.plans.is_empty() {
+        if resolution.plans.is_empty() && consumer != ProbeConsumer::Direct {
             return Err(ControlError::new(
                 "tls_sync_plan",
                 "no supported TLS payload probe points found",
@@ -337,8 +471,10 @@ impl TlsSyncPlanWorker {
             .plans
             .into_iter()
             .map(|plan| {
-                validate_native_backend_plan(&plan)
-                    .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                if consumer != ProbeConsumer::Direct {
+                    validate_native_backend_plan(&plan)
+                        .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                }
                 Ok(BinaryPlanDescriptor {
                     target: runtime_view_binary(&plan.target.binary, runtime_binary, probe_binary),
                     binary: runtime_view_binary(&plan.binary.path, runtime_binary, probe_binary),
@@ -435,11 +571,9 @@ fn unsupported_outcome(reason: String, started: Instant) -> PlanLookupOutcome {
 
 fn launch_reply_for_outcome(outcome: PlanLookupOutcome) -> LaunchTlsPlanReply {
     let status = if outcome.launch_plans.is_empty() {
-        let reason = match outcome.response {
-            PlanLookupResponse::Unsupported { reason } => reason,
-            PlanLookupResponse::Found(_) => "empty TLS plan set".to_string(),
-        };
-        LaunchTlsPlanStatus::Unsupported { reason }
+        LaunchTlsPlanStatus::Unsupported {
+            reason: LaunchTlsPlanUnavailableReason::AnalysisRejected,
+        }
     } else {
         LaunchTlsPlanStatus::Found(outcome.launch_plans)
     };
@@ -505,6 +639,7 @@ const fn probe_consumer_name(consumer: ProbeConsumer) -> &'static str {
         ProbeConsumer::Standalone => "standalone",
         ProbeConsumer::Sync => "sync",
         ProbeConsumer::Daemon => "daemon",
+        ProbeConsumer::Direct => "direct",
     }
 }
 

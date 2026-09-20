@@ -6,6 +6,6 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 control_contract = { path = "../../../../contracts/control_plane" }
-idle_contract = { path = "../../../../contracts/idle" }
+agent_lifecycle_contract = { path = "../../../../contracts/agent_lifecycle" }
 model_core = { path = "../../../../core/model" }
 plugin_system = { path = "../../../../core/plugin_system" }

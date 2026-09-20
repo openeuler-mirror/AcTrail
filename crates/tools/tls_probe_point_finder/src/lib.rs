@@ -29,8 +29,8 @@ pub use plan::{
     ProbeSource, TargetIdentity, TlsProvider,
 };
 pub use resolve::{
-    ProbeResolution, ResolveMode, resolve_plans, resolve_plans_with_analysis_cache,
-    resolve_plans_with_scan,
+    DirectSharedObjectResolver, ProbeResolution, ResolveMode, resolve_plans,
+    resolve_plans_with_analysis_cache, resolve_plans_with_scan,
 };
 
 pub const GO_TLS_WRITE_SYMBOL: &str = probe_detector::detector::tls::go_tls::WRITE_SYMBOL;

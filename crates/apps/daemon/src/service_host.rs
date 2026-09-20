@@ -74,11 +74,19 @@ pub trait AttachService {
     ) -> Result<(), ControlError>;
     fn report_turn_lifecycle(
         &mut self,
-        event: idle_contract::TurnLifecycleEvent,
+        event: agent_lifecycle_contract::TurnLifecycleEvent,
+    ) -> Result<(), ControlError>;
+    fn report_work_lifecycle(
+        &mut self,
+        event: agent_lifecycle_contract::WorkLifecycleEvent,
+    ) -> Result<(), ControlError>;
+    fn report_session_closed(
+        &mut self,
+        event: agent_lifecycle_contract::SessionClosedEvent,
     ) -> Result<(), ControlError>;
     fn report_user_interaction(
         &mut self,
-        event: idle_contract::UserInteractionEvent,
+        event: agent_lifecycle_contract::UserInteractionEvent,
     ) -> Result<(), ControlError>;
     fn plugin_statuses(&self) -> Vec<PluginInstanceStatus>;
     fn load_plugin(
@@ -516,8 +524,9 @@ where
                     ));
                 }
                 self.wiring.attach_service.report_turn_lifecycle(
-                    idle_contract::TurnLifecycleEvent {
+                    agent_lifecycle_contract::TurnLifecycleEvent {
                         trace_id: command.trace_id,
+                        session_id: command.session_id,
                         task_id: command.task_id,
                         kind: command.kind,
                         observed_at: command.observed_at,
@@ -527,8 +536,9 @@ where
             }
             ControlCommand::ReportUserInteraction(command) => {
                 self.wiring.attach_service.report_user_interaction(
-                    idle_contract::UserInteractionEvent {
+                    agent_lifecycle_contract::UserInteractionEvent {
                         trace_id: command.trace_id,
+                        session_id: command.session_id,
                         task_id: command.task_id,
                         interaction_id: command.interaction_id,
                         state: command.state,
@@ -536,6 +546,29 @@ where
                     },
                 )?;
                 Ok(ControlReply::UserInteractionRecorded)
+            }
+            ControlCommand::ReportWorkLifecycle(command) => {
+                self.wiring.attach_service.report_work_lifecycle(
+                    agent_lifecycle_contract::WorkLifecycleEvent {
+                        trace_id: command.trace_id,
+                        session_id: command.session_id,
+                        task_id: command.task_id,
+                        kind: command.kind,
+                        state: command.state,
+                        observed_at: command.observed_at,
+                    },
+                )?;
+                Ok(ControlReply::WorkLifecycleRecorded)
+            }
+            ControlCommand::ReportSessionClosed(command) => {
+                self.wiring.attach_service.report_session_closed(
+                    agent_lifecycle_contract::SessionClosedEvent {
+                        trace_id: command.trace_id,
+                        session_id: command.session_id,
+                        observed_at: command.observed_at,
+                    },
+                )?;
+                Ok(ControlReply::SessionClosedRecorded)
             }
             ControlCommand::PluginList(_) => Ok(ControlReply::PluginList(self.plugin_statuses())),
             ControlCommand::PluginStatus(command) => self
@@ -679,6 +712,12 @@ where
             ControlCommand::ReportUserInteraction(command) => {
                 self.authorize_trace_owner(peer, command.trace_id)
             }
+            ControlCommand::ReportWorkLifecycle(command) => {
+                self.authorize_trace_owner(peer, command.trace_id)
+            }
+            ControlCommand::ReportSessionClosed(command) => {
+                self.authorize_trace_owner(peer, command.trace_id)
+            }
             ControlCommand::ListTraces(_) | ControlCommand::Doctor(_) => Ok(()),
             ControlCommand::PluginList(_)
             | ControlCommand::PluginStatus(_)
@@ -763,6 +802,8 @@ fn control_command_name(command: &ControlCommand) -> &'static str {
         ControlCommand::Doctor(_) => "doctor",
         ControlCommand::ReportTurnLifecycle(_) => "report_turn_lifecycle",
         ControlCommand::ReportUserInteraction(_) => "report_user_interaction",
+        ControlCommand::ReportSessionClosed(_) => "report_session_closed",
+        ControlCommand::ReportWorkLifecycle(_) => "report_work_lifecycle",
         ControlCommand::PluginList(_) => "plugin_list",
         ControlCommand::PluginStatus(_) => "plugin_status",
         ControlCommand::PluginLoad(_) => "plugin_load",

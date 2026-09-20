@@ -7,7 +7,6 @@ use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDraft, AlertId, AlertListLimit, AlertStoreError,
     AlertView,
 };
-use idle_contract::{IdleInterval, IdleStoreError, IdleStoreOp};
 use model_core::diagnostics::{DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::DomainEvent;
 use model_core::external_cgroup::{ExternalBindingStaleReason, ExternalCgroupBinding};
@@ -72,6 +71,7 @@ pub struct SemanticActionTraceRevision {
     pub action_max_key: i64,
     pub link_count: u64,
     pub link_max_rowid: i64,
+    pub state_revision: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,11 +101,13 @@ pub struct SemanticActionChildPageQuery {
 }
 
 pub trait StorageBackend {
+    /// Whether observation records are retained and need protection from purge during history reads.
+    fn retains_observations(&self) -> bool;
+
     fn next_trace_id_seed(&self) -> Result<u64, StorageError>;
     fn next_event_id_seed(&self) -> Result<u64, StorageError>;
     fn next_diagnostic_id_seed(&self) -> Result<u64, StorageError>;
     fn next_payload_segment_id_seed(&self) -> Result<u64, StorageError>;
-    fn next_idle_interval_id_seed(&self) -> Result<u64, StorageError>;
     fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), StorageError>;
     fn upsert_process_record(&mut self, record: ProcessRecord) -> Result<(), StorageError>;
     fn get_process_record(
@@ -238,13 +240,11 @@ pub trait StorageBackend {
         limit: AlertListLimit,
     ) -> Result<Vec<AlertView>, AlertStoreError>;
 
-    fn apply_idle_ops(&mut self, ops: &[IdleStoreOp]) -> Result<(), IdleStoreError>;
-    fn idle_intervals_for_trace(
-        &self,
-        trace_id: TraceId,
-    ) -> Result<Vec<IdleInterval>, IdleStoreError>;
-
-    fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
+    fn insert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
+    fn update_semantic_action(
+        &mut self,
+        update: semantic_action::SemanticActionUpdate,
+    ) -> Result<(), StorageError>;
     fn upsert_semantic_action_link(&mut self, link: SemanticActionLink)
     -> Result<(), StorageError>;
     fn upsert_file_observation_paths(

@@ -13,15 +13,14 @@ import sqlite3
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from action_snapshot import ActionRecord, SemanticActionSnapshot  # noqa: E402
+from action_snapshot import SemanticActionSnapshot  # noqa: E402
 
 
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
-FAST_PATH_READ_COUNT_ATTR = "file.bulk_read.fp_read_count"
-FAST_PATH_SUMMARY_COUNT_ATTR = "file.bulk_read.fp_summary_count"
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,7 +58,7 @@ def main() -> int:
         wait_for_daemon(daemon, args.ready_timeout_sec)
         trace_id, output = run_scan_workload(actrailctl, config, scan_dir, args.ready_timeout_sec)
         wait_for_completed_trace(storage, trace_id, args.completion_timeout_sec)
-        verify_scan_recording(storage, actrailviewer, config, trace_id)
+        verify_scan_recording(storage, actrailviewer, config, trace_id, scan_dir)
         print(f"file scan recording e2e passed trace=trace-{trace_id}")
         print(output, end="")
         return 0
@@ -246,62 +245,56 @@ def verify_scan_recording(
     actrailviewer: Path,
     config: Path,
     trace_id: int,
+    scan_dir: Path,
 ) -> None:
+    effective = tomllib.loads(config.read_text())["file_observation"]
+    if not (effective["bulk_read"]["enabled"] and effective["bulk_read"]["mode"] == "path_set"
+            and effective["collection"]["read"]["counts"] and effective["collection"]["read"]["bytes"]):
+        raise RuntimeError("scan fixture requires bulk path sets and actual read counts/bytes")
     snapshot = SemanticActionSnapshot.load(actrailviewer, config, trace_id)
     bulk_actions = snapshot.actions("file.bulk_read")
-    if len(bulk_actions) < 2:
-        raise RuntimeError(
-            f"expected at least two file.bulk_read actions, got {len(bulk_actions)}"
-        )
+    expected = {str(path) for path in scan_dir.rglob("*.txt")}
+    expected_bytes = sum(Path(path).stat().st_size for path in expected)
+    process_paths = {}
+    process_counts = {}
+    canonical = {}
     with sqlite3.connect(storage) as connection:
-        verify_fast_path_bulk_read(bulk_actions)
         verify_no_event_transport_loss(connection, trace_id)
-        action_ids = tuple(action.action_id for action in bulk_actions)
-        placeholders = ",".join("?" for _ in action_ids)
-        reused_path_set_count = scalar(
-            connection,
-            f"""
-            SELECT COUNT(*)
-            FROM (
-                SELECT refs.path_set_id
-                FROM file_path_set_action_refs refs
-                JOIN semantic_action_ids ids
-                  ON ids.action_key = refs.action_key
-                WHERE refs.trace_id = ?
-                  AND ids.action_id IN ({placeholders})
-                GROUP BY refs.path_set_id
-                HAVING COUNT(*) >= 2
-            )
-            """,
-            (trace_id, *action_ids),
-        )
-        if reused_path_set_count < 1:
-            raise RuntimeError("expected repeated bulk reads to share a canonical path set")
-        bulk_processes = {action.process_id for action in bulk_actions}
-        leaked_read_links = sum(
-            child.process_id in bulk_processes
-            for child in snapshot.valid_linked_children(
-                "command.contains_file_access", "file.read"
-            )
-        )
-        if leaked_read_links != 0:
-            raise RuntimeError(
-                "aggregated scan process leaked command.contains_file_access -> file.read links: "
-                f"{leaked_read_links}"
-            )
-
-
-def verify_fast_path_bulk_read(actions: tuple[ActionRecord, ...]) -> None:
-    summary_count = 0
-    read_count = 0
-    for action in actions:
-        summary_count += int(action.attributes.get(FAST_PATH_SUMMARY_COUNT_ATTR, "0"))
-        read_count += int(action.attributes.get(FAST_PATH_READ_COUNT_ATTR, "0"))
-    if summary_count <= 0 or read_count <= 0:
-        raise RuntimeError(
-            "expected file.bulk_read actions to include fast-path read_summary counts, "
-            f"got summary_count={summary_count} read_count={read_count}"
-        )
+        for action in bulk_actions:
+            attrs = action.attributes
+            if attrs.get("file.interval_basis") != "collector_batch":
+                raise RuntimeError("bulk action did not originate from a delivered summary batch")
+            path_set = attrs.get("file.bulk_read.path_set_id")
+            if not path_set:
+                continue
+            members = frozenset(row[0] for row in connection.execute(
+                "SELECT p.path_text FROM file_path_set_chunk_refs r "
+                "JOIN file_path_set_chunks c ON c.trace_id=r.trace_id AND c.chunk_id=r.chunk_id "
+                "JOIN file_paths p ON p.trace_id=c.trace_id "
+                "AND instr(',' || c.encoded_sorted_path_ids || ',', ',' || p.path_id || ',') > 0 "
+                "WHERE r.trace_id=? AND r.path_set_id=?", (trace_id, path_set)))
+            if int(attrs["file.bulk_read.unique_path_count"]) != len(members):
+                raise RuntimeError("bulk path count disagrees with stored batch members")
+            previous = canonical.setdefault(members, path_set)
+            if previous != path_set:
+                raise RuntimeError("identical actual batch members did not reuse canonical path identity")
+            matching = members.intersection(expected)
+            if not matching:
+                continue
+            process_paths.setdefault(action.process_id, set()).update(matching)
+            count, size = process_counts.get(action.process_id, (0, 0))
+            process_counts[action.process_id] = (
+                count + int(attrs["file.bulk_read.read_count"]),
+                size + int(attrs["file.bytes_read"]))
+        if len(process_paths) != 2:
+            raise RuntimeError(f"expected two actual scanner processes, got {len(process_paths)}")
+        for process, members in process_paths.items():
+            count, size = process_counts[process]
+            if members != expected or count < len(expected) or size < expected_bytes:
+                raise RuntimeError(f"scanner {process} lost paths or I/O contributions: paths={len(members)}, count={count}, bytes={size}")
+        for action in snapshot.actions("file.read"):
+            if action.process_id in process_paths and action.attributes.get("file.path") in expected:
+                raise RuntimeError("bulk summary input also emitted an individual file.read action")
 
 
 def verify_no_event_transport_loss(connection: sqlite3.Connection, trace_id: int) -> None:

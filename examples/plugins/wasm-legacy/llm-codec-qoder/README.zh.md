@@ -217,7 +217,7 @@ examples/plugins/wasm-legacy/llm-codec-qoder/qoder_llm_codec.wasm
 初始化或校验默认配置：
 
 ```bash
-sudo target/release/actraild init
+sudo target/release/actrailctl init
 ```
 
 预期输出显示配置已初始化或校验成功，且 `/etc/actrail/actraild.conf` 存在。默认配置使用以下运行路径：

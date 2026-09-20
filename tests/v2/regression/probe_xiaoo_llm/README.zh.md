@@ -18,9 +18,10 @@ sudo -E python3 tests/v2/regression/probe_xiaoo_llm/run_e2e.py
 3. 生成随机 marker，以 `--no-tools --max-turns 1` 请求 xiaoO 原样回答。
 4. 验证标准输出包含 marker，并提取唯一 trace id。
 5. 停止 daemon，等待事件排空和 trace finalization 完成。
-6. 从数据库验证 trace 为 `Exited/Clean`，并验证 LLM actions 完整配对，
+6. 从数据库验证 trace 为 `Exited/Clean`，并验证 LLM actions 的结构连接，
    response 包含 marker；完整 operation 为 `complete`，实际触发前缀限采的
-   operation 为成功的 `capture_limited`。
+   operation 为成功的 `capture_limited`。`llm.call` 只保存连接身份，不复制
+   request/response 的状态、时间或 payload。
 
 # 手动测试
 
@@ -65,7 +66,7 @@ rustls plan，可直接通过 socket plaintext 捕获。
 ### 手动指令
 
 ```bash
-sudo -E target/release/actraild init -f
+sudo -E target/release/actrailctl init -f
 sudo -E target/release/actraild stop
 sudo -E target/release/actrailctl clean
 sudo -E target/release/actraild start
@@ -179,13 +180,19 @@ jq --arg marker "$CASE_MARKER" '
         $requests[]
         | select(
             (.attributes["llm.request.content_state"] == "canonical_blocks"
-             and ((.attributes["llm.request.canonical_body_hash"] // "")
-                  | startswith("sha256:"))
-             and (((.attributes["llm.request.canonical_body_bytes"] // "0")
+             and .status == "success" and .completeness == "complete"
+             and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
+             and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
+             and (((.attributes["llm.request.payload_bytes"] // "0")
                    | tonumber) > 0))
             or (.status == "success"
                 and .completeness == "capture_limited"
-                and .attributes["llm.request.content_state"] == "unavailable")
+                and .attributes["llm.request.content_state"] == "unavailable"
+                and (.attributes | has("llm.request.canonical_body_json") | not)
+                and (.attributes | has("llm.request.content_format_version") | not)
+                and (.attributes | has("llm.request.block_count") | not)
+                and (((.attributes["llm.request.raw_payload_bytes"] // "0") | tonumber) > 0)
+                and (((.attributes["llm.request.payload_bytes"] // "0") | tonumber) > 0))
           )
         | .action_id
       ],
@@ -216,8 +223,7 @@ jq --arg marker "$CASE_MARKER" '
 
 trace 为 `Exited/Clean`；call 与 request 计数相等且每个 call 恰好有一个
 request link。已有的 LLM response 必须各自拥有唯一 response link，不能复用。
-缺少 LLM response 的 call 只能是 trace-close 后的 terminal partial/error，并且其
-request 的 stream、method 和 path 必须与 `failed_http_requests` 中尚未使用的
-HTTP 4xx/5xx request 一致。`usable_requests` 和 `marker_responses` 均非空；默认
-`bpf-copy` 下完整抓取的 request/call 必须是 `success/complete`，只有实际超过
-采集上限的 request/call 才是 `success/capture_limited`。
+缺少 LLM response 的 call 必须保持无结束时间的 `unknown/partial`，不能把观测缺口
+伪装成模型错误。`usable_requests` 和 `marker_responses` 均非空；默认 `bpf-copy`
+下完整抓取的 request/response 保留各自状态，实际超过采集上限的 request 为预期的
+`success/capture_limited`。配对 call 固定为无结束时间的 `unknown/inferred` 连接节点。

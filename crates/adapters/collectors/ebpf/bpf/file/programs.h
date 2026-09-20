@@ -3,6 +3,7 @@
 
 #include "observe.h"
 #include "open.h"
+#include "mutation.h"
 
 SEC("tracepoint/syscalls/sys_enter_pipe")
 int handle_sys_enter_pipe(struct trace_event_raw_sys_enter *ctx) {
@@ -51,59 +52,56 @@ int handle_sys_exit_socketpair(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_open")
 int handle_sys_enter_open(struct trace_event_raw_sys_enter *ctx) {
-    fd_open_enter(ctx, (__u64)ctx->args[1]);
-    return emit_file_open_enter(ctx);
+    fd_open_enter(ctx);
+    return capture_file_open_enter(ctx, ACTRAIL_FILE_SYSCALL_OPEN, 0);
 }
 
 SEC("tracepoint/syscalls/sys_exit_open")
 int handle_sys_exit_open(struct trace_event_raw_sys_exit *ctx) {
     fd_register_open_exit(ctx);
-    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_OPEN);
+    return emit_file_open_exit(ctx, ACTRAIL_FILE_SYSCALL_OPEN);
 }
 
 SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_sys_enter_openat(struct trace_event_raw_sys_enter *ctx) {
-    fd_open_enter(ctx, (__u64)ctx->args[2]);
-    return emit_file_openat_enter(ctx);
+    fd_open_enter(ctx);
+    return capture_file_open_enter(ctx, ACTRAIL_FILE_SYSCALL_OPENAT, 0);
 }
 
 SEC("tracepoint/syscalls/sys_exit_openat")
 int handle_sys_exit_openat(struct trace_event_raw_sys_exit *ctx) {
     fd_register_open_exit(ctx);
-    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_OPENAT);
+    return emit_file_open_exit(ctx, ACTRAIL_FILE_SYSCALL_OPENAT);
 }
 
 SEC("tracepoint/syscalls/sys_enter_openat2")
 int handle_sys_enter_openat2(struct trace_event_raw_sys_enter *ctx) {
     struct actrail_open_how how = {};
-    __u32 tgid = 0;
-    __u32 tid = 0;
-    __u32 lookup_flags = 0;
 
-    if (!lookup_current_detailed_trace(&tgid, &tid, &lookup_flags)) {
+    fd_open_enter(ctx);
+    if (!file_context_capture_enabled(ACTRAIL_FILE_SYSCALL_OPENAT2)) {
         return 0;
     }
     read_file_open_how(ctx, &how);
-    fd_open_enter(ctx, how.flags);
-    return emit_file_openat2_enter(ctx, &how);
+    return capture_file_open_enter(ctx, ACTRAIL_FILE_SYSCALL_OPENAT2, &how);
 }
 
 SEC("tracepoint/syscalls/sys_exit_openat2")
 int handle_sys_exit_openat2(struct trace_event_raw_sys_exit *ctx) {
     fd_register_open_exit(ctx);
-    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_OPENAT2);
+    return emit_file_open_exit(ctx, ACTRAIL_FILE_SYSCALL_OPENAT2);
 }
 
 SEC("tracepoint/syscalls/sys_enter_creat")
 int handle_sys_enter_creat(struct trace_event_raw_sys_enter *ctx) {
-    fd_open_enter(ctx, 0);
-    return emit_file_creat_enter(ctx);
+    fd_open_enter(ctx);
+    return capture_file_open_enter(ctx, ACTRAIL_FILE_SYSCALL_CREAT, 0);
 }
 
 SEC("tracepoint/syscalls/sys_exit_creat")
 int handle_sys_exit_creat(struct trace_event_raw_sys_exit *ctx) {
     fd_register_open_exit(ctx);
-    return emit_file_exit(ctx, ACTRAIL_FILE_OPEN, ACTRAIL_FILE_SYSCALL_CREAT);
+    return emit_file_open_exit(ctx, ACTRAIL_FILE_SYSCALL_CREAT);
 }
 
 SEC("tracepoint/syscalls/sys_enter_unlinkat")
@@ -138,12 +136,12 @@ int handle_sys_exit_mkdirat(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_mmap")
 int handle_sys_enter_mmap(struct trace_event_raw_sys_enter *ctx) {
-    return emit_file_mmap_enter(ctx);
+    return capture_file_mmap_enter(ctx);
 }
 
 SEC("tracepoint/syscalls/sys_exit_mmap")
 int handle_sys_exit_mmap(struct trace_event_raw_sys_exit *ctx) {
-    return emit_file_exit(ctx, ACTRAIL_FILE_MMAP, ACTRAIL_FILE_SYSCALL_MMAP);
+    return emit_file_completion_exit(ctx, ACTRAIL_FILE_MMAP, ACTRAIL_FILE_SYSCALL_MMAP);
 }
 
 SEC("tracepoint/syscalls/sys_enter_chdir")
@@ -163,7 +161,7 @@ int handle_sys_enter_fchdir(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_fchdir")
 int handle_sys_exit_fchdir(struct trace_event_raw_sys_exit *ctx) {
-    return emit_file_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_FCHDIR);
+    return emit_file_completion_exit(ctx, ACTRAIL_FILE_CONTEXT, ACTRAIL_FILE_SYSCALL_FCHDIR);
 }
 
 

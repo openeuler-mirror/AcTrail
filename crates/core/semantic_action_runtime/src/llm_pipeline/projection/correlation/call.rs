@@ -2,11 +2,11 @@
 
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
-    attr_keys as attrs, validated_model_identifier,
+    attr_keys as attrs,
 };
 use std::collections::BTreeMap;
 
-use crate::live::{append_missing_evidence, llm_call_action_id_from_request_action_id};
+use crate::live::llm_call_action_id_from_request_action_id;
 
 pub(in crate::llm_pipeline) fn llm_call_from_request_response(
     request: &SemanticAction,
@@ -23,97 +23,24 @@ pub(in crate::llm_pipeline) fn llm_call_from_request_response(
             response.action_id.clone(),
         );
     }
-    if let Some(model) = response
-        .and_then(|action| action.attributes.get(attrs::llm_response::MODEL))
-        .and_then(|value| validated_model_identifier(value))
-        .or_else(|| {
-            request
-                .attributes
-                .get(attrs::llm_request::MODEL)
-                .and_then(|value| validated_model_identifier(value))
-        })
-    {
-        attributes.insert(attrs::llm_call::MODEL.to_string(), model.to_string());
-    }
-    copy_attr(request, &mut attributes, attrs::payload::STREAM_KEY);
-    copy_attr(request, &mut attributes, attrs::payload::OPERATION_ID);
-    copy_attr(request, &mut attributes, attrs::http_request::STREAM_ID);
-    copy_attr(
-        request,
-        &mut attributes,
-        attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE,
-    );
-    if let Some(response) = response {
-        copy_attr(response, &mut attributes, attrs::http_response::STATUS_CODE);
-        copy_attr(response, &mut attributes, attrs::http_response::REASON);
-        copy_attr(
-            response,
-            &mut attributes,
-            attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE,
-        );
-    }
-
-    let mut evidence = request.evidence.clone();
-    if let Some(response) = response {
-        append_missing_evidence(&mut evidence, &response.evidence);
-    }
-    let status = response
-        .map(|action| action.status)
-        .unwrap_or(SemanticActionStatus::InProgress);
-    let completeness = response
-        .map(|action| merge_llm_call_completeness(request.completeness, action.completeness))
-        .unwrap_or(request.completeness);
-    let title = attributes
-        .get(attrs::llm_call::MODEL)
-        .map(|model| format!("LLM call {model}"))
-        .unwrap_or_else(|| "LLM call".to_string());
+    let completeness = if response.is_some() {
+        SemanticActionCompleteness::Inferred
+    } else {
+        SemanticActionCompleteness::Partial
+    };
 
     SemanticAction {
         action_id: llm_call_action_id_from_request_action_id(&request.action_id),
         trace_id: request.trace_id,
         kind: SemanticActionKind::LlmCall,
-        title,
+        title: "LLM call".to_string(),
         start_time: request.start_time,
-        end_time: response.and_then(|action| action.end_time),
+        end_time: None,
         process: request.process.clone(),
-        status,
+        status: SemanticActionStatus::Unknown,
         completeness,
         attributes,
-        evidence,
-    }
-}
-
-fn copy_attr(
-    action: &SemanticAction,
-    attributes: &mut BTreeMap<String, String>,
-    key: &'static str,
-) {
-    if let Some(value) = action.attributes.get(key) {
-        attributes.insert(key.to_string(), value.clone());
-    }
-}
-
-fn merge_llm_call_completeness(
-    request: SemanticActionCompleteness,
-    response: SemanticActionCompleteness,
-) -> SemanticActionCompleteness {
-    match (request, response) {
-        (SemanticActionCompleteness::Complete, SemanticActionCompleteness::Complete) => {
-            SemanticActionCompleteness::Complete
-        }
-        (SemanticActionCompleteness::Partial, _) | (_, SemanticActionCompleteness::Partial) => {
-            SemanticActionCompleteness::Partial
-        }
-        (SemanticActionCompleteness::CaptureLimited, SemanticActionCompleteness::Complete)
-        | (SemanticActionCompleteness::Complete, SemanticActionCompleteness::CaptureLimited)
-        | (
-            SemanticActionCompleteness::CaptureLimited,
-            SemanticActionCompleteness::CaptureLimited,
-        ) => SemanticActionCompleteness::CaptureLimited,
-        (SemanticActionCompleteness::Inferred, SemanticActionCompleteness::Inferred) => {
-            SemanticActionCompleteness::Inferred
-        }
-        _ => SemanticActionCompleteness::Partial,
+        evidence: Vec::new(),
     }
 }
 

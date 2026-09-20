@@ -95,6 +95,7 @@ static long (*bpf_get_ns_current_pid_tgid)(
     struct actrail_bpf_pidns_info *nsdata,
     __u32 size
 ) = (void *)ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID;
+#define ACTRAIL_CORE_FIELD_EXISTS(field) __builtin_preserve_field_info(field, 2)
 #define ACTRAIL_CORE_READ(dst, source, field) \
     bpf_probe_read_kernel( \
         (dst), \

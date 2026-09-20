@@ -6,6 +6,8 @@ mod action_tree_projection;
 mod action_tree_roles;
 #[path = "view/actions.rs"]
 mod actions;
+#[path = "view/agent_idle.rs"]
+mod agent_idle;
 #[path = "view/alerts.rs"]
 mod alerts;
 #[path = "view/cluster.rs"]
@@ -166,7 +168,9 @@ pub fn aggregate_time_attribution_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     time_attribution::aggregate_time_attribution_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("time attribution requires SQLite storage")?,
         storage.as_mut(),
         query,
     )
@@ -177,7 +181,13 @@ pub fn time_attribution_rows_json(
     query: TimeAttributionRowsQuery,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
-    time_attribution::time_attribution_rows_json(storage_config.path(), storage.as_mut(), query)
+    time_attribution::time_attribution_rows_json(
+        storage_config
+            .path()
+            .ok_or("time attribution requires SQLite storage")?,
+        storage.as_mut(),
+        query,
+    )
 }
 
 pub fn parse_llm_explore_query(body: &str) -> Result<stats::LlmExploreQuery, String> {
@@ -307,7 +317,9 @@ pub fn trace_time_attribution_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     time_attribution::trace_time_attribution_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("time attribution requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
     )
@@ -408,7 +420,9 @@ pub fn clear_cache_json() -> Result<String, String> {
 pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
     )
@@ -428,7 +442,9 @@ pub fn action_tree_root_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_root_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
     )
@@ -442,7 +458,9 @@ pub fn action_tree_children_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_children_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
         parent_id,
@@ -458,7 +476,9 @@ pub fn action_tree_llm_nav_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_llm_nav_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
         mode,

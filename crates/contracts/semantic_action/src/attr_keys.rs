@@ -163,13 +163,8 @@ pub mod llm_call {
 pub mod llm_request {
     pub const BACKGROUND_KIND: &str = "llm.request.background_kind";
     pub const BLOCK_COUNT: &str = "llm.request.block_count";
-    pub const CANONICAL_BODY_BYTES: &str = "llm.request.canonical_body_bytes";
     pub const CANONICAL_BODY_EXPORT_STATE: &str = "llm.request.canonical_body_export_state";
-    pub const CANONICAL_BODY_HASH: &str = "llm.request.canonical_body_hash";
-    /// The whole canonical request body, present only when body export is
-    /// enabled. Distinct from the removed inline `body_json`, which carried
-    /// the raw request body: this is the canonicalised content the
-    /// [`CANONICAL_BODY_HASH`] is computed over.
+    /// Complete canonical request JSON, serialized only for explicit bounded export.
     pub const CANONICAL_BODY_JSON: &str = "llm.request.canonical_body_json";
     pub const CLASSIFIER_ID: &str = "llm.request.classifier_id";
     pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
@@ -188,7 +183,6 @@ pub mod llm_request {
 }
 
 pub mod agent_turn {
-    pub const TASK_ID: &str = "agent.turn.task_id";
     pub const USER_INPUT_OBSERVED_AT_UNIX_NANOS: &str =
         "agent.turn.user_input_observed_at_unix_nanos";
     pub const USER_INPUT_SEGMENT_ID: &str = "agent.turn.user_input_segment_id";

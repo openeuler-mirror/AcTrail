@@ -7,11 +7,6 @@ use config_core::daemon::DEFAULT_OPERATOR_CONFIG_PATH;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AcTraildCommand {
-    Init {
-        config_path: PathBuf,
-        force: bool,
-        patch_path: Option<PathBuf>,
-    },
     Run {
         config_path: PathBuf,
     },
@@ -79,20 +74,13 @@ struct AcTraildCli {
 
 impl AcTraildCli {
     fn into_command(self) -> Result<AcTraildCommand, String> {
-        let explicit_config = self.config_path.is_some();
         let config_path = self.config_path.unwrap_or_else(default_config_path);
-        self.command.into_command(config_path, explicit_config)
+        self.command.into_command(config_path)
     }
 }
 
 #[derive(Clone, Debug, Subcommand)]
 enum AcTraildCommandArgs {
-    #[command(
-        name = "init",
-        visible_alias = "init-config",
-        about = "Initialize the default operator config"
-    )]
-    Init(InitArgs),
     #[command(about = "Run the daemon in the foreground")]
     Run,
     #[command(about = "Start the daemon in the background")]
@@ -108,20 +96,8 @@ enum AcTraildCommandArgs {
 }
 
 impl AcTraildCommandArgs {
-    fn into_command(
-        self,
-        config_path: PathBuf,
-        explicit_config: bool,
-    ) -> Result<AcTraildCommand, String> {
+    fn into_command(self, config_path: PathBuf) -> Result<AcTraildCommand, String> {
         match self {
-            Self::Init(args) => {
-                let config_path = init_config_path(args.output_path, config_path, explicit_config)?;
-                Ok(AcTraildCommand::Init {
-                    config_path,
-                    force: args.force,
-                    patch_path: args.patch_path,
-                })
-            }
             Self::Run => Ok(AcTraildCommand::Run { config_path }),
             Self::Start => Ok(AcTraildCommand::Start { config_path }),
             Self::Stop => Ok(AcTraildCommand::Stop { config_path }),
@@ -230,31 +206,6 @@ struct PluginCmdArgs {
 
     #[arg(last = true, trailing_var_arg = true, value_name = "PLUGIN_ARG")]
     argv: Vec<String>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct InitArgs {
-    #[arg(long = "output", value_name = "PATH")]
-    output_path: Option<PathBuf>,
-
-    #[arg(long = "patch", value_name = "PATH")]
-    patch_path: Option<PathBuf>,
-
-    #[arg(short = 'f', long = "force")]
-    force: bool,
-}
-
-fn init_config_path(
-    output_path: Option<PathBuf>,
-    config_path: PathBuf,
-    explicit_config: bool,
-) -> Result<PathBuf, String> {
-    match (output_path, explicit_config) {
-        (Some(_), true) => Err("init accepts either --output or --config, not both".to_string()),
-        (Some(path), false) => Ok(path),
-        (None, true) => Ok(config_path),
-        (None, false) => Ok(default_config_path()),
-    }
 }
 
 fn default_config_path() -> PathBuf {

@@ -12,6 +12,8 @@ sudo -E python3 tests/v2/regression/container_agent_xiaoo/v2/run_e2e.py
 `tail -f /dev/null` 长驻，xiaoO 再通过容器内的 `actrailctl launch` 启动。测试
 验证容器归属、PID namespace、并发 trace、eBPF、文件访问和 LLM response 证据
 不会跨容器串线。
+每轮使用 `actrailctl init -f --patch` 生成默认配置并应用场景设置。文件观测显式开启
+read/write 的 `observed` 和 `bytes`，关闭 `bulk_read`，以验证独立读写动作及字节数。
 `sudo -E` 保留调用者已经导出的环境，runner、场景进程和 Docker 调用继续继承。
 
 # 步骤摘要

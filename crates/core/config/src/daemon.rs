@@ -19,8 +19,6 @@ mod command;
 mod enforcement;
 #[path = "daemon/observation/file.rs"]
 mod file_observation;
-#[path = "daemon/idle.rs"]
-mod idle;
 #[path = "daemon/logging/config.rs"]
 mod logging;
 #[path = "daemon/network.rs"]
@@ -87,15 +85,13 @@ pub use enforcement::{
     EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
 };
 pub use file_observation::{
-    DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
-    DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
-    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadFastPathConfig, FileBulkReadMode,
-    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+    DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
+    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadMode, FileBulkReadObservationConfig,
+    FileCollectionConfig, FileIoCollectionConfig, FileIoSummaryConfig, FileMetadataRetention,
+    FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
+    FsEnumerateObservationConfig,
 };
-pub use idle::{
-    DEFAULT_IDLE_DETECTION_THRESHOLD, DEFAULT_OPENCODE_PLUGIN_DIR, IdleDetectionConfig,
-};
+pub use idle_detector::IdleDetectionConfig;
 pub use logging::{
     DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,
     DiagnosticLogLevel, WorkloadDiagnosticsConfig,
@@ -115,12 +111,12 @@ pub use operator::{
 pub use payload::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
     DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
-    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DisabledOrPath, PayloadConfig, PayloadMcpConfig,
-    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
-    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
-    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath,
+    DEFAULT_TLS_DYNAMIC_DISCOVERY_CAPACITY, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
+    DisabledOrPath, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
+    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
+    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
 pub use resource::{ExistingContainerCgroups, ResourceMetricsConfig, ResourceMetricsMode};
@@ -135,8 +131,6 @@ pub const DEFAULT_FINALIZATION_TRACES_PER_CYCLE: u32 = 1;
 pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
 pub const DEFAULT_FINALIZATION_SETTLE_DELAY_MS: u64 = 250;
 pub const DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
-pub const DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS: u32 = 4;
-pub const MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS: u32 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraceFinalizationConfig {
@@ -296,7 +290,6 @@ pub struct EbpfCollectorConfig {
     /// set by `resolve_ebpf_collector_config` based on the host probe.
     pub enabled: bool,
     pub memlock_rlimit: MemlockRlimit,
-    pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
     /// Maximum simultaneously tracked descriptors for one process. This is
@@ -305,6 +298,8 @@ pub struct EbpfCollectorConfig {
     pub suppressed_fd_max_entries: u32,
     pub suppressed_fd_index_slots_per_process: u32,
     pub event_ring_buffer_max_bytes: u32,
+    /// Nonempty collector loss summaries are emitted at most once per interval.
+    pub diagnostics_summary_interval_ms: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
     /// Aggregate per-connection net send/recv events at the collector (default

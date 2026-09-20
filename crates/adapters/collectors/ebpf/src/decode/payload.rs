@@ -94,6 +94,14 @@ pub struct TlsPayloadDirectCapture {
     pub bytes: Vec<u8>,
 }
 
+impl TlsPayloadDirectCapture {
+    pub fn policy_limited(&self) -> bool {
+        // actrail_tls_direct_capture_flags in bpf/abi/payload.h.
+        const POLICY_LIMITED: u32 = 1;
+        self.flags & POLICY_LIMITED != 0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsDiagnosticEvent {
     pub reason: u32,

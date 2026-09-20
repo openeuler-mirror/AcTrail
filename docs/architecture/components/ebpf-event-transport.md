@@ -24,7 +24,7 @@ cargo build --release -p daemon --features perf-buffer
 
 ring buffer 路径直接使用 `bpf_ringbuf_reserve`、submit 和 discard。perf buffer 没有等价的可变长 reserve，因此使用 per-CPU scratch map 暂存事件，再调用 `bpf_perf_event_output`；perf event array 的 entry 数按主机 CPU 数设置。
 
-TLS direct-copy 事件最大可达 4 MiB。perf buffer 不为此分配同等大小的 per-CPU scratch，而是让 direct-copy 未命中，交给既有的 seccomp 用户态读取路径。
+TLS direct-copy 事件包含固定 65536 字节正文区，单次实际复制最多 65535 字节。perf buffer 分支不输出 direct-copy 正文；配置 `bpf-copy-seccomp-fallback` 时由既有 seccomp 用户态读取路径处理，纯 TLS `bpf-copy` 在 perf-buffer 制品中启动时报错。
 
 ## 单消费者与有界交接
 

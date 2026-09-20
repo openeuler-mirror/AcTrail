@@ -190,12 +190,6 @@ impl WorkloadDiagnostics {
         };
         let counters = &inner.counters;
         match phase {
-            PayloadTransactionPhase::RetentionCheck => {
-                counters.payload_retention_checks.add(1);
-                counters
-                    .payload_retention_check_max_us
-                    .max(duration_micros(elapsed));
-            }
             PayloadTransactionPhase::SemanticObserve => {
                 counters.payload_semantic_observes.add(1);
                 counters
@@ -244,7 +238,6 @@ pub(crate) enum PayloadSegmentStage {
 
 #[derive(Clone, Copy)]
 pub(crate) enum PayloadTransactionPhase {
-    RetentionCheck,
     SemanticObserve,
     SemanticPersist,
     SegmentPersist,
@@ -294,8 +287,6 @@ struct WorkloadCounters {
     storage_trace_states: Counter,
     storage_errors: Counter,
     storage_elapsed_max_us: Counter,
-    payload_retention_checks: Counter,
-    payload_retention_check_max_us: Counter,
     payload_semantic_observes: Counter,
     payload_semantic_observe_max_us: Counter,
     payload_semantic_persists: Counter,
@@ -346,8 +337,6 @@ impl WorkloadCounters {
             storage_trace_states: self.storage_trace_states.take(),
             storage_errors: self.storage_errors.take(),
             storage_elapsed_max_us: self.storage_elapsed_max_us.take(),
-            payload_retention_checks: self.payload_retention_checks.take(),
-            payload_retention_check_max_us: self.payload_retention_check_max_us.take(),
             payload_semantic_observes: self.payload_semantic_observes.take(),
             payload_semantic_observe_max_us: self.payload_semantic_observe_max_us.take(),
             payload_semantic_persists: self.payload_semantic_persists.take(),
@@ -415,8 +404,6 @@ struct WorkloadSnapshot {
     storage_trace_states: u64,
     storage_errors: u64,
     storage_elapsed_max_us: u64,
-    payload_retention_checks: u64,
-    payload_retention_check_max_us: u64,
     payload_semantic_observes: u64,
     payload_semantic_observe_max_us: u64,
     payload_semantic_persists: u64,
@@ -444,8 +431,7 @@ impl WorkloadSnapshot {
                 "semantic_actions={} semantic_links={} storage_batches={} storage_events={} ",
                 "storage_payload_segments={} storage_diagnostics={} storage_semantic_actions={} ",
                 "storage_semantic_links={} storage_trace_states={} storage_errors={} ",
-                "storage_elapsed_max_us={} payload_retention_checks={} ",
-                "payload_retention_check_max_us={} payload_semantic_observes={} ",
+                "storage_elapsed_max_us={} payload_semantic_observes={} ",
                 "payload_semantic_observe_max_us={} payload_semantic_persists={} ",
                 "payload_semantic_persist_max_us={} payload_segment_persists={} ",
                 "payload_segment_persist_max_us={} payload_application_analyzes={} ",
@@ -486,8 +472,6 @@ impl WorkloadSnapshot {
             self.storage_trace_states,
             self.storage_errors,
             self.storage_elapsed_max_us,
-            self.payload_retention_checks,
-            self.payload_retention_check_max_us,
             self.payload_semantic_observes,
             self.payload_semantic_observe_max_us,
             self.payload_semantic_persists,

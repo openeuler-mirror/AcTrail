@@ -89,7 +89,8 @@ def require_complete_llm_action(actions: str) -> None:
 
 
 def require_complete_llm_exchange(actions: str) -> None:
-    require_complete_action(actions, "llm.call")
+    if not connector_action_ids(parse_actions(actions)):
+        raise RuntimeError("actions did not contain a paired llm.call connector")
     require_complete_action(actions, "llm.request")
     require_complete_action(actions, "llm.response")
 
@@ -97,11 +98,11 @@ def require_complete_llm_exchange(actions: str) -> None:
 def require_llm_exchange_graph(actions: str) -> None:
     document = parse_actions(actions)
     by_id = {action["action_id"]: action for action in document.get("actions", [])}
-    call_ids = complete_action_ids(document, "llm.call")
+    call_ids = connector_action_ids(document)
     request_ids = complete_action_ids(document, "llm.request")
     response_ids = complete_action_ids(document, "llm.response")
     if not call_ids:
-        raise RuntimeError("actions did not contain a complete successful llm.call")
+        raise RuntimeError("actions did not contain a paired llm.call connector")
     if not request_ids:
         raise RuntimeError("actions did not contain a complete successful llm.request")
     if not response_ids:
@@ -474,20 +475,36 @@ def validate_time_attribution(
     )
     coverage = attribution.get("coverage", {})
     llm_request_count = int(coverage.get("llm_request_count", -1))
+    llm_response_count = int(coverage.get("llm_response_count", -1))
     observed_llm_call_count = int(coverage.get("observed_llm_call_count", -1))
-    paired_llm_call_count = int(coverage.get("llm_call_count", -1))
-    excluded_llm_call_count = int(coverage.get("excluded_llm_call_count", -1))
+    paired_llm_call_count = int(coverage.get("paired_llm_call_count", -1))
+    unpaired_llm_call_count = int(coverage.get("unpaired_llm_call_count", -1))
+    orphan_llm_response_count = int(coverage.get("orphan_llm_response_count", -1))
+    attributed_llm_call_count = int(
+        coverage.get("attributed_llm_call_count", -1)
+    )
+    excluded_llm_call_count = int(
+        coverage.get("excluded_from_attribution_llm_call_count", -1)
+    )
     if min(
         llm_request_count,
+        llm_response_count,
         observed_llm_call_count,
         paired_llm_call_count,
+        unpaired_llm_call_count,
+        orphan_llm_response_count,
+        attributed_llm_call_count,
         excluded_llm_call_count,
     ) < 0:
         raise RuntimeError("time attribution LLM evidence coverage is missing")
-    if paired_llm_call_count != bottleneck_counts["model_requests"]:
-        raise RuntimeError("paired LLM coverage does not match attributed model requests")
-    if excluded_llm_call_count != observed_llm_call_count - paired_llm_call_count:
-        raise RuntimeError("excluded LLM call coverage is inconsistent")
+    if attributed_llm_call_count != bottleneck_counts["model_requests"]:
+        raise RuntimeError("attributed LLM coverage does not match model requests")
+    if unpaired_llm_call_count != observed_llm_call_count - paired_llm_call_count:
+        raise RuntimeError("unpaired LLM call coverage is inconsistent")
+    if orphan_llm_response_count != llm_response_count - paired_llm_call_count:
+        raise RuntimeError("orphan LLM response coverage is inconsistent")
+    if excluded_llm_call_count != paired_llm_call_count - attributed_llm_call_count:
+        raise RuntimeError("LLM attribution exclusion coverage is inconsistent")
     if any(row.get("key") == "{" for row in attribution.get("models", [])):
         raise RuntimeError("JSON fragment was exposed as a model attribution key")
 
@@ -551,8 +568,12 @@ def validate_time_attribution(
         "command_bottleneck_count": bottleneck_counts["commands"],
         "unattributed_bottleneck_count": bottleneck_counts["unattributed_gaps"],
         "llm_request_count": llm_request_count,
+        "llm_response_count": llm_response_count,
         "observed_llm_call_count": observed_llm_call_count,
         "paired_llm_call_count": paired_llm_call_count,
+        "unpaired_llm_call_count": unpaired_llm_call_count,
+        "orphan_llm_response_count": orphan_llm_response_count,
+        "attributed_llm_call_count": attributed_llm_call_count,
         "excluded_llm_call_count": excluded_llm_call_count,
     }
 
@@ -791,12 +812,17 @@ def validate_llm_calls_covered(
     scope_end: int,
     attributed_action_ids: set[str],
 ) -> None:
+    actions = action_tree.get("actions", [])
+    by_id = {
+        action.get("id"): action
+        for action in actions
+        if isinstance(action.get("id"), str)
+    }
     calls = [
         action
-        for action in action_tree.get("actions", [])
+        for action in actions
         if action.get("kind") == "llm.call"
         and action.get("id") in attributed_action_ids
-        and action.get("end_time_unix_nanos") is not None
     ]
     if len(calls) != len(attributed_action_ids):
         raise RuntimeError(
@@ -804,8 +830,11 @@ def validate_llm_calls_covered(
             f"expected={attributed_action_ids} found={[call.get('id') for call in calls]}"
         )
     for call in calls:
-        start = max(required_decimal(call, "start_time_unix_nanos"), scope_start)
-        end = min(required_decimal(call, "end_time_unix_nanos"), scope_end)
+        attributes = call.get("attributes", {})
+        request = by_id.get(attributes.get("llm.call.request_action_id"), {})
+        response = by_id.get(attributes.get("llm.call.response_action_id"), {})
+        start = max(required_decimal(request, "start_time_unix_nanos"), scope_start)
+        end = min(required_decimal(response, "end_time_unix_nanos"), scope_end)
         if start >= end:
             continue
         cursor = start
@@ -1143,5 +1172,24 @@ def complete_action_ids(document: dict, kind: str) -> set[str]:
         if action.get("kind") == kind
         and action.get("status") == "success"
         and action.get("completeness") == "complete"
+        and isinstance(action.get("action_id"), str)
+    }
+
+
+def connector_action_ids(document: dict) -> set[str]:
+    return {
+        action["action_id"]
+        for action in document.get("actions", [])
+        if action.get("kind") == "llm.call"
+        and action.get("status") == "unknown"
+        and action.get("completeness") == "inferred"
+        and action.get("end_time_unix_nanos") is None
+        and isinstance(action.get("attributes"), dict)
+        and isinstance(
+            action["attributes"].get("llm.call.request_action_id"), str
+        )
+        and isinstance(
+            action["attributes"].get("llm.call.response_action_id"), str
+        )
         and isinstance(action.get("action_id"), str)
     }

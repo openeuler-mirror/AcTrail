@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
 from pathlib import Path
 
 from .actrail_runtime import ActrailRuntime, CommandResult
@@ -19,8 +18,7 @@ class LLMTraceAssertion:
         "llm.response.output_text",
     )
     _REQUEST_CONTENT_STATE_ATTRIBUTE = "llm.request.content_state"
-    _REQUEST_CONTENT_HASH_ATTRIBUTE = "llm.request.canonical_body_hash"
-    _REQUEST_CONTENT_BYTES_ATTRIBUTE = "llm.request.canonical_body_bytes"
+    _REQUEST_PAYLOAD_BYTES_ATTRIBUTE = "llm.request.payload_bytes"
     _CAPTURE_LIMITED_ROUTES = frozenset(
         {
             "/chat/completions",
@@ -175,6 +173,20 @@ class LLMTraceAssertion:
             kind = action.get("kind")
             status = action.get("status")
             completeness = action.get("completeness")
+            if kind == "llm.call":
+                attributes = action.get("attributes", {})
+                paired = "llm.call.response_action_id" in attributes
+                expected_completeness = "inferred" if paired else "partial"
+                if (
+                    status != "unknown"
+                    or completeness != expected_completeness
+                    or action.get("end_time_unix_nanos") is not None
+                ):
+                    raise AssertionError(
+                        f"{action.get('action_id')} has mutable connector state "
+                        f"status={status} completeness={completeness}"
+                    )
+                continue
             if status == "in_progress":
                 raise AssertionError(
                     f"{action.get('action_id')} ({kind}) is still in_progress "
@@ -212,7 +224,9 @@ class LLMTraceAssertion:
         attributes = action.get("attributes", {})
         if (
             attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE) != "unavailable"
-            or self._REQUEST_CONTENT_HASH_ATTRIBUTE in attributes
+            or "llm.request.canonical_body_json" in attributes
+            or "llm.request.content_format_version" in attributes
+            or "llm.request.block_count" in attributes
             or attributes.get("http.request.method", "").upper() != "POST"
             or attributes.get("url.path") not in self._CAPTURE_LIMITED_ROUTES
         ):
@@ -220,6 +234,13 @@ class LLMTraceAssertion:
                 f"{action.get('action_id')} has invalid capture-limited "
                 "request metadata"
             )
+        try:
+            declared = int(attributes[self._REQUEST_PAYLOAD_BYTES_ATTRIBUTE])
+            captured = int(attributes["llm.request.raw_payload_bytes"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise AssertionError("capture-limited request has invalid payload sizes") from error
+        if declared <= 0 or captured <= 0:
+            raise AssertionError("capture-limited request must retain positive payload sizes")
 
     def _require_one_to_one_call_links(
         self,
@@ -233,7 +254,6 @@ class LLMTraceAssertion:
         responses_by_id = {action["action_id"]: action for action in responses}
         request_links: dict[str, set[str]] = {}
         response_links: dict[str, set[str]] = {}
-        failed_http_requests = self._failed_http_request_counts(document)
         for link in document.get("links", []):
             if not link.get("valid", False):
                 continue
@@ -271,11 +291,7 @@ class LLMTraceAssertion:
                 response = responses_by_id[response_id]
                 pairs.append((request, response))
                 continue
-            self._require_failed_http_probe(
-                calls_by_id[call_id],
-                request,
-                failed_http_requests,
-            )
+            self._require_unpaired_connector(calls_by_id[call_id])
         if (
             paired_requests != set(requests_by_id)
             or paired_responses != set(responses_by_id)
@@ -285,94 +301,20 @@ class LLMTraceAssertion:
             )
         return pairs
 
-    def _failed_http_request_counts(
-        self,
-        document: dict,
-    ) -> Counter[tuple[str, str, str]]:
-        http_requests: dict[str, tuple[str, str, str]] = {}
-        http_responses: list[dict] = []
-        for action in document.get("actions", []):
-            if action.get("kind") != "http.message":
-                continue
-            attributes = action.get("attributes")
-            if not isinstance(attributes, dict):
-                continue
-            operation = attributes.get("http.operation")
-            if operation == "request":
-                key = self._http_request_key(
-                    attributes,
-                    stream_key_name="stream_key",
-                    method_name="method",
-                    path_name="target",
-                )
-                action_id = action.get("action_id")
-                if key is not None and isinstance(action_id, str):
-                    http_requests[action_id] = key
-            elif operation == "response":
-                http_responses.append(attributes)
-
-        failed: Counter[tuple[str, str, str]] = Counter()
-        for response in http_responses:
-            try:
-                status_code = int(response.get("status_code", ""))
-            except (TypeError, ValueError):
-                continue
-            if status_code < 400:
-                continue
-            request_id = response.get("http.request.action_id")
-            if isinstance(request_id, str) and request_id in http_requests:
-                failed[http_requests[request_id]] += 1
-        return failed
-
-    def _require_failed_http_probe(
-        self,
-        call: dict,
-        request: dict,
-        failed_http_requests: Counter[tuple[str, str, str]],
-    ) -> None:
+    def _require_unpaired_connector(self, call: dict) -> None:
         attributes = call.get("attributes")
         if not isinstance(attributes, dict):
             attributes = {}
-        terminal_partial = (
-            call.get("status") == "error"
+        if not (
+            call.get("status") == "unknown"
             and call.get("completeness") == "partial"
-            and attributes.get(self._TRACE_CLOSE_ATTRIBUTE) == "true"
-        )
-        request_attributes = request.get("attributes")
-        key = (
-            self._http_request_key(
-                request_attributes,
-                stream_key_name="payload.stream_key",
-                method_name="http.request.method",
-                path_name="url.path",
-            )
-            if isinstance(request_attributes, dict)
-            else None
-        )
-        if not terminal_partial or key is None or failed_http_requests[key] == 0:
+            and call.get("end_time_unix_nanos") is None
+            and "llm.call.response_action_id" not in attributes
+        ):
             raise AssertionError(
-                f"LLM call {call.get('action_id')} has no response and no "
-                "correlated failed HTTP probe"
+                f"LLM call {call.get('action_id')} has invalid request-only "
+                "connector state"
             )
-        failed_http_requests[key] -= 1
-
-    @staticmethod
-    def _http_request_key(
-        attributes: dict,
-        *,
-        stream_key_name: str,
-        method_name: str,
-        path_name: str,
-    ) -> tuple[str, str, str] | None:
-        values = (
-            attributes.get(stream_key_name),
-            attributes.get(method_name),
-            attributes.get(path_name),
-        )
-        if not all(isinstance(value, str) and value for value in values):
-            return None
-        stream_key, method, path = values
-        return stream_key, method.upper(), path
 
     def _require_marker_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
         if self._marker is None:
@@ -382,13 +324,13 @@ class LLMTraceAssertion:
             request_has_canonical_content = (
                 request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
                 == "canonical_blocks"
-                and request_attributes.get(
-                    self._REQUEST_CONTENT_HASH_ATTRIBUTE,
-                    "",
-                ).startswith("sha256:")
+                and request.get("status") == "success"
+                and request.get("completeness") == "complete"
+                and int(request_attributes.get("llm.request.content_format_version", "0")) > 0
+                and int(request_attributes.get("llm.request.block_count", "-1")) >= 0
                 and int(
                     request_attributes.get(
-                        self._REQUEST_CONTENT_BYTES_ATTRIBUTE,
+                        self._REQUEST_PAYLOAD_BYTES_ATTRIBUTE,
                         "0",
                     )
                 )
@@ -399,7 +341,9 @@ class LLMTraceAssertion:
                 and request.get("completeness") == "capture_limited"
                 and request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
                 == "unavailable"
-                and self._REQUEST_CONTENT_HASH_ATTRIBUTE not in request_attributes
+                and "llm.request.canonical_body_json" not in request_attributes
+                and "llm.request.content_format_version" not in request_attributes
+                and "llm.request.block_count" not in request_attributes
                 and request_attributes.get("http.request.method", "").upper()
                 == "POST"
                 and request_attributes.get("url.path")

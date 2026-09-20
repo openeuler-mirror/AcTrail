@@ -4,14 +4,12 @@ use std::collections::VecDeque;
 
 use model_core::diagnostics::LlmPipelineDiagnosticCode;
 use model_core::ids::TraceId;
-use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionStatus, attr_keys as attrs,
-};
+use semantic_action::{SemanticAction, attr_keys as attrs};
 
 use crate::live::HttpResponseMatch;
 use crate::llm_pipeline::projection::correlation::{
     self as call, ActiveLlmResponseBinding, BindingAdmission, ClosedLlmExchangeBinding,
-    DamagedHttpResponseBinding, IndexedQueue, LateHttpFailureBinding, LlmStreamKey,
+    DamagedHttpResponseBinding, IndexedQueue, LateHttpFailureBinding, LlmActionOrder, LlmStreamKey,
     PendingLlmResponse,
 };
 use crate::llm_pipeline::projection::projector::capacity_diagnostic;
@@ -21,6 +19,46 @@ use super::super::links::{LlmHttpRequestLink, LlmHttpResponseLink};
 use super::ProjectionCoordinator;
 
 impl ProjectionCoordinator {
+    pub(in crate::llm_pipeline) fn bind_terminal_http2_response(
+        &mut self,
+        response: &SemanticAction,
+    ) -> LiveLlmOutput {
+        let mut output = LiveLlmOutput::default();
+        if response
+            .attributes
+            .get("network.protocol.version")
+            .is_none_or(|protocol| protocol != "h2")
+        {
+            return output;
+        }
+        let Some(stream_key) =
+            LlmStreamKey::from_llm_response(response).filter(|key| key.http_stream_id.is_some())
+        else {
+            return output;
+        };
+        let Some(requests) = self.correlation.open_requests.get_mut(&stream_key) else {
+            return output;
+        };
+        // One HTTP/2 stream identifies one exchange within this trace,
+        // process and connection. A failed response can close that exact call
+        // without becoming reusable provider or historical exchange evidence.
+        let ordered = requests
+            .front()
+            .and_then(|request| LlmActionOrder::from_action(&request.action))
+            .zip(LlmActionOrder::from_action(response))
+            .is_some_and(|(request, response)| request <= response);
+        if requests.len() != 1 || !ordered {
+            return output;
+        }
+        let Some(request) = requests.pop_front() else {
+            return output;
+        };
+        self.correlation.open_requests.remove(&stream_key);
+        let call = call::llm_call_from_request_response(&request.action, Some(response));
+        self.push_recorded_action(call, &mut output);
+        output
+    }
+
     pub(in crate::llm_pipeline) fn consume_damaged_http_response(
         &mut self,
         response: &SemanticAction,
@@ -143,14 +181,11 @@ impl ProjectionCoordinator {
                         &evicted.request,
                         LlmPipelineDiagnosticCode::ActiveResponseBindingCapacityEvicted,
                     ));
-                    let mut partial_call = call::llm_call_from_request_response(
+                    let partial_call = call::llm_call_from_request_response(
                         &evicted.request,
                         Some(&evicted.response),
                     );
-                    partial_call.status = SemanticActionStatus::Error;
-                    partial_call.completeness = SemanticActionCompleteness::Partial;
-                    partial_call.end_time = Some(response.start_time);
-                    self.push_recorded_action(partial_call, &mut output);
+                    output.updated_actions.push(partial_call);
                 }
             }
             BindingAdmission::SequenceExhausted => {
@@ -284,7 +319,12 @@ impl ProjectionCoordinator {
                 attrs::llm_call::HTTP_RESPONSE_ACTION_ID.to_string(),
                 matched.response.action_id.clone(),
             );
-            self.push_recorded_action(llm_call, &mut output);
+            output
+                .updates
+                .push(crate::live::ActionUpdateFactory::lifecycle(&llm_call, None));
+            output.updated_actions.push(llm_call);
+            output.updated_actions.push(response);
+            output.updated_actions.push(matched.response.clone());
             return Some(output);
         }
         None

@@ -1,9 +1,8 @@
 //! HTTP and LLM request/response correlation orchestration.
 use model_core::diagnostics::LlmPipelineDiagnosticCode;
 use model_core::ids::TraceId;
-use semantic_action::{SemanticAction, SemanticActionStatus, attr_keys as attrs};
+use semantic_action::{SemanticAction, attr_keys as attrs};
 use std::collections::BTreeSet;
-use std::time::SystemTime;
 
 use crate::live::{HttpResponseMatch, MatchedHttpRequest};
 use crate::llm_pipeline::projection::correlation::{
@@ -241,20 +240,9 @@ impl ProjectionCoordinator {
                 .unwrap_or(response.action.start_time),
         );
         self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-        if !response.compacted {
-            self.push_recorded_action(response.action.clone(), &mut output);
-        }
+        // The response was already emitted by its parser; HTTP ownership is a link.
+        output.updated_actions.push(response.action.clone());
         let mut call = call::llm_call_from_request_response(&request, Some(&response.action));
-        if let Some(finalized) = response
-            .action
-            .attributes
-            .get(attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE)
-        {
-            call.attributes.insert(
-                attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
-                finalized.clone(),
-            );
-        }
         call.attributes.insert(
             attrs::llm_call::HTTP_RESPONSE_ACTION_ID.to_string(),
             http_response_action_id.clone(),
@@ -462,7 +450,6 @@ impl ProjectionCoordinator {
     pub(in crate::llm_pipeline) fn reconcile_unconfirmed_stream_exchanges(
         &mut self,
         trace_id: TraceId,
-        finished_at: SystemTime,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
         let mut keys = BTreeSet::new();
@@ -484,7 +471,7 @@ impl ProjectionCoordinator {
             if websocket::WebSocketLlmAdapter::is_exchange_stream_key(&key.stream_key) {
                 continue;
             }
-            output.extend(self.reconcile_ordered_stream(&key, finished_at));
+            output.extend(self.reconcile_ordered_stream(&key));
         }
         output
     }
@@ -492,23 +479,18 @@ impl ProjectionCoordinator {
     pub(in crate::llm_pipeline) fn reconcile_unconfirmed_identity_exchanges(
         &mut self,
         identity: &model_core::payload::PayloadStreamIdentity,
-        finished_at: SystemTime,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
         for key in self.correlation.unconfirmed_streams_for_identity(identity) {
             if websocket::WebSocketLlmAdapter::is_exchange_stream_key(&key.stream_key) {
                 continue;
             }
-            output.extend(self.reconcile_ordered_stream(&key, finished_at));
+            output.extend(self.reconcile_ordered_stream(&key));
         }
         output
     }
 
-    fn reconcile_ordered_stream(
-        &mut self,
-        stream_key: &LlmStreamKey,
-        finished_at: SystemTime,
-    ) -> LiveLlmOutput {
+    fn reconcile_ordered_stream(&mut self, stream_key: &LlmStreamKey) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
         let Some(requests) = self.correlation.open_requests.remove(stream_key) else {
             return output;
@@ -555,20 +537,7 @@ impl ProjectionCoordinator {
                     .unwrap_or(response.action.start_time),
             );
             self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
-            let mut call = call::llm_call_from_request_response(&request, Some(&response.action));
-            if response.action.status == SemanticActionStatus::Error {
-                call.end_time = response.action.end_time.or(Some(finished_at));
-                if let Some(value) = response
-                    .action
-                    .attributes
-                    .get(attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE)
-                {
-                    call.attributes.insert(
-                        attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
-                        value.clone(),
-                    );
-                }
-            }
+            let call = call::llm_call_from_request_response(&request, Some(&response.action));
             self.push_recorded_action(call, &mut output);
         }
         let mut remaining_requests = IndexedQueue::new();

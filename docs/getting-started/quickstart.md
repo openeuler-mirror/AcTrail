@@ -33,10 +33,12 @@ cargo build --release
 ## 1. 生成默认配置
 
 ```bash
-sudo ./target/release/actraild init
+sudo ./target/release/actrailctl init
 ```
 
 命令创建 `/etc/actrail/actraild.conf`。如果文件已经存在，AcTrail 会校验并保留它；只有明确需要替换时才使用 `init --force`。默认运行文件位于 `/run/actrail/`，SQLite 数据位于 `/var/lib/actrail/`，日志位于 `/var/log/actrail/`。
+
+初始化默认使用 `--mode complete`（别名 `C`）。需要保留 LLM 时序而减少内容采集时，可使用 `--mode profile`（别名 `P`）；该模式也关闭治理。具体覆盖范围和 `--patch` 优先级见[配置模式](../operations/daemon/configure.md#生成配置)。
 
 ## 2. 启动 daemon
 

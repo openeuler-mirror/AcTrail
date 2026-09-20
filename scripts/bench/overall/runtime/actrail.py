@@ -8,6 +8,8 @@ from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
 
+from .config_patch import ConfigPatch
+
 
 def prepare_actrail(
     work_dir: Path,
@@ -16,9 +18,11 @@ def prepare_actrail(
     no_tls_capture: bool = False,
     no_stdio_capture: bool = False,
     no_seccomp: bool = False,
+    config_patch: Path | None = None,
 ) -> int:
     config = work_dir / "actraild.conf"
     patch = work_dir / "actraild.patch.toml"
+    custom_patch = ConfigPatch(config_patch) if config_patch is not None else None
     ActrailRuntime.write_isolated_operator_config_patch(
         patch,
         work_dir,
@@ -27,6 +31,8 @@ def prepare_actrail(
         payload_tls_seccomp_syscalls=[] if no_seccomp else None,
         payload_socket_seccomp_syscalls=[] if no_seccomp else None,
     )
+    if custom_patch is not None:
+        custom_patch.apply_isolation(patch)
 
     def run(*arguments: str) -> None:
         command = [str(bin_dir / arguments[0]), *arguments[1:]]
@@ -48,7 +54,7 @@ def prepare_actrail(
                 f"{' '.join(command)}\n{detail}"
             )
 
-    run("actraild", "init", "-f", "--patch", str(patch))
+    run("actrailctl", "init", "-f", "--patch", str(patch))
     run("actraild", "stop")
     run("actrailctl", "clean")
     run("actraild", "start")

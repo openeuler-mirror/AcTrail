@@ -1,0 +1,11 @@
+[package]
+name = "storage_noop"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+alert_contract = { path = "../../../contracts/alert" }
+model_core = { path = "../../../core/model" }
+semantic_action = { path = "../../../contracts/semantic_action" }
+storage_core = { path = "../../core" }

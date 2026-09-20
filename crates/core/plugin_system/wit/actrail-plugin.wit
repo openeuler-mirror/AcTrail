@@ -31,6 +31,7 @@ interface types {
     denied,
     not-found,
     truncated,
+    failed,
   }
 
   enum config-read-status {

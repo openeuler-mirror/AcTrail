@@ -5,6 +5,7 @@ use std::path::Path;
 use control_contract::command::{ControlCommand, ResolveLaunchTlsPlanCommand};
 use control_contract::reply::{
     ControlError, ControlReply, LaunchTlsPlanReply, LaunchTlsPlanStatus,
+    LaunchTlsPlanUnavailableReason,
 };
 use model_core::ids::RequestId;
 use tls_payload_sync::RuntimePlanDescriptor;
@@ -61,11 +62,20 @@ pub(crate) fn queried_plan_from_reply(
             resolve_elapsed_micros: reply.resolve_elapsed_micros,
         })),
         LaunchTlsPlanStatus::Unsupported { reason } => {
-            if reason.is_empty() {
-                Ok(None)
-            } else {
-                Err(reason)
-            }
+            Err(unavailable_reason_text(reason).to_string())
+        }
+    }
+}
+
+pub(crate) const fn unavailable_reason_text(
+    reason: LaunchTlsPlanUnavailableReason,
+) -> &'static str {
+    match reason {
+        LaunchTlsPlanUnavailableReason::NoProbePoints => {
+            "no supported TLS payload probe points found"
+        }
+        LaunchTlsPlanUnavailableReason::AnalysisRejected => {
+            "TLS probe analysis did not produce a usable plan"
         }
     }
 }

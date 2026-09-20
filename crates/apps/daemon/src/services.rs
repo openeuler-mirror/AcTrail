@@ -12,7 +12,6 @@ pub(crate) mod diagnostic_logging;
 pub(crate) mod enforcement;
 #[path = "services/identity/service.rs"]
 pub(crate) mod identity;
-pub(crate) mod idle_detector;
 pub(crate) mod live;
 pub(crate) mod network_control;
 pub(crate) mod payload;
@@ -29,6 +28,7 @@ pub(crate) mod seccomp_tls;
 pub(crate) mod semantic_actions;
 #[path = "services/tls_sync/service.rs"]
 pub(crate) mod tls_sync;
+pub(crate) mod user_lifecycle;
 pub(crate) mod wiring;
 #[path = "services/logging/workload.rs"]
 pub(crate) mod workload_diagnostics;
@@ -37,9 +37,3 @@ pub(crate) use wiring::{
     build_runtime_wiring_with_provider_rule_set_and_storage_retention,
     build_runtime_wiring_with_storage_retention,
 };
-
-pub(crate) fn idle_store_error_to_control(
-    error: idle_contract::IdleStoreError,
-) -> control_contract::reply::ControlError {
-    control_contract::reply::ControlError::new(error.stage, error.message)
-}

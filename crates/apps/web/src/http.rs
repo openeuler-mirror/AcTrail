@@ -55,8 +55,8 @@ pub fn run_server(config: WebConfig) -> Result<(), String> {
         );
     } else {
         println!(
-            "actrailweb listening on http://{address} storage={}",
-            config.storage.path().display()
+            "actrailweb listening on http://{address} storage_backend={}",
+            config.storage.backend().as_str()
         );
     }
     println!("actrailweb is running; press Ctrl-C to stop");
@@ -136,11 +136,10 @@ fn detach_connection(stream: TcpStream, context: WebContext) {
 }
 
 fn validate_storage(storage: &StorageConfig) -> Result<(), String> {
-    if !storage.path().exists() {
-        return Err(format!(
-            "storage path does not exist: {}",
-            storage.path().display()
-        ));
+    if let Some(path) = storage.path()
+        && !path.exists()
+    {
+        return Err(format!("storage path does not exist: {}", path.display()));
     }
     open_storage_backend(storage, StorageOpenMode::ReadOnly)
         .map(|_| ())

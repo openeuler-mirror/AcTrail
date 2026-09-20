@@ -1,5 +1,7 @@
 //! Userspace state for raw file syscall events.
 
+mod completion;
+mod mcp_context;
 mod path_utils;
 mod syscall;
 
@@ -15,19 +17,23 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::rc::Rc;
 
-use collector_event::RawCollectorEvent;
-use config_core::daemon::IpcLineageConfig;
+use crate::maps::BindingStateMap;
+use config_core::daemon::{FileCollectionConfig, IpcLineageConfig};
+use model_core::capability::Capability;
 use model_core::ids::TraceId;
 use model_core::process::ProcessObservation;
 
 use crate::loader::KernelFilePathEvent;
 
-use super::lineage::{FdIpcKind, IpcLineageTracker};
+use super::mcp_stdio::McpStdioTracker;
+use crate::decode::FdIpcKind;
 
 pub(super) const FILE_FD_MISSING: u32 = u32::MAX;
 pub(super) const PATH_FLAG_CAPTURED: u32 = 1;
 pub(super) const PATH_FLAG_TRUNCATED: u32 = 2;
 pub(super) const PATH_FLAG_FAULT: u32 = 4;
+pub(super) const PATH_FLAG_DIRECTORY: u32 = 1 << 8;
+pub(super) const PATH_FLAG_INTERNAL_CONTEXT: u32 = 1 << 9;
 
 pub(super) const FILE_PHASE_ENTER: u32 = 1;
 pub(super) const FILE_PHASE_EXIT: u32 = 2;
@@ -67,7 +73,7 @@ const CLOSE_RANGE_CLOEXEC: u64 = 1 << 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FileSyscallOutcome {
-    pub enter: KernelFilePathEvent,
+    pub syscall: KernelFilePathEvent,
     pub result: i64,
     pub primary_path: PathResolution,
     pub secondary_path: Option<PathResolution>,
@@ -81,13 +87,27 @@ pub(super) struct PathResolution {
     pub source: &'static str,
 }
 
+/// Consumers of userspace file/FD context for one trace, derived from bindings.
+#[derive(Clone, Copy)]
+pub(crate) struct FileContextConsumers {
+    pub(crate) file_paths: bool,
+    pub(crate) mcp_stdio: bool,
+}
+
+impl FileContextConsumers {
+    pub(crate) fn any(self) -> bool {
+        self.file_paths || self.mcp_stdio
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FileTracker {
-    pending: BTreeMap<PendingKey, KernelFilePathEvent>,
-    pending_processes: BTreeMap<PendingKey, ProcessFileKey>,
+    pending: BTreeMap<PendingKey, PendingFileOperation>,
     pub(super) processes: BTreeMap<ProcessFileKey, ProcessFileState>,
-    lineage: IpcLineageTracker,
+    mcp_stdio: McpStdioTracker,
     process_rcs: RefCell<HashMap<ProcessObservation, Rc<ProcessObservation>>>,
+    file_capture_enabled: bool,
+    file_collection: FileCollectionConfig,
 }
 
 impl Default for FileTracker {
@@ -103,6 +123,12 @@ struct PendingKey {
     syscall: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingFileOperation {
+    syscall: KernelFilePathEvent,
+    process: ProcessFileKey,
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ProcessFileKey {
     pub(super) trace_id: TraceId,
@@ -116,15 +142,49 @@ pub(super) struct ProcessFileState {
     creation_requested_fds: BTreeSet<u32>,
 }
 
+pub(crate) struct ResolvedFileDescriptor {
+    pub(crate) path: String,
+    pub(crate) creation_requested: bool,
+}
+
 impl FileTracker {
     pub(crate) fn new(ipc_lineage: IpcLineageConfig, mcp_projection_enabled: bool) -> Self {
         Self {
             pending: BTreeMap::new(),
-            pending_processes: BTreeMap::new(),
             processes: BTreeMap::new(),
-            lineage: IpcLineageTracker::new(ipc_lineage, mcp_projection_enabled),
+            mcp_stdio: McpStdioTracker::new(ipc_lineage, mcp_projection_enabled),
             process_rcs: RefCell::new(HashMap::new()),
+            file_capture_enabled: true,
+            file_collection: FileCollectionConfig::default(),
         }
+    }
+
+    pub(crate) fn context_consumers(
+        &self,
+        trace_id: TraceId,
+        bindings: &BindingStateMap,
+    ) -> FileContextConsumers {
+        FileContextConsumers {
+            file_paths: self.file_capture_enabled
+                && (bindings.trace_has_capability(trace_id, &Capability::FsAccessBasic)
+                    || bindings.trace_has_capability(trace_id, &Capability::FsMmap)),
+            mcp_stdio: self.mcp_stdio_enabled()
+                && bindings.trace_has_capability(trace_id, &Capability::StdioChunk),
+        }
+    }
+
+    pub(crate) fn with_file_capture(mut self, enabled: bool) -> Self {
+        self.file_capture_enabled = enabled;
+        self
+    }
+
+    pub(crate) fn with_file_collection(mut self, collection: FileCollectionConfig) -> Self {
+        self.file_collection = collection;
+        self
+    }
+
+    pub(in crate::decode) fn file_capture_enabled(&self) -> bool {
+        self.file_capture_enabled
     }
 
     /// Intern the process observation so repeated `ProcessFileKey`
@@ -145,16 +205,24 @@ impl FileTracker {
         trace_id: TraceId,
         process: ProcessObservation,
         cwd: Option<String>,
+        consumers: FileContextConsumers,
     ) {
+        if !consumers.any() {
+            return;
+        }
         let key = ProcessFileKey {
             trace_id,
             process: self.intern_process(&process),
         };
-        let state = self.processes.entry(key.clone()).or_default();
-        if let Some(cwd) = cwd.and_then(|path| absolute_path(&path)) {
-            state.cwd = Some(cwd);
+        if consumers.file_paths {
+            let state = self.processes.entry(key.clone()).or_default();
+            if let Some(cwd) = cwd.and_then(|path| absolute_path(&path)) {
+                state.cwd = Some(cwd);
+            }
         }
-        self.lineage.seed_process(key);
+        if consumers.mcp_stdio {
+            self.mcp_stdio.seed_process(key);
+        }
     }
 
     pub(crate) fn inherit_process(
@@ -162,7 +230,11 @@ impl FileTracker {
         trace_id: TraceId,
         parent: &ProcessObservation,
         child: ProcessObservation,
+        consumers: FileContextConsumers,
     ) {
+        if !consumers.any() {
+            return;
+        }
         let parent_key = ProcessFileKey {
             trace_id,
             process: self.intern_process(parent),
@@ -171,9 +243,13 @@ impl FileTracker {
             trace_id,
             process: self.intern_process(&child),
         };
-        let inherited = self.processes.get(&parent_key).cloned().unwrap_or_default();
-        self.processes.insert(child_key.clone(), inherited);
-        self.lineage.inherit_process(&parent_key, child_key);
+        if consumers.file_paths {
+            let inherited = self.processes.get(&parent_key).cloned().unwrap_or_default();
+            self.processes.insert(child_key.clone(), inherited);
+        }
+        if consumers.mcp_stdio {
+            self.mcp_stdio.inherit_process(&parent_key, child_key);
+        }
     }
 
     pub(crate) fn exec_process(
@@ -181,26 +257,38 @@ impl FileTracker {
         trace_id: TraceId,
         process: ProcessObservation,
         observed_ktime_ns: u64,
+        consumers: FileContextConsumers,
     ) {
+        if !consumers.any() {
+            return;
+        }
         let key = ProcessFileKey {
             trace_id,
             process: self.intern_process(&process),
         };
-        if !self.processes.contains_key(&key) {
+        if !consumers.file_paths || !self.processes.contains_key(&key) {
             let provisional = process.host.clone().map(|host| ProcessFileKey {
                 trace_id,
                 process: self.intern_process(&ProcessObservation::host(host)),
             });
-            let state = provisional
-                .as_ref()
-                .and_then(|provisional| self.processes.remove(provisional))
-                .unwrap_or_default();
-            if let Some(provisional) = provisional.filter(|provisional| provisional != &key) {
-                self.lineage.rekey_process(&provisional, key.clone());
+            let state = consumers.file_paths.then(|| {
+                provisional
+                    .as_ref()
+                    .and_then(|provisional| self.processes.remove(provisional))
+                    .unwrap_or_default()
+            });
+            if consumers.mcp_stdio
+                && let Some(provisional) = provisional.filter(|provisional| provisional != &key)
+            {
+                self.mcp_stdio.rekey_process(&provisional, key.clone());
             }
-            self.processes.insert(key.clone(), state);
+            if let Some(state) = state {
+                self.processes.insert(key.clone(), state);
+            }
         }
-        self.lineage.exec_process(key, observed_ktime_ns);
+        if consumers.mcp_stdio {
+            self.mcp_stdio.exec_process(key, observed_ktime_ns);
+        }
     }
 
     pub(crate) fn exit_process(
@@ -208,21 +296,27 @@ impl FileTracker {
         trace_id: TraceId,
         process: ProcessObservation,
         observed_ktime_ns: u64,
+        consumers: FileContextConsumers,
     ) {
+        if !consumers.any() {
+            return;
+        }
         let key = ProcessFileKey {
             trace_id,
             process: self.intern_process(&process),
         };
-        self.lineage.exit_process(&key, observed_ktime_ns);
-        self.processes.remove(&key);
+        if consumers.mcp_stdio {
+            self.mcp_stdio.exit_process(&key, observed_ktime_ns);
+        }
+        if consumers.file_paths {
+            self.processes.remove(&key);
+        }
     }
 
     pub(crate) fn remove_trace(&mut self, trace_id: TraceId) {
         self.processes.retain(|key, _| key.trace_id != trace_id);
         self.pending.retain(|key, _| key.trace_id != trace_id);
-        self.pending_processes
-            .retain(|key, _| key.trace_id != trace_id);
-        self.lineage.remove_trace(trace_id);
+        self.mcp_stdio.remove_trace(trace_id);
     }
 
     pub(crate) fn resolve_fd_path(
@@ -231,7 +325,7 @@ impl FileTracker {
         process: &ProcessObservation,
         fd: u32,
     ) -> Option<String> {
-        if fd == FILE_FD_MISSING {
+        if !self.file_capture_enabled || fd == FILE_FD_MISSING {
             return None;
         }
         let key = ProcessFileKey {
@@ -244,44 +338,31 @@ impl FileTracker {
             .cloned()
     }
 
-    pub(in crate::decode) fn resolve_fd_ipc_kind(
+    pub(crate) fn resolve_file_descriptor(
         &self,
         trace_id: TraceId,
         process: &ProcessObservation,
         fd: u32,
-    ) -> Option<FdIpcKind> {
-        if fd == FILE_FD_MISSING {
+    ) -> Option<ResolvedFileDescriptor> {
+        if !self.file_capture_enabled || fd == FILE_FD_MISSING {
             return None;
         }
         let key = ProcessFileKey {
             trace_id,
             process: self.intern_process(process),
         };
-        self.lineage.resolve_kind(&key, fd)
-    }
-
-    pub(crate) fn fd_creation_requested(
-        &self,
-        trace_id: TraceId,
-        process: &ProcessObservation,
-        fd: u32,
-    ) -> bool {
-        if fd == FILE_FD_MISSING {
-            return false;
-        }
-        let key = ProcessFileKey {
-            trace_id,
-            process: self.intern_process(process),
-        };
-        self.processes
-            .get(&key)
-            .is_some_and(|state| state.creation_requested_fds.contains(&fd))
+        let state = self.processes.get(&key)?;
+        Some(ResolvedFileDescriptor {
+            path: state.fds.get(&fd)?.clone(),
+            creation_requested: state.creation_requested_fds.contains(&fd),
+        })
     }
 
     pub(super) fn record_ipc_fd_pair(
         &mut self,
         event: &KernelFilePathEvent,
         process: ProcessObservation,
+        consumers: FileContextConsumers,
     ) -> bool {
         if event.kind != crate::decode::FILE_EVENT_CONTEXT
             || event.phase != FILE_PHASE_EXIT
@@ -302,103 +383,55 @@ impl FileTracker {
             trace_id: event.trace_id,
             process: self.intern_process(&process),
         };
-        let state = self.processes.entry(process_key.clone()).or_default();
-        state.fds.remove(&event.fd);
-        state.fds.remove(&peer_fd);
-        state.creation_requested_fds.remove(&event.fd);
-        state.creation_requested_fds.remove(&peer_fd);
-        self.lineage.record_pair(
-            &process_key,
-            kind,
-            event.fd,
-            peer_fd,
-            ipc_pair_close_on_exec(event),
-            event.observed_ktime_ns,
-        );
-        true
-    }
-
-    pub(crate) fn take_stdio_bundle_events(&mut self) -> Vec<RawCollectorEvent> {
-        self.lineage.take_lifecycle_events()
-    }
-
-    pub(crate) fn lineage_gap_diagnostics(&self) -> Vec<(&'static str, u64)> {
-        self.lineage.lineage_gap_diagnostics()
-    }
-
-    pub(super) fn record(
-        &mut self,
-        event: KernelFilePathEvent,
-        process: ProcessObservation,
-    ) -> Option<FileSyscallOutcome> {
-        match event.phase {
-            FILE_PHASE_ENTER => {
-                let key = pending_key(&event);
-                self.pending_processes.insert(
-                    key.clone(),
-                    ProcessFileKey {
-                        trace_id: event.trace_id,
-                        process: self.intern_process(&process),
-                    },
-                );
-                self.pending.insert(key, event);
-                None
-            }
-            FILE_PHASE_EXIT => self.complete(event),
-            _ => None,
+        if consumers.file_paths {
+            let state = self.processes.entry(process_key.clone()).or_default();
+            state.fds.remove(&event.fd);
+            state.fds.remove(&peer_fd);
+            state.creation_requested_fds.remove(&event.fd);
+            state.creation_requested_fds.remove(&peer_fd);
         }
-    }
-
-    fn complete(&mut self, exit: KernelFilePathEvent) -> Option<FileSyscallOutcome> {
-        let key = pending_key(&exit);
-        let enter = self.pending.remove(&key)?;
-        let process_key = self.pending_processes.remove(&key)?;
-        let primary_path = self.resolve_primary_path(&process_key, &enter);
-        let secondary_path = self.resolve_secondary_path(&process_key, &enter);
-        let fd_path = self.apply_successful_exit(
-            &process_key,
-            &enter,
-            exit.result,
-            exit.observed_ktime_ns,
-            &primary_path,
-            &secondary_path,
-        );
-        Some(FileSyscallOutcome {
-            enter,
-            result: exit.result,
-            primary_path,
-            secondary_path,
-            fd_path,
-        })
+        if consumers.mcp_stdio {
+            self.mcp_stdio.record_pair(
+                &process_key,
+                kind,
+                event.fd,
+                peer_fd,
+                ipc_pair_close_on_exec(event),
+                event.observed_ktime_ns,
+            );
+        }
+        true
     }
 
     fn apply_successful_exit(
         &mut self,
         process_key: &ProcessFileKey,
-        enter: &KernelFilePathEvent,
+        syscall: &KernelFilePathEvent,
         result: i64,
-        observed_ktime_ns: u64,
         primary_path: &PathResolution,
         secondary_path: &Option<PathResolution>,
     ) -> Option<String> {
-        if enter.aux == FILE_SYSCALL_CLOSE {
-            let fd = enter.arg0 as u32;
-            let path = self.resolve_fd_path(process_key.trace_id, &process_key.process, fd);
+        if syscall.aux == FILE_SYSCALL_CLOSE {
+            let fd = syscall.arg0 as u32;
             let state = self.ensure_process(process_key);
-            state.fds.remove(&fd);
             state.creation_requested_fds.remove(&fd);
-            self.lineage.close_fd(process_key, fd, observed_ktime_ns);
-            return path;
+            return state.fds.remove(&fd);
         }
         if result < 0 {
             return None;
         }
-        match enter.aux {
+        match syscall.aux {
             FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT | FILE_SYSCALL_OPENAT2 => {
                 let fd = u32::try_from(result).ok()?;
-                let creation_requested = open_requests_creation(enter);
-                self.lineage
-                    .replace_with_non_ipc(process_key, fd, observed_ktime_ns);
+                let track_fd = syscall.path_flags & PATH_FLAG_DIRECTORY != 0
+                    || self.file_collection.fd_mutations;
+                if !track_fd {
+                    let state = self.ensure_process(process_key);
+                    state.fds.remove(&fd);
+                    state.creation_requested_fds.remove(&fd);
+                    return None;
+                }
+                let creation_requested = open_requests_creation(syscall);
                 let Some(path) = resolved_absolute_path(primary_path) else {
                     let state = self.ensure_process(process_key);
                     state.fds.remove(&fd);
@@ -415,31 +448,15 @@ impl FileTracker {
                 Some(path)
             }
             FILE_SYSCALL_CLOSE_RANGE => {
-                self.apply_close_range_exit(process_key, enter, observed_ktime_ns);
+                self.apply_close_range_exit(process_key, syscall);
                 None
             }
             FILE_SYSCALL_DUP | FILE_SYSCALL_DUP2 | FILE_SYSCALL_DUP3 => {
-                self.apply_dup_like_exit(process_key, enter, result, observed_ktime_ns);
+                self.apply_dup_like_exit(process_key, syscall, result);
                 None
             }
-            FILE_SYSCALL_FCNTL if fcntl_duplicates_fd(enter) => {
-                self.apply_dup_like_exit(process_key, enter, result, observed_ktime_ns);
-                None
-            }
-            FILE_SYSCALL_FCNTL if fcntl_sets_fd_flags(enter) => {
-                self.lineage.set_fd_close_on_exec(
-                    process_key,
-                    enter.arg0 as u32,
-                    enter.arg2 & libc::FD_CLOEXEC as u64 != 0,
-                );
-                None
-            }
-            FILE_SYSCALL_IOCTL_CLOEXEC | FILE_SYSCALL_IOCTL_NCLOEXEC => {
-                self.lineage.set_fd_close_on_exec(
-                    process_key,
-                    enter.arg0 as u32,
-                    enter.aux == FILE_SYSCALL_IOCTL_CLOEXEC,
-                );
+            FILE_SYSCALL_FCNTL if fcntl_duplicates_fd(syscall) => {
+                self.apply_dup_like_exit(process_key, syscall, result);
                 None
             }
             FILE_SYSCALL_CHDIR => {
@@ -452,18 +469,22 @@ impl FileTracker {
                 if let Some(path) = self.resolve_fd_path(
                     process_key.trace_id,
                     &process_key.process,
-                    enter.arg0 as u32,
+                    syscall.arg0 as u32,
                 ) {
                     self.ensure_process(process_key).cwd = Some(path);
                 }
                 None
             }
             FILE_SYSCALL_RENAME | FILE_SYSCALL_RENAMEAT | FILE_SYSCALL_RENAMEAT2 => {
-                self.apply_rename(primary_path, secondary_path);
+                self.apply_rename(
+                    primary_path,
+                    secondary_path,
+                    syscall.aux == FILE_SYSCALL_RENAMEAT2 && syscall.arg4 & 2 != 0,
+                );
                 None
             }
             FILE_SYSCALL_MMAP | FILE_SYSCALL_FTRUNCATE => {
-                self.resolve_fd_path(process_key.trace_id, &process_key.process, enter.fd)
+                self.resolve_fd_path(process_key.trace_id, &process_key.process, syscall.fd)
             }
             _ => None,
         }
@@ -472,34 +493,21 @@ impl FileTracker {
     fn apply_dup_like_exit(
         &mut self,
         process_key: &ProcessFileKey,
-        enter: &KernelFilePathEvent,
+        syscall: &KernelFilePathEvent,
         result: i64,
-        observed_ktime_ns: u64,
     ) {
-        let source = self.resolve_fd_path(
+        let source = self.resolve_file_descriptor(
             process_key.trace_id,
             &process_key.process,
-            enter.arg0 as u32,
+            syscall.arg0 as u32,
         );
-        let creation_requested = self.fd_creation_requested(
-            process_key.trace_id,
-            &process_key.process,
-            enter.arg0 as u32,
-        );
-        let Some(target_fd) = dup_target_fd(enter, result) else {
+        let Some(target_fd) = dup_target_fd(syscall, result) else {
             return;
         };
-        self.lineage.duplicate_fd(
-            process_key,
-            enter.arg0 as u32,
-            target_fd,
-            duplicated_fd_close_on_exec(enter),
-            observed_ktime_ns,
-        );
         let state = self.ensure_process(process_key);
         if let Some(source) = source {
-            state.fds.insert(target_fd, source);
-            if creation_requested {
+            state.fds.insert(target_fd, source.path);
+            if source.creation_requested {
                 state.creation_requested_fds.insert(target_fd);
             } else {
                 state.creation_requested_fds.remove(&target_fd);
@@ -513,14 +521,11 @@ impl FileTracker {
     fn apply_close_range_exit(
         &mut self,
         process_key: &ProcessFileKey,
-        enter: &KernelFilePathEvent,
-        observed_ktime_ns: u64,
+        syscall: &KernelFilePathEvent,
     ) {
-        let first = enter.arg0 as u32;
-        let last = enter.arg1 as u32;
-        let close_on_exec = enter.arg2 & CLOSE_RANGE_CLOEXEC != 0;
-        self.lineage
-            .close_range(process_key, first, last, close_on_exec, observed_ktime_ns);
+        let first = syscall.arg0 as u32;
+        let last = syscall.arg1 as u32;
+        let close_on_exec = syscall.arg2 & CLOSE_RANGE_CLOEXEC != 0;
         if close_on_exec {
             return;
         }
@@ -535,6 +540,7 @@ impl FileTracker {
         &mut self,
         primary_path: &PathResolution,
         secondary_path: &Option<PathResolution>,
+        exchange: bool,
     ) {
         let Some(source) = resolved_absolute_path(primary_path) else {
             return;
@@ -546,6 +552,8 @@ impl FileTracker {
             for fd_path in state.fds.values_mut() {
                 if fd_path.as_str() == source.as_str() {
                     *fd_path = target.clone();
+                } else if exchange && fd_path.as_str() == target.as_str() {
+                    *fd_path = source.clone();
                 }
             }
         }
@@ -555,20 +563,22 @@ impl FileTracker {
         &mut self,
         process_key: &ProcessFileKey,
         event: &KernelFilePathEvent,
+        result: i64,
     ) -> PathResolution {
         let raw = path_string(&event.path, event.path_flags);
         let dirfd = primary_dirfd(event);
-        self.resolve_path(process_key, raw, dirfd)
+        self.resolve_path(process_key, raw, dirfd, result)
     }
 
     fn resolve_secondary_path(
         &mut self,
         process_key: &ProcessFileKey,
         event: &KernelFilePathEvent,
+        result: i64,
     ) -> Option<PathResolution> {
         let raw = path_string(&event.secondary_path, event.secondary_path_flags)?;
         let dirfd = secondary_dirfd(event);
-        Some(self.resolve_path(process_key, Some(raw), dirfd))
+        Some(self.resolve_path(process_key, Some(raw), dirfd, result))
     }
 
     fn resolve_path(
@@ -576,6 +586,7 @@ impl FileTracker {
         process_key: &ProcessFileKey,
         raw: Option<String>,
         dirfd: Option<u32>,
+        result: i64,
     ) -> PathResolution {
         let Some(raw_path) = raw else {
             return PathResolution {
@@ -587,9 +598,19 @@ impl FileTracker {
         if Path::new(&raw_path).is_absolute() {
             let resolved = lexically_normalize_path(&raw_path);
             return PathResolution {
-                raw: Some(raw_path.clone()),
+                raw: Some(raw_path),
                 resolved: Some(resolved),
                 source: "absolute",
+            };
+        }
+        // EBADF rejects resolution through an explicit directory FD. For
+        // two-dirfd operations it does not identify which FD is invalid.
+        if result == -i64::from(libc::EBADF) && dirfd.is_some_and(|fd| fd as i32 != libc::AT_FDCWD)
+        {
+            return PathResolution {
+                raw: Some(raw_path),
+                resolved: None,
+                source: "unresolved_relative",
             };
         }
         let base = match dirfd {
@@ -598,7 +619,7 @@ impl FileTracker {
             }
             _ => self.ensure_process(process_key).cwd.clone(),
         };
-        let Some(base) = base.and_then(|path| absolute_path(&path)) else {
+        let Some(base) = base else {
             return PathResolution {
                 raw: Some(raw_path),
                 resolved: None,

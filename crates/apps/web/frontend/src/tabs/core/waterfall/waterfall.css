@@ -732,6 +732,11 @@
   );
 }
 
+.wf-idle-segment.waiting {
+  background-color: #b7791f;
+  box-shadow: inset 0 0 0 1px #975a16;
+}
+
 .lane-category-agent_side {
   background: var(--stats-chart-cache-hit, #48b89f);
 }

@@ -147,7 +147,7 @@ class FileLeakageE2E:
         self.patch.write_text(self.operator_patch(), encoding="utf-8")
         run_checked(
             [
-                str(self.actraild),
+                str(self.actrailctl),
                 "--config",
                 str(self.config),
                 "init",

@@ -5,10 +5,11 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+agent_host = { path = "../../adapters/agent_host" }
 clap = { version = "4.6", features = ["derive"] }
 config_core = { path = "../../core/config" }
 control_contract = { path = "../../contracts/control_plane" }
-idle_contract = { path = "../../contracts/idle" }
+agent_lifecycle_contract = { path = "../../contracts/agent_lifecycle" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }

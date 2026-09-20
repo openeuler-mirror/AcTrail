@@ -183,7 +183,7 @@ def main() -> int:
     failure_stage = "runtime_preparation"
 
     try:
-        prepare_runtime(runtime, operator_template, config, actraild)
+        prepare_runtime(runtime, operator_template, config, actrailctl)
         prepare_workload_files(workloads)
         failure_stage = "container_image_preparation"
         test_image = prepare_agent_image(
@@ -377,7 +377,7 @@ def prepare_runtime(
     runtime: Path,
     template: Path,
     config: Path,
-    actraild: Path,
+    actrailctl: Path,
 ) -> None:
     for child in ("run", "data", "data/export", "log"):
         (runtime / child).mkdir(parents=True, exist_ok=True)
@@ -388,7 +388,7 @@ def prepare_runtime(
     patch.write_text(rendered, encoding="utf-8")
     initialized = subprocess.run(
         [
-            str(actraild),
+            str(actrailctl),
             "--config",
             str(config),
             "init",
@@ -954,7 +954,6 @@ def wait_for_trace_evidence(
                 trace_id = trace_by_workload[workload.suffix]
                 require_ebpf_evidence(database, trace_id)
                 require_llm_response(actrailviewer, config, trace_id)
-                require_sse_application_event(actrailviewer, config, trace_id)
                 require_file_actions(actrailviewer, config, trace_id, workload)
             return trace_by_workload
         except RuntimeError as error:
@@ -1054,6 +1053,13 @@ def require_llm_response(actrailviewer: Path, config: Path, trace_id: int) -> No
         raise RuntimeError(f"trace-{trace_id} has no llm.response action")
     if any(action.get("status") != "success" for action in responses):
         raise RuntimeError(f"trace-{trace_id} contains failed llm.response actions")
+    if any(action.get("completeness") != "complete" for action in responses):
+        raise RuntimeError(f"trace-{trace_id} contains incomplete llm.response actions")
+    if any(
+        action.get("attributes", {}).get("llm.response.done") != "true"
+        for action in responses
+    ):
+        raise RuntimeError(f"trace-{trace_id} contains llm.response without protocol termination")
 
 
 def require_file_actions(
@@ -1089,59 +1095,6 @@ def positive_integer(value: object) -> bool:
         return int(str(value)) > 0
     except (TypeError, ValueError):
         return False
-
-
-def require_sse_application_event(
-    actrailviewer: Path,
-    config: Path,
-    trace_id: int,
-) -> None:
-    for event in load_trace_events(actrailviewer, config, trace_id):
-        payload = event.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        metadata = payload.get("metadata")
-        if not isinstance(metadata, dict):
-            continue
-        if (
-            event.get("collector") != "application-protocol-analyzer"
-            or event.get("variant") != "application"
-            or payload.get("protocol") != "sse"
-            or payload.get("operation") != "event"
-            or payload.get("summary") != "message"
-            or payload.get("body") is not None
-            or metadata.get("event") != "message"
-            or not positive_integer(metadata.get("data_size"))
-        ):
-            continue
-        return
-    raise RuntimeError(
-        f"trace-{trace_id} missing complete SSE application event evidence"
-    )
-
-
-def load_trace_events(
-    actrailviewer: Path,
-    config: Path,
-    trace_id: int,
-) -> list[dict[str, object]]:
-    output = run_checked(
-        [
-            str(actrailviewer),
-            "--config",
-            str(config),
-            "--output-format",
-            "json",
-            "events",
-            "--trace-id",
-            f"trace-{trace_id}",
-        ]
-    )
-    document = json.loads(output)
-    events = document.get("events")
-    if not isinstance(events, list):
-        raise RuntimeError(f"trace-{trace_id} viewer output has no events array")
-    return events
 
 
 def load_trace_actions(

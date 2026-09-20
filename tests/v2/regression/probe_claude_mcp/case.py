@@ -25,6 +25,9 @@ class ProbeClaudeMcpCase(TestCase):
                 test_context.output,
                 self._config.work_dir,
             )
+            patch_path = self._config.work_dir / "actraild.patch.toml"
+            with patch_path.open("a", encoding="utf-8") as patch:
+                patch.write("\n[payload.mcp]\nenabled = true\n")
             try:
                 task = ProbeClaudeMcpTask(self._config, runtime)
             except AgentBinaryNotFoundError as error:

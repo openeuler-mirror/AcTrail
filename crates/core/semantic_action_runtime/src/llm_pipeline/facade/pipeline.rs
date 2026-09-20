@@ -82,13 +82,11 @@ impl LiveLlmProjector {
         let mut changed = self.projection.changed_actions(&self.config, output);
         changed.extend(
             self.projection
-                .reconcile_unconfirmed_identity_exchanges(&identity, segment.observed_at),
+                .reconcile_unconfirmed_identity_exchanges(&identity),
         );
-        changed.extend(self.finalize_missing_response_calls(
-            &identity,
-            StreamFinalizationReason::ConfirmedGap,
-            segment.observed_at,
-        ));
+        changed.extend(
+            self.finalize_missing_response_calls(&identity, StreamFinalizationReason::ConfirmedGap),
+        );
         self.forget_payload_associations_by_identity(&identity);
         changed
     }
@@ -101,11 +99,10 @@ impl LiveLlmProjector {
         let identity = PayloadStreamIdentity::from_segment(segment);
         let mut output = self
             .projection
-            .reconcile_unconfirmed_identity_exchanges(&identity, segment.observed_at);
+            .reconcile_unconfirmed_identity_exchanges(&identity);
         output.extend(self.finalize_missing_response_calls(
             &identity,
             StreamFinalizationReason::OperationIncomplete,
-            segment.observed_at,
         ));
         self.forget_payload_associations_by_identity(&identity);
         output
@@ -150,13 +147,11 @@ impl LiveLlmProjector {
         let mut output = self.projection.changed_actions(&self.config, projected);
         output.extend(
             self.projection
-                .reconcile_unconfirmed_identity_exchanges(identity, finished_at),
+                .reconcile_unconfirmed_identity_exchanges(identity),
         );
-        output.extend(self.finalize_missing_response_calls(
-            identity,
-            StreamFinalizationReason::PeerClosed,
-            finished_at,
-        ));
+        output.extend(
+            self.finalize_missing_response_calls(identity, StreamFinalizationReason::PeerClosed),
+        );
         self.forget_payload_associations_by_identity(identity);
         self.websocket_stream_ownership.release_stream(
             identity.trace_id,
@@ -170,13 +165,12 @@ impl LiveLlmProjector {
         &mut self,
         identity: &PayloadStreamIdentity,
         reason: StreamFinalizationReason,
-        finished_at: SystemTime,
     ) -> LiveLlmOutput {
         let requests = self.projection.open_requests_for_identity(identity);
         let mut missing_responses = LiveLlmOutput::default();
         for request in requests {
             let mut call = call::llm_call_from_request_response(&request, None);
-            ResponseFinalizer::finalize_incomplete(&mut call, reason, finished_at);
+            ResponseFinalizer::finalize_response_unobserved(&mut call, reason);
             missing_responses.actions.push(call);
         }
         self.projection
@@ -299,14 +293,13 @@ impl LiveLlmProjector {
         // before emitting "no response" error calls for the remaining requests.
         output.extend(
             self.projection
-                .reconcile_unconfirmed_stream_exchanges(trace_id, finished_at),
+                .reconcile_unconfirmed_stream_exchanges(trace_id),
         );
         for request in self.projection.open_requests_for_trace(trace_id) {
             let mut call = call::llm_call_from_request_response(&request, None);
-            ResponseFinalizer::finalize_incomplete(
+            ResponseFinalizer::finalize_response_unobserved(
                 &mut call,
                 StreamFinalizationReason::TraceClosed,
-                finished_at,
             );
             output.actions.push(call);
         }

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use config_core::capture_profile::CaptureProfile;
+use model_core::capability::Capability;
 use model_core::ids::ProfileName;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,6 +35,14 @@ impl DaemonProfileRegistry {
 
     pub fn capture_profiles(&self) -> impl Iterator<Item = (&ProfileName, &CaptureProfile)> {
         self.capture_profiles.iter()
+    }
+
+    pub(crate) fn disable_stdio_capture(&mut self) {
+        for profile in self.capture_profiles.values_mut() {
+            profile
+                .capabilities
+                .retain(|request| request.capability != Capability::StdioChunk);
+        }
     }
 
     pub fn is_launch_only_profile(&self, name: &ProfileName) -> bool {

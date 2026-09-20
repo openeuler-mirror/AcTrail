@@ -9,7 +9,7 @@ use plugin_system::{PluginRuntimeError, PostTraceTask};
 use storage_core::{StorageBackend, TraceLease, TraceLeasePurpose};
 
 pub(crate) struct PostTraceCoordinator {
-    running: BTreeMap<TaskKey, TraceLease>,
+    running: BTreeMap<TaskKey, Option<TraceLease>>,
     admitted: BTreeSet<TaskKey>,
     pending_since: BTreeMap<TaskKey, Instant>,
     diagnosed_admission_timeout: BTreeSet<TaskKey>,
@@ -207,9 +207,11 @@ impl PostTraceCoordinator {
                     ),
                 )
             })?;
-            storage
-                .release_trace_lease(lease)
-                .map_err(|error| ControlError::new(error.stage, error.message))?;
+            if let Some(lease) = lease {
+                storage
+                    .release_trace_lease(lease)
+                    .map_err(|error| ControlError::new(error.stage, error.message))?;
+            }
             self.running.remove(&key);
             self.diagnosed_drain_timeout.remove(&key);
             outcomes.push(PostTraceOutcome {
@@ -277,9 +279,15 @@ impl PostTraceCoordinator {
         export_runtime: &ExportRuntime,
         storage: &mut dyn StorageBackend,
     ) -> Result<(), ControlError> {
-        let lease = storage
-            .acquire_trace_lease(key.trace_id, TraceLeasePurpose::PostTraceAnalysis)
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        let lease = if storage.retains_observations() {
+            Some(
+                storage
+                    .acquire_trace_lease(key.trace_id, TraceLeasePurpose::PostTraceAnalysis)
+                    .map_err(|error| ControlError::new(error.stage, error.message))?,
+            )
+        } else {
+            None
+        };
         let enqueue = export_runtime.enqueue_post_trace(
             &key.instance_id,
             PostTraceTask {
@@ -288,9 +296,11 @@ impl PostTraceCoordinator {
             },
         );
         if let Err(error) = enqueue {
-            storage
-                .release_trace_lease(lease)
-                .map_err(|release| ControlError::new(release.stage, release.message))?;
+            if let Some(lease) = lease {
+                storage
+                    .release_trace_lease(lease)
+                    .map_err(|release| ControlError::new(release.stage, release.message))?;
+            }
             return Err(ControlError::new(error.code, error.message));
         }
         self.running.insert(key.clone(), lease);

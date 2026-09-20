@@ -18,6 +18,7 @@ const PAYLOAD_READ_DENIED: i64 = -1;
 const PAYLOAD_READ_NOT_FOUND: i64 = -2;
 const PAYLOAD_READ_INVALID: i64 = -3;
 const PAYLOAD_READ_TOO_LARGE: i64 = -4;
+const PAYLOAD_READ_FAILED: i64 = -5;
 const CONTEXT_QUERY_DENIED: i64 = -1;
 const CONTEXT_QUERY_NOT_FOUND: i64 = -2;
 const CONTEXT_QUERY_INVALID: i64 = -3;
@@ -311,31 +312,24 @@ fn payload_read_inner(
     if max_len > caller.data().host_limits().payload_read_max_bytes {
         return PayloadReadOutcome::result(PAYLOAD_READ_TOO_LARGE);
     }
-    let Some(payload) = caller.data().payload_entry(ref_id) else {
-        return PayloadReadOutcome::result(PAYLOAD_READ_NOT_FOUND);
+    let (bytes, truncated) = match caller.data().read_payload(ref_id, offset as u64, max_len) {
+        plugin_system::PayloadReadResult::Chunk {
+            bytes, truncated, ..
+        } => (bytes, truncated),
+        plugin_system::PayloadReadResult::NotFound => {
+            return PayloadReadOutcome::result(PAYLOAD_READ_NOT_FOUND);
+        }
+        plugin_system::PayloadReadResult::Denied => {
+            return PayloadReadOutcome::result(PAYLOAD_READ_DENIED);
+        }
+        plugin_system::PayloadReadResult::Failed => {
+            return PayloadReadOutcome::result(PAYLOAD_READ_FAILED);
+        }
     };
-    if !caller
-        .data()
-        .host_grants()
-        .can_read_payload_source(payload.source_boundary)
-    {
-        return PayloadReadOutcome::result(PAYLOAD_READ_DENIED);
-    }
-    let Some(bytes) = payload.bytes.as_deref() else {
-        return PayloadReadOutcome::result(PAYLOAD_READ_NOT_FOUND);
-    };
-    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-    if offset >= bytes.len() {
-        return PayloadReadOutcome::success(0, false);
-    }
-    let available = &bytes[offset..];
-    let count = available.len().min(max_len);
-    let truncated = available.len() > count;
-    let chunk = available[..count].to_vec();
-    if memory.write(&mut *caller, out_offset, &chunk).is_err() {
+    if memory.write(&mut *caller, out_offset, &bytes).is_err() {
         return PayloadReadOutcome::result(PAYLOAD_READ_INVALID);
     }
-    PayloadReadOutcome::success(count, truncated)
+    PayloadReadOutcome::success(bytes.len(), truncated)
 }
 
 pub(super) fn context_query(

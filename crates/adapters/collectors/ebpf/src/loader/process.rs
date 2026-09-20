@@ -10,7 +10,7 @@ use crate::loader::LoaderError;
 const PROCESS_EXEC_CONFIG_KEY: u32 = 0;
 const PROCESS_EXEC_ARG_MAX: u32 = 128;
 const PROCESS_EXEC_ARGV_COPY_MAX_BYTES: u32 = 4_095;
-const PROCESS_EXEC_CONFIG_FIELDS: usize = 3;
+const PROCESS_EXEC_CONFIG_FIELDS: usize = 4;
 const PROCESS_EXEC_CONFIG_VALUE_SIZE: usize =
     PROCESS_EXEC_CONFIG_FIELDS * std::mem::size_of::<u32>();
 
@@ -43,6 +43,7 @@ pub(super) fn validate_config(config: &ProcessSeccompConfig) -> Result<(), Loade
 pub(super) fn configure_map(
     object: &Object,
     config: &ProcessSeccompConfig,
+    executable_identity_enabled: bool,
 ) -> Result<(), LoaderError> {
     let map = object
         .maps()
@@ -56,6 +57,7 @@ pub(super) fn configure_map(
         config.max_args,
         config.max_arg_bytes,
         config.max_total_arg_bytes,
+        executable_identity_enabled as u32,
     ];
     let mut value = [0_u8; PROCESS_EXEC_CONFIG_VALUE_SIZE];
     for (index, field) in fields.into_iter().enumerate() {

@@ -22,6 +22,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent_host"
+version = "0.7.1"
+dependencies = [
+ "agent_lifecycle_contract",
+ "model_core",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "agent_lifecycle_contract"
+version = "0.7.1"
+dependencies = [
+ "model_core",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -494,6 +511,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "config_core"
 version = "0.7.1"
 dependencies = [
+ "idle_detector",
  "model_core",
  "payload_capability",
  "serde",
@@ -505,7 +523,7 @@ dependencies = [
 name = "control_contract"
 version = "0.7.1"
 dependencies = [
- "idle_contract",
+ "agent_lifecycle_contract",
  "model_core",
  "plugin_system",
 ]
@@ -686,10 +704,11 @@ dependencies = [
 name = "ctl"
 version = "0.7.1"
 dependencies = [
+ "agent_host",
+ "agent_lifecycle_contract",
  "clap",
  "config_core",
  "control_contract",
- "idle_contract",
  "libc",
  "linux_platform",
  "model_core",
@@ -703,6 +722,8 @@ dependencies = [
 name = "daemon"
 version = "0.7.1"
 dependencies = [
+ "agent_host",
+ "agent_lifecycle_contract",
  "alert-delivery-contract",
  "alert_contract",
  "alert_forwarding",
@@ -719,7 +740,6 @@ dependencies = [
  "export_factory",
  "gateway_ingest_runtime",
  "getrandom 0.3.4",
- "idle_contract",
  "idle_detector",
  "ingest_runtime",
  "jsonschema",
@@ -808,22 +828,6 @@ dependencies = [
  "process_identity",
  "process_tree_snapshot_contract",
  "tls_probe_point_finder",
-]
-
-[[package]]
-name = "ebpf_probe"
-version = "0.7.1"
-dependencies = [
- "config_core",
- "control_contract",
- "daemon",
- "libc",
- "model_core",
- "payload_capability",
- "semantic_action",
- "storage_core",
- "storage_factory",
- "uds_control_transport",
 ]
 
 [[package]]
@@ -1352,19 +1356,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
-name = "idle_contract"
-version = "0.7.1"
-dependencies = [
- "model_core",
-]
-
-[[package]]
 name = "idle_detector"
 version = "0.7.1"
 dependencies = [
- "idle_contract",
+ "agent_host",
+ "alert_contract",
  "model_core",
- "semantic_action",
+ "serde_json",
 ]
 
 [[package]]
@@ -2516,6 +2514,7 @@ dependencies = [
  "model_core",
  "plugin_system",
  "semantic_action",
+ "serde",
  "serde_json",
  "sha1",
  "sha2",
@@ -2662,7 +2661,6 @@ version = "0.7.1"
 dependencies = [
  "alert_contract",
  "bincode",
- "idle_contract",
  "model_core",
  "rusqlite",
  "semantic_action",
@@ -2690,7 +2688,6 @@ name = "storage_core"
 version = "0.7.1"
 dependencies = [
  "alert_contract",
- "idle_contract",
  "model_core",
  "semantic_action",
  "store_read_contract",
@@ -2705,6 +2702,17 @@ name = "storage_factory"
 version = "0.7.1"
 dependencies = [
  "sqlite_storage",
+ "storage_core",
+ "storage_noop",
+]
+
+[[package]]
+name = "storage_noop"
+version = "0.7.1"
+dependencies = [
+ "alert_contract",
+ "model_core",
+ "semantic_action",
  "storage_core",
 ]
 
@@ -3020,8 +3028,8 @@ dependencies = [
 name = "uds_control_transport"
 version = "0.7.1"
 dependencies = [
+ "agent_lifecycle_contract",
  "control_contract",
- "idle_contract",
  "model_core",
  "plugin_system",
 ]
@@ -3569,7 +3577,6 @@ dependencies = [
  "config_core",
  "control_contract",
  "flate2",
- "idle_contract",
  "model_core",
  "plugin_system",
  "rusqlite",

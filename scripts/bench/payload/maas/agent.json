@@ -1,0 +1,9 @@
+{
+  "name": "payload-agent",
+  "prompt": "Read input.txt with the tools provided by the local model and complete its requested checks.",
+  "input_line": "PAYLOAD_BENCH_INPUT: deterministic local agent tool output.\n",
+  "input_bytes": 16384,
+  "tool_command": "cat input.txt | tee result-{index}.txt",
+  "completion": "PAYLOAD_BENCH_AGENT_COMPLETE",
+  "output_tokens": 32
+}

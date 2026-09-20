@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS payload_segments (
     library TEXT NOT NULL,
     symbol TEXT NOT NULL,
     protocol_hint TEXT,
+    storage_omission INTEGER NOT NULL DEFAULT 0 CHECK (storage_omission IN (0, 1)),
     bytes BLOB NOT NULL
 );
 
@@ -208,13 +209,9 @@ CREATE TABLE IF NOT EXISTS semantic_actions (
     title TEXT,
     file_path_id INTEGER,
     start_time INTEGER NOT NULL,
-    end_time INTEGER,
     process_id INTEGER NOT NULL,
-    status_code INTEGER NOT NULL,
-    completeness_code INTEGER NOT NULL,
     action_valid_code INTEGER NOT NULL DEFAULT 1,
     process_parent_conflict INTEGER NOT NULL DEFAULT 0,
-    evidence_blob BLOB NOT NULL,
     CHECK (title IS NOT NULL OR file_path_id IS NOT NULL)
 );
 
@@ -230,12 +227,10 @@ CREATE TABLE IF NOT EXISTS semantic_action_links (
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_cold_fields (
-    owner_key INTEGER NOT NULL,
-    field_code INTEGER NOT NULL,
+    owner_key INTEGER PRIMARY KEY,
     encoding_code INTEGER NOT NULL,
     uncompressed_bytes INTEGER NOT NULL,
-    payload BLOB NOT NULL,
-    PRIMARY KEY (owner_key, field_code)
+    payload BLOB NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS semantic_action_link_cold_fields (
@@ -243,11 +238,10 @@ CREATE TABLE IF NOT EXISTS semantic_action_link_cold_fields (
     parent_action_key INTEGER NOT NULL,
     child_action_key INTEGER NOT NULL,
     role_code INTEGER NOT NULL,
-    field_code INTEGER NOT NULL,
     encoding_code INTEGER NOT NULL,
     uncompressed_bytes INTEGER NOT NULL,
     payload BLOB NOT NULL,
-    PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code, field_code)
+    PRIMARY KEY (trace_id, parent_action_key, child_action_key, role_code)
 );
 
 CREATE TABLE IF NOT EXISTS file_observation_paths (
@@ -307,8 +301,6 @@ CREATE TABLE IF NOT EXISTS llm_request_manifests (
     trace_id INTEGER NOT NULL,
     action_key INTEGER NOT NULL,
     format_version INTEGER NOT NULL,
-    canonical_body_hash BLOB NOT NULL,
-    canonical_body_bytes INTEGER NOT NULL,
     skeleton_json TEXT NOT NULL,
     UNIQUE (trace_id, action_key)
 );
@@ -492,8 +484,8 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_writable_schema_state(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     connection.execute_batch(CREATE_EXTERNAL_CGROUP_BINDINGS_SQL)?;
+    connection.execute_batch(include_str!("semantic_actions/store/schema.sql"))?;
     connection.execute_batch(crate::alerts::schema::CREATE_SQL)?;
-    connection.execute_batch(crate::idle::schema::CREATE_SQL)?;
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
         .and_then(|codebook| codebook.validate())
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
@@ -512,10 +504,10 @@ mod baseline_upgrade_tests {
     ) {
         connection.execute_batch(CREATE_TABLES_SQL).unwrap();
         connection
-            .execute_batch(crate::alerts::schema::CREATE_SQL)
+            .execute_batch(include_str!("semantic_actions/store/schema.sql"))
             .unwrap();
         connection
-            .execute_batch(crate::idle::schema::CREATE_SQL)
+            .execute_batch(crate::alerts::schema::CREATE_SQL)
             .unwrap();
         if !with_host_scopes {
             connection
@@ -578,8 +570,6 @@ fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error>
          CREATE INDEX IF NOT EXISTS idx_tls_flow_diagnostics_trace_id ON tls_flow_diagnostics(trace_id);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
          CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_kind_start ON semantic_actions(trace_id, kind_code, start_time, action_key);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_parent ON semantic_action_links(trace_id, parent_action_key);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_child ON semantic_action_links(trace_id, child_action_key);
          CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role_code);
          DROP INDEX IF EXISTS idx_memberships_trace_parent;
          DROP INDEX IF EXISTS idx_processes_host_pid;
@@ -629,7 +619,6 @@ fn validate_schema(
     require_external_bindings: bool,
 ) -> Result<(), rusqlite::Error> {
     crate::alerts::schema::validate(connection)?;
-    crate::idle::schema::validate(connection)?;
     require_schema_object(connection, "table", "tls_flow_diagnostics")?;
     require_column(connection, "tls_flow_diagnostics", "trace_id")?;
     require_column(connection, "tls_flow_diagnostics", "stream_key")?;
@@ -699,6 +688,7 @@ fn validate_schema(
     require_column(connection, "event_policy_details", "truncations")?;
     require_column(connection, "payload_segments", "process_id")?;
     require_integer_column(connection, "payload_segments", "segment_meta")?;
+    require_integer_column(connection, "payload_segments", "storage_omission")?;
     require_column(connection, "traces", "exited_at")?;
     require_column(connection, "semantic_action_ids", "action_key")?;
     require_column(connection, "semantic_action_ids", "action_id")?;
@@ -706,11 +696,35 @@ fn validate_schema(
     require_column(connection, "semantic_actions", "kind_code")?;
     require_column(connection, "semantic_actions", "title")?;
     require_column(connection, "semantic_actions", "file_path_id")?;
-    require_column(connection, "semantic_actions", "status_code")?;
-    require_column(connection, "semantic_actions", "completeness_code")?;
+    for column in [
+        "action_key",
+        "end_time",
+        "status_code",
+        "completeness_code",
+        "finalization_reason",
+        "failure_http_status",
+        "command_invocation_kind",
+        "tool_result_binding",
+    ] {
+        require_integer_column(connection, "semantic_action_state", column)?;
+    }
+    for column in [
+        "failure_title",
+        "failure_body_format",
+        "failure_http_reason",
+        "command_tool_name",
+    ] {
+        require_column(connection, "semantic_action_state", column)?;
+    }
+    for column in ["evidence_key", "action_key", "kind_code", "evidence_id"] {
+        require_integer_column(connection, "semantic_action_evidence", column)?;
+    }
+    require_column(connection, "semantic_action_evidence", "role")?;
+    for column in ["trace_id", "revision"] {
+        require_integer_column(connection, "semantic_action_state_revisions", column)?;
+    }
     require_column(connection, "semantic_actions", "action_valid_code")?;
     require_column(connection, "semantic_actions", "process_parent_conflict")?;
-    require_column(connection, "semantic_actions", "evidence_blob")?;
     require_column(connection, "agent_identities", "trace_id")?;
     require_column(connection, "agent_identities", "process_id")?;
     require_column(connection, "agent_identities", "identity_action_key")?;

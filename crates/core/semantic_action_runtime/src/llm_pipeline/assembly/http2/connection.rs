@@ -1,5 +1,7 @@
 //! HTTP/2 connection assembly and logical-stream coordination.
 
+mod request;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -14,7 +16,7 @@ use crate::llm_pipeline::assembly::router::{
 };
 use crate::llm_pipeline::projection::ProjectionBatch as LiveLlmOutput;
 use crate::llm_pipeline::projection::projector::{
-    ProjectedProviderResponseId, project_http2_stream_request, project_http2_stream_response,
+    ProjectedProviderResponseId, project_http2_stream_response,
 };
 use crate::llm_pipeline::provider::codec::LlmCodecRegistry;
 use crate::llm_pipeline::stream::finalizer::ResponseFinalizer;
@@ -53,109 +55,6 @@ impl Http2StreamAssembly {
                 .sse_parse_cache
                 .as_ref()
                 .is_some_and(|cache| cache.is_confirmed_llm())
-    }
-
-    fn project_request(
-        &mut self,
-        config: &SemanticRetentionConfig,
-        codecs: &LlmCodecRegistry,
-        key: &PayloadStreamGroupKey,
-        stream_id: u32,
-    ) -> LiveLlmOutput {
-        let mut output = LiveLlmOutput::default();
-        if !self.end_stream || self.plain.buffer.is_empty() {
-            return output;
-        }
-        let message_start = self.plain.base_offset;
-        let message_end = message_start + self.plain.buffer.len();
-        let segments = self.plain.segments_for_range(message_start, message_end);
-        let Some(projection) = project_http2_stream_request(
-            config,
-            codecs,
-            key,
-            stream_id,
-            message_start,
-            &self.plain.buffer,
-            Arc::clone(&self.body),
-            &segments,
-            true,
-        ) else {
-            return output;
-        };
-        output.actions.extend(projection.actions);
-        output
-            .llm_request_contents
-            .extend(projection.llm_request_contents);
-        output
-            .llm_request_histories
-            .extend(projection.llm_request_histories);
-        output.llm_tool_results.extend(projection.llm_tool_results);
-        self.plain.evict_encoded_len(projection.encoded_len);
-        output
-    }
-
-    fn materialize_incomplete_request(
-        &mut self,
-        config: &SemanticRetentionConfig,
-        codecs: &LlmCodecRegistry,
-        key: &PayloadStreamGroupKey,
-        stream_id: u32,
-        reason: StreamFinalizationReason,
-        finished_at: SystemTime,
-    ) -> LiveLlmOutput {
-        let mut output = LiveLlmOutput::default();
-        if self.plain.buffer.is_empty() {
-            return output;
-        }
-        let buffered_bytes = self.plain.buffer.len();
-        let retained_ranges = self.plain.segments.len();
-        let message_start = self.plain.base_offset;
-        let message_end = message_start.saturating_add(buffered_bytes);
-        let segments = self.plain.segments_for_range(message_start, message_end);
-        if let Some(mut projection) = project_http2_stream_request(
-            config,
-            codecs,
-            key,
-            stream_id,
-            message_start,
-            &self.plain.buffer,
-            Arc::clone(&self.body),
-            &segments,
-            false,
-        ) && !projection.actions.is_empty()
-        {
-            for action in &mut projection.actions {
-                ResponseFinalizer::finalize_incomplete(action, reason, finished_at);
-            }
-            output.actions.extend(projection.actions);
-            output
-                .llm_request_contents
-                .extend(projection.llm_request_contents);
-            output
-                .llm_request_histories
-                .extend(projection.llm_request_histories);
-            output.llm_tool_results.extend(projection.llm_tool_results);
-            output.payload_segments.extend(projection.payload_segments);
-            return output;
-        }
-        if reason == StreamFinalizationReason::CapturePolicyLimited {
-            return output;
-        }
-        let diagnostic_stream_key = format!("{}#h2:{}", key.stream_key, stream_id);
-        output.diagnostics.push(
-            LlmPipelineDiagnostic::new(
-                key.trace_id,
-                &key.process,
-                finished_at,
-                LlmPipelineDiagnosticCode::Http2IncompleteRequestUnprojectableAtClose,
-                LlmPipelineDiagnosticSeverity::Warning,
-                LlmPipelineDiagnosticStage::Http2,
-            )
-            .with_stream_key(&diagnostic_stream_key)
-            .with_discarded_bytes(u64::try_from(buffered_bytes).unwrap_or(u64::MAX))
-            .with_discarded_entries(u64::try_from(retained_ranges).unwrap_or(u64::MAX)),
-        );
-        output
     }
 
     fn project_response(
@@ -647,16 +546,21 @@ impl Http2ConnectionAssembly {
         for mut pending in std::mem::take(&mut self.pending_finalizations) {
             let finalization_reason = pending.reason.finalization_reason();
             let retained = pending.stream.retention_footprint();
+            // DATA and RST_STREAM can arrive in the same decoder batch, before
+            // any progress projection. Let the provider inspect the retained
+            // bytes even when no in-flight response has been created yet.
+            let message_start = pending
+                .stream
+                .plain
+                .in_flight_response
+                .take()
+                .map_or(pending.stream.plain.base_offset, |response| {
+                    response.message_start
+                });
             if direction == LiveStreamDirection::Inbound
-                && let Some(in_flight) = pending.stream.plain.in_flight_response.take()
-                && let Some((mut actions, drafts, provider_response_ids)) =
-                    pending.stream.materialize_response(
-                        config,
-                        codecs,
-                        key,
-                        pending.stream_id,
-                        in_flight.message_start,
-                    )
+                && let Some((mut actions, drafts, provider_response_ids)) = pending
+                    .stream
+                    .materialize_response(config, codecs, key, pending.stream_id, message_start)
             {
                 output.payload_segments.extend(drafts);
                 output.provider_response_ids.extend(provider_response_ids);

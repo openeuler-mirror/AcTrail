@@ -129,37 +129,85 @@ static __always_inline int actrail_launch_binding_observe_current(
     return *trace_id != 0 && *generation != 0;
 }
 
+static __always_inline int actrail_launch_binding_install_suppressed_fd(
+    const struct actrail_pending_exec_binding *binding,
+    __u32 pid,
+    __u64 index
+) {
+    struct actrail_suppressed_fd_value value = {};
+    __s32 fd = binding->suppressed_fds[index].fd;
+
+    value.trace_id = binding->trace_id;
+    value.purpose = binding->suppressed_fds[index].purpose;
+    return fd >= 0 &&
+        value.purpose != ACTRAIL_SUPPRESSED_FD_PURPOSE_NONE &&
+        upsert_suppressed_fd_for_generation(
+            pid,
+            binding->generation,
+            (__u32)fd,
+            &value);
+}
+
+#ifdef ACTRAIL_BPF_LOOP
+struct actrail_launch_suppressed_fd_install {
+    const struct actrail_pending_exec_binding *binding;
+    __u32 pid;
+    int succeeded;
+};
+
+static long actrail_launch_suppressed_fd_install_step(__u32 index, void *data) {
+    struct actrail_launch_suppressed_fd_install *install = data;
+    __u64 slot = index;
+
+    if (slot >= ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX ||
+        slot >= install->binding->suppressed_fd_count) {
+        return 1;
+    }
+    actrail_barrier_var(slot);
+    install->succeeded = actrail_launch_binding_install_suppressed_fd(
+        install->binding,
+        install->pid,
+        slot);
+    return install->succeeded ? 0 : 1;
+}
+#endif
+
 static __always_inline int actrail_launch_binding_install_suppressed_fds(
     const struct actrail_pending_exec_binding *binding,
     __u32 pid
 ) {
-    __u32 index;
+    __u32 count = binding->suppressed_fd_count;
 
-    if (binding->suppressed_fd_count > ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX) {
+    if (count > ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX) {
         return 0;
     }
+    if (!count) {
+        return 1;
+    }
+#ifdef ACTRAIL_BPF_LOOP
+    /* Keep the outer install loop out of the verifier's nested slot search. */
+    struct actrail_launch_suppressed_fd_install install = {
+        .binding = binding,
+        .pid = pid,
+        .succeeded = 1,
+    };
+    long result = bpf_loop(count, actrail_launch_suppressed_fd_install_step, &install, 0);
+
+    return result >= 0 && install.succeeded;
+#else
+    __u32 index;
+
 #pragma unroll
     for (index = 0; index < ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX; index++) {
-        struct actrail_suppressed_fd_value value = {};
-        __s32 fd;
-
         if (index >= binding->suppressed_fd_count) {
             break;
         }
-        fd = binding->suppressed_fds[index].fd;
-        value.trace_id = binding->trace_id;
-        value.purpose = binding->suppressed_fds[index].purpose;
-        if (fd < 0 ||
-            value.purpose == ACTRAIL_SUPPRESSED_FD_PURPOSE_NONE ||
-            !upsert_suppressed_fd_for_generation(
-                pid,
-                binding->generation,
-                (__u32)fd,
-                &value)) {
+        if (!actrail_launch_binding_install_suppressed_fd(binding, pid, index)) {
             return 0;
         }
     }
     return 1;
+#endif
 }
 
 static __always_inline void actrail_launch_binding_delete_invalid(

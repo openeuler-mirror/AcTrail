@@ -7,9 +7,9 @@ pub(super) use evidence::{
     payload_snapshot_evidence,
 };
 pub(in crate::llm_pipeline) use policy::semantic_payload_draft;
-pub(crate) use request_blocks::canonical_json as canonical_llm_json;
 pub(crate) use request_blocks::canonical_json_text as canonical_llm_json_text;
 pub(super) use request_blocks::{
-    FORMAT_VERSION, canonical_request_content, canonical_shape_metadata,
+    BackgroundRequestKind, CanonicalJsonWriter, FORMAT_VERSION, background_request_kind,
+    canonical_request_content, request_shape_metadata,
 };
 pub(in crate::llm_pipeline) use request_blocks::{HistoryAtom, TrajectoryHistoryProjection};

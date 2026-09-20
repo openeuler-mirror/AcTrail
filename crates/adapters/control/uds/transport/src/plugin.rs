@@ -7,7 +7,7 @@ use plugin_system::{
 
 use super::{ControlCodecError, field, parse_usize};
 
-const HOSTCALL_METRIC_FIELDS: usize = 9;
+const HOSTCALL_METRIC_FIELDS: usize = 10;
 const WARNINGS_FIELD: &str = "warnings";
 const OPERATIONAL_METRICS_FIELD: &str = "operational_metrics";
 
@@ -62,6 +62,7 @@ fn encode_plugin_status_fields(fields: &mut Vec<String>, status: &PluginInstance
     fields.push(payload_read.truncated.to_string());
     fields.push(payload_read.latency_total_ns.to_string());
     fields.push(payload_read.latency_max_ns.to_string());
+    fields.push(payload_read.failed.to_string());
     if !status.warnings.is_empty() {
         fields.push(WARNINGS_FIELD.to_string());
         fields.push(status.warnings.len().to_string());
@@ -200,6 +201,7 @@ fn decode_plugin_status_fields(
                     field(fields, base_end + 8)?,
                     "payload_read_latency_max_ns",
                 )?,
+                failed: parse_u64(field(fields, base_end + 9)?, "payload_read_failed")?,
             },
         },
     };

@@ -173,7 +173,15 @@ fn build_runtime_wiring_with_attach_service(
     network_control_config: NetworkControlConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
-    let storage = open_storage_backend(storage_config, StorageOpenMode::ReadWrite)
+    let storage_config = storage_config.clone().with_payload_retention_limits(
+        storage_core::PayloadRetentionLimits {
+            tls: payload_config.tls.retention_max_bytes_per_trace,
+            socket: payload_config.socket.retention_max_bytes_per_trace,
+            stdio: payload_config.stdio.retention_max_bytes_per_trace,
+        },
+        active_trace_max as usize,
+    );
+    let storage = open_storage_backend(&storage_config, StorageOpenMode::ReadWrite)
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     let trace_id_seed = storage
         .next_trace_id_seed()

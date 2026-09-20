@@ -11,7 +11,55 @@ struct signal_struct {
     struct actrail_atomic_counter live;
 } __attribute__((preserve_access_index));
 
-struct file;
+struct timespec64 {
+    __s64 tv_sec;
+    long tv_nsec;
+} __attribute__((preserve_access_index));
+
+struct super_block {
+    __u32 s_dev;
+} __attribute__((preserve_access_index));
+
+struct inode {
+    unsigned short i_mode;
+    struct super_block *i_sb;
+    unsigned long i_ino;
+    __s64 i_size;
+} __attribute__((preserve_access_index));
+
+struct inode___legacy {
+    struct timespec64 i_mtime;
+    struct timespec64 i_ctime;
+} __attribute__((preserve_access_index));
+
+struct inode___private {
+    struct timespec64 __i_mtime;
+    struct timespec64 __i_ctime;
+} __attribute__((preserve_access_index));
+
+struct vfsmount;
+struct dentry;
+struct path {
+    struct vfsmount *mnt;
+    struct dentry *dentry;
+} __attribute__((preserve_access_index));
+
+struct file {
+    struct inode *f_inode;
+    struct path f_path;
+} __attribute__((preserve_access_index));
+
+struct mm_struct {
+    struct file *exe_file;
+} __attribute__((preserve_access_index));
+
+struct vm_area_struct {
+    unsigned long vm_start;
+    unsigned long vm_end;
+    struct mm_struct *vm_mm;
+    unsigned long vm_flags;
+    struct file *vm_file;
+} __attribute__((preserve_access_index));
 
 struct fdtable {
     unsigned int max_fds;
@@ -31,6 +79,7 @@ struct task_struct {
     struct pid *thread_pid;
     struct signal_struct *signal;
     struct files_struct *files;
+    struct mm_struct *mm;
 } __attribute__((preserve_access_index));
 
 struct bpf_iter_meta;

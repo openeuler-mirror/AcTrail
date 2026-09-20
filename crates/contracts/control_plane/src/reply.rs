@@ -70,7 +70,34 @@ pub struct LaunchTlsPlanDescriptor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LaunchTlsPlanStatus {
     Found(Vec<LaunchTlsPlanDescriptor>),
-    Unsupported { reason: String },
+    Unsupported {
+        reason: LaunchTlsPlanUnavailableReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum LaunchTlsPlanUnavailableReason {
+    NoProbePoints = 1,
+    AnalysisRejected = 2,
+}
+
+impl LaunchTlsPlanUnavailableReason {
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
+
+impl TryFrom<u8> for LaunchTlsPlanUnavailableReason {
+    type Error = ();
+
+    fn try_from(code: u8) -> Result<Self, Self::Error> {
+        match code {
+            1 => Ok(Self::NoProbePoints),
+            2 => Ok(Self::AnalysisRejected),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,6 +149,8 @@ pub enum ControlReply {
     Doctor(DoctorReply),
     TurnLifecycleRecorded,
     UserInteractionRecorded,
+    SessionClosedRecorded,
+    WorkLifecycleRecorded,
     PluginList(Vec<PluginInstanceStatus>),
     PluginStatus(PluginInstanceStatus),
     PluginCommand(PluginCommandReply),

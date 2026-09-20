@@ -200,7 +200,8 @@ impl FinalizationDocument {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct StorageDocument {
     pub backend: String,
-    pub sqlite: SqliteStorageDocument,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sqlite: Option<SqliteStorageDocument>,
     pub retention: StorageRetentionDocument,
 }
 
@@ -208,7 +209,7 @@ impl Default for StorageDocument {
     fn default() -> Self {
         Self {
             backend: "sqlite".to_string(),
-            sqlite: SqliteStorageDocument::default(),
+            sqlite: Some(SqliteStorageDocument::default()),
             retention: StorageRetentionDocument::default(),
         }
     }
@@ -216,23 +217,27 @@ impl Default for StorageDocument {
 
 impl StorageDocument {
     pub(super) fn to_config(&self) -> Result<StorageConfig, String> {
+        if self.backend == "noop" {
+            return Ok(StorageConfig::NoOp);
+        }
         if self.backend != "sqlite" {
             return Err(format!(
-                "invalid storage.backend: expected sqlite, got {}",
+                "invalid storage.backend: expected sqlite or noop, got {}",
                 self.backend
             ));
         }
+        let sqlite = self
+            .sqlite
+            .as_ref()
+            .ok_or_else(|| "storage.sqlite is required for storage.backend=sqlite".to_string())?;
         Ok(StorageConfig::sqlite_with_options(
-            &self.sqlite.path,
-            require_positive_u64(
-                "storage.sqlite.busy_timeout_ms",
-                self.sqlite.busy_timeout_ms,
-            )?,
-            self.sqlite.cold_field_compression_min_bytes,
-            self.sqlite.cold_field_zstd_level,
-            self.sqlite.event_payload_dictionary_cache_bytes,
-            self.sqlite.event_path_dictionary_cache_bytes,
-            match self.sqlite.event_record_layout.as_str() {
+            &sqlite.path,
+            require_positive_u64("storage.sqlite.busy_timeout_ms", sqlite.busy_timeout_ms)?,
+            sqlite.cold_field_compression_min_bytes,
+            sqlite.cold_field_zstd_level,
+            sqlite.event_payload_dictionary_cache_bytes,
+            sqlite.event_path_dictionary_cache_bytes,
+            match sqlite.event_record_layout.as_str() {
                 "rows" => EventRecordLayout::Rows,
                 "blocks" => EventRecordLayout::Blocks,
                 value => {
@@ -243,17 +248,17 @@ impl StorageDocument {
             },
             require_bounded_positive_usize(
                 "storage.sqlite.event_record_block_max_events",
-                self.sqlite.event_record_block_max_events,
+                sqlite.event_record_block_max_events,
                 SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
             )?,
             require_bounded_positive_usize(
                 "storage.sqlite.event_record_block_max_uncompressed_bytes",
-                self.sqlite.event_record_block_max_uncompressed_bytes,
+                sqlite.event_record_block_max_uncompressed_bytes,
                 SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
             )?,
             require_zstd_level(
                 "storage.sqlite.event_record_block_zstd_level",
-                self.sqlite.event_record_block_zstd_level,
+                sqlite.event_record_block_zstd_level,
             )?,
         ))
     }
@@ -490,8 +495,6 @@ impl Default for CaptureDocument {
                 "fs-access-basic",
                 "fs-mmap",
                 "net-transport",
-                "ipc-unix-socket",
-                "ipc-pipe-fifo",
                 "stdio-chunk",
                 "tls-plaintext-payload",
                 "socket-plaintext-payload",
@@ -557,13 +560,13 @@ pub(super) struct EbpfDocument {
     )]
     pub enabled: String,
     pub memlock_rlimit: String,
-    pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
     pub fd_per_process_max_entries: u32,
     pub suppressed_fd_max_entries: u32,
     pub suppressed_fd_index_slots_per_process: u32,
     pub event_ring_buffer_max_bytes: u32,
+    pub diagnostics_summary_interval_ms: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
     pub net_send_recv_aggregation: bool,
@@ -575,13 +578,13 @@ impl Default for EbpfDocument {
         Self {
             enabled: "true".to_string(),
             memlock_rlimit: "inherit".to_string(),
-            preflight_link_teardown_workers: DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
             fd_per_process_max_entries: 64,
             suppressed_fd_max_entries: 8192,
             suppressed_fd_index_slots_per_process: 64,
             event_ring_buffer_max_bytes: 33554432,
+            diagnostics_summary_interval_ms: 10000,
             file_path_capture_enabled: true,
             file_path_max_bytes: 255,
             net_send_recv_aggregation: true,
@@ -599,15 +602,6 @@ impl EbpfDocument {
         // At parse time `enabled` is true only for an explicit `true`; `auto`
         // defers to daemon-side resolution (starts false).
         let enabled = matches!(enabled_mode, EbpfEnabledMode::True);
-        let preflight_link_teardown_workers = require_positive_u32(
-            "ebpf.preflight_link_teardown_workers",
-            self.preflight_link_teardown_workers,
-        )?;
-        if preflight_link_teardown_workers > MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS {
-            return Err(format!(
-                "invalid ebpf.preflight_link_teardown_workers: value must not exceed {MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS}"
-            ));
-        }
         Ok(EbpfCollectorConfig {
             enabled_mode,
             enabled,
@@ -615,7 +609,6 @@ impl EbpfDocument {
                 "ebpf.memlock_rlimit",
                 &self.memlock_rlimit,
             )?,
-            preflight_link_teardown_workers,
             tracked_process_max_entries: self.tracked_process_max_entries,
             pending_operation_max_entries: self.pending_operation_max_entries,
             fd_per_process_max_entries: require_positive_u32(
@@ -625,6 +618,10 @@ impl EbpfDocument {
             suppressed_fd_max_entries: self.suppressed_fd_max_entries,
             suppressed_fd_index_slots_per_process: self.suppressed_fd_index_slots_per_process,
             event_ring_buffer_max_bytes: self.event_ring_buffer_max_bytes,
+            diagnostics_summary_interval_ms: require_positive_u32(
+                "ebpf.diagnostics_summary_interval_ms",
+                self.diagnostics_summary_interval_ms,
+            )?,
             file_path_capture_enabled: self.file_path_capture_enabled,
             file_path_max_bytes: require_positive_u32(
                 "ebpf.file_path_max_bytes",

@@ -32,10 +32,8 @@ enum actrail_fd_category {
     ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET = 2,
     ACTRAIL_FD_CATEGORY_IPC_PIPE = 3,
     ACTRAIL_FD_CATEGORY_FILE = 4,
-};
-
-enum actrail_fd_flag {
-    ACTRAIL_FD_FLAG_CLOEXEC = 1,
+    ACTRAIL_FD_CATEGORY_IPC_FIFO = 5,
+    ACTRAIL_FD_CATEGORY_DIRECTORY = 6,
 };
 
 enum actrail_fd_flag_context_kind {
@@ -68,10 +66,9 @@ struct actrail_fd_key {
 
 struct actrail_fd_state {
     __u32 category;
-    __u32 flags;
     __u32 index_slot;
-    __u32 reserved;
     __u64 generation;
+    __u64 file_identity;
 };
 
 struct actrail_fd_object_key {
@@ -84,7 +81,6 @@ struct actrail_fd_object_state {
     __u32 refcount;
     __u32 category;
     __u64 trace_id;
-    __u64 file_identity;
     struct actrail_endpoint remote;
 };
 
@@ -117,13 +113,11 @@ struct actrail_fd_registration {
     __u32 pid;
     __u32 fd;
     __u32 category;
-    __u32 flags;
 };
 
 struct actrail_pending_fd_open_op {
     __u64 trace_id;
     __u32 pid;
-    __u32 flags;
 };
 
 struct actrail_pending_fd_close_op {
@@ -142,18 +136,13 @@ struct actrail_pending_fd_dup_op {
     __u32 pid;
     __u32 source_fd;
     __u32 target_fd;
-    __u32 target_flags;
     __u32 mode;
     __u32 reference_reserved;
     __u64 source_file_identity;
 };
 
 struct actrail_pending_fd_flag_op {
-    __u32 pid;
-    __u32 fd;
-    __u32 flags;
     __u32 context_kind;
-    __u64 generation;
 };
 
 struct actrail_pending_ipc_fd_pair_op {

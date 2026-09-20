@@ -8,7 +8,6 @@ use super::http::HttpMessageLinkProjector;
 use super::llm::LlmExchangeLinkProjector;
 use super::sse::SseLinkProjector;
 use crate::live::HttpResponseMatch;
-use crate::live::actions::action_for_live_state;
 use crate::llm_pipeline::{LlmHttpRequestLink, LlmHttpResponseLink};
 
 pub(in crate::live) struct ActionLinkProjector {
@@ -53,25 +52,25 @@ impl ActionLinkProjector {
         }
     }
 
-    pub(in crate::live) fn observe_actions(
+    pub(in crate::live) fn observe_actions<'a>(
         &mut self,
-        actions: &[SemanticAction],
+        actions: impl IntoIterator<Item = &'a SemanticAction>,
     ) -> Vec<SemanticActionLink> {
-        let state_actions = actions
-            .iter()
-            .map(action_for_live_state)
-            .collect::<Vec<_>>();
-        for action in &state_actions {
+        let actions = actions.into_iter().collect::<Vec<_>>();
+        for action in &actions {
             self.agent.observe_action(action);
-            self.command.observe_action(action);
         }
 
         let mut links = Vec::new();
-        for action in &state_actions {
+        for action in &actions {
             links.extend(self.agent.link_pending_for_agent(action));
-            links.extend(self.command.link_pending_for_command(action));
         }
-        for action in &state_actions {
+        for action in &actions {
+            // Boundary output can contain file activity from the preceding
+            // image before the new command. Advance command ownership in
+            // that order instead of pre-registering the whole batch.
+            self.command.observe_action(action);
+            links.extend(self.command.link_pending_for_command(action));
             links.extend(self.llm_exchange.observe_action(action));
             links.extend(self.sse.observe_action(action));
             links.extend(self.agent.link_child_action(action));

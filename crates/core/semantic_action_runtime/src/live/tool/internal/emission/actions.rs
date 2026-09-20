@@ -15,7 +15,7 @@ use semantic_action::{
 use serde_json::Value;
 
 use crate::live::tool::internal::declaration::DeclaredLlmToolCall;
-use crate::llm_pipeline::{ProjectedLlmToolResult, canonical_llm_json};
+use crate::llm_pipeline::ProjectedLlmToolResult;
 
 pub(super) fn tool_diagnostic(
     trace_id: TraceId,
@@ -55,10 +55,6 @@ pub(super) fn tool_call_action(
             attrs::llm_tool_call::ARGUMENTS_BYTES.to_string(),
             declared.arguments_json.len().to_string(),
         ),
-        (
-            attrs::llm_tool_call::ARGUMENTS_HASH.to_string(),
-            declared.arguments_hash.clone(),
-        ),
     ]);
     if let Some(id) = &declared.tool_call_id {
         attributes.insert(attrs::llm_tool_call::ID.to_string(), id.clone());
@@ -71,7 +67,7 @@ pub(super) fn tool_call_action(
         start_time: response.start_time,
         end_time: response.end_time,
         process: response.process,
-        status: response.status,
+        status: SemanticActionStatus::Unknown,
         completeness: response.completeness,
         attributes,
         evidence: response.evidence.clone(),
@@ -117,10 +113,6 @@ pub(super) fn agent_invocation_action(
             agent_type.to_string(),
         );
     }
-    if let Some(prompt) = declared.arguments.get("prompt").and_then(Value::as_str) {
-        let (_, hash) = canonical_llm_json(&Value::String(prompt.to_string()));
-        attributes.insert(attrs::agent_invocation::PROMPT_HASH.to_string(), hash);
-    }
     SemanticAction {
         action_id: format!("{}:agent-invocation", tool_call.action_id),
         trace_id: tool_call.trace_id,
@@ -150,10 +142,6 @@ pub(super) fn tool_result_action(
             binding_state.to_string(),
         ),
         (
-            attrs::llm_tool_result::CONTENT_BYTES.to_string(),
-            result.content_bytes.to_string(),
-        ),
-        (
             attrs::llm_tool_result::CONTENT_EXPORT_STATE.to_string(),
             result.content_export_state.to_string(),
         ),
@@ -170,6 +158,12 @@ pub(super) fn tool_result_action(
             request.action_id.clone(),
         ),
     ]);
+    if let Some(content_bytes) = result.content_bytes {
+        attributes.insert(
+            attrs::llm_tool_result::CONTENT_BYTES.to_string(),
+            content_bytes.to_string(),
+        );
+    }
     if let Some(id) = &result.tool_call_id {
         attributes.insert(attrs::llm_tool_result::ID.to_string(), id.clone());
     }
@@ -190,7 +184,8 @@ pub(super) fn tool_result_action(
         status: if result.is_error {
             SemanticActionStatus::Error
         } else {
-            SemanticActionStatus::Success
+            // Absence of a protocol error flag does not establish execution success.
+            SemanticActionStatus::Unknown
         },
         completeness: request.completeness,
         attributes,

@@ -12,6 +12,7 @@ pub fn open_storage_backend(
     mode: StorageOpenMode,
 ) -> Result<Box<dyn StorageBackend>, StorageError> {
     match (config, mode) {
+        (StorageConfig::NoOp, _) => Ok(Box::new(storage_noop::NoOpStorage::new())),
         (StorageConfig::Sqlite(config), StorageOpenMode::ReadWrite) => {
             create_parent_directory(&config.path)?;
             SqliteStorage::open_with_options(
@@ -25,7 +26,16 @@ pub fn open_storage_backend(
                 config.event_record_block_max_uncompressed_bytes,
                 config.event_record_block_zstd_level,
             )
-            .map(|storage| Box::new(storage) as Box<dyn StorageBackend>)
+            .map(|storage| {
+                let storage = match config.payload_retention_limits {
+                    Some(limits) => storage.with_payload_retention_limits(
+                        limits,
+                        config.payload_retention_max_cached_traces,
+                    ),
+                    None => storage,
+                };
+                Box::new(storage) as Box<dyn StorageBackend>
+            })
             .map_err(|error| StorageError::new("open_sqlite_storage", error.to_string()))
         }
         (StorageConfig::Sqlite(config), StorageOpenMode::ReadOnly) => {

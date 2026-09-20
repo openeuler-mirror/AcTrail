@@ -4,7 +4,7 @@ pub mod alerts;
 pub mod backend;
 pub mod config;
 mod external_cgroups;
-pub mod idle;
+mod payload;
 pub mod query;
 pub mod records;
 mod resource_scopes;
@@ -40,15 +40,27 @@ pub use semantic_actions::storage_meta::ColdFieldCompression;
 
 #[derive(Clone)]
 pub struct SqliteStorage {
+    payload_retention: Rc<RefCell<payload::PayloadRetentionState>>,
     connection: Rc<RefCell<Connection>>,
     trace_leases: Rc<RefCell<crate::query::TraceLeaseRegistry>>,
-    cold_field_compression: ColdFieldCompression,
+    cold_field_encoder: semantic_actions::ColdFieldEncoder,
     event_payload_dictionary: Rc<RefCell<crate::records::EventPayloadDictionary>>,
     event_path_dictionary: Rc<RefCell<crate::records::PathInterner>>,
     event_record_blocks: Rc<RefCell<crate::records::EventRecordBlockWriter>>,
 }
 
 impl SqliteStorage {
+    pub fn with_payload_retention_limits(
+        self,
+        limits: storage_core::PayloadRetentionLimits,
+        max_cached_traces: usize,
+    ) -> Self {
+        self.payload_retention
+            .borrow_mut()
+            .configure(limits, max_cached_traces);
+        self
+    }
+
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         Self::open_with_compression(path, None, ColdFieldCompression::DEFAULT)
     }
@@ -100,8 +112,9 @@ impl SqliteStorage {
         let event_id_high_water = read_event_id_high_water(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
+            payload_retention: Rc::new(RefCell::new(payload::PayloadRetentionState::default())),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-            cold_field_compression,
+            cold_field_encoder: semantic_actions::ColdFieldEncoder::new(cold_field_compression)?,
             event_payload_dictionary: Rc::new(RefCell::new(
                 crate::records::EventPayloadDictionary::new(event_payload_dictionary_cache_bytes),
             )),
@@ -125,8 +138,9 @@ impl SqliteStorage {
         schema::validate_read_schema(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
+            payload_retention: Rc::new(RefCell::new(payload::PayloadRetentionState::default())),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-            cold_field_compression: ColdFieldCompression::DEFAULT,
+            cold_field_encoder: semantic_actions::ColdFieldEncoder::for_read_only(),
             event_payload_dictionary: Rc::new(RefCell::new(
                 crate::records::EventPayloadDictionary::new(0),
             )),
@@ -148,8 +162,11 @@ impl SqliteStorage {
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
+            payload_retention: Rc::new(RefCell::new(payload::PayloadRetentionState::default())),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-            cold_field_compression: ColdFieldCompression::DEFAULT,
+            cold_field_encoder: semantic_actions::ColdFieldEncoder::new(
+                ColdFieldCompression::DEFAULT,
+            )?,
             event_payload_dictionary: Rc::new(RefCell::new(
                 crate::records::EventPayloadDictionary::new(
                     SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
@@ -204,10 +221,6 @@ impl SqliteStorage {
             "payload_segments",
             "segment_id",
         )
-    }
-
-    pub fn next_idle_interval_id_seed(&self) -> Result<u64, rusqlite::Error> {
-        next_id_seed(&self.connection().borrow(), "idle_intervals", "interval_id")
     }
 
     pub fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), rusqlite::Error> {

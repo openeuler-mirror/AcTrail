@@ -150,10 +150,7 @@ fn request_shape(request: Option<&SemanticAction>) -> Result<RequestShape, Strin
         return Ok(RequestShape::default());
     };
     Ok(RequestShape {
-        canonical_body_bytes: optional_u64_attr(
-            request,
-            attr_keys::llm_request::CANONICAL_BODY_BYTES,
-        )?,
+        request_payload_bytes: optional_u64_attr(request, attr_keys::llm_request::PAYLOAD_BYTES)?,
         block_count: optional_u64_attr(request, attr_keys::llm_request::BLOCK_COUNT)?,
     })
 }

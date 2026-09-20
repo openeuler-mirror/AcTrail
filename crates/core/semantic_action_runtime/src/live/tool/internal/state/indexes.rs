@@ -27,8 +27,6 @@ pub(super) struct ToolTraceEntries {
 pub(super) struct ToolInteractionIndexes {
     traces: BTreeMap<TraceId, ToolTraceEntries>,
     tool_call_ids: BTreeMap<(TraceId, String), BTreeSet<String>>,
-    prompt_hashes: BTreeMap<(TraceId, String), BTreeSet<String>>,
-    prompt_previews: BTreeMap<(TraceId, String), BTreeSet<String>>,
     order: BTreeMap<TraceId, BTreeSet<(u64, ToolStateKind, String)>>,
     positions: BTreeMap<(TraceId, ToolStateKind, String), u64>,
     next_sequence: u64,
@@ -109,65 +107,12 @@ impl ToolInteractionIndexes {
             .insert(action_id.to_string());
     }
 
-    pub(super) fn record_agent_invocation(
-        &mut self,
-        trace_id: TraceId,
-        action_id: &str,
-        prompt_hashes: &BTreeSet<String>,
-        prompt_preview: Option<&str>,
-    ) {
+    pub(super) fn record_agent_invocation(&mut self, trace_id: TraceId, action_id: &str) {
         self.traces
             .entry(trace_id)
             .or_default()
             .agent_invocations
             .insert(action_id.to_string());
-        for hash in prompt_hashes {
-            self.prompt_hashes
-                .entry((trace_id, hash.clone()))
-                .or_default()
-                .insert(action_id.to_string());
-        }
-        if let Some(preview) = prompt_preview {
-            self.prompt_previews
-                .entry((trace_id, preview.to_string()))
-                .or_default()
-                .insert(action_id.to_string());
-        }
-    }
-
-    pub(super) fn agent_child_candidates(
-        &self,
-        trace_id: TraceId,
-        request_hash: Option<&str>,
-        request_preview: Option<&str>,
-    ) -> BTreeSet<String> {
-        let mut candidates = BTreeSet::new();
-        if let Some(hash) = request_hash
-            && let Some(action_ids) = self.prompt_hashes.get(&(trace_id, hash.to_string()))
-        {
-            candidates.extend(action_ids.iter().cloned());
-        }
-        if let Some(preview) = request_preview
-            && let Some(action_ids) = self.prompt_previews.get(&(trace_id, preview.to_string()))
-        {
-            candidates.extend(action_ids.iter().cloned());
-        }
-        candidates
-    }
-
-    pub(super) fn unlink_agent_candidate(
-        &mut self,
-        trace_id: TraceId,
-        action_id: &str,
-        prompt_hashes: &BTreeSet<String>,
-        prompt_preview: Option<&str>,
-    ) {
-        for hash in prompt_hashes {
-            Self::remove_lookup(&mut self.prompt_hashes, trace_id, hash, action_id);
-        }
-        if let Some(preview) = prompt_preview {
-            Self::remove_lookup(&mut self.prompt_previews, trace_id, preview, action_id);
-        }
     }
 
     pub(super) fn take_trace(&mut self, trace_id: TraceId) -> ToolTraceEntries {

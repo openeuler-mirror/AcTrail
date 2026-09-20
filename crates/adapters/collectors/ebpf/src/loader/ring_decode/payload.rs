@@ -232,24 +232,22 @@ pub(super) fn decode_tls_direct_capture_event(
     raw: &[u8],
 ) -> Result<KernelTlsDirectCaptureEvent, LoaderError> {
     const TLS_DIRECT_CAPTURE_HEADER_SIZE: usize = 88;
-    const TLS_DIRECT_CAPTURE_ABI_MAX_BYTES: usize = 65_536;
-    const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize =
-        TLS_DIRECT_CAPTURE_HEADER_SIZE + TLS_DIRECT_CAPTURE_ABI_MAX_BYTES;
-    if raw.len() != TLS_DIRECT_CAPTURE_EVENT_SIZE {
+    const TLS_DIRECT_CAPTURE_MAX_BYTES: usize = 65_535;
+    // Payload capacities of the constant ring reservations in tls/capture.h.
+    // Only captured_size bytes belong to the payload; the rest is bucket padding.
+    let capacity = raw.len().checked_sub(TLS_DIRECT_CAPTURE_HEADER_SIZE);
+    if !matches!(capacity, Some(256 | 1_024 | 4_096 | 16_384 | 65_536)) {
         return Err(LoaderError::new(
             "decode_tls_direct_capture",
-            format!(
-                "unexpected TLS direct capture event size {}, expected {}",
-                raw.len(),
-                TLS_DIRECT_CAPTURE_EVENT_SIZE
-            ),
+            format!("unexpected TLS direct capture event size {}", raw.len()),
         ));
     }
+    let capacity = capacity.expect("event length checked");
     let captured_size = read_u32(raw, 52).expect("event length checked");
-    if captured_size as usize > TLS_DIRECT_CAPTURE_ABI_MAX_BYTES {
+    if captured_size as usize > TLS_DIRECT_CAPTURE_MAX_BYTES || captured_size as usize > capacity {
         return Err(LoaderError::new(
             "decode_tls_direct_capture",
-            format!("TLS captured size {} exceeds ABI maximum", captured_size),
+            format!("TLS captured size {captured_size} exceeds record capacity or capture maximum"),
         ));
     }
     Ok(KernelTlsDirectCaptureEvent {

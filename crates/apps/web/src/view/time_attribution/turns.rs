@@ -47,7 +47,9 @@ pub(super) fn user_turns(
                 current_calls.push(call);
                 continue;
             }
-            if call.user_input_start.is_none() {
+            if call.user_input_start.is_none()
+                && !matches!(call.turn_key.identity, UserTurnIdentity::Opaque)
+            {
                 tracker.action_info(
                     "detached_llm_call_excluded",
                     "A repeated user-message request was observed after its turn completed without new input or tool activity; it is treated as background activity.",

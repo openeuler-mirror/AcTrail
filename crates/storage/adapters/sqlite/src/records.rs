@@ -27,7 +27,6 @@ pub(crate) use event_record_blocks::{
     decode_event as decode_event_record_frame,
     decode_kind_counts as decode_event_record_block_kind_counts,
 };
-pub(crate) use helpers::escape;
 pub use helpers::{
     bool_to_i64, decode_map, decode_tags, decode_time, encode_map, encode_tags, encode_time,
     i64_to_bool,

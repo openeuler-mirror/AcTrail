@@ -30,6 +30,9 @@ class ProbeCodexMcpCase(TestCase):
                 self._config.work_dir,
                 agent_invocation_commands=[task.native_binary],
             )
+            patch_path = self._config.work_dir / "actraild.patch.toml"
+            with patch_path.open("a", encoding="utf-8") as patch:
+                patch.write("\n[payload.mcp]\nenabled = true\n")
             if not test_context.check_agent_availability(
                 "codex",
                 task.binary,

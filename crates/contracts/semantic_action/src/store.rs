@@ -24,9 +24,14 @@ impl SemanticActionStoreError {
 }
 
 pub trait SemanticActionWriteStore {
-    fn upsert_semantic_action(
+    fn insert_semantic_action(
         &mut self,
         action: SemanticAction,
+    ) -> Result<(), SemanticActionStoreError>;
+
+    fn update_semantic_action(
+        &mut self,
+        update: crate::SemanticActionUpdate,
     ) -> Result<(), SemanticActionStoreError>;
 
     fn upsert_semantic_action_link(

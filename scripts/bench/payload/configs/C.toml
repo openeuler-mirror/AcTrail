@@ -1,0 +1,50 @@
+# C is a configuration group; collection fallbacks may use synchronous seccomp.
+[file_observation.tty]
+enabled = true
+
+[file_observation.enumerate]
+enabled = true
+
+[file_observation.collection]
+writable_open = true
+path_mutations = true
+fd_mutations = true
+
+[file_observation.collection.read]
+observed = true
+counts = true
+bytes = true
+errors = true
+
+[file_observation.collection.write]
+observed = true
+counts = true
+bytes = true
+errors = true
+
+[capture]
+profile_name = "default-full-monitor"
+capabilities = ["proc-lifecycle", "proc-exec-context", "fs-access-basic", "fs-mmap", "net-transport", "stdio-chunk", "tls-plaintext-payload", "socket-plaintext-payload", "net-application-plaintext-http", "net-application-http2-frames", "resource-metrics"]
+
+[enforcement]
+enabled = false
+[command_control]
+enabled = false
+[network_control]
+enabled = false
+[process_seccomp]
+enabled = false
+
+[payload.tls]
+enabled = true
+capture_backend = "tls-sync"
+sync_flow_control_enabled = false
+[payload.socket]
+enabled = true
+capture_backend = "bpf-copy-seccomp-fallback"
+[seccomp_notify]
+enabled = true
+
+# Explicit MCP coverage for payload acceptance.
+[payload.mcp]
+enabled = true

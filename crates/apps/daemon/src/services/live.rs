@@ -2,6 +2,8 @@
 
 #[path = "live/batch.rs"]
 mod batch;
+#[path = "live/direct.rs"]
+mod direct;
 #[path = "live/launch_binding.rs"]
 mod launch_binding;
 #[path = "live/llm_diagnostics.rs"]
@@ -30,7 +32,6 @@ use model_core::process::{ProcessIdentity, ProcessMembership};
 use model_core::resource_scope::ResourceScopeLifecycleState;
 use model_core::trace::{TraceHealth, TraceLifecycleState};
 use recording_runtime::{RecordingWriter, SemanticActionBatch, TraceStateRecord};
-use trace_runtime::membership::MembershipIndex;
 use trace_runtime::registry::TraceRuntime;
 
 use crate::services::attach::StorageAttachService;
@@ -59,13 +60,17 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
+        for resolution in self.tls_sync.drain_direct() {
+            resolution.attach(&mut self.collector);
+        }
+        self.drain_idle_detection_alerts(trace_runtime);
         self.drain_alert_ingress_impl()?;
-        self.tick_idle_detector_impl()?;
         self.drain_post_trace_runtime_impl()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
         let active_bindings = self.collector.active_binding_trace_count();
-        let active_path = self.collector_ready() && active_bindings > 0;
+        let active_path = self.collector_ready()
+            && (active_bindings > 0 || self.collector.has_pending_file_io_events());
         self.workload_diagnostics
             .record_drain_call(active_bindings, active_path);
         if !active_path {
@@ -75,18 +80,19 @@ impl StorageAttachService {
                 .collector
                 .poll_tls_payload_control_events()
                 .map_err(|error| ControlError::new(error.stage, error.message));
+            self.discover_direct_mappings();
             warn_best_effort(
                 self.ingest_polled_seccomp_tls_controls_impl(),
                 "seccomp_tls_control",
+            );
+            warn_best_effort(
+                self.persist_event_transport_loss_diagnostics_impl(trace_runtime, false),
+                "event_transport_loss_diag",
             );
             poll_result?;
             warn_best_effort(
                 self.persist_launch_binding_failures_impl(trace_runtime),
                 "launch_binding_failure",
-            );
-            warn_best_effort(
-                self.persist_event_transport_loss_diagnostics_impl(trace_runtime),
-                "event_transport_loss_diag",
             );
             self.log_tls_diagnostic_events_impl();
             self.drain_seccomp_notifications_impl(trace_runtime)?;
@@ -116,9 +122,14 @@ impl StorageAttachService {
             .poll_batch()
             .map_err(|error| ControlError::new(error.stage, error.message));
         let drain_probe_poll_ms = drain_probe_poll.elapsed().as_millis();
+        self.discover_direct_mappings();
         warn_best_effort(
             self.ingest_polled_seccomp_tls_controls_impl(),
             "seccomp_tls_control",
+        );
+        warn_best_effort(
+            self.persist_event_transport_loss_diagnostics_impl(trace_runtime, false),
+            "event_transport_loss_diag",
         );
         let batch = batch_result?;
         let observations_count = batch.observations.len();
@@ -127,10 +138,6 @@ impl StorageAttachService {
         warn_best_effort(
             self.persist_launch_binding_failures_impl(trace_runtime),
             "launch_binding_failure",
-        );
-        warn_best_effort(
-            self.persist_event_transport_loss_diagnostics_impl(trace_runtime),
-            "event_transport_loss_diag",
         );
         self.workload_diagnostics
             .record_collector_batch(batch.observations.len(), batch.payload_segments.len());
@@ -178,6 +185,8 @@ impl StorageAttachService {
             if trace.lifecycle_state.is_terminal()
                 && self.finalized_terminal_traces.contains(&trace.trace_id)
             {
+                self.idle_detection.finish_trace(trace.trace_id);
+                self.agent_executions.finish_trace(trace.trace_id);
                 self.semantic_actions.forget_trace(trace.trace_id);
                 self.application_protocol.forget_trace(trace.trace_id);
                 self.payload_reorderer.forget_trace(trace.trace_id);
@@ -185,7 +194,6 @@ impl StorageAttachService {
                 self.socket_payload_gate.forget_trace(trace.trace_id);
                 self.payload_body_retention_gate
                     .forget_trace(trace.trace_id);
-                self.retained_payload_bytes_by_trace.remove(&trace.trace_id);
             }
         }
     }
@@ -271,39 +279,34 @@ impl StorageAttachService {
     fn persist_event_transport_loss_diagnostics_impl(
         &mut self,
         trace_runtime: &mut TraceRuntime,
+        force: bool,
     ) -> Result<(), ControlError> {
-        let losses = self.collector.take_event_transport_loss_summaries();
-        if losses.is_empty() {
-            return Ok(());
-        }
-
-        let active_trace_ids = non_terminal_trace_ids(trace_runtime);
-        let mut trace_state_ids = BTreeSet::new();
-        let mut drafts = Vec::new();
-        let loss_message = event_transport_loss_message(&losses);
-        if active_trace_ids.is_empty() {
-            drafts.push(RuntimeDropDiagnosticDraft {
-                trace_id: None,
-                code: "event_transport_loss".to_string(),
-                message: loss_message,
-            });
-        } else {
-            for trace_id in &active_trace_ids {
-                trace_runtime.mark_degraded(*trace_id).map_err(|error| {
+        let (new_loss, summary) = self.collector.take_event_transport_loss_summary(force);
+        let mut trace_states = Vec::new();
+        if new_loss {
+            for trace_id in non_terminal_trace_ids(trace_runtime) {
+                // TraceRuntime owns health. Once degraded, no repeated state
+                // writes are needed while the shared loss counter keeps rising.
+                if trace_runtime.get_trace(trace_id).is_none_or(|state| {
+                    state.trace.health == model_core::trace::TraceHealth::Degraded
+                }) {
+                    continue;
+                }
+                trace_runtime.mark_degraded(trace_id).map_err(|error| {
                     ControlError::new("event_transport_loss_degrade", format!("{error:?}"))
                 })?;
-                trace_state_ids.insert(*trace_id);
-                drafts.push(RuntimeDropDiagnosticDraft {
-                    trace_id: Some(*trace_id),
-                    code: "event_transport_loss".to_string(),
-                    message: loss_message.clone(),
-                });
+                trace_states
+                    .push(self.trace_state_record_for_persistence(trace_runtime, trace_id)?);
             }
         }
-        let trace_states = trace_state_ids
+        let drafts = summary
             .into_iter()
-            .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|message| RuntimeDropDiagnosticDraft {
+                trace_id: None,
+                code: "event_transport_loss".to_string(),
+                message,
+            })
+            .collect();
         self.persist_runtime_drop_diagnostics(trace_runtime, drafts, trace_states)
     }
 
@@ -337,6 +340,7 @@ impl StorageAttachService {
             diagnostics,
             SemanticActionBatch::default(),
             trace_states,
+            Vec::new(),
             Vec::new(),
         )
     }
@@ -457,7 +461,7 @@ impl StorageAttachService {
             .with_metadata("error", failure.message);
             RecordingWriter::new(self.storage.as_mut())
                 .persist_diagnostic(diagnostic)
-                .map_err(recording_error_to_control)?;
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
             if !failure.recovered {
                 self.persist_trace_state(trace_runtime, failure.trace_id)?;
             }
@@ -608,7 +612,7 @@ impl StorageAttachService {
         .with_metadata("timed_out", timed_out.to_string());
         RecordingWriter::new(self.storage.as_mut())
             .persist_diagnostic(diagnostic)
-            .map_err(recording_error_to_control)
+            .map_err(|error| ControlError::new(error.stage, error.message))
     }
 
     fn persist_resource_final_event(
@@ -683,7 +687,7 @@ impl StorageAttachService {
         .with_process(root);
         RecordingWriter::new(self.storage.as_mut())
             .persist_diagnostic(diagnostic)
-            .map_err(recording_error_to_control)
+            .map_err(|error| ControlError::new(error.stage, error.message))
     }
 
     fn drain_enforcement_impl(
@@ -839,9 +843,12 @@ impl StorageAttachService {
         trace_id: TraceId,
     ) -> Result<(), ControlError> {
         let trace_state = self.trace_state_record_for_persistence(trace_runtime, trace_id)?;
-        RecordingWriter::new(self.storage.as_mut())
-            .persist_trace_state(trace_state)
-            .map_err(recording_error_to_control)?;
+        if let Err(error) =
+            RecordingWriter::new(self.storage.as_mut()).persist_trace_state(trace_state)
+        {
+            tracing::warn!(trace_id = %trace_id, stage = %error.stage, message = %error.message,
+                "trace state storage delivery failed locally");
+        }
 
         Ok(())
     }
@@ -853,53 +860,66 @@ impl StorageAttachService {
     ) -> Result<TraceStateRecord, ControlError> {
         trace_runtime
             .get_trace(trace_id)
-            .map(|entry| {
-                TraceStateRecord::new(
-                    entry.trace.clone(),
-                    entry
-                        .memberships
-                        .memberships()
-                        .cloned()
-                        .collect::<Vec<ProcessMembership>>(),
-                )
-            })
+            .map(|entry| TraceStateRecord::new(entry.trace.clone()))
             .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))
     }
 
-    pub(in crate::services) fn trace_state_record_for_memberships(
+    pub(in crate::services) fn membership_records_for_persistence(
         &self,
         trace_runtime: &TraceRuntime,
         trace_id: TraceId,
         membership_ids: &BTreeSet<ProcessIdentity>,
-    ) -> Result<TraceStateRecord, ControlError> {
-        // Trace-state persistence upserts the supplied memberships and never
-        // deletes omitted rows, so hot-path batches only need their mutations.
-        // Lifecycle/finalization paths continue to use the full snapshot above.
+    ) -> Result<Vec<ProcessMembership>, ControlError> {
         let entry = trace_runtime
             .get_trace(trace_id)
-            .ok_or_else(|| ControlError::new("persist_trace_state", "trace not found"))?;
-        let memberships =
-            memberships_for_persistence(trace_id, &entry.memberships, membership_ids)?;
-        Ok(TraceStateRecord::new(entry.trace.clone(), memberships))
-    }
-}
-
-fn memberships_for_persistence(
-    trace_id: TraceId,
-    memberships: &MembershipIndex,
-    membership_ids: &BTreeSet<ProcessIdentity>,
-) -> Result<Vec<ProcessMembership>, ControlError> {
-    membership_ids
-        .iter()
-        .map(|identity| {
-            memberships.get(identity).cloned().ok_or_else(|| {
-                ControlError::new(
-                    "persist_trace_membership",
-                    format!("trace {trace_id} membership {identity} not found"),
-                )
+            .ok_or_else(|| ControlError::new("persist_memberships", "trace not found"))?;
+        membership_ids
+            .iter()
+            .map(|identity| {
+                entry.memberships.get(identity).cloned().ok_or_else(|| {
+                    ControlError::new(
+                        "persist_trace_membership",
+                        format!("trace {trace_id} membership {identity} not found"),
+                    )
+                })
             })
-        })
-        .collect()
+            .collect()
+    }
+
+    pub(in crate::services) fn persist_memberships(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+        membership_ids: &BTreeSet<ProcessIdentity>,
+    ) -> Result<(), ControlError> {
+        let memberships =
+            self.membership_records_for_persistence(trace_runtime, trace_id, membership_ids)?;
+        if let Err(error) =
+            RecordingWriter::new(self.storage.as_mut()).persist_memberships(memberships)
+        {
+            tracing::warn!(trace_id = %trace_id, stage = %error.stage, message = %error.message,
+                "membership storage delivery failed locally");
+        }
+        Ok(())
+    }
+
+    pub(in crate::services) fn persist_trace_state_with_memberships(
+        &mut self,
+        trace_runtime: &TraceRuntime,
+        trace_id: TraceId,
+        membership_ids: &BTreeSet<ProcessIdentity>,
+    ) -> Result<(), ControlError> {
+        let trace_state = self.trace_state_record_for_persistence(trace_runtime, trace_id)?;
+        let memberships =
+            self.membership_records_for_persistence(trace_runtime, trace_id, membership_ids)?;
+        if let Err(error) = RecordingWriter::new(self.storage.as_mut())
+            .persist_trace_state_with_memberships(trace_state, memberships)
+        {
+            tracing::warn!(trace_id = %trace_id, stage = %error.stage, message = %error.message,
+                "trace state and membership storage delivery failed locally");
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn next_diagnostic_id_from_seed(seed: &mut u64) -> Result<DiagnosticId, ControlError> {
@@ -923,20 +943,4 @@ fn non_terminal_trace_ids(trace_runtime: &TraceRuntime) -> Vec<TraceId> {
         .filter(|trace| !trace.lifecycle_state.is_terminal())
         .map(|trace| trace.trace_id)
         .collect()
-}
-
-fn event_transport_loss_message(losses: &[String]) -> String {
-    match losses {
-        [] => String::new(),
-        [loss] => loss.clone(),
-        _ => format!(
-            "{} kernel event transport loss reports: {}",
-            losses.len(),
-            losses.join("; ")
-        ),
-    }
-}
-
-fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {
-    ControlError::new(error.stage, error.message)
 }

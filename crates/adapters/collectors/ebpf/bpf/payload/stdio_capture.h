@@ -175,18 +175,26 @@ static __always_inline int store_stdio_payload_op(
     struct trace_event_raw_sys_enter *ctx,
     __u32 syscall
 ) {
-    __u64 operation_key = current_kernel_pid_tgid();
+    __u64 operation_key;
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
-    struct actrail_stdio_payload_config *config = stdio_payload_config();
+    __u64 *trace_id;
+    struct actrail_stdio_payload_config *config;
     struct actrail_pending_stdio_payload_op op = {};
     struct actrail_pending_stdio_payload_op *stored_op;
     __u32 fd = (__u32)ctx->args[0];
 
-    if (!operation_key || !tgid || !trace_id || !config || !config->enabled
-        || !ctx->args[1] || !ctx->args[2]) {
+    if (!ctx->args[1] || !ctx->args[2]) {
+        return 0;
+    }
+    if (!((syscall == ACTRAIL_STDIO_SYSCALL_READ && fd == ACTRAIL_STDIO_STREAM_STDIN)
+        || (syscall == ACTRAIL_STDIO_SYSCALL_WRITE
+            && (fd == ACTRAIL_STDIO_STREAM_STDOUT || fd == ACTRAIL_STDIO_STREAM_STDERR)))) {
+        return 0;
+    }
+    config = stdio_payload_config();
+    if (!config || !config->enabled) {
         return 0;
     }
 
@@ -206,6 +214,12 @@ static __always_inline int store_stdio_payload_op(
         op.stream = ACTRAIL_STDIO_STREAM_STDERR;
         op.direction = ACTRAIL_STDIO_PAYLOAD_OUTBOUND;
     } else {
+        return 0;
+    }
+
+    operation_key = current_kernel_pid_tgid();
+    trace_id = lookup_current_detailed_trace(&tgid, &tid, &lookup_flags);
+    if (!operation_key || !tgid || !trace_id) {
         return 0;
     }
 
@@ -241,16 +255,18 @@ static __always_inline int store_stdio_payload_op(
 
 static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit *ctx) {
     __u64 operation_key = current_kernel_pid_tgid();
-    struct actrail_pending_stdio_payload_op *op =
-        bpf_map_lookup_elem(&pending_stdio_payload_ops, &operation_key);
+    struct actrail_pending_stdio_payload_op *op;
     struct actrail_stdio_payload_event *event;
     __u64 original_size = (__u64)ctx->ret;
     __u64 bounded_size;
     __u32 capture_size;
-    __u32 limit = payload_stdio_capture_limit();
+    __u32 limit;
 
-    if (!operation_key || !op) {
-        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
+    if (!operation_key) {
+        return 0;
+    }
+    op = bpf_map_lookup_elem(&pending_stdio_payload_ops, &operation_key);
+    if (!op) {
         return 0;
     }
     if (op->syscall == ACTRAIL_STDIO_SYSCALL_WRITE) {
@@ -258,7 +274,12 @@ static __always_inline int emit_stdio_payload_op(struct trace_event_raw_sys_exit
         bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
         return 0;
     }
-    if (ctx->ret <= 0 || !limit) {
+    if (ctx->ret <= 0) {
+        bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
+        return 0;
+    }
+    limit = payload_stdio_capture_limit();
+    if (!limit) {
         bpf_map_delete_elem(&pending_stdio_payload_ops, &operation_key);
         return 0;
     }

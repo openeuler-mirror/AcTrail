@@ -6,6 +6,7 @@
 #include "../fd/suppressed.h"
 #include "../launch_binding/binding.h"
 #include "state.h"
+#include "file_identity.h"
 
 enum actrail_proc_coord_syscall_id {
     ACTRAIL_PROC_COORD_TRACEPOINT_SIGNAL_GENERATE = 1,
@@ -55,6 +56,7 @@ struct actrail_process_exec_config {
     __u32 max_args;
     __u32 max_arg_bytes;
     __u32 max_total_arg_bytes;
+    __u32 executable_identity_enabled;
 };
 
 struct actrail_pending_process_exec {
@@ -106,6 +108,20 @@ struct actrail_process_exec_arg_event {
     __u32 reserved;
     __u8 arg[ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES];
 };
+
+/* Syscall entry emits the path and each argument sequentially. A single
+ * per-CPU scratch slot holds one record until its effective length is known. */
+union actrail_process_exec_scratch {
+    struct actrail_process_exec_attempt_event attempt;
+    struct actrail_process_exec_arg_event arg;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, union actrail_process_exec_scratch);
+} process_exec_scratch SEC(".maps");
 
 struct actrail_process_exec_result_event {
     __u32 kind;
@@ -388,6 +404,10 @@ static __always_inline int emit_exec_proc_event(
     event->filename_size = 0;
     event->filename_flags = 0;
     event->filename[0] = 0;
+    struct actrail_process_exec_config *config = current_process_exec_config();
+    if (config && config->executable_identity_enabled) {
+        capture_exec_file_identity(&event->file_identity);
+    }
     filename_offset = ctx->filename_loc & 0xffff;
     filename_data_size = ctx->filename_loc >> 16;
     if (filename_offset) {

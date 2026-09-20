@@ -94,10 +94,10 @@ pub(super) fn activity_snapshot(dataset: &LlmUsageDataset) -> ActivitySnapshot {
                 .iter()
                 .filter_map(|row| row.tokens.input_tokens)
                 .collect(),
-            canonical_body_bytes_samples: dataset
+            request_payload_bytes_samples: dataset
                 .rows
                 .iter()
-                .filter_map(|row| row.request_shape.canonical_body_bytes)
+                .filter_map(|row| row.request_shape.request_payload_bytes)
                 .collect(),
             block_count_samples: dataset
                 .rows
@@ -113,8 +113,8 @@ fn summary(dataset: &LlmUsageDataset) -> Summary {
     let mut trace_ids = BTreeSet::new();
     let mut completed_requests = 0usize;
     let mut missing_usage_count = 0usize;
-    let mut canonical_body_bytes = 0u64;
-    let mut canonical_body_bytes_count = 0usize;
+    let mut request_payload_bytes = 0u64;
+    let mut request_payload_bytes_count = 0usize;
     let mut block_count = 0u64;
     let mut block_count_rows = 0usize;
     for row in &dataset.rows {
@@ -125,9 +125,9 @@ fn summary(dataset: &LlmUsageDataset) -> Summary {
         } else {
             missing_usage_count += 1;
         }
-        if let Some(value) = row.request_shape.canonical_body_bytes {
-            canonical_body_bytes = canonical_body_bytes.saturating_add(value);
-            canonical_body_bytes_count += 1;
+        if let Some(value) = row.request_shape.request_payload_bytes {
+            request_payload_bytes = request_payload_bytes.saturating_add(value);
+            request_payload_bytes_count += 1;
         }
         if let Some(value) = row.request_shape.block_count {
             block_count = block_count.saturating_add(value);
@@ -148,8 +148,8 @@ fn summary(dataset: &LlmUsageDataset) -> Summary {
         ),
         app_count: unique_count(dataset.rows.iter().map(|row| row.app.executable.clone())),
         totals,
-        canonical_body_bytes,
-        canonical_body_bytes_count,
+        request_payload_bytes,
+        request_payload_bytes_count,
         block_count,
         block_count_rows,
     }
@@ -355,9 +355,9 @@ fn request_shape_json(snapshot: &RequestShapeSnapshot) -> String {
         )
     };
     format!(
-        "{{\"input_tokens_samples\":{},\"canonical_body_bytes_samples\":{},\"block_count_samples\":{}}}",
+        "{{\"input_tokens_samples\":{},\"request_payload_bytes_samples\":{},\"block_count_samples\":{}}}",
         values(&snapshot.input_tokens_samples),
-        values(&snapshot.canonical_body_bytes_samples),
+        values(&snapshot.request_payload_bytes_samples),
         values(&snapshot.block_count_samples)
     )
 }
@@ -377,7 +377,7 @@ fn capabilities_json() -> String {
 
 fn summary_json(summary: &Summary) -> String {
     format!(
-        "{{\"completed_requests\":{},\"failed_requests\":{},\"missing_usage_count\":{},\"trace_count\":{},\"model_count\":{},\"endpoint_count\":{},\"app_count\":{},\"total_tokens\":{},\"input_tokens\":{},\"output_tokens\":{},\"reasoning_tokens\":{},\"cache_hit_tokens\":{},\"cache_miss_tokens\":{},\"canonical_body_bytes\":{},\"canonical_body_bytes_count\":{},\"block_count\":{},\"block_count_rows\":{},\"estimated_spend_cny\":null}}",
+        "{{\"completed_requests\":{},\"failed_requests\":{},\"missing_usage_count\":{},\"trace_count\":{},\"model_count\":{},\"endpoint_count\":{},\"app_count\":{},\"total_tokens\":{},\"input_tokens\":{},\"output_tokens\":{},\"reasoning_tokens\":{},\"cache_hit_tokens\":{},\"cache_miss_tokens\":{},\"request_payload_bytes\":{},\"request_payload_bytes_count\":{},\"block_count\":{},\"block_count_rows\":{},\"estimated_spend_cny\":null}}",
         json::number(summary.completed_requests),
         json::optional_number(summary.failed_requests),
         json::number(summary.missing_usage_count),
@@ -391,8 +391,8 @@ fn summary_json(summary: &Summary) -> String {
         json::number(summary.totals.reasoning_tokens),
         json::number(summary.totals.cache_hit_tokens),
         json::number(summary.totals.cache_miss_tokens),
-        json::number(summary.canonical_body_bytes),
-        json::number(summary.canonical_body_bytes_count),
+        json::number(summary.request_payload_bytes),
+        json::number(summary.request_payload_bytes_count),
         json::number(summary.block_count),
         json::number(summary.block_count_rows)
     )

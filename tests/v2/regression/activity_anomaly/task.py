@@ -258,17 +258,20 @@ class ActivityAnomalyTask:
                 )
             if (
                 attributes.get("llm.request.content_state") != "unavailable"
-                or "llm.request.canonical_body_hash" in attributes
+                or "llm.request.canonical_body_json" in attributes
+                or "llm.request.content_format_version" in attributes
+                or "llm.request.block_count" in attributes
             ):
                 raise AssertionError(
                     "capture-limited LLM request invented unavailable body content"
                 )
         if any(
-            call.get("status") != "success"
-            or call.get("completeness") != "capture_limited"
+            call.get("status") != "unknown"
+            or call.get("completeness") != "inferred"
+            or call.get("end_time_unix_nanos") is not None
             for call in calls
         ):
-            raise AssertionError("capture-limited request did not propagate to llm.call")
+            raise AssertionError("llm.call did not remain a lightweight connector")
         if any(
             response.get("status") != "success"
             or response.get("completeness") != "complete"

@@ -1,5 +1,7 @@
 //! `/proc`-backed helpers used for attach bootstrap and identity lookup.
 
+mod liveness;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::SystemTime;

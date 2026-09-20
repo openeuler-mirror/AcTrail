@@ -2,8 +2,8 @@
 
 use semantic_action::{
     LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
-    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
-    LlmToolCall, LlmToolFunction,
+    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmResponseRetention,
+    LlmResponseTermination, LlmSseEvent, LlmSseResponseInput, LlmToolCall, LlmToolFunction,
 };
 use serde_json::Value;
 
@@ -59,26 +59,37 @@ impl LlmProviderResponseParser for AnthropicMessagesResponseParser {
         }
     }
 
-    fn parse_json_response(&self, input: LlmJsonResponseInput<'_>) -> Option<LlmParsedResponse> {
+    fn parse_json_response(
+        &self,
+        input: LlmJsonResponseInput<'_>,
+        retention: LlmResponseRetention,
+    ) -> Option<LlmParsedResponse> {
         if self.match_json_response(input) == LlmProviderMatch::NoMatch {
             return None;
         }
         let mut content_chunks = Vec::new();
         let mut reasoning_chunks = Vec::new();
         let mut assembler = ToolCallAssembler::default();
+        let mut chunk_count = 0;
+        let mut response_observed = false;
         if let Some(content) = input.json.get("content").and_then(Value::as_array) {
             for (index, item) in content.iter().enumerate() {
+                let chunks = Self::content_chunks(item, false);
+                chunk_count += chunks;
+                response_observed |= chunks > 0
+                    || item.get("type").and_then(Value::as_str) == Some(CONTENT_TOOL_USE);
                 collect_json_content_item(
                     item,
                     index,
                     &mut content_chunks,
                     &mut reasoning_chunks,
                     &mut assembler,
+                    retention,
                 );
             }
         }
         let tool_calls = assembler.into_calls();
-        if content_chunks.is_empty() && reasoning_chunks.is_empty() && tool_calls.is_empty() {
+        if !response_observed {
             return None;
         }
         let content_text = (!content_chunks.is_empty()).then(|| content_chunks.join(""));
@@ -93,52 +104,128 @@ impl LlmProviderResponseParser for AnthropicMessagesResponseParser {
             content_text,
             reasoning_text,
             tool_calls,
-            token_usage: extract_token_usage(input.json),
-            chunk_count: content_chunks.len() + reasoning_chunks.len(),
-            done: input.json.get("stop_reason").is_some(),
+            token_usage: retention
+                .usage
+                .then(|| extract_token_usage(input.json))
+                .flatten(),
+            chunk_count,
+            termination: input
+                .json
+                .get("stop_reason")
+                .is_some()
+                .then_some(LlmResponseTermination::Completed),
             stream: false,
         })
     }
 
-    fn parse_sse_response(&self, input: LlmSseResponseInput<'_>) -> Option<LlmParsedResponse> {
+    fn parse_sse_response(
+        &self,
+        input: LlmSseResponseInput<'_>,
+        retention: LlmResponseRetention,
+    ) -> Option<LlmParsedResponse> {
         if self.match_sse_response(input) == LlmProviderMatch::NoMatch {
             return None;
         }
         let parsed_events = input
             .events
             .iter()
-            .map(|event| self.parse_sse_event(*event))
+            .map(|event| self.parse_sse_event(*event, retention))
             .collect::<Vec<_>>();
         parsed_events_to_response(
             self.provider_id(),
             &parsed_events,
-            extract_token_usage_from_values(input.events.iter().filter_map(|event| event.json)),
+            retention
+                .usage
+                .then(|| {
+                    extract_token_usage_from_values(
+                        input.events.iter().filter_map(|event| event.json),
+                    )
+                })
+                .flatten(),
             true,
         )
     }
 
-    fn parse_sse_event(&self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent {
+    fn parse_sse_event(
+        &self,
+        event: LlmSseEvent<'_>,
+        retention: LlmResponseRetention,
+    ) -> LlmParsedSseEvent {
         let Some(value) = event.json else {
             return LlmParsedSseEvent {
-                done: event.done_marker,
+                termination: event
+                    .done_marker
+                    .then_some(LlmResponseTermination::Completed),
                 ..LlmParsedSseEvent::default()
             };
         };
-        match value.get("type").and_then(Value::as_str) {
+        let mut parsed = match value.get("type").and_then(Value::as_str) {
             Some(MESSAGE_START) => message_start_event(value),
-            Some(CONTENT_BLOCK_START) => content_block_start_event(value),
-            Some(CONTENT_BLOCK_DELTA) => content_block_delta_event(value),
+            Some(CONTENT_BLOCK_START) => content_block_start_event(value, retention),
+            Some(CONTENT_BLOCK_DELTA) => content_block_delta_event(value, retention),
             Some(MESSAGE_DELTA) => message_delta_event(value),
+            Some("error")
+                if value
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .and_then(Value::as_str)
+                    .is_some() =>
+            {
+                LlmParsedSseEvent {
+                    termination: Some(LlmResponseTermination::Failed),
+                    ..LlmParsedSseEvent::default()
+                }
+            }
             Some(MESSAGE_STOP) => LlmParsedSseEvent {
-                done: true,
+                termination: Some(LlmResponseTermination::Completed),
                 ..LlmParsedSseEvent::default()
             },
             _ => LlmParsedSseEvent::default(),
+        };
+        let block = match value.get("type").and_then(Value::as_str) {
+            Some(CONTENT_BLOCK_START) => value.get("content_block").map(|item| (item, false)),
+            Some(CONTENT_BLOCK_DELTA) => value.get("delta").map(|item| (item, true)),
+            _ => None,
+        };
+        if let Some((item, delta)) = block {
+            parsed.text_chunk_count = Self::content_chunks(item, delta);
+            let tool = match item.get("type").and_then(Value::as_str) {
+                Some(CONTENT_TOOL_USE) if !delta => true,
+                Some(DELTA_INPUT_JSON) if delta => {
+                    item.get("partial_json").and_then(Value::as_str).is_some()
+                }
+                _ => false,
+            };
+            let identity = value.get("index").and_then(Value::as_u64).is_some()
+                || item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty());
+            parsed.response_observed = parsed.text_chunk_count > 0 || (tool && identity);
         }
+        parsed
     }
 
-    fn new_stream_parser(&self) -> Box<dyn LlmProviderResponseStreamParser + Send> {
-        Box::new(AnthropicMessagesStreamParser::default())
+    fn new_stream_parser(
+        &self,
+        retention: LlmResponseRetention,
+    ) -> Box<dyn LlmProviderResponseStreamParser + Send> {
+        Box::new(AnthropicMessagesStreamParser::new(retention))
+    }
+}
+
+impl AnthropicMessagesResponseParser {
+    fn content_chunks(item: &Value, delta: bool) -> usize {
+        let key = match (item.get("type").and_then(Value::as_str), delta) {
+            (Some(CONTENT_TEXT), false) | (Some(DELTA_TEXT), true) => "text",
+            (Some(CONTENT_THINKING), false) | (Some(DELTA_THINKING), true) => "thinking",
+            _ => return 0,
+        };
+        usize::from(
+            item.get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty()),
+        )
     }
 }
 
@@ -174,7 +261,7 @@ fn message_start_event(value: &Value) -> LlmParsedSseEvent {
     }
 }
 
-fn content_block_start_event(value: &Value) -> LlmParsedSseEvent {
+fn content_block_start_event(value: &Value, retention: LlmResponseRetention) -> LlmParsedSseEvent {
     let Some(block) = value.get("content_block") else {
         return LlmParsedSseEvent::default();
     };
@@ -183,7 +270,7 @@ fn content_block_start_event(value: &Value) -> LlmParsedSseEvent {
             content_text: block
                 .get("text")
                 .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
+                .filter(|text| retention.content && !text.is_empty())
                 .map(ToString::to_string),
             ..LlmParsedSseEvent::default()
         },
@@ -191,12 +278,15 @@ fn content_block_start_event(value: &Value) -> LlmParsedSseEvent {
             reasoning_text: block
                 .get("thinking")
                 .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
+                .filter(|text| retention.content && !text.is_empty())
                 .map(ToString::to_string),
             ..LlmParsedSseEvent::default()
         },
         Some(CONTENT_TOOL_USE) => LlmParsedSseEvent {
-            tool_calls: tool_use_start_call(value, block, false)
+            tool_calls: retention
+                .tool_calls
+                .then(|| tool_use_start_call(value, block, false))
+                .flatten()
                 .into_iter()
                 .collect(),
             ..LlmParsedSseEvent::default()
@@ -205,7 +295,7 @@ fn content_block_start_event(value: &Value) -> LlmParsedSseEvent {
     }
 }
 
-fn content_block_delta_event(value: &Value) -> LlmParsedSseEvent {
+fn content_block_delta_event(value: &Value, retention: LlmResponseRetention) -> LlmParsedSseEvent {
     let Some(delta) = value.get("delta") else {
         return LlmParsedSseEvent::default();
     };
@@ -214,7 +304,7 @@ fn content_block_delta_event(value: &Value) -> LlmParsedSseEvent {
             content_text: delta
                 .get("text")
                 .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
+                .filter(|text| retention.content && !text.is_empty())
                 .map(ToString::to_string),
             ..LlmParsedSseEvent::default()
         },
@@ -222,12 +312,17 @@ fn content_block_delta_event(value: &Value) -> LlmParsedSseEvent {
             reasoning_text: delta
                 .get("thinking")
                 .and_then(Value::as_str)
-                .filter(|text| !text.is_empty())
+                .filter(|text| retention.content && !text.is_empty())
                 .map(ToString::to_string),
             ..LlmParsedSseEvent::default()
         },
         Some(DELTA_INPUT_JSON) => LlmParsedSseEvent {
-            tool_calls: input_json_delta_call(value, delta).into_iter().collect(),
+            tool_calls: retention
+                .tool_calls
+                .then(|| input_json_delta_call(value, delta))
+                .flatten()
+                .into_iter()
+                .collect(),
             ..LlmParsedSseEvent::default()
         },
         _ => LlmParsedSseEvent::default(),
@@ -237,7 +332,9 @@ fn content_block_delta_event(value: &Value) -> LlmParsedSseEvent {
 fn message_delta_event(value: &Value) -> LlmParsedSseEvent {
     let finish_reason = value.get("delta").and_then(extract_finish_reason);
     LlmParsedSseEvent {
-        done: finish_reason.is_some(),
+        termination: finish_reason
+            .is_some()
+            .then_some(LlmResponseTermination::Completed),
         finish_reason,
         ..LlmParsedSseEvent::default()
     }
@@ -249,19 +346,20 @@ fn collect_json_content_item(
     content_chunks: &mut Vec<String>,
     reasoning_chunks: &mut Vec<String>,
     assembler: &mut ToolCallAssembler,
+    retention: LlmResponseRetention,
 ) {
     match item.get("type").and_then(Value::as_str) {
-        Some(CONTENT_TEXT) => {
+        Some(CONTENT_TEXT) if retention.content => {
             if let Some(text) = item.get("text").and_then(Value::as_str) {
                 push_non_empty_text(content_chunks, text);
             }
         }
-        Some(CONTENT_THINKING) => {
+        Some(CONTENT_THINKING) if retention.content => {
             if let Some(text) = item.get("thinking").and_then(Value::as_str) {
                 push_non_empty_text(reasoning_chunks, text);
             }
         }
-        Some(CONTENT_TOOL_USE) => {
+        Some(CONTENT_TOOL_USE) if retention.tool_calls => {
             if let Some(call) = json_tool_use_call(item, index) {
                 assembler.apply_call_delta(call);
             }

@@ -30,7 +30,7 @@ pub(super) fn project_range(
         }
         let projection = project_trace(storage_path, storage, &trace, Some(window))?;
         if trace_duration(&projection) > 0
-            && (projection.coverage.llm_call_count > 0
+            && (projection.coverage.attributed_llm_call_count > 0
                 || projection.coverage.agent_process_count > 0)
         {
             projections.push(projection);
@@ -162,9 +162,14 @@ pub(super) fn aggregate_coverage(projections: &[TraceAttribution]) -> AggregateC
             AttributionStatus::Invalid => coverage.invalid_trace_count += 1,
         }
         coverage.llm_request_count += projection.coverage.llm_request_count;
+        coverage.llm_response_count += projection.coverage.llm_response_count;
         coverage.observed_llm_call_count += projection.coverage.observed_llm_call_count;
-        coverage.llm_call_count += projection.coverage.llm_call_count;
-        coverage.excluded_llm_call_count += projection.coverage.excluded_llm_call_count;
+        coverage.paired_llm_call_count += projection.coverage.paired_llm_call_count;
+        coverage.unpaired_llm_call_count += projection.coverage.unpaired_llm_call_count;
+        coverage.orphan_llm_response_count += projection.coverage.orphan_llm_response_count;
+        coverage.attributed_llm_call_count += projection.coverage.attributed_llm_call_count;
+        coverage.excluded_from_attribution_llm_call_count +=
+            projection.coverage.excluded_from_attribution_llm_call_count;
         coverage.user_turn_count += projection.coverage.user_turn_count;
         coverage.tool_interval_count += projection.coverage.tool_interval_count;
         coverage.command_interval_count += projection.coverage.command_interval_count;

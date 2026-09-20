@@ -16,16 +16,18 @@ use crate::llm_pipeline::transport::HttpRequestParts;
 
 use crate::llm_pipeline::assembly::router::PayloadStreamGroupKey;
 use crate::llm_pipeline::provider::codec::LlmCodecRegistry;
-use crate::llm_pipeline::provider::{LlmRequestParserInput, parse_json_request};
+use crate::llm_pipeline::provider::{LlmRequestFacts, LlmRequestParserInput, parse_json_request};
 
 use super::super::retention::semantic_payload_draft;
-use super::super::retention::{
-    FORMAT_VERSION, TrajectoryHistoryProjection, canonical_request_content,
-    canonical_shape_metadata,
-};
+use super::super::retention::{BackgroundRequestKind, TrajectoryHistoryProjection};
 use super::super::retention::{insert_payload_span_attributes, payload_aggregate_evidence};
 
+mod content;
+mod selective;
+mod strict;
 mod tool_results;
+
+use content::project_request_content;
 
 pub(crate) use tool_results::ProjectedLlmToolResult;
 use tool_results::project_tool_results;
@@ -59,14 +61,14 @@ pub(super) fn project_stream_llm_request_action(
     key: &PayloadStreamGroupKey,
     message_start: usize,
     raw_bytes: &[u8],
-    mut http: HttpRequestParts,
+    mut http: HttpRequestParts<'_>,
     segments: &[&PayloadSegment],
 ) -> Option<ProjectedLlmRequestAction> {
     let completeness = llm_stream_completeness(http.complete, segments);
     let body = if completeness == SemanticActionCompleteness::CaptureLimited {
         CaptureLimitedHttpRequestClassifier::classify(&http)
     } else {
-        parse_llm_request_body(&http, codecs)
+        parse_llm_request_body(&http, codecs, config)
     }?;
     let first = *segments.first()?;
     let action_id = llm_stream_action_id(key, message_start, first, http.stream_id);
@@ -79,7 +81,7 @@ pub(super) fn project_stream_llm_request_action(
         raw_bytes,
         &http,
         &body,
-        content_projection.metadata.as_ref(),
+        content_projection.metadata,
     );
     let evidence = payload_aggregate_evidence(segments, evidence_roles::llm_request::PAYLOAD);
     let tool_results = body.json.as_ref().map_or_else(Vec::new, |value| {
@@ -153,154 +155,26 @@ impl CanonicalBodyExport {
             Self::TooLarge => "too_large",
         }
     }
-
-    fn body_json(&self) -> Option<&str> {
-        match self {
-            Self::Exported(body_json) => Some(body_json),
-            Self::TooLarge => None,
-        }
-    }
-}
-
-struct CanonicalBodyMetadata {
-    hash: String,
-    bytes: u64,
-    export: Option<CanonicalBodyExport>,
 }
 
 struct RequestContentMetadata {
     state: &'static str,
     format_version: Option<u32>,
-    canonical_body: Option<CanonicalBodyMetadata>,
+    body_export: Option<CanonicalBodyExport>,
     block_count: Option<usize>,
     message_preview: Option<String>,
     user_message_count: Option<usize>,
     tool_result_count: Option<usize>,
-    latest_user_message_hash: Option<String>,
     background_kind: Option<&'static str>,
-}
-
-fn project_request_content(
-    config: &SemanticRetentionConfig,
-    trace_id: model_core::ids::TraceId,
-    action_id: &str,
-    body: &LlmRequestBody,
-) -> Result<RequestContentProjection, String> {
-    if !config.llm_layer_enabled() {
-        return Ok(RequestContentProjection {
-            content: None,
-            metadata: None,
-            trajectory_history: None,
-        });
-    }
-    if !body.content_available {
-        return Ok(RequestContentProjection {
-            content: None,
-            metadata: None,
-            trajectory_history: None,
-        });
-    }
-    match config.l0_llm_call.request_content {
-        LlmRequestContentRetention::None => Ok(RequestContentProjection {
-            content: None,
-            trajectory_history: None,
-            metadata: Some(RequestContentMetadata {
-                state: "none",
-                format_version: None,
-                canonical_body: None,
-                block_count: None,
-                message_preview: None,
-                user_message_count: None,
-                tool_result_count: None,
-                latest_user_message_hash: None,
-                background_kind: None,
-            }),
-        }),
-        LlmRequestContentRetention::Shape => Ok(shape_projection(body)),
-        LlmRequestContentRetention::CanonicalBlocks => {
-            let Some(value) = body.json.as_ref() else {
-                return Ok(shape_projection(body));
-            };
-            let content = canonical_request_content(
-                trace_id,
-                action_id,
-                value,
-                config.llm_trajectory_enabled(),
-            )?;
-            let canonical_body_export = config.llm_request_body_export_enabled().then(|| {
-                if content.canonical_body.bytes <= config.l0_llm_call.request_body_export_max_bytes
-                {
-                    CanonicalBodyExport::Exported(content.canonical_body.json.clone())
-                } else {
-                    CanonicalBodyExport::TooLarge
-                }
-            });
-            Ok(RequestContentProjection {
-                metadata: Some(RequestContentMetadata {
-                    state: "canonical_blocks",
-                    format_version: Some(FORMAT_VERSION),
-                    canonical_body: Some(CanonicalBodyMetadata {
-                        hash: content.canonical_body.hash.clone(),
-                        bytes: content.canonical_body.bytes,
-                        export: canonical_body_export,
-                    }),
-                    block_count: Some(content.block_count),
-                    message_preview: content.message_preview.clone(),
-                    user_message_count: Some(content.user_message_count),
-                    tool_result_count: Some(content.tool_result_count),
-                    latest_user_message_hash: content.latest_user_message_hash.clone(),
-                    background_kind: content.background_kind,
-                }),
-                content: Some(content.write),
-                trajectory_history: content.trajectory_history,
-            })
-        }
-    }
-}
-
-fn shape_projection(body: &LlmRequestBody) -> RequestContentProjection {
-    let (canonical_body, message_preview, user_messages, tool_result_count, background_kind) = body
-        .json
-        .as_ref()
-        .map_or((None, None, None, None, None), |value| {
-            let (hash, bytes, preview, user_messages, tool_result_count, background_kind) =
-                canonical_shape_metadata(value);
-            (
-                Some(CanonicalBodyMetadata {
-                    hash,
-                    bytes,
-                    export: None,
-                }),
-                preview,
-                Some(user_messages),
-                Some(tool_result_count),
-                background_kind,
-            )
-        });
-    RequestContentProjection {
-        content: None,
-        trajectory_history: None,
-        metadata: Some(RequestContentMetadata {
-            state: "shape",
-            format_version: body.json.as_ref().map(|_| FORMAT_VERSION),
-            canonical_body,
-            block_count: None,
-            message_preview,
-            user_message_count: user_messages.as_ref().map(|metadata| metadata.count),
-            tool_result_count,
-            latest_user_message_hash: user_messages.and_then(|metadata| metadata.latest_hash),
-            background_kind,
-        }),
-    }
 }
 
 fn llm_attributes(
     config: &SemanticRetentionConfig,
     segments: &[&PayloadSegment],
     raw_bytes: &[u8],
-    http: &HttpRequestParts,
+    http: &HttpRequestParts<'_>,
     body: &LlmRequestBody,
-    content: Option<&RequestContentMetadata>,
+    content: Option<RequestContentMetadata>,
 ) -> BTreeMap<String, String> {
     let first = segments[0];
     let mut attributes = BTreeMap::new();
@@ -401,27 +275,17 @@ fn llm_attributes(
                 format_version.to_string(),
             );
         }
-        if let Some(canonical_body) = content.canonical_body.as_ref() {
-            if let Some(export) = canonical_body.export.as_ref() {
-                if let Some(body_json) = export.body_json() {
-                    attributes.insert(
-                        attrs::llm_request::CANONICAL_BODY_JSON.to_string(),
-                        body_json.to_string(),
-                    );
-                }
+        if let Some(export) = content.body_export {
+            attributes.insert(
+                attrs::llm_request::CANONICAL_BODY_EXPORT_STATE.to_string(),
+                export.state_attribute_value().to_string(),
+            );
+            if let CanonicalBodyExport::Exported(body_json) = export {
                 attributes.insert(
-                    attrs::llm_request::CANONICAL_BODY_EXPORT_STATE.to_string(),
-                    export.state_attribute_value().to_string(),
+                    attrs::llm_request::CANONICAL_BODY_JSON.to_string(),
+                    body_json,
                 );
             }
-            attributes.insert(
-                attrs::llm_request::CANONICAL_BODY_HASH.to_string(),
-                canonical_body.hash.clone(),
-            );
-            attributes.insert(
-                attrs::llm_request::CANONICAL_BODY_BYTES.to_string(),
-                canonical_body.bytes.to_string(),
-            );
         }
         if let Some(block_count) = content.block_count {
             attributes.insert(
@@ -429,11 +293,8 @@ fn llm_attributes(
                 block_count.to_string(),
             );
         }
-        if let Some(preview) = content.message_preview.as_deref() {
-            attributes.insert(
-                attrs::llm_request::MESSAGE_PREVIEW.to_string(),
-                preview.to_string(),
-            );
+        if let Some(preview) = content.message_preview {
+            attributes.insert(attrs::llm_request::MESSAGE_PREVIEW.to_string(), preview);
         }
         if let Some(user_message_count) = content.user_message_count {
             attributes.insert(
@@ -445,12 +306,6 @@ fn llm_attributes(
             attributes.insert(
                 attrs::llm_request::TOOL_RESULT_COUNT.to_string(),
                 tool_result_count.to_string(),
-            );
-        }
-        if let Some(hash) = content.latest_user_message_hash.as_deref() {
-            attributes.insert(
-                attrs::llm_request::LATEST_USER_MESSAGE_HASH.to_string(),
-                hash.to_string(),
             );
         }
         if let Some(background_kind) = content.background_kind {
@@ -506,26 +361,63 @@ struct LlmRequestBody {
     model: Option<String>,
     json: Option<Value>,
     content_available: bool,
+    background_kind: Option<&'static str>,
 }
 
 fn parse_llm_request_body(
-    http: &HttpRequestParts,
+    http: &HttpRequestParts<'_>,
     codecs: &LlmCodecRegistry,
+    config: &SemanticRetentionConfig,
 ) -> Option<LlmRequestBody> {
-    LlmRequestBodyParser { codecs }.parse(http)
+    LlmRequestBodyParser {
+        codecs,
+        retain_json: config.l0_llm_call.request_content != LlmRequestContentRetention::None
+            || config.l0_llm_call.tool_results_enabled
+            || config.llm_request_body_export_enabled()
+            || config.llm_trajectory_enabled(),
+    }
+    .parse(http)
 }
 
 struct LlmRequestBodyParser<'a> {
     codecs: &'a LlmCodecRegistry,
+    retain_json: bool,
+}
+
+struct DecodedRequestJson {
+    facts: LlmRequestFacts,
+    json: Option<Value>,
+    background_kind: Option<&'static str>,
 }
 
 impl LlmRequestBodyParser<'_> {
-    fn parse(&self, http: &HttpRequestParts) -> Option<LlmRequestBody> {
-        let body = &http.body;
+    fn parse_json(&self, bytes: &[u8]) -> serde_json::Result<DecodedRequestJson> {
+        if self.retain_json {
+            let json: Value = serde_json::from_slice(bytes)?;
+            Ok(DecodedRequestJson {
+                facts: LlmRequestFacts::from_json(&json),
+                json: Some(json),
+                background_kind: None,
+            })
+        } else {
+            let selected = selective::SelectedRequest::parse(bytes)?;
+            Ok(DecodedRequestJson {
+                background_kind: BackgroundRequestKind::classify(
+                    selected.system_parts.iter().map(|s| s.as_ref()),
+                ),
+                facts: selected.facts,
+                json: None,
+            })
+        }
+    }
+    fn parse(&self, http: &HttpRequestParts<'_>) -> Option<LlmRequestBody> {
+        let body = http.body;
         if let Some(decoded) = self.codecs.decode_request(http)
-            && let Ok(value) = serde_json::from_slice::<Value>(&decoded.body)
+            && let Ok(value) = self.parse_json(&decoded.body)
         {
-            let input = LlmRequestParserInput { json: &value };
+            let input = LlmRequestParserInput {
+                facts: &value.facts,
+            };
             let parsed = parse_json_request(&input);
             let classifier_id = decoded.classifier_id.or_else(|| {
                 parsed
@@ -543,20 +435,35 @@ impl LlmRequestBodyParser<'_> {
                 }),
                 model: valid_model(decoded.model)
                     .or_else(|| parsed.and_then(|parsed| valid_model(parsed.model))),
-                json: Some(value),
+                json: value.json,
+                background_kind: value.background_kind,
                 content_available: true,
             });
         }
-        if let Ok(value) = serde_json::from_slice::<Value>(body) {
-            let input = LlmRequestParserInput { json: &value };
-            let parsed = parse_json_request(&input)?;
+        if let Ok(value) = self.parse_json(body) {
+            let input = LlmRequestParserInput {
+                facts: &value.facts,
+            };
+            let parsed = parse_json_request(&input);
+            let classifier_id =
+                parsed
+                    .as_ref()
+                    .map(|parsed| parsed.classifier_id)
+                    .or_else(|| {
+                        (!self.retain_json)
+                            .then(|| CaptureLimitedHttpRequestClassifier::route(http))
+                            .flatten()
+                    })?;
             return Some(LlmRequestBody {
                 payload_bytes: body.len(),
                 json_valid: true,
-                classifier_id: parsed.classifier_id.to_string(),
-                protocol_id: parsed.protocol_id.map(ToString::to_string),
-                model: valid_model(parsed.model),
-                json: Some(value),
+                classifier_id: classifier_id.to_string(),
+                protocol_id: parsed
+                    .as_ref()
+                    .and_then(|parsed| parsed.protocol_id.map(ToString::to_string)),
+                model: valid_model(parsed.and_then(|parsed| parsed.model)),
+                json: value.json,
+                background_kind: value.background_kind,
                 content_available: true,
             });
         }
@@ -570,6 +477,7 @@ impl LlmRequestBodyParser<'_> {
                 protocol_id: None,
                 model,
                 json: None,
+                background_kind: None,
                 content_available: true,
             })
         } else {
@@ -581,12 +489,28 @@ impl LlmRequestBodyParser<'_> {
 struct CaptureLimitedHttpRequestClassifier;
 
 impl CaptureLimitedHttpRequestClassifier {
-    fn classify(http: &HttpRequestParts) -> Option<LlmRequestBody> {
-        if http.complete
-            || !http
-                .method
-                .as_deref()
-                .is_some_and(|method| method.eq_ignore_ascii_case("POST"))
+    fn classify(http: &HttpRequestParts<'_>) -> Option<LlmRequestBody> {
+        if http.complete {
+            return None;
+        }
+        let classifier_id = Self::route(http)?;
+        Some(LlmRequestBody {
+            payload_bytes: http.declared_body_len.unwrap_or(http.body.len()),
+            json_valid: false,
+            classifier_id: classifier_id.to_string(),
+            protocol_id: None,
+            model: None,
+            json: None,
+            background_kind: None,
+            content_available: false,
+        })
+    }
+
+    fn route(http: &HttpRequestParts<'_>) -> Option<&'static str> {
+        if !http
+            .method
+            .as_deref()
+            .is_some_and(|method| method.eq_ignore_ascii_case("POST"))
             || !http
                 .headers_text
                 .as_deref()
@@ -603,15 +527,7 @@ impl CaptureLimitedHttpRequestClassifier {
             "/messages" | "/v1/messages" => "anthropic-messages-route",
             _ => return None,
         };
-        Some(LlmRequestBody {
-            payload_bytes: http.declared_body_len.unwrap_or(http.body.len()),
-            json_valid: false,
-            classifier_id: classifier_id.to_string(),
-            protocol_id: None,
-            model: None,
-            json: None,
-            content_available: false,
-        })
+        Some(classifier_id)
     }
 
     fn has_json_content_type(headers: &str) -> bool {

@@ -9,6 +9,8 @@ default = []
 perf-buffer = ["ebpf_collector/perf-buffer"]
 
 [dependencies]
+idle_detector = { path = "../../core/idle_detector" }
+agent_host = { path = "../../adapters/agent_host" }
 alert_contract = { path = "../../contracts/alert" }
 alert_delivery_contract = { package = "alert-delivery-contract", path = "../../contracts/alert_delivery" }
 alert_forwarding = { path = "../../plugins/alert_forwarding" }
@@ -25,8 +27,7 @@ export_core = { path = "../../export/core" }
 export_factory = { path = "../../export/factory" }
 getrandom = "0.3"
 ingest_runtime = { path = "../../core/ingest_runtime" }
-idle_contract = { path = "../../contracts/idle" }
-idle_detector = { path = "../../core/idle_detector" }
+agent_lifecycle_contract = { path = "../../contracts/agent_lifecycle" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }

@@ -117,36 +117,26 @@ static __always_inline __u64 fd_kernel_file_identity(__u32 fd) {
     return (__u64)file;
 }
 
-static __always_inline int fd_kernel_cloexec(__u32 fd) {
-    struct task_struct *task = actrail_bpf_get_current_task();
-    struct files_struct *files = 0;
-    struct fdtable *table = 0;
-    unsigned long *bitmap = 0;
-    unsigned long word = 0;
-    __u32 max_fds = 0;
-    __u32 bits_per_word = sizeof(word) * 8;
-    __u64 word_address;
+static __always_inline __u32 fd_open_category(__u64 identity) {
+    struct file *file = (struct file *)identity;
+    struct inode *inode = 0;
+    unsigned short mode = 0;
 
-    if (!task || ACTRAIL_CORE_READ(&files, task, files) != 0 || !files
-        || ACTRAIL_CORE_READ(&table, files, fdt) != 0 || !table
-        || ACTRAIL_CORE_READ(&max_fds, table, max_fds) != 0) {
-        return -1;
+    if (identity <= ACTRAIL_FD_FILE_IDENTITY_READ_FAILED
+        || ACTRAIL_CORE_READ(&inode, file, f_inode) != 0 || !inode
+        || ACTRAIL_CORE_READ(&mode, inode, i_mode) != 0) {
+        return ACTRAIL_FD_CATEGORY_NONE;
     }
-    if (fd >= max_fds) {
-        return 0;
+    switch (mode & 0170000) {
+    case 0040000:
+        return ACTRAIL_FD_CATEGORY_DIRECTORY;
+    case 0010000:
+        return ACTRAIL_FD_CATEGORY_IPC_FIFO;
+    case 0140000:
+        return ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET;
+    default:
+        return ACTRAIL_FD_CATEGORY_FILE;
     }
-    if (ACTRAIL_CORE_READ(&bitmap, table, close_on_exec) != 0 || !bitmap) {
-        return -1;
-    }
-    word_address = (__u64)bitmap + ((__u64)(fd / bits_per_word) * sizeof(word));
-    if (bpf_probe_read_kernel(
-            &word,
-            sizeof(word),
-            (const void *)word_address
-        ) != 0) {
-        return -1;
-    }
-    return (word >> (fd % bits_per_word)) & 1;
 }
 
 #endif

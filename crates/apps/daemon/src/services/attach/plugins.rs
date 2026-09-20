@@ -137,23 +137,25 @@ impl StorageAttachService {
                 } else {
                     None
                 };
-                let post_trace_host = if manifest.has_post_trace_analyzer() {
-                    match self
-                        .post_trace_broker
-                        .register_plugin(&command.instance_id, &manifest)
-                    {
-                        Ok(host) => Some(host),
-                        Err(error) => {
-                            if alert_registered {
-                                self.close_and_drain_alert_instance_impl(&command.instance_id)?;
-                                self.unregister_alert_instance_impl(&command.instance_id)?;
+                let post_trace_host =
+                    if manifest.has_post_trace_analyzer() || host_grants.can_read_payload() {
+                        match self.post_trace_broker.register_plugin(
+                            &command.instance_id,
+                            &manifest,
+                            &host_grants,
+                        ) {
+                            Ok(host) => Some(host),
+                            Err(error) => {
+                                if alert_registered {
+                                    self.close_and_drain_alert_instance_impl(&command.instance_id)?;
+                                    self.unregister_alert_instance_impl(&command.instance_id)?;
+                                }
+                                return Err(error);
                             }
-                            return Err(error);
                         }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
                 let host = post_trace_host
                     .clone()
                     .map(|host| host as Arc<dyn plugin_system::PostTraceHost>);
@@ -351,12 +353,12 @@ impl StorageAttachService {
                 .export_runtime
                 .remove_observation_consumer(instance_id)
                 .map_err(|error| ControlError::new(error.code, error.message))?;
+            self.post_trace_broker.unregister_plugin(instance_id);
             self.persist_export_drop_report(removal.drop_report)?;
             if alert_registered {
                 self.close_and_drain_alert_instance_impl(instance_id)?;
                 self.unregister_alert_instance_impl(instance_id)?;
             }
-            self.post_trace_broker.unregister_plugin(instance_id);
             return Ok(removal.status);
         }
         if self

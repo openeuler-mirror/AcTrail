@@ -5,7 +5,7 @@ use super::{
     LinkOriginCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 35;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 41;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
@@ -70,6 +70,8 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             llm_request_trajectory_fork: 523,
             llm_call_request: 510,
             llm_call_response: 511,
+            llm_call_http_response: 528,
+            llm_request_tool_result: 529,
             llm_response_tool_call: 524,
             llm_tool_call_result: 525,
             llm_tool_call_agent_invocation: 526,

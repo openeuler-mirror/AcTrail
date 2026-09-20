@@ -1,0 +1,5 @@
+# Explicit direct-copy limits for the short real-agent functional acceptance.
+[payload.tls]
+capture_backend = "bpf-copy"
+max_segment_bytes = 65535
+max_operation_bytes = 65535

@@ -49,6 +49,16 @@ struct OpenSslArchitectureBranch {
 }
 
 impl OpenSslProbeDetector {
+    pub(crate) fn detect_shared_object(context: &ProbeContext<'_>) -> ToolResult<DetectionOutcome> {
+        let detector = OpenSslSharedLibraryProbeDetector::try_new(
+            Default::default(),
+            context.probe.image.arch(),
+        )?;
+        detector
+            .detect(context)
+            .map_err(|error| crate::ToolError::new(error.to_string()))
+    }
+
     pub(crate) fn try_new(config: OpenSslProbeDetectorConfig) -> Result<Self, DetectorConfigError> {
         config.validate()?;
         let id = DetectorId::new(NAME);

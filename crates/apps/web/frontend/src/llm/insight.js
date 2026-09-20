@@ -226,7 +226,7 @@ function requestInsight(action, requestContent, trajectoryContext) {
       chip('messages', messages.length || null),
       chip('available tools', tools.length || null),
       chip('blocks', attrs['llm.request.block_count']),
-      chip('bytes', attrs['llm.request.canonical_body_bytes'] ?? attrs['llm.request.payload_bytes']),
+      chip('request payload bytes', attrs['llm.request.payload_bytes']),
     ]),
     blocks,
   };

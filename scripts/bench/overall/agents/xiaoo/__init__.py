@@ -31,7 +31,7 @@ def build_command_with_binary(
         "--provider",
         "openai",
         "--api-base",
-        f"http://127.0.0.1:{replay_port}",
+        f"http://127.0.0.1:{replay_port}/v1/chat/completions",
         "--api-key",
         "bench",
         "--model",

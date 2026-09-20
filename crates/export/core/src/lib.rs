@@ -4,6 +4,8 @@ mod contract;
 mod delivery;
 mod runtime;
 
+pub use plugin_system::{PayloadReference, PayloadReferenceMetadata};
+
 pub use contract::{
     ExportDeliveryDrop, ExportDropReason, ExportError, ExportPublishResult,
     SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionKindSelection,

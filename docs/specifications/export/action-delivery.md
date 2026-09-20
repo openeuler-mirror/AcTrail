@@ -8,7 +8,8 @@ Scope: action materialization、持久化与在线导出
 
 semantic action 是 AcTrail 对有意义的 agent 或进程事实提供的可查询表示。导出必须异步，不能阻塞上游执行。一个完成事实只导出一次，禁止用变化中的 snapshot 重复表示同一事实。
 
-- 每次完成的进程镜像替换生成一个 `process.exec`；seccomp exec observation 只是补充 completion 的 intent，不能独立生成 action。
+- 每次完成的 exec 尝试生成一个 `process.exec`，保留成功或失败结果、参数及来源证据；seccomp exec observation 只是补充 completion 的 intent，不能独立生成 action。
+- 只有成功 exec 才生成 `command.invocation` 并推进当前命令上下文。失败 exec 不改变当前命令；有已观测、且起始时间不晚于失败尝试的同进程命令时，以 `command.contains_process_exec` 关联失败事实。无可靠归属时保留独立事实，禁止用未来成功 exec 回填。fork 血缘不证明祖先当前命令就是子进程继承的命令，不能据此推定失败 exec 的归属。
 - 每个 `llm.request` 只导出一次。
 - agent identity 只在首次确认时导出，后续 request 不刷新。
 - process 与 agent 结束只生成各自终态 export record，不重放早先 action。

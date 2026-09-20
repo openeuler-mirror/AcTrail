@@ -151,15 +151,13 @@ static __always_inline int fd_object_create(
     __u32 pid,
     __u64 generation,
     __u32 category,
-    __u64 trace_id,
-    __u64 file_identity
+    __u64 trace_id
 ) {
     struct actrail_fd_object_key key = { .pid = pid, .generation = generation };
     struct actrail_fd_object_state object = {
         .refcount = 1,
         .category = category,
         .trace_id = trace_id,
-        .file_identity = file_identity,
     };
 
     return bpf_map_update_elem(&fd_objects, &key, &object, BPF_NOEXIST) == 0;
@@ -231,7 +229,10 @@ static __noinline int fd_release(
         || state.category == ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET) {
         socket_payload_release_fd(pid, fd);
     }
-    remaining = fd_object_ref_release(pid, state.generation, &object);
+    remaining = ACTRAIL_FD_REFCOUNT_NOT_LAST;
+    if (state.category == ACTRAIL_FD_CATEGORY_NET) {
+        remaining = fd_object_ref_release(pid, state.generation, &object);
+    }
     event_trace_id = trace_id ? trace_id : object.trace_id;
     if ((state.category == ACTRAIL_FD_CATEGORY_NET
         || state.category == ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET)
@@ -285,6 +286,9 @@ static __always_inline void fd_reserved_ref_release(
     __u32 remaining;
     __u64 event_trace_id;
 
+    if (state->category != ACTRAIL_FD_CATEGORY_NET) {
+        return;
+    }
     remaining = fd_object_ref_release(pid, state->generation, &object);
     event_trace_id = trace_id ? trace_id : object.trace_id;
     if (state->category == ACTRAIL_FD_CATEGORY_NET && remaining == 0 && event_trace_id) {
@@ -315,8 +319,13 @@ static __always_inline int fd_object_ref_reserve(
     __u64 trace_id,
     void *ctx
 ) {
-    struct actrail_fd_object_state *object = fd_object_lookup(pid, source->generation);
+    struct actrail_fd_object_state *object;
     struct actrail_fd_state *current;
+
+    if (source->category != ACTRAIL_FD_CATEGORY_NET) {
+        return 1;
+    }
+    object = fd_object_lookup(pid, source->generation);
 
     if (!object || !object->refcount
         || object->refcount >= ACTRAIL_FD_REFCOUNT_NOT_LAST) {
@@ -335,14 +344,14 @@ static __always_inline int fd_object_ref_reserve(
 static __always_inline int fd_install_state(
     __u32 pid,
     __u32 fd,
-    const struct actrail_fd_state *source,
-    __u32 flags
+    const struct actrail_fd_state *source
 ) {
     struct actrail_fd_state state;
     struct actrail_fd_key key;
     __u32 slot = 0;
 
-    if (!fd_object_lookup(pid, source->generation)) {
+    if (source->category == ACTRAIL_FD_CATEGORY_NET
+        && !fd_object_lookup(pid, source->generation)) {
         return 0;
     }
     if (!fd_process_active_count_acquire(pid)) {
@@ -353,7 +362,6 @@ static __always_inline int fd_install_state(
         return 0;
     }
     state = *source;
-    state.flags = flags;
     state.index_slot = slot;
     key.pid = pid;
     key.fd = fd;
@@ -368,34 +376,24 @@ static __always_inline int fd_install_state(
 static __always_inline int fd_register(const struct actrail_fd_registration *registration) {
     struct actrail_fd_state state = {};
     struct actrail_fd_state *existing;
-    struct actrail_fd_object_state *existing_object;
     __u64 file_identity = 0;
     __u64 observed_identity = 0;
     __u64 generation;
-    __u32 descriptor_flags = registration->flags;
     __u32 pid = registration->pid;
     __u32 fd = registration->fd;
-    int close_on_exec;
+    __u32 category = registration->category;
 
-    if (!pid || registration->category == ACTRAIL_FD_CATEGORY_NONE
-        || !fd_category_enabled(registration->category)) {
+    if (!pid || category == ACTRAIL_FD_CATEGORY_NONE
+        || (category != ACTRAIL_FD_CATEGORY_FILE && !fd_category_enabled(category))) {
         return 0;
     }
     file_identity = fd_kernel_file_identity(fd);
     if (file_identity <= ACTRAIL_FD_FILE_IDENTITY_READ_FAILED) {
         return 0;
     }
-    close_on_exec = fd_kernel_cloexec(fd);
-    if (close_on_exec >= 0) {
-        descriptor_flags = close_on_exec ? ACTRAIL_FD_FLAG_CLOEXEC : 0;
-    }
     existing = fd_lookup(pid, fd);
     if (existing) {
-        existing_object = fd_object_lookup(pid, existing->generation);
-        if (existing_object && existing_object->file_identity == file_identity) {
-            if (close_on_exec >= 0) {
-                existing->flags = descriptor_flags;
-            }
+        if (existing->file_identity == file_identity) {
             return 1;
         }
         __u64 stale_generation = existing->generation;
@@ -411,20 +409,28 @@ static __always_inline int fd_register(const struct actrail_fd_registration *reg
             return 0;
         }
     }
-    generation = fd_generation_next();
-    state.category = registration->category;
-    state.generation = generation;
-    if (!fd_object_create(
-            pid,
-            generation,
-            registration->category,
-            registration->trace_id,
-            file_identity)) {
+    if (category == ACTRAIL_FD_CATEGORY_FILE) {
+        category = fd_open_category(file_identity);
+    }
+    if (category == ACTRAIL_FD_CATEGORY_NONE || !fd_category_enabled(category)) {
         return 0;
     }
-    if (!fd_install_state(pid, fd, &state, descriptor_flags)) {
-        struct actrail_fd_object_key object_key = { .pid = pid, .generation = generation };
-        bpf_map_delete_elem(&fd_objects, &object_key);
+    generation = fd_generation_next();
+    state.category = category;
+    state.generation = generation;
+    state.file_identity = file_identity;
+    if (state.category == ACTRAIL_FD_CATEGORY_NET && !fd_object_create(
+            pid,
+            generation,
+            category,
+            registration->trace_id)) {
+        return 0;
+    }
+    if (!fd_install_state(pid, fd, &state)) {
+        if (state.category == ACTRAIL_FD_CATEGORY_NET) {
+            struct actrail_fd_object_key object_key = { .pid = pid, .generation = generation };
+            bpf_map_delete_elem(&fd_objects, &object_key);
+        }
         return 0;
     }
     observed_identity = fd_kernel_file_identity(fd);
@@ -454,7 +460,10 @@ static __always_inline int fd_snapshot(
         return 0;
     }
     *state_snapshot = *state;
-    return fd_object_snapshot(pid, state_snapshot->generation, object_snapshot);
+    if (state_snapshot->category == ACTRAIL_FD_CATEGORY_NET) {
+        return fd_object_snapshot(pid, state_snapshot->generation, object_snapshot);
+    }
+    return 1;
 }
 
 static __always_inline void fd_update_endpoint_expected(

@@ -11,6 +11,7 @@ pub(crate) fn parse_storage_config(raw: &str) -> Result<StorageConfig, String> {
         .parse::<StorageBackendKind>()
         .map_err(|error| format!("invalid storage_backend: {error}"))?;
     match backend {
+        StorageBackendKind::NoOp => Ok(StorageConfig::NoOp),
         StorageBackendKind::Sqlite => Ok(StorageConfig::Sqlite(
             SqliteStorageConfig::parse_entries(values.prefixed(SQLITE_STORAGE_CONFIG_PREFIX))?,
         )),

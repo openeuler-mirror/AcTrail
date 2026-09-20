@@ -1,13 +1,11 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use model_core::ids::TraceId;
-use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
 use model_core::trace::TraceAlertToken;
 use plugin_system::{
     AlertHost, CommandExecutionContext, CommandPolicyHost, FilePolicyHost, FilePolicyReadContext,
-    NetworkActionContext, NetworkPolicyHost, PluginHostGrants, PostTraceHost,
+    NetworkActionContext, NetworkPolicyHost, PayloadReadResult, PluginHostGrants, PostTraceHost,
 };
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 
@@ -19,7 +17,6 @@ pub(crate) struct WasmStoreState {
     host_limits: WasmHostLimits,
     hostcall_metrics: Arc<WasmHostcallMetrics>,
     plugin_config: Option<Vec<u8>>,
-    payload_snapshot: BTreeMap<String, PayloadSnapshotEntry>,
     observation_trace_context: Option<ObservationTraceContext>,
     requested_reevaluation_at: Option<SystemTime>,
     alert_host: Option<Arc<dyn AlertHost>>,
@@ -103,11 +100,6 @@ pub(crate) struct ControlContextSnapshot {
     pub(crate) actor_process_identity: String,
 }
 
-pub(crate) struct PayloadSnapshotEntry {
-    pub(crate) source_boundary: PayloadSourceBoundary,
-    pub(crate) bytes: Option<Vec<u8>>,
-}
-
 impl WasmStoreState {
     pub(super) fn new(
         memory_max_bytes: usize,
@@ -123,7 +115,6 @@ impl WasmStoreState {
             host_limits,
             hostcall_metrics,
             plugin_config: None,
-            payload_snapshot: BTreeMap::new(),
             observation_trace_context: None,
             requested_reevaluation_at: None,
             alert_host: None,
@@ -158,8 +149,33 @@ impl WasmStoreState {
         &self.hostcall_metrics
     }
 
-    pub(crate) fn payload_entry(&self, ref_id: &str) -> Option<&PayloadSnapshotEntry> {
-        self.payload_snapshot.get(ref_id)
+    pub(crate) fn read_payload(
+        &self,
+        ref_id: &str,
+        offset: u64,
+        max_bytes: usize,
+    ) -> PayloadReadResult {
+        if !self.host_grants.can_read_payload() {
+            return PayloadReadResult::Denied;
+        }
+        let Some(trace_id) = self
+            .observation_trace_context
+            .as_ref()
+            .map(|context| context.trace_id)
+            .or_else(|| self.post_trace_task.as_ref().map(|task| task.trace_id))
+        else {
+            return PayloadReadResult::Denied;
+        };
+        let Some(segment_id) = ref_id
+            .strip_prefix("payload-")
+            .and_then(|id| id.parse::<u64>().ok())
+        else {
+            return PayloadReadResult::NotFound;
+        };
+        let Some(host) = &self.post_trace_host else {
+            return PayloadReadResult::Failed;
+        };
+        host.read_payload(trace_id, segment_id, offset, max_bytes)
     }
 
     pub(crate) fn plugin_config(&self) -> Option<&[u8]> {
@@ -168,29 +184,6 @@ impl WasmStoreState {
 
     pub(crate) fn set_plugin_config(&mut self, plugin_config: Option<&str>) {
         self.plugin_config = plugin_config.map(|config| config.as_bytes().to_vec());
-    }
-
-    pub(crate) fn set_payload_snapshot(&mut self, segments: &[PayloadSegment]) {
-        self.payload_snapshot.clear();
-        for segment in segments
-            .iter()
-            .take(self.host_limits.payload_segment_max_count)
-        {
-            self.payload_snapshot.insert(
-                segment.segment_id.to_string(),
-                PayloadSnapshotEntry {
-                    source_boundary: segment.source_boundary,
-                    bytes: self
-                        .host_grants
-                        .can_read_payload_source(segment.source_boundary)
-                        .then(|| segment.bytes.clone()),
-                },
-            );
-        }
-    }
-
-    pub(crate) fn clear_payload_snapshot(&mut self) {
-        self.payload_snapshot.clear();
     }
 
     pub(crate) fn observation_trace_context(&self) -> Option<&ObservationTraceContext> {

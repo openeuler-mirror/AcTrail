@@ -49,7 +49,7 @@ pub(super) use self::api::{
 use self::cache::project_trace;
 use self::summary::exact_percentages;
 
-const SCHEMA_VERSION: &str = "time-attribution.v1";
+const SCHEMA_VERSION: &str = "time-attribution.v2";
 const NANOS_PER_MILLI: u128 = 1_000_000;
 const PERCENT_SCALE_BPS: u32 = 10_000;
 const MODEL_UNKNOWN_KEY: &str = "__unknown_model__";
@@ -140,8 +140,16 @@ struct ModelInterval {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct UserTurnKey {
     process: ProcessIdentity,
-    user_message_count: u64,
-    latest_user_message_hash: String,
+    identity: UserTurnIdentity,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum UserTurnIdentity {
+    RetainedMessage {
+        user_message_count: u64,
+        message_preview: String,
+    },
+    Opaque,
 }
 
 #[derive(Clone, Debug)]
@@ -386,9 +394,13 @@ struct AttributionScopeWindow {
 #[derive(Clone, Debug, Default, Serialize)]
 struct TraceCoverage {
     llm_request_count: usize,
+    llm_response_count: usize,
     observed_llm_call_count: usize,
-    llm_call_count: usize,
-    excluded_llm_call_count: usize,
+    paired_llm_call_count: usize,
+    unpaired_llm_call_count: usize,
+    orphan_llm_response_count: usize,
+    attributed_llm_call_count: usize,
+    excluded_from_attribution_llm_call_count: usize,
     user_turn_count: usize,
     strong_user_input_count: usize,
     agent_process_count: usize,
@@ -435,9 +447,13 @@ struct AggregateCoverage {
     partial_trace_count: usize,
     invalid_trace_count: usize,
     llm_request_count: usize,
+    llm_response_count: usize,
     observed_llm_call_count: usize,
-    llm_call_count: usize,
-    excluded_llm_call_count: usize,
+    paired_llm_call_count: usize,
+    unpaired_llm_call_count: usize,
+    orphan_llm_response_count: usize,
+    attributed_llm_call_count: usize,
+    excluded_from_attribution_llm_call_count: usize,
     user_turn_count: usize,
     tool_interval_count: usize,
     command_interval_count: usize,

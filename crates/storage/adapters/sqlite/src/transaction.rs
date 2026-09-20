@@ -10,6 +10,7 @@ use store_tx_contract::boundary::{StorageTransaction, TransactionBoundary};
 use crate::SqliteStorage;
 
 struct SqliteWriteTransaction {
+    payload_retention: Rc<RefCell<crate::payload::PayloadRetentionState>>,
     connection: Rc<RefCell<Connection>>,
     event_payload_dictionary: Rc<RefCell<crate::records::EventPayloadDictionary>>,
     event_path_dictionary: Rc<RefCell<crate::records::PathInterner>>,
@@ -48,6 +49,7 @@ impl StorageTransaction for SqliteWriteTransaction {
             self.event_path_dictionary.borrow_mut().commit_transaction();
             self.event_record_blocks.borrow_mut().commit_transaction();
         } else {
+            self.payload_retention.borrow_mut().invalidate();
             let rollback_result = self.connection.borrow_mut().execute_batch("ROLLBACK");
             self.event_payload_dictionary
                 .borrow_mut()
@@ -65,6 +67,7 @@ impl StorageTransaction for SqliteWriteTransaction {
     }
 
     fn rollback(self: Box<Self>) -> Result<(), StorageTransactionError> {
+        self.payload_retention.borrow_mut().invalidate();
         let result = self
             .connection
             .borrow_mut()
@@ -96,6 +99,7 @@ impl TransactionBoundary for SqliteStorage {
             .borrow_mut()
             .begin_transaction(&self.connection().borrow());
         if let Err(error) = block_begin {
+            self.payload_retention.borrow_mut().invalidate();
             let rollback_result = self.connection().borrow_mut().execute_batch("ROLLBACK");
             if rollback_result.is_err() {
                 self.event_record_blocks().borrow_mut().poison_transaction();
@@ -109,6 +113,7 @@ impl TransactionBoundary for SqliteStorage {
             .borrow_mut()
             .begin_transaction();
         Ok(Box::new(SqliteWriteTransaction {
+            payload_retention: self.payload_retention.clone(),
             connection: self.connection().clone(),
             event_payload_dictionary: self.event_payload_dictionary().clone(),
             event_path_dictionary: self.event_path_dictionary().clone(),

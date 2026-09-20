@@ -38,12 +38,13 @@ def measure_command(
     extra_samplers = [ProcTreeSampler(pid) for pid in extra_pids]
     peak_rss = 0
     extra_peak_rss = 0
-    cpu_seconds = 0.0
     while True:
-        if process.poll() is not None:
+        waited_pid, status, usage = os.wait4(process.pid, os.WNOHANG)
+        if waited_pid == process.pid:
+            process.returncode = os.waitstatus_to_exitcode(status)
+            cpu_seconds = usage.ru_utime + usage.ru_stime
             break
-        sampled_cpu, rss_kb, _ = sampler.sample()
-        cpu_seconds = max(cpu_seconds, sampled_cpu)
+        _, rss_kb, _ = sampler.sample()
         peak_rss = max(peak_rss, rss_kb)
         for extra in extra_samplers:
             _, extra_rss, _ = extra.sample()
@@ -67,8 +68,7 @@ def measure_command(
                 + stderr.strip()[-3000:]
             )
         time.sleep(0.05)
-    final_cpu, final_rss, _ = sampler.sample()
-    cpu_seconds = max(cpu_seconds, final_cpu)
+    _, final_rss, _ = sampler.sample()
     peak_rss = max(peak_rss, final_rss)
     extra_cpu = 0.0
     for extra, pid in zip(extra_samplers, extra_pids):

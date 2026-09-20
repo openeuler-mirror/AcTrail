@@ -9,6 +9,60 @@ use semantic_action::{
     evidence_roles,
 };
 
+pub(crate) struct ActionUpdateFactory;
+
+impl ActionUpdateFactory {
+    pub(crate) fn response_failure(
+        action: &SemanticAction,
+    ) -> Option<semantic_action::SemanticActionUpdate> {
+        let body_format = action
+            .attributes
+            .get(attrs::llm_response::BODY_FORMAT)?
+            .clone();
+        Some(Self::update(
+            action,
+            semantic_action::SemanticActionChange::LlmResponseFailure {
+                title: action.title.clone(),
+                end_time: action.end_time,
+                body_format,
+                http_status_code: action
+                    .attributes
+                    .get(attrs::http_response::STATUS_CODE)
+                    .and_then(|value| value.parse().ok()),
+                http_reason: action.attributes.get(attrs::http_response::REASON).cloned(),
+            },
+        ))
+    }
+    pub(crate) fn lifecycle(
+        action: &SemanticAction,
+        finalization_reason: Option<semantic_action::SemanticActionFinalizationReason>,
+    ) -> semantic_action::SemanticActionUpdate {
+        Self::update(
+            action,
+            semantic_action::SemanticActionChange::Lifecycle {
+                end_time: action.end_time,
+                status: action.status,
+                completeness: action.completeness,
+                finalization_reason,
+            },
+        )
+    }
+
+    pub(crate) fn update(
+        action: &SemanticAction,
+        change: semantic_action::SemanticActionChange,
+    ) -> semantic_action::SemanticActionUpdate {
+        semantic_action::SemanticActionUpdate {
+            action_id: action.action_id.clone(),
+            trace_id: action.trace_id,
+            kind: action.kind,
+            process: action.process,
+            change,
+            evidence: action.evidence.clone(),
+        }
+    }
+}
+
 pub(super) const ATTR_AGENT_IDENTITY_STATUS: &str = attrs::agent::IDENTITY_STATUS;
 pub(super) const ATTR_AGENT_IDENTITY_SOURCE: &str = attrs::agent::IDENTITY_SOURCE;
 pub(super) const ATTR_AGENT_IDENTITY_EVIDENCE_ACTION_ID: &str =
@@ -282,6 +336,13 @@ pub(super) fn file_modify_action(event: &DomainEvent) -> SemanticAction {
         attrs::file::CHANGE_KIND.to_string(),
         file_change_kind(payload).as_str().to_string(),
     );
+    if payload.operation == "open" {
+        attributes.insert("file.open_intent".to_string(), "true".to_string());
+        attributes.insert(
+            attrs::file::CHANGE_KIND.to_string(),
+            FileChangeKind::Unknown.as_str().to_string(),
+        );
+    }
     if let Some(path) = &payload.path {
         attributes.insert(attrs::file::PATH.to_string(), path.clone());
     }
@@ -422,8 +483,17 @@ pub(super) fn is_file_modify_event(event: &DomainEvent) -> bool {
     (is_file_modify_operation(&payload.operation)
         && !matches!(payload.operation.as_str(), "write" | "writev"))
         || (payload.operation == "open"
-            && (file_change_kind(payload) == FileChangeKind::Created
-                || payload.metadata.contains_key("truncate_source")))
+            && (open_requests_creation(payload)
+                || payload.metadata.contains_key("truncate_source")
+                || payload
+                    .metadata
+                    .get("flags")
+                    .and_then(|raw| raw.parse::<u64>().ok())
+                    .is_some_and(|flags| {
+                        flags & libc::O_ACCMODE as u64 != libc::O_RDONLY as u64
+                            || flags & libc::O_TRUNC as u64 != 0
+                            || flags & libc::O_TMPFILE as u64 == libc::O_TMPFILE as u64
+                    })))
 }
 
 fn file_change_kind(payload: &model_core::event::FilePayload) -> FileChangeKind {

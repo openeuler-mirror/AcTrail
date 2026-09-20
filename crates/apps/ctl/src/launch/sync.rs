@@ -4,8 +4,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use config_core::daemon::{
-    DisabledOrPath, PayloadTlsConfig, PayloadTlsLibraryPath, PayloadTlsSyncRuntimeLibraryPath,
+    DisabledOrPath, PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibraryPath,
+    PayloadTlsSyncRuntimeLibraryPath,
 };
+use control_contract::reply::LaunchTlsPlanStatus;
 use model_core::ids::RequestId;
 use model_core::ids::TraceId;
 use tls_payload_sync::{
@@ -20,7 +22,10 @@ use tls_payload_sync::{
 use super::java_agent::{java_agent_env_required, maybe_append_java_agent_env};
 use super::suppress::InheritableSuppressedFd;
 use super::timing::LaunchTiming;
-use crate::tls_plan::{QueriedLaunchTlsPlan, query_launch_tls_plan};
+use crate::tls_plan::{
+    QueriedLaunchTlsPlan, queried_plan_from_reply, query_launch_tls_plan,
+    query_launch_tls_plan_reply,
+};
 use crate::transport::ControlClientPort;
 
 pub(super) struct SyncLaunch {
@@ -36,6 +41,71 @@ pub(super) struct SyncLaunch {
 }
 
 impl SyncLaunch {
+    fn direct(command: Vec<OsString>, direct_probe_plans: Vec<RuntimePlanDescriptor>) -> Self {
+        Self {
+            command,
+            plans: Vec::new(),
+            sync_runtime_required: false,
+            runtime_libraries: None,
+            initial_runtime_family: None,
+            preload_libraries: Vec::new(),
+            audit_libraries: Vec::new(),
+            direct_probe_plans,
+            java_agent_env_required: false,
+        }
+    }
+
+    fn prepare_direct(
+        client: &mut impl ControlClientPort,
+        request_id: RequestId,
+        command: Vec<OsString>,
+        agent_commands: &[String],
+        timing: &mut LaunchTiming,
+    ) -> Result<Self, String> {
+        let binary = resolve_command_binary(&command)?;
+        let primary = Self::query_direct(client, request_id, &binary, timing)?;
+        let command = match primary.first() {
+            Some(plan) => launch_command_for_plan_descriptor(&command, plan)
+                .map_err(|error| error.to_string())?,
+            None => command,
+        };
+        let mut launch = Self::direct(command, primary);
+        for candidate in agent_commands {
+            let Ok(binary) = resolve_command_binary(&[OsString::from(candidate)]) else {
+                continue;
+            };
+            for plan in Self::query_direct(client, request_id, &binary, timing)? {
+                if !launch
+                    .direct_probe_plans
+                    .iter()
+                    .any(|existing| same_plan(existing, &plan))
+                {
+                    launch.direct_probe_plans.push(plan);
+                }
+            }
+        }
+        Ok(launch)
+    }
+
+    fn query_direct(
+        client: &mut impl ControlClientPort,
+        request_id: RequestId,
+        binary: &Path,
+        timing: &mut LaunchTiming,
+    ) -> Result<Vec<RuntimePlanDescriptor>, String> {
+        let reply = query_launch_tls_plan_reply(client, request_id, binary)
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        if let LaunchTlsPlanStatus::Unsupported { reason } = &reply.status {
+            timing.mark_detail(
+                "direct.resolve_launch_plan",
+                format_args!("binary={} reason_code={}", binary.display(), reason.code()),
+            );
+            return Ok(Vec::new());
+        }
+        queried_plan_from_reply(reply)
+            .map(|plan| plan.map(|plan| plan.descriptors).unwrap_or_default())
+    }
+
     pub(super) const fn requires_sync_runtime(&self) -> bool {
         self.sync_runtime_required
     }
@@ -108,6 +178,12 @@ pub(super) fn sync_launch(
     validate_resolver_inputs(config)?;
     timing.mark("sync.validate_resolver_inputs");
     let raw_command = argv.into_iter().map(OsString::from).collect::<Vec<_>>();
+    if config.capture_backend == PayloadTlsCaptureBackend::BpfCopy {
+        if !config.direct_startup_discovery_enabled {
+            return Ok(SyncLaunch::direct(raw_command, Vec::new()));
+        }
+        return SyncLaunch::prepare_direct(client, request_id, raw_command, agent_commands, timing);
+    }
     let (command, launch_plan) = match resolve_daemon_plan(client, request_id, &raw_command, config)
     {
         Ok(plan) => {
@@ -165,17 +241,7 @@ pub(super) fn sync_launch(
                     .join(",")
             ),
         );
-        return Ok(SyncLaunch {
-            command,
-            plans: Vec::new(),
-            sync_runtime_required: false,
-            runtime_libraries: None,
-            initial_runtime_family: None,
-            preload_libraries: Vec::new(),
-            audit_libraries: Vec::new(),
-            direct_probe_plans,
-            java_agent_env_required: false,
-        });
+        return Ok(SyncLaunch::direct(command, direct_probe_plans));
     }
     let initial_runtime_family = initial_runtime
         .libc
@@ -275,6 +341,8 @@ pub(super) fn sync_launch_envs(
             rules: Vec::new(),
             max_payload_bytes: usize::try_from(config.max_operation_bytes)
                 .map_err(|error| format!("payload_tls_max_operation_bytes overflow: {error}"))?,
+            max_frame_bytes: usize::try_from(config.sync_max_frame_bytes)
+                .map_err(|error| format!("payload_tls_sync_max_frame_bytes overflow: {error}"))?,
             flow_control: RuntimeFlowControlConfig {
                 enabled: config.sync_flow_control_enabled,
                 sniff_bytes: usize::try_from(config.sync_flow_sniff_bytes).map_err(|error| {

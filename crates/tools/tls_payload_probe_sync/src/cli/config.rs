@@ -21,6 +21,7 @@ pub(crate) struct ProbeConfig {
     pub(crate) library_search_dirs: Vec<PathBuf>,
     pub(crate) rules: Vec<RewriteRule>,
     pub(crate) max_payload_bytes: usize,
+    pub(crate) max_frame_bytes: usize,
     pub(crate) redaction: RedactionMode,
     pub(crate) events: EventFilter,
 }

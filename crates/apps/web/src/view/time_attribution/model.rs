@@ -73,12 +73,14 @@ pub(super) fn model_intervals(
     scope: Interval,
     provisional: bool,
     tracker: &mut StatusTracker,
-) -> Vec<ModelInterval> {
+) -> ModelProjection {
     let actions_by_id = actions
         .iter()
         .map(|action| (action.action_id.as_str(), action))
         .collect::<BTreeMap<_, _>>();
     let mut intervals = Vec::new();
+    let mut paired_call_count = 0;
+    let mut paired_response_ids = HashSet::new();
     for action in actions
         .iter()
         .filter(|action| action.kind == SemanticActionKind::LlmCall)
@@ -97,20 +99,10 @@ pub(super) fn model_intervals(
             );
             continue;
         };
-        if let Some(background_kind) = request
+        let background_kind = request
             .attributes
             .get(attr_keys::llm_request::BACKGROUND_KIND)
-        {
-            tracker.action_info(
-                "background_llm_call_excluded",
-                format!(
-                    "LLM call is classified as background activity ({background_kind}) and is excluded from user-turn attribution."
-                ),
-                &action.action_id,
-                None,
-            );
-            continue;
-        }
+            .cloned();
         let response = action
             .attributes
             .get(attr_keys::llm_call::RESPONSE_ACTION_ID)
@@ -121,6 +113,19 @@ pub(super) fn model_intervals(
             report_unpaired_call(action, provisional, tracker);
             continue;
         };
+        paired_call_count += 1;
+        paired_response_ids.insert(response.action_id.as_str());
+        if let Some(background_kind) = background_kind {
+            tracker.action_info(
+                "background_llm_call_excluded",
+                format!(
+                    "LLM call is classified as background activity ({background_kind}) and is excluded from user-turn attribution."
+                ),
+                &action.action_id,
+                None,
+            );
+            continue;
+        }
         let Ok(start) = system_time_nanos(request.start_time) else {
             tracker.action_error(
                 "llm_call_clock_invalid",
@@ -168,15 +173,15 @@ pub(super) fn model_intervals(
             );
             continue;
         }
-        let Some(turn_key) = user_turn_key(request) else {
+        let turn_key = user_turn_key(request);
+        if matches!(turn_key.identity, UserTurnIdentity::Opaque) {
             tracker.action_info(
-                "llm_call_without_user_message",
-                "LLM call has no retained user-message evidence and is excluded from user-turn attribution.",
+                "llm_call_without_user_message_content",
+                "LLM call has no retained user-message content; its model interval is included with an inferred turn boundary.",
                 &action.action_id,
                 Interval::new(start, end),
             );
-            continue;
-        };
+        }
         let user_input_start = request
             .attributes
             .get(attr_keys::agent_turn::USER_INPUT_OBSERVED_AT_UNIX_NANOS)
@@ -198,9 +203,6 @@ pub(super) fn model_intervals(
             continue;
         };
         let partial_observation = matches!(
-            action.completeness,
-            SemanticActionCompleteness::Partial | SemanticActionCompleteness::Inferred
-        ) || matches!(
             response.completeness,
             SemanticActionCompleteness::Partial | SemanticActionCompleteness::Inferred
         ) || response.status == SemanticActionStatus::InProgress;
@@ -253,45 +255,65 @@ pub(super) fn model_intervals(
             &right.action_id,
         ))
     });
-    intervals
+    let observed_call_count = actions
+        .iter()
+        .filter(|action| action.kind == SemanticActionKind::LlmCall)
+        .count();
+    let request_count = actions
+        .iter()
+        .filter(|action| action.kind == SemanticActionKind::LlmRequest)
+        .count();
+    let response_count = actions
+        .iter()
+        .filter(|action| action.kind == SemanticActionKind::LlmResponse)
+        .count();
+    ModelProjection {
+        intervals,
+        request_count,
+        response_count,
+        observed_call_count,
+        paired_call_count,
+        orphan_response_count: response_count.saturating_sub(paired_response_ids.len()),
+    }
 }
 
-fn user_turn_key(request: &SemanticAction) -> Option<UserTurnKey> {
+pub(super) struct ModelProjection {
+    pub(super) intervals: Vec<ModelInterval>,
+    pub(super) request_count: usize,
+    pub(super) response_count: usize,
+    pub(super) observed_call_count: usize,
+    pub(super) paired_call_count: usize,
+    pub(super) orphan_response_count: usize,
+}
+
+fn user_turn_key(request: &SemanticAction) -> UserTurnKey {
     let user_message_count = request
         .attributes
         .get(attr_keys::llm_request::USER_MESSAGE_COUNT)
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|count| *count > 0);
-    let latest_user_message_hash = request
+    let preview = request
         .attributes
-        .get(attr_keys::llm_request::LATEST_USER_MESSAGE_HASH)
-        .filter(|value| valid_user_message_hash(value))
-        .cloned();
-    let (user_message_count, latest_user_message_hash) =
-        match (user_message_count, latest_user_message_hash) {
-            (Some(count), Some(hash)) => (count, hash),
-            _ => {
-                let preview = request
-                    .attributes
-                    .get(attr_keys::llm_request::MESSAGE_PREVIEW)
-                    .map(|value| value.trim())
-                    .filter(|value| !value.is_empty())?;
-                (0, format!("legacy-preview:{preview}"))
-            }
-        };
-    Some(UserTurnKey {
+        .get(attr_keys::llm_request::MESSAGE_PREVIEW)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty() && value.chars().count() <= 160)
+        .map(ToOwned::to_owned);
+    let (user_message_count, message_preview) = match (user_message_count, preview) {
+        (Some(count), Some(preview)) => (count, preview),
+        _ => {
+            return UserTurnKey {
+                process: request.process.clone(),
+                identity: UserTurnIdentity::Opaque,
+            };
+        }
+    };
+    UserTurnKey {
         process: request.process.clone(),
-        user_message_count,
-        latest_user_message_hash,
-    })
-}
-
-fn valid_user_message_hash(value: &str) -> bool {
-    value.len() == "sha256:".len() + 64
-        && value.starts_with("sha256:")
-        && value["sha256:".len()..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+        identity: UserTurnIdentity::RetainedMessage {
+            user_message_count,
+            message_preview,
+        },
+    }
 }
 
 fn report_unpaired_call(action: &SemanticAction, provisional: bool, tracker: &mut StatusTracker) {

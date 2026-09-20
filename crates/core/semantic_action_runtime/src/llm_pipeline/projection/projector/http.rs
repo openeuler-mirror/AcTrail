@@ -71,10 +71,9 @@ pub(in crate::llm_pipeline) fn failed_response_for_open_request(
     call: &SemanticAction,
 ) -> Option<SemanticAction> {
     let failure = HttpResponseFailure::classify(http_response)?;
-    if call.status != SemanticActionStatus::InProgress
-        || call
-            .attributes
-            .contains_key(attrs::llm_call::RESPONSE_ACTION_ID)
+    if call
+        .attributes
+        .contains_key(attrs::llm_call::RESPONSE_ACTION_ID)
     {
         return None;
     }

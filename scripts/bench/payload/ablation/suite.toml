@@ -1,0 +1,71 @@
+[[cases]]
+name = "P"
+parent = "0"
+patch = "cases/chain/P.toml"
+description = "P collection and semantic projection with startup TLS discovery enabled and daemon-side dynamic discovery disabled."
+
+[[cases]]
+name = "no-startup"
+parent = "P"
+patch = "cases/chain/no-startup.toml"
+description = "Disable startup TLS discovery in addition to dynamic discovery."
+
+[[cases]]
+name = "no-socket"
+parent = "no-startup"
+patch = "cases/chain/no-socket.toml"
+description = "Disable socket payload collection with both TLS discovery paths disabled."
+
+[[cases]]
+name = "no-stdio"
+parent = "no-socket"
+patch = "cases/chain/no-stdio.toml"
+description = "Additionally disable stdio payload collection."
+
+[[cases]]
+name = "no-fs"
+parent = "no-stdio"
+patch = "cases/chain/no-fs.toml"
+description = "Additionally remove filesystem access and mmap capabilities."
+
+[[cases]]
+name = "no-resource"
+parent = "no-fs"
+patch = "cases/chain/no-resource.toml"
+description = "Additionally disable resource metrics collection."
+
+[[cases]]
+name = "no-tls"
+parent = "no-resource"
+patch = "cases/chain/no-tls.toml"
+description = "Additionally disable TLS payload and application protocol observation; retain process and network capabilities."
+
+[[cases]]
+name = "no-net"
+parent = "no-tls"
+patch = "cases/tail/no-net.toml"
+description = "Additionally remove network transport observation."
+
+[[cases]]
+name = "lifecycle-only"
+parent = "no-net"
+patch = "cases/tail/lifecycle-only.toml"
+description = "Additionally remove process exec context; retain process lifecycle collection."
+
+[[cases]]
+name = "no-semantics"
+parent = "lifecycle-only"
+patch = "cases/tail/no-semantics.toml"
+description = "Disable semantic projection with lifecycle-only collection and unrestricted descendant observation depth."
+
+[[cases]]
+name = "mcp-off"
+parent = "P"
+patch = "cases/branches/mcp-off.toml"
+description = "Disable MCP processing with P collection, startup TLS discovery enabled and daemon-side dynamic discovery disabled."
+
+[[cases]]
+name = "ipc-context-only"
+parent = "no-tls"
+blocked = "No external switch for the historical file-context-only bypass."
+description = "Historical isolated IPC context experiment awaiting a valid external configuration model."

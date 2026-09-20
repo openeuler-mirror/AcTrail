@@ -1,6 +1,6 @@
 //! Atomic state ownership for live tool interaction correlation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use model_core::ids::TraceId;
@@ -18,6 +18,7 @@ pub(in crate::live::tool) struct StateEviction {
 
 pub(in crate::live::tool) struct StateMutation {
     pub(in crate::live::tool) changed: bool,
+    pub(in crate::live::tool) existing: bool,
     pub(in crate::live::tool) eviction: Option<StateEviction>,
 }
 
@@ -64,6 +65,7 @@ impl ToolInteractionState {
             action.start_time,
         );
         let key = (trace_id, action_id.clone());
+        let existing = self.tool_calls.contains_key(&key);
         let changed = self
             .tool_calls
             .get(&key)
@@ -85,7 +87,11 @@ impl ToolInteractionState {
             previous_id.as_deref(),
             tool_call_id.as_deref(),
         );
-        StateMutation { changed, eviction }
+        StateMutation {
+            changed,
+            existing,
+            eviction,
+        }
     }
 
     pub(in crate::live::tool) fn record_tool_result(
@@ -101,10 +107,15 @@ impl ToolInteractionState {
             action.start_time,
         );
         let key = (trace_id, action_id.clone());
+        let existing = self.tool_results.contains_key(&key);
         let changed = self.tool_results.get(&key) != Some(&action);
         self.tool_results.insert(key, action);
         self.indexes.record_tool_result(trace_id, &action_id);
-        StateMutation { changed, eviction }
+        StateMutation {
+            changed,
+            existing,
+            eviction,
+        }
     }
 
     pub(in crate::live::tool) fn has_agent_invocation(
@@ -120,14 +131,13 @@ impl ToolInteractionState {
         &mut self,
         tool_call_action_id: &str,
         action: &SemanticAction,
-        prompt_message_hashes: BTreeSet<String>,
-        prompt_preview: Option<String>,
     ) -> StateMutation {
         let trace_id = action.trace_id;
         let key = (trace_id, tool_call_action_id.to_string());
         if self.agent_invocations.contains_key(&key) {
             return StateMutation {
                 changed: false,
+                existing: true,
                 eviction: None,
             };
         }
@@ -137,23 +147,17 @@ impl ToolInteractionState {
             tool_call_action_id,
             action.start_time,
         );
-        self.indexes.record_agent_invocation(
-            trace_id,
-            tool_call_action_id,
-            &prompt_message_hashes,
-            prompt_preview.as_deref(),
-        );
+        self.indexes
+            .record_agent_invocation(trace_id, tool_call_action_id);
         self.agent_invocations.insert(
             key,
             AgentInvocationRecord {
                 action: action.clone(),
-                prompt_message_hashes,
-                prompt_preview,
-                child_linked: false,
             },
         );
         StateMutation {
             changed: true,
+            existing: false,
             eviction,
         }
     }
@@ -208,43 +212,6 @@ impl ToolInteractionState {
         invocation.action.completeness = request.completeness;
         invocation.action.end_time = request.end_time.or(Some(request.start_time));
         Some(invocation.action.clone())
-    }
-
-    pub(in crate::live::tool) fn agent_child_candidates(
-        &self,
-        trace_id: TraceId,
-        request_hash: Option<&str>,
-        request_preview: Option<&str>,
-    ) -> Vec<String> {
-        self.indexes
-            .agent_child_candidates(trace_id, request_hash, request_preview)
-            .into_iter()
-            .filter(|action_id| {
-                self.agent_invocations
-                    .get(&(trace_id, action_id.clone()))
-                    .is_some_and(|invocation| !invocation.child_linked)
-            })
-            .collect()
-    }
-
-    pub(in crate::live::tool) fn link_agent_child(
-        &mut self,
-        trace_id: TraceId,
-        tool_call_action_id: &str,
-    ) -> Option<SemanticAction> {
-        let key = (trace_id, tool_call_action_id.to_string());
-        let invocation = self.agent_invocations.get_mut(&key)?;
-        invocation.child_linked = true;
-        let prompt_message_hashes = invocation.prompt_message_hashes.clone();
-        let prompt_preview = invocation.prompt_preview.clone();
-        let action = invocation.action.clone();
-        self.indexes.unlink_agent_candidate(
-            trace_id,
-            tool_call_action_id,
-            &prompt_message_hashes,
-            prompt_preview.as_deref(),
-        );
-        Some(action)
     }
 
     pub(in crate::live::tool) fn finish_trace(
@@ -333,12 +300,6 @@ impl ToolInteractionState {
                         materialized_invocation: None,
                     };
                 };
-                self.indexes.unlink_agent_candidate(
-                    trace_id,
-                    &eviction.action_id,
-                    &invocation.prompt_message_hashes,
-                    invocation.prompt_preview.as_deref(),
-                );
                 if invocation.action.status == SemanticActionStatus::InProgress {
                     invocation.action.status = SemanticActionStatus::Unknown;
                     invocation.action.completeness = SemanticActionCompleteness::Partial;
@@ -367,17 +328,7 @@ impl ToolInteractionState {
             self.tool_results.remove(&(trace_id, action_id));
         }
         for action_id in entries.agent_invocations {
-            if let Some(invocation) = self
-                .agent_invocations
-                .remove(&(trace_id, action_id.clone()))
-            {
-                self.indexes.unlink_agent_candidate(
-                    trace_id,
-                    &action_id,
-                    &invocation.prompt_message_hashes,
-                    invocation.prompt_preview.as_deref(),
-                );
-            }
+            self.agent_invocations.remove(&(trace_id, action_id));
         }
     }
 }

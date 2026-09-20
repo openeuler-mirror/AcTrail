@@ -1,0 +1,5 @@
+[storage]
+backend = "sqlite"
+[storage.sqlite]
+cold_field_compression_min_bytes = 0
+event_payload_dictionary_cache_bytes = 0

@@ -15,6 +15,7 @@ from typing import Protocol
 from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAutoConfig
+from .fixtures.tls_injection import ForeignTracePayload
 from .cases import (
     EbpfOffNotifyOffCase,
     EbpfOffNotifyOnCase,
@@ -160,6 +161,12 @@ class ContainerAutoScenario:
             build_args={"BASE_IMAGE": self._config.base_image},
             force_rebuild=self._config.rebuild_image,
         )
+        removed_images = build.prune_other_versions()
+        if removed_images:
+            self._test_context.report_progress(
+                "container_image_prune",
+                f"removed stale image versions: {', '.join(removed_images)}",
+            )
         reference = build.ensure()
         self._image = ContainerImage(build.image_name, build.version)
         self._test_context.report_progress(
@@ -173,7 +180,22 @@ class ContainerAutoScenario:
         rendered = rendered.replace("@EBPF_ENABLED@", ebpf_enabled)
         if "@RUNTIME_DIR@" in rendered or "@EBPF_ENABLED@" in rendered:
             raise RuntimeError("container-auto operator template is unresolved")
-        self._operator_config.write_text(rendered, encoding="utf-8")
+        patch = self._runtime / "operator.patch.toml"
+        patch.write_text(rendered, encoding="utf-8")
+        initialized = subprocess.run(
+            [
+                str(self._actrailctl), "--config", str(self._operator_config),
+                "init", "-f", "--patch", str(patch),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if initialized.returncode != 0:
+            raise RuntimeError(
+                "failed to initialize refreshed operator config: "
+                f"stdout={initialized.stdout!r} stderr={initialized.stderr!r}"
+            )
 
     def _start_daemon(self, ebpf_enabled: str) -> None:
         self._stop_daemon()
@@ -437,62 +459,27 @@ sys.stdout.buffer.write(client.recv(65536))
         if "peer_identity" not in stdout:
             raise RuntimeError("foreign seccomp listener registration was not rejected")
 
-    def _require_tls_injection_rejected(
-        self,
-        peer: TestContainer,
-        trace_id: int,
-    ) -> None:
+    def _require_tls_injection_rejected(self, peer: TestContainer, trace_id: int) -> None:
         offset = self._daemon_log.stat().st_size
-        script = """
-import os, socket, sys
-client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-client.connect(sys.argv[2])
-start_ticks = open("/proc/self/stat", encoding="utf-8").read().split()[21]
-pid_ns = os.readlink("/proc/self/ns/pid")
-line = "v2\\tpayload\\t" + sys.argv[1] + "\\t" + str(os.getpid()) + "\\t" + start_ticks + "\\t" + pid_ns + "\\toutbound\\tpeer-e2e\\tinjection\\t1\\t1\\t6869\\n"
-client.sendall(line.encode())
-client.shutdown(socket.SHUT_WR)
-client.settimeout(2)
-try:
-    while client.recv(4096):
-        pass
-except socket.timeout:
-    pass
-"""
+        script = self._runtime / "tls_injection.py"
+        shutil.copy2(self._case_dir / "fixtures" / script.name, script)
         self._exec_result(
             peer,
             [
                 "python3",
-                "-c",
-                script,
+                str(script),
                 str(trace_id),
                 str(self._runtime / "run/tls-sync.sock"),
             ],
             check=True,
         )
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            with self._daemon_log.open("rb") as log:
-                log.seek(offset)
-                audit = log.read().decode("utf-8", errors="replace")
-            if (
-                "closed rejected TLS-sync peer" in audit
-                and f"trace trace-{trace_id}" in audit
-            ):
-                break
-            time.sleep(0.2)
-        else:
-            raise RuntimeError("foreign TLS payload injection lacked an audited rejection")
-        with sqlite3.connect(self._database) as connection:
-            forged = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM payload_segments "
-                    "WHERE trace_id = ? AND library = 'peer-e2e' AND symbol = 'injection'",
-                    (trace_id,),
-                ).fetchone()[0]
-            )
-        if forged != 0:
-            raise RuntimeError("foreign TLS payload reached another container trace")
+        rejection_reason = ForeignTracePayload(trace_id).verify_rejected(
+            self._daemon_log, self._database, offset
+        )
+        self._test_context.report_progress(
+            "tls_peer_rejection",
+            f"audited: {rejection_reason}; forged payloads stored=0",
+        )
 
     def _verify_required_permission_guards(self) -> None:
         container = self._new_container(

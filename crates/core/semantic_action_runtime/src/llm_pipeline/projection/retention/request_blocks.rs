@@ -6,49 +6,33 @@ use semantic_action::{
 };
 use serde_json::{Map, Number, Value};
 
+pub(in crate::llm_pipeline) use self::canonical_json::CanonicalJsonWriter;
 use self::canonical_json::{
     bytes as canonical_json_bytes, sha256_hex, string as canonical_json_string,
 };
-use self::metadata::{background_request_kind, message_preview, user_message_metadata};
+pub(in crate::llm_pipeline) use self::metadata::{BackgroundRequestKind, background_request_kind};
 
 mod canonical_json;
 mod metadata;
 
 pub(super) use self::metadata::UserMessageMetadata;
+pub(in crate::llm_pipeline) use self::metadata::user_message_metadata;
 
 pub(in crate::llm_pipeline) const FORMAT_VERSION: u32 = 2;
 
 const BLOCK_PLACEHOLDER_KEY: &str = "$actrail_llm_block";
 
-pub(crate) fn canonical_json(value: &Value) -> (String, String) {
-    let json = canonical_json_string(value);
-    let hash = sha256_hex(json.as_bytes());
-    (json, hash)
-}
-
 pub(crate) fn canonical_json_text(value: &Value) -> String {
     canonical_json_string(value)
-}
-
-pub(in crate::llm_pipeline) struct CanonicalBody {
-    pub(in crate::llm_pipeline) json: String,
-    pub(in crate::llm_pipeline) hash: String,
-    pub(in crate::llm_pipeline) bytes: u64,
 }
 
 pub(in crate::llm_pipeline) struct CanonicalRequestContent {
     pub(in crate::llm_pipeline) write: LlmRequestContentWrite,
     pub(crate) trajectory_history: Option<TrajectoryHistoryProjection>,
-    /// The canonicalised body together with the hash and size derived from its
-    /// exact bytes. Carried out so body export can put those same bytes on the
-    /// action; the caller retains the hash and size but drops the JSON unless
-    /// export is enabled.
-    pub(in crate::llm_pipeline) canonical_body: CanonicalBody,
     pub(in crate::llm_pipeline) block_count: usize,
     pub(in crate::llm_pipeline) message_preview: Option<String>,
     pub(in crate::llm_pipeline) user_message_count: usize,
     pub(in crate::llm_pipeline) tool_result_count: usize,
-    pub(in crate::llm_pipeline) latest_user_message_hash: Option<String>,
     pub(in crate::llm_pipeline) background_kind: Option<&'static str>,
 }
 
@@ -72,9 +56,6 @@ pub(in crate::llm_pipeline) fn canonical_request_content(
 ) -> Result<CanonicalRequestContent, String> {
     let user_messages = user_message_metadata(body);
     let tool_result_count = metadata::tool_result_count(body);
-    let canonical_body_json = canonical_json_string(body);
-    let canonical_body_hash = sha256_hex(canonical_body_json.as_bytes());
-    let canonical_body_bytes = canonical_body_json.len() as u64;
     let mut accumulator = BlockAccumulator::new(trace_id, action_id);
     let (skeleton, trajectory_history) =
         skeletonize_body(body, &mut accumulator, project_trajectory_history)?;
@@ -84,8 +65,6 @@ pub(in crate::llm_pipeline) fn canonical_request_content(
         trace_id,
         action_id: action_id.to_string(),
         format_version: FORMAT_VERSION,
-        canonical_body_hash: canonical_body_hash.clone(),
-        canonical_body_bytes,
         skeleton_json,
     };
     let block_count = block_refs.len();
@@ -96,36 +75,26 @@ pub(in crate::llm_pipeline) fn canonical_request_content(
             blocks,
         },
         trajectory_history,
-        canonical_body: CanonicalBody {
-            json: canonical_body_json,
-            hash: canonical_body_hash,
-            bytes: canonical_body_bytes,
-        },
         block_count,
-        message_preview: message_preview(body),
+        message_preview: user_messages.preview(),
         user_message_count: user_messages.count,
         tool_result_count,
-        latest_user_message_hash: user_messages.latest_hash,
         background_kind: background_request_kind(body),
     })
 }
 
-pub(in crate::llm_pipeline) fn canonical_shape_metadata(
+pub(in crate::llm_pipeline) fn request_shape_metadata(
     body: &Value,
 ) -> (
-    String,
-    u64,
     Option<String>,
     UserMessageMetadata,
     usize,
     Option<&'static str>,
 ) {
-    let canonical_body = canonical_json_bytes(body);
+    let user_messages = user_message_metadata(body);
     (
-        sha256_hex(&canonical_body),
-        canonical_body.len() as u64,
-        message_preview(body),
-        user_message_metadata(body),
+        user_messages.preview(),
+        user_messages,
         metadata::tool_result_count(body),
         background_request_kind(body),
     )

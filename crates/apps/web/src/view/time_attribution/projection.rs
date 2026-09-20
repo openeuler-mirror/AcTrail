@@ -28,7 +28,8 @@ pub(super) fn project_trace_data(
     }
     let provisional = !trace.lifecycle_state.is_terminal();
     let full_scope = trace_scope(trace, actions, memberships, &mut tracker)?;
-    let observed_calls = model_intervals(actions, full_scope, provisional, &mut tracker);
+    let model_projection = model_intervals(actions, full_scope, provisional, &mut tracker);
+    let observed_calls = model_projection.intervals;
     let strong_turn_keys = observed_calls
         .iter()
         .filter(|call| call.user_input_start.is_some())
@@ -38,7 +39,7 @@ pub(super) fn project_trace_data(
         if !observed_calls.is_empty() {
             tracker.info(
                 "user_input_boundary_unobserved",
-                "User-message evidence was observed, but terminal input timing was unavailable; each turn begins at its first model request.",
+                "Terminal input timing was unavailable; each inferred turn begins at its first model request.",
             );
         }
         observed_calls.clone()
@@ -100,7 +101,7 @@ pub(super) fn project_trace_data(
     if full_windows.is_empty() {
         tracker.info(
             "user_turn_not_observed",
-            "No completed model exchange with reliable user-message evidence was observed; startup, idle, and background activity are excluded.",
+            "No completed model exchange with a usable time boundary was observed; startup, idle, and background activity are excluded.",
         );
     }
     let tools = clip_tool_intervals(&raw_local_tools, &windows);
@@ -135,19 +136,24 @@ pub(super) fn project_trace_data(
     let rounds = round_attributions(&turns, &calls, &segments, &tools, provisional);
     let bottlenecks = trace_bottlenecks(&calls, &command_intervals, &segments, provisional);
     let status = tracker.status(provisional);
-    let llm_request_count = actions
+    let attributed_llm_call_count = calls
         .iter()
-        .filter(|action| action.kind == SemanticActionKind::LlmRequest)
-        .count();
-    let observed_llm_call_count = actions
-        .iter()
-        .filter(|action| action.kind == SemanticActionKind::LlmCall)
-        .count();
+        .map(|call| call.action_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len();
     let coverage = TraceCoverage {
-        llm_request_count,
-        observed_llm_call_count,
-        llm_call_count: calls.len(),
-        excluded_llm_call_count: observed_llm_call_count.saturating_sub(calls.len()),
+        llm_request_count: model_projection.request_count,
+        llm_response_count: model_projection.response_count,
+        observed_llm_call_count: model_projection.observed_call_count,
+        paired_llm_call_count: model_projection.paired_call_count,
+        unpaired_llm_call_count: model_projection
+            .observed_call_count
+            .saturating_sub(model_projection.paired_call_count),
+        orphan_llm_response_count: model_projection.orphan_response_count,
+        attributed_llm_call_count,
+        excluded_from_attribution_llm_call_count: model_projection
+            .paired_call_count
+            .saturating_sub(attributed_llm_call_count),
         user_turn_count: turns.len(),
         strong_user_input_count: calls
             .iter()

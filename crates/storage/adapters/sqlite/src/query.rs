@@ -611,8 +611,17 @@ fn read_payload_segments(
         .map(crate::records::PayloadSegmentMeta::direction_bits);
     let segment_id = query.segment_id.map(|value| value.get());
     let (order_direction, row_limit, reverse_rows) = payload_segment_query_limit(query.limit)?;
+    let body_projection = if query.include_bytes {
+        "bytes"
+    } else {
+        "X'' AS bytes"
+    };
     let sql = format!(
-        "SELECT * FROM payload_segments
+        "SELECT segment_id, trace_id, observed_at, process_id, segment_meta,
+                stream_key, sequence, original_size, captured_size, operation_id,
+                operation_offset, operation_original_size, operation_captured_size,
+                library, symbol, protocol_hint, storage_omission, {body_projection}
+         FROM payload_segments
          WHERE trace_id = ?1
            AND (?2 IS NULL OR segment_id = ?2)
            AND (?3 IS NULL OR (segment_meta & {PAYLOAD_DIRECTION_MASK}) = ?3)
@@ -633,11 +642,6 @@ fn read_payload_segments(
         .map_err(|error| SnapshotError::new("map_payload_segments", error.to_string()))?;
     if reverse_rows {
         segments.reverse();
-    }
-    if !query.include_bytes {
-        for segment in &mut segments {
-            segment.bytes.clear();
-        }
     }
     Ok(segments)
 }

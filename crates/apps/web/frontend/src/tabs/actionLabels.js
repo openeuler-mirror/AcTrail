@@ -10,35 +10,28 @@ const FILE_ACTION_KINDS = new Set([
 ]);
 
 export function semanticActionLabel(action) {
-  if (action?.kind === 'command.invocation') {
-    if (action.attributes?.['invocation.kind'] === 'agent') {
-      return 'tool.call:agent.invoke';
-    }
-    if (action.attributes?.['invocation.kind'] === 'mcp') {
-      return 'tool.call:mcp_server';
-    }
-    return 'tool.call:bash.exec';
-  }
-  if (action?.kind === 'file.read') {
-    return 'tool.call:file.read';
-  }
-  if (action?.kind === 'file.write') {
-    return 'tool.call:file.write';
+  const attributes = action?.attributes ?? {};
+  if (action?.kind === 'process.exec' && action.status === 'error') {
+    const errno = Number(attributes.errno ?? attributes['syscall.result']);
+    return Math.abs(errno) === 2 ? 'process.exec (not found)' : 'process.exec (failed)';
   }
   if (action?.kind === 'file.modify') {
-    return 'tool.call:file.modify';
+    const operation = attributes['file.operation'];
+    const label = operation ? `file.${operation}` : action.kind;
+    if (action.status === 'error') {
+      if (operation === 'mkdir' && Math.abs(Number(attributes.errno ?? attributes['syscall.result'])) === 17) {
+        return `${label} (already exists)`;
+      }
+      return `${label} (failed)`;
+    }
+    if (attributes['file.open_intent'] === 'true') {
+      return `${label} (write intent)`;
+    }
+    return label;
   }
-  if (action?.kind === 'file.tty_io') {
-    return 'tool.call:file.tty_io';
-  }
-  if (action?.kind === 'file.bulk_read') {
-    return 'tool.call:file.bulk_read';
-  }
-  if (action?.kind === 'fs.enumerate') {
-    return 'tool.call:fs.enumerate';
-  }
-  if (action?.kind === 'agent.invocation') {
-    return 'tool.call:agent.invoke';
+  if (action?.kind === 'llm.tool_call') {
+    const tool = attributes['llm.tool_call.name'];
+    return tool ? `tool.call:${tool}` : action.kind;
   }
   if (action?.kind === 'mcp.tool_call') {
     return 'tool.call:mcp';
@@ -84,7 +77,16 @@ export function semanticActionTarget(action) {
     return attributes['agent.child.command_line'] ?? attributes['command.line'] ?? action.title;
   }
   if (FILE_ACTION_KINDS.has(action?.kind)) {
+    if (attributes['file.operation'] === 'rename') {
+      return `${attributes['file.path'] || 'path unavailable'} → ${attributes.target_path || 'path unavailable'}`;
+    }
+    if (attributes.path_resolution === 'missing') {
+      return 'path unavailable';
+    }
     return attributes['file.path'] ?? action.title;
+  }
+  if (action?.kind === 'llm.tool_call') {
+    return attributes['file.path'] ?? attributes['command.line'] ?? '';
   }
   if (action?.kind === 'agent.invocation') {
     return attributes['agent.child.command_line'] ?? attributes['agent.child.executable'] ?? action.title;

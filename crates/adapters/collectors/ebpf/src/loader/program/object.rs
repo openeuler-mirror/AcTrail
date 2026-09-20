@@ -151,9 +151,8 @@ where
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn perf_sample_payload(raw: &[u8]) -> &[u8] {
-    strip_perf_raw_size_prefix(raw)
-        .or_else(|| strip_perf_trailing_padding(raw))
-        .unwrap_or(raw)
+    let payload = strip_perf_raw_size_prefix(raw).unwrap_or(raw);
+    strip_perf_trailing_padding(payload).unwrap_or(payload)
 }
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
@@ -173,8 +172,26 @@ fn strip_perf_raw_size_prefix(raw: &[u8]) -> Option<&[u8]> {
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn strip_perf_trailing_padding(raw: &[u8]) -> Option<&[u8]> {
+    let kind = read_u32(raw, 0)?;
+    let variable_record = match kind {
+        5 => Some((80, 56)),
+        9 => Some((72, 52)),
+        _ => None,
+    };
+    if let Some((header_size, length_offset)) = variable_record {
+        let captured_size = read_u32(raw, length_offset)? as usize;
+        if captured_size > 4_096 {
+            return None;
+        }
+        let payload_size = header_size + captured_size;
+        // PERF_SAMPLE_RAW aligns its u32 size field plus payload to 8 bytes.
+        // Variable records can therefore have zero through seven tail bytes.
+        let sample_size = (payload_size + 4).next_multiple_of(8) - 4;
+        return (raw.len() == sample_size)
+            .then(|| raw.get(..payload_size))
+            .flatten();
+    }
     let payload = raw.get(..raw.len().checked_sub(4)?)?;
-    let kind = read_u32(payload, 0)?;
     if known_event_size(kind, payload.len()) {
         Some(payload)
     } else {
@@ -194,8 +211,6 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     const STDIO_COMPLETION_EVENT_SIZE: usize = 88;
     const SOCKET_EVENT_SIZE: usize = 120 + 4_096;
     const SOCKET_COMPLETION_EVENT_SIZE: usize = 104;
-    const PROCESS_EXEC_ATTEMPT_EVENT_SIZE: usize = 80 + 4_096;
-    const PROCESS_EXEC_ARG_EVENT_SIZE: usize = 72 + 4_096;
     const PROCESS_EXEC_RESULT_EVENT_SIZE: usize = 64;
     const PROCESS_FORK_ATTEMPT_EVENT_SIZE: usize = 88;
     const PROCESS_FORK_RESULT_EVENT_SIZE: usize = 64;
@@ -209,11 +224,9 @@ fn known_event_size(kind: u32, size: usize) -> bool {
         2 => size == PROCESS_EXEC_EVENT_SIZE,
         3 => size == PROCESS_EXIT_EVENT_SIZE,
         4 => size == PROCESS_SIGNAL_EVENT_SIZE,
-        5 => size == PROCESS_EXEC_ATTEMPT_EVENT_SIZE,
         6 => size == PROCESS_EXEC_RESULT_EVENT_SIZE,
         7 => size == PROCESS_FORK_ATTEMPT_EVENT_SIZE,
         8 => size == PROCESS_FORK_RESULT_EVENT_SIZE,
-        9 => size == PROCESS_EXEC_ARG_EVENT_SIZE,
         100 | 101 | 104..=107 => size == NETWORK_EVENT_SIZE,
         102 | 103 => size == FD_IO_EVENT_SIZE,
         108 => size == SOCKET_RELEASE_EVENT_SIZE,

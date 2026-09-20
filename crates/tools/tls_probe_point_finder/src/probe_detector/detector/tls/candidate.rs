@@ -9,7 +9,9 @@ use crate::probe_detector::contract::candidate::closure::ProbeClosure;
 use crate::probe_detector::contract::capability::{
     CapabilityKey, ConsumerCapability, DetectorCapability,
 };
-use crate::probe_detector::contract::detection::{DetectionEvidence, EvidenceFact, ProbeContext};
+use crate::probe_detector::contract::detection::{
+    DetectionEvidence, EvidenceFact, ProbeConsumer, ProbeContext,
+};
 use crate::probe_detector::contract::identity::DetectorPath;
 
 use super::{gnutls, go_tls, nss, openssl, rustls};
@@ -43,6 +45,11 @@ impl<'a, 'context> TlsProbeCandidateFactory<'a, 'context> {
     ) -> ToolResult<ProbeCandidate> {
         let points = symbols
             .iter()
+            .filter(|(symbol, _)| {
+                self.provider != TlsProvider::OpenSsl
+                    || self.context.request.consumer != ProbeConsumer::Direct
+                    || ConsumerCapability::supports_direct_symbol(symbol)
+            })
             .map(|(symbol, virtual_address)| {
                 Ok(ProbePoint {
                     symbol: symbol.clone(),

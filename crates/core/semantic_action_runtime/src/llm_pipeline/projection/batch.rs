@@ -15,7 +15,10 @@ use super::projector::{
 
 #[derive(Default)]
 pub(crate) struct ProjectionBatch {
+    pub(crate) links: Vec<semantic_action::SemanticActionLink>,
     pub(crate) actions: Vec<SemanticAction>,
+    pub(crate) updates: Vec<semantic_action::SemanticActionUpdate>,
+    pub(crate) updated_actions: Vec<SemanticAction>,
     pub(crate) llm_request_contents: Vec<LlmRequestContentWrite>,
     pub(crate) llm_request_lineages: Vec<LlmRequestLineageWrite>,
     pub(crate) llm_tool_results: Vec<ProjectedLlmToolResult>,
@@ -31,7 +34,10 @@ pub(crate) struct ProjectionBatch {
 
 impl ProjectionBatch {
     pub(in crate::llm_pipeline) fn extend(&mut self, other: Self) {
+        self.links.extend(other.links);
         self.actions.extend(other.actions);
+        self.updates.extend(other.updates);
+        self.updated_actions.extend(other.updated_actions);
         self.llm_request_contents.extend(other.llm_request_contents);
         self.llm_request_lineages.extend(other.llm_request_lineages);
         self.llm_tool_results.extend(other.llm_tool_results);

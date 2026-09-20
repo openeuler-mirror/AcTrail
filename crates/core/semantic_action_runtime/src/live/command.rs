@@ -1,4 +1,4 @@
-//! One-shot command invocation projection from completed process exec actions.
+//! Command context projection from successful process exec actions.
 
 use std::collections::BTreeMap;
 
@@ -7,8 +7,8 @@ use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
-    evidence_roles,
+    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
+    attr_keys as attrs, evidence_roles,
 };
 
 use super::actions::{
@@ -46,7 +46,11 @@ impl CommandProjector {
         &mut self,
         event: &DomainEvent,
         process_action: &SemanticAction,
+        retain_for_mcp: bool,
     ) -> LiveSemanticActionOutput {
+        if process_action.status != SemanticActionStatus::Success {
+            return LiveSemanticActionOutput::default();
+        }
         let mut action = command_action(event, process_action);
         if let Some(edge) = self
             .fork_edges
@@ -58,7 +62,9 @@ impl CommandProjector {
         if let Some(evidence) = self.mcp_invocations.get(&key) {
             Self::apply_mcp_invocation(&mut action, evidence);
         }
-        self.commands.insert(key, action.clone());
+        if retain_for_mcp {
+            self.commands.insert(key, action.clone());
+        }
         let link = command_exec_link(&action, process_action);
         LiveSemanticActionOutput {
             actions: vec![action],
@@ -98,8 +104,22 @@ impl CommandProjector {
             return LiveSemanticActionOutput::default();
         }
         self.commands.insert(key, command.clone());
+        let kind = if command
+            .attributes
+            .get(attrs::invocation::KIND)
+            .map(String::as_str)
+            == Some("agent")
+        {
+            semantic_action::SemanticCommandKind::Agent
+        } else {
+            semantic_action::SemanticCommandKind::Mcp
+        };
         LiveSemanticActionOutput {
-            actions: vec![command],
+            updates: vec![super::ActionUpdateFactory::update(
+                &command,
+                semantic_action::SemanticActionChange::CommandClassification { kind },
+            )],
+            updated_actions: vec![command],
             ..LiveSemanticActionOutput::default()
         }
     }

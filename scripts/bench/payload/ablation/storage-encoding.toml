@@ -1,0 +1,31 @@
+base = "cases/storage/P.toml"
+
+[[cases]]
+name = "P-noop"
+parent = "0"
+patch = "cases/storage/noop.toml"
+description = "Fixed P collection with NoOp storage."
+
+[[cases]]
+name = "P-sqlite"
+parent = "P-noop"
+patch = "cases/storage/sqlite.toml"
+description = "SQLite with default cold-field compression and event payload dictionary."
+
+[[cases]]
+name = "P-no-compression"
+parent = "P-sqlite"
+patch = "cases/storage/no-compression.toml"
+description = "Disable only action/link cold-field compression; preserve full attributes."
+
+[[cases]]
+name = "P-no-dictionary"
+parent = "P-sqlite"
+patch = "cases/storage/no-dictionary.toml"
+description = "Store complete event payloads inline without dictionary insertion."
+
+[[cases]]
+name = "P-plain"
+parent = "P-sqlite"
+patch = "cases/storage/plain.toml"
+description = "Disable both cold-field compression and event payload dictionary."

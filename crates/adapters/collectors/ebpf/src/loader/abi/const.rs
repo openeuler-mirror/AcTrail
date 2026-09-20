@@ -11,7 +11,7 @@ pub(super) const EVENT_HEADER_SIZE: usize = 40;
 // Should be same with the typed process records in bpf/abi/process.h.
 pub(super) const PROCESS_FORK_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 24;
 pub(super) const PROCESS_EXEC_EVENT_SIZE: usize =
-    EVENT_HEADER_SIZE + 16 + EXEC_FILENAME_ABI_MAX_BYTES;
+    EVENT_HEADER_SIZE + 16 + EXEC_FILENAME_ABI_MAX_BYTES + 52;
 pub(super) const PROCESS_EXIT_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 8;
 pub(super) const PROCESS_SIGNAL_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 16;
 pub(super) const NETWORK_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 52;

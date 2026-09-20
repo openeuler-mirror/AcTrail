@@ -120,7 +120,7 @@ The default configuration performs broad collection and can persist sensitive pl
 After installation, initialize the configuration, start the daemon, launch a traced command, and open the local Web UI:
 
 ```bash
-sudo actraild init
+sudo actrailctl init
 sudo actraild start
 sudo actrailctl launch --name quickstart -- \
   bash -lc 'echo ACTRAIL_QUICKSTART_OK; id >/dev/null; ls /etc/hosts >/dev/null'

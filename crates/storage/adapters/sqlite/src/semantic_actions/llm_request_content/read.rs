@@ -4,7 +4,6 @@ use model_core::ids::TraceId;
 use rusqlite::{OptionalExtension, params};
 use semantic_action::{LlmRequestContentPage, SemanticActionStoreError};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 use crate::semantic_actions::action_ids::resolve_action_key;
 
@@ -26,19 +25,7 @@ pub(in crate::semantic_actions) fn llm_request_content_page(
     })?;
     let hydrated = hydrate_value(skeleton, &blocks)?;
     let body_json = canonical_json_string(&hydrated);
-    if body_json.len() as u64 != manifest.canonical_body_bytes {
-        return Err(SemanticActionStoreError::new(
-            "llm_request_body_size_mismatch",
-            "reconstructed request body size does not match manifest",
-        ));
-    }
-    let body_hash = sha256_digest_text(body_json.as_bytes());
-    if body_hash != manifest.canonical_body_hash {
-        return Err(SemanticActionStoreError::new(
-            "llm_request_body_hash_mismatch",
-            "reconstructed request body hash does not match manifest",
-        ));
-    }
+    let canonical_body_bytes = body_json.len() as u64;
     let truncated = body_json.len() > max_bytes;
     let body_json = if truncated {
         utf8_prefix(&body_json, max_bytes)
@@ -49,8 +36,7 @@ pub(in crate::semantic_actions) fn llm_request_content_page(
         trace_id,
         action_id: action_id.to_string(),
         format_version: manifest.format_version,
-        canonical_body_hash: manifest.canonical_body_hash,
-        canonical_body_bytes: manifest.canonical_body_bytes,
+        canonical_body_bytes,
         returned_bytes: body_json.len() as u64,
         truncated,
         body_json,
@@ -60,8 +46,6 @@ pub(in crate::semantic_actions) fn llm_request_content_page(
 struct ManifestRow {
     manifest_id: i64,
     format_version: u32,
-    canonical_body_hash: String,
-    canonical_body_bytes: u64,
     skeleton_json: String,
 }
 
@@ -80,18 +64,14 @@ fn read_manifest(
     };
     connection
         .query_row(
-            "SELECT manifest_id, format_version, canonical_body_hash,
-                    canonical_body_bytes, skeleton_json
+            "SELECT manifest_id, format_version, skeleton_json
              FROM llm_request_manifests
              WHERE trace_id = ?1 AND action_key = ?2",
             params![trace_id.get(), action_key],
             |row| {
-                let hash = row.get::<_, Vec<u8>>("canonical_body_hash")?;
                 Ok(ManifestRow {
                     manifest_id: row.get("manifest_id")?,
                     format_version: row.get("format_version")?,
-                    canonical_body_hash: sha256_hash_text(&hash),
-                    canonical_body_bytes: row.get("canonical_body_bytes")?,
                     skeleton_json: row.get("skeleton_json")?,
                 })
             },
@@ -244,19 +224,6 @@ fn write_canonical_json(output: &mut String, value: &Value) {
             output.push('}');
         }
     }
-}
-
-fn sha256_hash_text(bytes: &[u8]) -> String {
-    let mut output = String::from("sha256:");
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut output, "{byte:02x}").expect("writing to string cannot fail");
-    }
-    output
-}
-
-fn sha256_digest_text(bytes: &[u8]) -> String {
-    sha256_hash_text(&Sha256::digest(bytes))
 }
 
 fn utf8_prefix(text: &str, max_bytes: usize) -> String {

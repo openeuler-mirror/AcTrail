@@ -97,7 +97,7 @@ class ResourceMetricsCgroupCase(TestCase):
         )
         self._command(
             (
-                str(self._binary("actraild")),
+                str(self._binary("actrailctl")),
                 "--config",
                 str(self._config),
                 "init",

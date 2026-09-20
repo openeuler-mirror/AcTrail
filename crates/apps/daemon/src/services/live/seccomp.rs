@@ -83,7 +83,7 @@ fn prepare_exec_tls(
                         target: "actrail::tls_sync",
                         pid = candidate.pid,
                         binary = %host_path.display(),
-                        reason,
+                        reason_code = reason.code(),
                         cache_hit,
                         elapsed_micros,
                         "exec candidate has no supported TLS plan"

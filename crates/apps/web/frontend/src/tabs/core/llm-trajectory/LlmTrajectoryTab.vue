@@ -2,7 +2,7 @@
   <section class="trajectory-layout">
     <aside class="trajectory-summary">
       <h2>LLM Trajectory</h2>
-      <p class="summary-note">Strict-prefix relationships within this trace.</p>
+      <p class="summary-note">Request histories and inferred agent delegation within this trace.</p>
       <dl>
         <template v-for="[label, value] in summaryRows" :key="label">
           <dt>{{ label }}</dt>
@@ -24,13 +24,16 @@
       </div>
       <div class="trajectory-legend">
         <span><i class="legend-line solid"></i>Strict prefix</span>
-        <span><i class="legend-line dashed"></i>Content related (future)</span>
+        <span><i class="legend-line dashed"></i>Inferred delegation</span>
       </div>
       <p v-if="graph?.partial" class="capability-warning">
         This graph is partial because some trajectory data was unavailable.
       </p>
-      <p v-else-if="!graph?.capabilities?.related_edges" class="summary-note">
-        Content-related dashed edges and compaction inference are not enabled yet.
+      <p v-if="correlationLoading" class="summary-note" role="status">
+        Checking recorded content for agent delegation…
+      </p>
+      <p v-if="correlationError || offline.unavailable" class="capability-warning" role="status">
+        Some recorded content is unavailable. Delegation links may be incomplete.
       </p>
     </aside>
 
@@ -75,6 +78,9 @@
           :key="`${edge.kind}:${edge.source}:${edge.target}`"
           class="trajectory-edge"
           :class="`edge-${edge.kind}`"
+          :data-source="edge.source"
+          :data-target="edge.target"
+          :data-invocation-id="edge.invocation_id"
           :d="edge.path"
           :stroke="edge.color"
           marker-end="url(#trajectory-arrow)"
@@ -135,10 +141,11 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 
-import { readActionDetail } from '../../../api';
+import { readActionDetail, readActionLlmRequestContent, readWaterfall } from '../../../api';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import FullscreenSurface from '../../../components/FullscreenSurface.vue';
 import { buildTrajectoryLayout } from './model';
+import { OfflineAgentCorrelation } from './offline-correlation.js';
 
 const props = defineProps({
   traceKey: {
@@ -149,6 +156,10 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  correlationOptions: {
+    type: Object,
+    default: () => ({}),
+  },
 });
 
 const selectedNodeId = ref(null);
@@ -156,7 +167,13 @@ const selectedDetail = ref(null);
 const detailError = ref('');
 let activeDetailLoad = null;
 
-const graph = computed(() => props.trajectoryGraph ?? emptyGraph());
+const offline = ref({ edges: [], unavailable: 0 });
+const correlationLoading = ref(false);
+const correlationError = ref(false);
+const graph = computed(() => {
+  const recorded = props.trajectoryGraph ?? emptyGraph();
+  return { ...recorded, edges: [...(recorded.edges ?? []), ...offline.value.edges] };
+});
 const layout = computed(() => buildTrajectoryLayout(graph.value));
 const summaryRows = computed(() => {
   const stats = graph.value.stats ?? {};
@@ -165,6 +182,7 @@ const summaryRows = computed(() => {
     ['Trajectories', stats.trajectory_count ?? 0],
     ['Append edges', stats.append_count ?? 0],
     ['Fork edges', stats.fork_count ?? 0],
+    ['Inferred delegations', offline.value.edges.length],
     ['Duplicate roots', stats.duplicate_count ?? 0],
     ['Strongly linked', formatRatio(stats.strongly_linked_node_ratio)],
     ['Duplicate ratio', formatRatio(stats.duplicate_node_ratio)],
@@ -174,6 +192,31 @@ const summaryRows = computed(() => {
 watch(
   () => props.traceKey,
   () => clearDetail(),
+);
+
+watch(
+  () => [props.traceKey, props.trajectoryGraph, props.correlationOptions],
+  async ([traceKey, recorded, options], _previous, onCleanup) => {
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    offline.value = { edges: [], unavailable: 0 };
+    correlationError.value = false;
+    correlationLoading.value = false;
+    if (traceKey == null || !recorded) return;
+    const correlation = new OfflineAgentCorrelation({
+      readWaterfall, readActionDetail, readRequestContent: readActionLlmRequestContent,
+    }, options);
+    correlationLoading.value = true;
+    try {
+      const result = await correlation.derive(traceKey, recorded, controller.signal);
+      if (!controller.signal.aborted) offline.value = result;
+    } catch (error) {
+      if (!controller.signal.aborted) correlationError.value = true;
+    } finally {
+      if (!controller.signal.aborted) correlationLoading.value = false;
+    }
+  },
+  { immediate: true },
 );
 
 async function selectNode(node) {
@@ -381,6 +424,10 @@ function emptyGraph() {
   fill: none;
   stroke-width: 2;
   opacity: 0.9;
+}
+
+.edge-delegation {
+  stroke-dasharray: 6 4;
 }
 
 .lane-reuse-marker {

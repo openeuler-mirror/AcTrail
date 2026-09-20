@@ -1,3 +1,5 @@
+import { ToolCallDisplay } from '../../shared/toolCallDisplay.js';
+
 // Request interpretation used only by the flame graph. Stored actions are never rewritten.
 export function requestContext(body) {
   const messages = Array.isArray(body.messages) ? body.messages
@@ -49,20 +51,7 @@ function textParts(content) {
 }
 
 export function toolCallArguments(toolCall, actionById) {
-  const response = actionById.get(toolCall?.attributes?.['llm.tool_call.response_action_id']);
-  try {
-    const calls = JSON.parse(response?.attributes?.['llm.response.tool_calls_json'] ?? 'null');
-    if (!Array.isArray(calls)) return null;
-    const id = toolCall.attributes?.['llm.tool_call.id'];
-    const ordinal = Number(toolCall.attributes?.['llm.tool_call.ordinal']);
-    const call = (id ? calls.find((candidate) => candidate.id === id) : null)
-      ?? (Number.isInteger(ordinal) ? calls[ordinal] : null);
-    const declaration = call?.function ?? call;
-    const value = declaration?.arguments_json ?? declaration?.arguments ?? declaration?.input;
-    return typeof value === 'string' ? JSON.parse(value) : value ?? null;
-  } catch {
-    return null;
-  }
+  return new ToolCallDisplay(actionById).arguments(toolCall);
 }
 
 // Bound concurrent reads and retain only the small interpretation, not full histories.

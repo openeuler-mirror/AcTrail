@@ -5,7 +5,7 @@
 本用例使用真实 OpenCode、Claude 或 xiaoO 执行一个多子代理任务，验证 LLM 请求从
 采集、语义投影、lineage 持久化到 Web 轨迹图 API 和 OTel 导出的完整链路。
 
-本次新增的核心回归对象是：
+整图 API 回归对象是：
 
 ```text
 GET /api/traces/{trace_id}/llm-trajectories
@@ -59,6 +59,11 @@ related 弱关系和 compaction 自动识别。
 - 每个 request 的 action attribute、lineage 和单轨迹 endpoint 必须一致；
 - 每条 trajectory 的 position 连续，parent 形成连续链；
 - 排序子代理场景必须产生至少三条独立 trajectory。
+- 两个子代理的实际调用 prompt 必须超过 160 字符，各自在 Web 离线推断中得到唯一的
+  `delegation` 关联，且关联请求的完整内容包含相应 prompt。
+  Claude 在同一用户消息中附加独立系统提醒文本块时，关联仍须正确。
+- 运行时不得持久化 `agent.invocation.child_llm_request`；Node 执行生产前端推断类，
+  通过真实 Web HTTP 接口读取完整数据并核验关系，不模拟响应、不复制匹配算法。
 
 ### 整图 API 契约
 
@@ -158,26 +163,20 @@ OpenCode 模型可由 `OPENCODE_E2E_MODEL` 配置；Claude 使用其通用模型
 4. 在隔离工作目录运行双排序子代理与主 Agent benchmark，并等待 trace 终态；
 5. 验证 call 配对、lineage 和单轨迹 endpoint；
 6. 请求整图 API，校验节点、边、统计和 capabilities，并验证独立上下文、append、工具结果增长、时间交错及完整状态；
-7. flush OTel exporter，验证每个 request/response 恰好导出一次。
+7. 用 Node 执行 Web 离线委派关联，验证完整长 prompt、唯一子请求及运行时无推断 link；
+8. flush OTel exporter，验证每个 request/response 恰好导出一次。
 
 通过时结果中应包含：
 
 ```text
 semantic-projection: PASSED
 trajectory-graph-api: PASSED
+web-offline-delegation: PASSED
 web-analysis-scenario: PASSED
 otel-export: PASSED
 ```
 
-## 断言代码自测
-
-该命令不启动 daemon、不调用真实 Agent，也不需要 root。它验证回测判据本身能够接受
-正确图和真实排序分析形状，并拒绝缺失 fork 边、`null`/`0` 语义退化及 incomplete 节点：
-
-```bash
-python3 -m unittest \
-  tests.v2.regression.project_subagent_trajectory.test_graph_assertion
-```
+自动化依赖 Node.js 18 或更高版本，执行相同前端模块和真实 HTTP 数据链路；浏览器交互与 SVG 呈现按以下步骤手工验证。
 
 ## 手工验证
 
@@ -224,7 +223,7 @@ jq '.stats, .edges, [.nodes[] | {
 
 也可以在浏览器打开 `http://127.0.0.1:18089`，进入对应 trace 后选择
 `LLM Trajectory` 标签页。页面节点数、轨迹数、append/fork 数应与上述 JSON 的
-`stats` 一致；点击节点应打开现有 Action 详情面板。
+`stats` 一致；完成原文读取后应出现两个 `Inferred delegation` 虚线关联；点击节点应打开现有 Action 详情面板。
 
 `--no-cleanup` 会保留测试现场。检查结束后应按测试机既有运维流程清理，避免误删其他
 并行测试或开发数据。
@@ -255,6 +254,6 @@ jq '.stats, .edges, [.nodes[] | {
 - `case.py`：编排环境、真实 Agent、图断言和 OTel 断言；
 - `scenario.py`：启动真实多子代理 workload；
 - `assertion.py`：以 action/lineage 为事实源校验整图 API；
-- `test_graph_assertion.py`：断言逻辑的无外部依赖自测；
+- `web/assertion.py`、`web/offline.mjs`：通过真实 HTTP 数据验证生产前端离线推断；
 - `agent.py`：OpenCode、Claude、xiaoO 启动适配；
 - `config.py`：环境变量和测试运行配置。

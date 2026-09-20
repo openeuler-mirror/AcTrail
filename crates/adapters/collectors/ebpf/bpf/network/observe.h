@@ -6,6 +6,7 @@
 #include "../fd/lifecycle.h"
 #include "../fd/suppressed.h"
 #include "state.h"
+#include "../file/state.h"
 
 #define ACTRAIL_NET_EINPROGRESS 115
 
@@ -35,6 +36,10 @@ static __always_inline int store_pending_net_op_with_flags(
         return 0;
     }
     if (fd_snapshot(kernel_pid, fd, &fd_state, &fd_object)) {
+        if (fd_state.category == ACTRAIL_FD_CATEGORY_DIRECTORY
+            || fd_state.category == ACTRAIL_FD_CATEGORY_FILE) {
+            return 0;
+        }
         op.generation = fd_state.generation;
         op.category = fd_state.category;
         op.remote = fd_object.remote;
@@ -143,7 +148,6 @@ static __always_inline void fd_accept_exit(struct trace_event_raw_sys_exit *ctx)
     registration.pid = op->pid;
     registration.fd = (__u32)ctx->ret;
     registration.category = op->category;
-    registration.flags = fd_creation_flags(op->flags);
     fd_register(&registration);
 }
 

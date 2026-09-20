@@ -42,6 +42,7 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
     segments: &[&PayloadSegment],
 ) -> Option<LiveLlmProjection> {
     let encoded_len = message.encoded_len;
+    let body = message.body;
     let http = HttpRequestParts {
         protocol: message.protocol,
         scheme: "https",
@@ -51,7 +52,7 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
         stream_id: None,
         headers_text: Some(message.headers_text),
         headers_hpack_base64: None,
-        body: message.body,
+        body: body.bytes(raw_bytes)?,
         declared_body_len: message.declared_body_len,
         encoded_len,
         complete: message.complete,
@@ -132,7 +133,7 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_response(
         stream_id: None,
         headers_text: Some(message.headers_text),
         headers_hpack_base64: None,
-        body: message.body,
+        body: message.body.into_shared()?,
         encoded_len,
         complete: message.complete,
         body_boundary_known: message.body_boundary_known,
@@ -174,7 +175,7 @@ pub(crate) fn project_http2_stream_request(
         stream_id: Some(stream_id),
         headers_text: None,
         headers_hpack_base64: None,
-        body,
+        body: body.as_slice(),
         declared_body_len: None,
         encoded_len,
         complete: transport_complete,

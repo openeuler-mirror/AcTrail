@@ -23,6 +23,8 @@ pub const HTTP_REQUEST_HTTP_RESPONSE: &str =
     SemanticActionLinkRole::HttpRequestHttpResponse.as_str();
 pub const LLM_CALL_REQUEST: &str = SemanticActionLinkRole::LlmCallRequest.as_str();
 pub const LLM_CALL_RESPONSE: &str = SemanticActionLinkRole::LlmCallResponse.as_str();
+pub const LLM_CALL_HTTP_RESPONSE: &str = SemanticActionLinkRole::LlmCallHttpResponse.as_str();
+pub const LLM_REQUEST_TOOL_RESULT: &str = SemanticActionLinkRole::LlmRequestToolResult.as_str();
 pub const LLM_REQUEST_HTTP_MESSAGE: &str = SemanticActionLinkRole::LlmRequestHttpMessage.as_str();
 pub const LLM_REQUEST_LLM_RESPONSE: &str = SemanticActionLinkRole::LlmRequestLlmResponse.as_str();
 pub const LLM_RESPONSE_HTTP_MESSAGE: &str = SemanticActionLinkRole::LlmResponseHttpMessage.as_str();
