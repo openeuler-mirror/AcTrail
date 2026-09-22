@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use super::agent::SemanticRetentionConfig;
+
 /// Maximum incomplete JSON-RPC message bytes retained per confirmed MCP stdio stream.
 pub const DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES: u64 = 4_194_304;
 /// Maximum aggregate bytes retained while a stdio bundle is awaiting `tools/call`.
@@ -10,6 +12,7 @@ pub const DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES: u64 = 65_536;
 /// Maximum number of stdio bundles simultaneously awaiting MCP confirmation.
 pub const DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES: u32 = 1_024;
 pub const DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY: u32 = 256;
+pub const DEFAULT_TLS_DYNAMIC_DISCOVERY_CAPACITY: u32 = 128;
 pub const DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +97,7 @@ impl FromStr for PayloadTlsResolver {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadTlsCaptureBackend {
+    BpfCopy,
     SeccompUserRead,
     BpfCopySeccompFallback,
     TlsSync,
@@ -104,6 +108,7 @@ impl FromStr for PayloadTlsCaptureBackend {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "bpf-copy" => Ok(Self::BpfCopy),
             "seccomp-user-read" => Ok(Self::SeccompUserRead),
             "bpf-copy-seccomp-fallback" => Ok(Self::BpfCopySeccompFallback),
             "tls-sync" => Ok(Self::TlsSync),
@@ -119,6 +124,10 @@ impl PayloadTlsCaptureBackend {
 
     pub const fn is_sync(self) -> bool {
         matches!(self, Self::TlsSync)
+    }
+
+    pub const fn uses_probe_plans(self) -> bool {
+        matches!(self, Self::TlsSync | Self::BpfCopy)
     }
 }
 
@@ -312,9 +321,13 @@ pub struct PayloadTlsConfig {
     pub redaction_policy: PayloadRedactionPolicy,
     pub sync_runtime_library_path: PayloadTlsSyncRuntimeLibraryPath,
     pub sync_event_socket_path: PathBuf,
+    pub sync_max_frame_bytes: u32,
     pub sync_socket_mode: u32,
     pub sync_match_limit: u32,
     pub binary_analysis_cache_capacity: u32,
+    pub dynamic_discovery_capacity: u32,
+    pub direct_startup_discovery_enabled: bool,
+    pub direct_dynamic_discovery_enabled: bool,
     pub dynamic_exec_plan_timeout_ms: u64,
     pub sync_flow_control_enabled: bool,
     pub sync_flow_sniff_bytes: u32,
@@ -327,6 +340,7 @@ pub struct PayloadTlsConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayloadStdioConfig {
+    /// Allows daemon stdio capture when an effective MCP or L4 consumer needs it.
     pub enabled: bool,
     pub capture_stdin: bool,
     pub capture_stdout: bool,
@@ -372,7 +386,7 @@ pub struct PayloadMcpConfig {
 impl Default for PayloadMcpConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             parse_buffer_max_bytes: DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES,
             stdio_candidate_max_bytes: DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES,
             pending_stdio_candidate_max_entries: DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
@@ -386,4 +400,22 @@ pub struct PayloadConfig {
     pub stdio: PayloadStdioConfig,
     pub socket: PayloadSocketConfig,
     pub mcp: PayloadMcpConfig,
+}
+
+impl PayloadConfig {
+    /// Resolves stdio capture for the daemon's configured consumers at startup.
+    pub fn resolve_stdio_capture(&mut self, retention: &SemanticRetentionConfig) {
+        let mcp_requested =
+            retention.projection_enabled && self.mcp.enabled && self.stdio.capture_stdin;
+        let l4_requested = retention.l4_payload.enabled && self.stdio.has_retained_stream();
+        self.stdio.enabled &= mcp_requested || l4_requested;
+    }
+}
+
+impl PayloadStdioConfig {
+    fn has_retained_stream(&self) -> bool {
+        (self.capture_stdin && self.stdin_storage_mode != PayloadStdioStorageMode::Drop)
+            || (self.capture_stdout && self.stdout_storage_mode != PayloadStdioStorageMode::Drop)
+            || (self.capture_stderr && self.stderr_storage_mode != PayloadStdioStorageMode::Drop)
+    }
 }

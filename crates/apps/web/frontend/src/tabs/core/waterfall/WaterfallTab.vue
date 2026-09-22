@@ -129,10 +129,10 @@
       <span
         v-if="idleRows.length"
         class="wf-chip wf-chip-idle"
-        :title="`${idleRows.length} no-observable-progress interval(s)`"
+        :title="`${idleRows.length} between-turn or waiting-for-user interval(s)`"
       >
         <span class="wf-chip-dot"></span>
-        Idle
+        User idle
         <small>{{ idleRows.length }}</small>
       </span>
       <div v-if="isGroupActive('llm')" class="wf-phase-legend" aria-hidden="true">
@@ -274,17 +274,17 @@
       </div>
 
       <div v-if="idleLaneSegments.length" class="waterfall-idle-lanes">
-        <div class="wf-idle-lane">
-          <div class="wf-gutter">
-            Idle
-            <small>{{ idleLaneSegments.length }}</small>
+        <div v-for="lane in agentIdleLanes" :key="lane.id" class="wf-idle-lane">
+          <div class="wf-gutter" :title="`Session: ${lane.sessionId}`">
+            {{ lane.label }}
+            <small>{{ lane.segments.length }}</small>
           </div>
           <div class="wf-idle-track wf-time-track">
             <span
-              v-for="segment in idleLaneSegments"
+              v-for="segment in lane.segments"
               :key="segment.id"
               class="wf-idle-segment"
-              :class="{ live: segment.live }"
+              :class="{ live: segment.live, waiting: segment.kind === 'hang' }"
               :style="segment.style"
               :title="segment.title"
             ></span>
@@ -861,9 +861,23 @@ const idleLaneSegments = computed(() => {
     if (!style) {
       continue;
     }
-    segments.push({ id: interval.id, style, title: idleTitle(interval), live: interval.live });
+    segments.push({ id: interval.id, style, title: idleTitle(interval), live: interval.live,
+      kind: interval.kind, sessionId: interval.sessionId });
   }
   return segments;
+});
+const agentIdleLanes = computed(() => {
+  const lanes = new Map();
+  for (const segment of idleLaneSegments.value) {
+    const id = JSON.stringify([segment.sessionId, segment.kind]);
+    if (!lanes.has(id)) {
+      lanes.set(id, { id, sessionId: segment.sessionId,
+        label: 'Agent stalled',
+        segments: [] });
+    }
+    lanes.get(id).segments.push(segment);
+  }
+  return [...lanes.values()];
 });
 const remainingRows = computed(() => Math.max(totalRows.value - rows.value.length, 0));
 const nextBatchSize = computed(() => Math.min(TABLE_RENDER_LIMITS.rowBatchSize, remainingRows.value));
@@ -914,7 +928,7 @@ function select(row) {
     scope: row.llmScope,
     parent: row.agentContext,
     ttft: row.llmPhases?.gap?.durMs ? formatOffset(row.llmPhases.gap.durMs) : null,
-  });
+  }, row.target);
   if (focusWindow.value && isFocusAction(row.id)) {
     detail.rows = {
       attribution: focusTitle.value,
@@ -951,7 +965,8 @@ function idleSegmentStyle(interval) {
 }
 
 function idleTitle(interval) {
-  const lines = ['No observable progress'];
+  const lines = ['Agent stalled'];
+  lines.push(`Session: ${interval.sessionId}`);
   if (interval.taskId) {
     lines.push(`Task: ${interval.taskId}`);
   }

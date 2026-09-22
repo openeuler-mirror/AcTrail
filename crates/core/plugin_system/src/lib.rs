@@ -71,7 +71,8 @@ pub use network_policy::{
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PostTraceAnalyzer, PostTraceHost, PostTraceTask, TraceActivityContext, TraceAnalysisAction,
+    PayloadReadResult, PayloadReference, PayloadReferenceMetadata, PostTraceAnalyzer,
+    PostTraceHost, PostTraceTask, TraceActivityContext, TraceAnalysisAction,
     TraceAnalysisActionPage, TraceAnalysisContext, TraceAnalysisFileChange, TraceCommandExecution,
     TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus, TraceLlmExchange,
     TraceLlmExchangePage, TraceLlmResponseStatus, DEFAULT_OBSERVATION_EVENT_FAMILIES,

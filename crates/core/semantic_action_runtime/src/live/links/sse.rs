@@ -9,6 +9,7 @@ use semantic_action::{
 };
 
 use super::shared::ActionLinkKey;
+use crate::live::actions::action_for_live_state;
 
 const ATTR_LLM_RESPONSE_ACTION_ID: &str = attrs::llm_response::ACTION_ID;
 const ATTR_SSE_STREAM_ACTION_ID: &str = attrs::sse::STREAM_ACTION_ID;
@@ -46,7 +47,8 @@ impl SseLinkProjector {
 
     fn observe_response(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
         let key = (action.trace_id, action.action_id.clone());
-        self.responses.insert(key.clone(), action.clone());
+        self.responses
+            .insert(key.clone(), action_for_live_state(action));
         let pending = self.pending_streams_by_response.remove(&key);
         pending
             .unwrap_or_default()
@@ -56,8 +58,10 @@ impl SseLinkProjector {
     }
 
     fn observe_stream(&mut self, action: &SemanticAction) -> Vec<SemanticActionLink> {
-        self.streams
-            .insert((action.trace_id, action.action_id.clone()), action.clone());
+        self.streams.insert(
+            (action.trace_id, action.action_id.clone()),
+            action_for_live_state(action),
+        );
         let mut links = Vec::new();
         if let Some(response_id) = action.attributes.get(ATTR_LLM_RESPONSE_ACTION_ID) {
             if let Some(response) = self
@@ -70,7 +74,7 @@ impl SseLinkProjector {
                 self.pending_streams_by_response
                     .entry((action.trace_id, response_id.clone()))
                     .or_default()
-                    .push(action.clone());
+                    .push(action_for_live_state(action));
             }
         }
         let pending = self
@@ -102,7 +106,7 @@ impl SseLinkProjector {
         self.pending_events_by_stream
             .entry((action.trace_id, stream_id.clone()))
             .or_default()
-            .push(action.clone());
+            .push(action_for_live_state(action));
         Vec::new()
     }
 

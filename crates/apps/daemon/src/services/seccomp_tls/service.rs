@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use config_core::daemon::{DiagnosticLogLevel, PayloadTlsConfig};
+use config_core::daemon::{DiagnosticLogLevel, PayloadTlsCaptureBackend, PayloadTlsConfig};
 use control_contract::reply::ControlError;
 use ebpf_collector::{
     EbpfCollector, TlsPayloadCaptureRequest, TlsPayloadCompletion, TlsPayloadDirectCapture,
@@ -24,7 +24,7 @@ const TLS_CAPTURE_STATE_BPF_COPIED_FULL: u32 = 2;
 
 #[derive(Debug)]
 pub(crate) struct SeccompTlsService {
-    enabled: bool,
+    capture_backend: Option<PayloadTlsCaptureBackend>,
     diagnostics_enabled: bool,
     diagnostic_log_level: DiagnosticLogLevel,
     max_operation_bytes: u32,
@@ -37,7 +37,7 @@ pub(crate) struct SeccompTlsService {
 impl SeccompTlsService {
     pub(crate) fn new(config: &PayloadTlsConfig, diagnostic_log_level: DiagnosticLogLevel) -> Self {
         Self {
-            enabled: config.enabled && !config.capture_backend.is_sync(),
+            capture_backend: config.enabled.then_some(config.capture_backend),
             diagnostics_enabled: config.diagnostics_enabled,
             diagnostic_log_level,
             max_operation_bytes: config.max_operation_bytes,
@@ -49,7 +49,8 @@ impl SeccompTlsService {
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.enabled
+        self.capture_backend
+            .is_some_and(PayloadTlsCaptureBackend::requires_seccomp_notify)
     }
 
     pub(crate) fn handle_notification(
@@ -57,7 +58,7 @@ impl SeccompTlsService {
         collector: &EbpfCollector,
         notification: &libc::seccomp_notif,
     ) -> Result<bool, ControlError> {
-        if !self.enabled {
+        if !self.enabled() {
             return Ok(false);
         }
         self.capture_if_tls_pending(collector, notification)
@@ -133,7 +134,11 @@ impl SeccompTlsService {
                     .captures
                     .entry(capture.operation_id)
                     .or_insert_with(CapturedTlsOperation::empty);
+                let policy_limited = capture.policy_limited();
                 let appended = operation.append_contiguous(capture.operation_offset, capture.bytes);
+                if appended && policy_limited {
+                    operation.policy_limit_end = Some(operation.bytes.len() as u64);
+                }
                 (appended, operation.bytes.len())
             };
             if !appended {
@@ -191,11 +196,15 @@ impl SeccompTlsService {
                 )
             })?;
             let captured_bytes = &capture.bytes[..captured_len];
-            let completion_state = if operation_captured_size == operation_original_size {
-                PayloadOperationCompletionState::Success
-            } else {
-                PayloadOperationCompletionState::Partial
-            };
+            let policy_limited = self.capture_backend == Some(PayloadTlsCaptureBackend::BpfCopy)
+                && operation_captured_size < operation_original_size
+                && capture.policy_limit_end == Some(operation_captured_size);
+            let completion_state =
+                if operation_captured_size == operation_original_size || policy_limited {
+                    PayloadOperationCompletionState::Success
+                } else {
+                    PayloadOperationCompletionState::Partial
+                };
             let Some(process) = tls_completion_identity(&completion, identity_reader)? else {
                 continue;
             };
@@ -216,8 +225,9 @@ impl SeccompTlsService {
                     .checked_mul(segment_max)
                     .ok_or_else(|| ControlError::new("seccomp_tls_segment", "offset overflow"))?;
                 let final_chunk = offset + chunk.len() >= captured_bytes.len();
-                let truncation = if final_chunk && operation_captured_size < operation_original_size
-                {
+                let truncation = if policy_limited {
+                    PayloadTruncationState::PolicyLimited
+                } else if final_chunk && operation_captured_size < operation_original_size {
                     PayloadTruncationState::Truncated
                 } else {
                     PayloadTruncationState::Complete
@@ -234,7 +244,9 @@ impl SeccompTlsService {
                         completion.pid, completion.stream_key
                     )),
                     sequence: completion.observed_ktime_ns + index as u64,
-                    original_size: if truncation == PayloadTruncationState::Truncated {
+                    original_size: if final_chunk
+                        && operation_captured_size < operation_original_size
+                    {
                         operation_original_size.saturating_sub(offset as u64)
                     } else {
                         chunk.len() as u64
@@ -357,15 +369,22 @@ impl SeccompTlsService {
 #[derive(Debug)]
 struct CapturedTlsOperation {
     bytes: Vec<u8>,
+    policy_limit_end: Option<u64>,
 }
 
 impl CapturedTlsOperation {
     fn empty() -> Self {
-        Self { bytes: Vec::new() }
+        Self {
+            bytes: Vec::new(),
+            policy_limit_end: None,
+        }
     }
 
     fn complete(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            policy_limit_end: None,
+        }
     }
 
     fn append_contiguous(&mut self, offset: u64, bytes: Vec<u8>) -> bool {

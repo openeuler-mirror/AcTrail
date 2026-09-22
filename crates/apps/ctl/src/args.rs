@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agent_host::{AgentHostConfig, AgentLaunchIntegration};
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
@@ -33,6 +34,7 @@ pub enum CtlCommand {
         config_path: PathBuf,
         force: bool,
         patch_path: Option<PathBuf>,
+        mode: Option<InitMode>,
     },
     TrackAdd {
         root: ProcessRef,
@@ -55,7 +57,7 @@ pub enum CtlCommand {
         agent_invocation_commands: Vec<String>,
         supervision_poll_interval_ms: u64,
         ebpf_seccomp_policy: DeploymentPermissionPolicy,
-        opencode_plugin_dir: Option<PathBuf>,
+        agent_integration: AgentLaunchIntegration,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -68,6 +70,17 @@ pub enum CtlCommand {
         artifacts: CleanArtifacts,
     },
     Doctor,
+    WorkLifecycle {
+        trace_id: TraceId,
+        session_id: String,
+        task_id: String,
+        kind: agent_lifecycle_contract::WorkKind,
+        state: agent_lifecycle_contract::WorkState,
+    },
+    SessionClosed {
+        trace_id: TraceId,
+        session_id: String,
+    },
     Probe {
         operator_config: Option<OperatorConfig>,
         json: bool,
@@ -167,6 +180,26 @@ enum CtlCommandArgs {
     Clean,
     #[command(about = "Check daemon control-plane readiness")]
     Doctor,
+    #[command(about = "Record an agent session closure at the current observation time")]
+    SessionClosed {
+        #[arg(long, value_parser = parse_trace_id)]
+        trace_id: TraceId,
+        #[arg(long)]
+        session_id: String,
+    },
+    #[command(about = "Report a model or tool execution transition")]
+    WorkLifecycle {
+        #[arg(long, value_parser = parse_trace_id)]
+        trace_id: TraceId,
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long, value_parser = ["model", "tool"])]
+        kind: String,
+        #[arg(long, value_parser = ["started", "completed"])]
+        state: String,
+    },
     #[command(about = "Probe local launch prerequisites and optional daemon readiness")]
     Probe(ProbeArgs),
     #[command(about = "Inspect daemon-side TLS launch plan resolution")]
@@ -185,6 +218,7 @@ impl CtlCommandArgs {
                 config_path: init_config_path(args.output_path, config_path, explicit_config)?,
                 force: args.force,
                 patch_path: args.patch_path,
+                mode: args.mode,
             }),
             Self::TrackAdd(args) => {
                 let root_pid = args.root_pid;
@@ -226,7 +260,13 @@ impl CtlCommandArgs {
                         })?
                         .supervision_poll_interval_ms,
                     ebpf_seccomp_policy: ebpf_seccomp_policy(args.host_ebpf, args.seccomp_notify),
-                    opencode_plugin_dir: opencode_plugin_dir(config, &args.argv)?,
+                    agent_integration: AgentLaunchIntegration::prepare(
+                        &match args.agent_host_config {
+                            Some(path) => AgentHostConfig::load(&path)?,
+                            None => AgentHostConfig::default(),
+                        },
+                        &args.argv,
+                    )?,
                     argv: args.argv,
                 })
             }
@@ -242,6 +282,38 @@ impl CtlCommandArgs {
                 ),
             }),
             Self::Doctor => Ok(CtlCommand::Doctor),
+            Self::WorkLifecycle {
+                trace_id,
+                session_id,
+                task_id,
+                kind,
+                state,
+            } => {
+                if session_id.trim().is_empty() || task_id.trim().is_empty() {
+                    return Err("--session-id and --task-id must not be empty".to_string());
+                }
+                Ok(CtlCommand::WorkLifecycle {
+                    trace_id,
+                    session_id,
+                    task_id,
+                    kind: agent_lifecycle_contract::WorkKind::parse(&kind)
+                        .ok_or_else(|| "invalid work kind".to_string())?,
+                    state: agent_lifecycle_contract::WorkState::parse(&state)
+                        .ok_or_else(|| "invalid work state".to_string())?,
+                })
+            }
+            Self::SessionClosed {
+                trace_id,
+                session_id,
+            } => {
+                if session_id.trim().is_empty() {
+                    return Err("--session-id must not be empty".to_string());
+                }
+                Ok(CtlCommand::SessionClosed {
+                    trace_id,
+                    session_id,
+                })
+            }
             Self::Probe(args) => {
                 if args.suggest_config && args.json {
                     return Err("--suggest-config and --json are mutually exclusive".to_string());
@@ -277,6 +349,23 @@ struct InitArgs {
 
     #[arg(short = 'f', long = "force")]
     force: bool,
+
+    #[arg(
+        long,
+        value_enum,
+        ignore_case = true,
+        help = "Configuration preset: C/complete (default) or P/profile; --patch overrides it"
+    )]
+    mode: Option<InitMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum InitMode {
+    #[default]
+    #[value(alias = "c")]
+    Complete,
+    #[value(alias = "p")]
+    Profile,
 }
 
 fn launch_agent_commands(config: Option<&OperatorConfig>) -> Vec<String> {
@@ -413,6 +502,12 @@ impl From<PermissionModeArg> for PermissionMode {
 
 #[derive(Clone, Debug, Args)]
 struct LaunchArgs {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Independent agent host integration config; omitted means no injection"
+    )]
+    agent_host_config: Option<PathBuf>,
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
 
@@ -440,30 +535,6 @@ struct LaunchArgs {
         allow_hyphen_values = true
     )]
     argv: Vec<String>,
-}
-
-fn opencode_plugin_dir(
-    config: Option<&OperatorConfig>,
-    argv: &[String],
-) -> Result<Option<PathBuf>, String> {
-    let command_is_opencode = argv
-        .first()
-        .and_then(|command| std::path::Path::new(command).file_name())
-        .is_some_and(|name| name == "opencode");
-    if !(command_is_opencode
-        && config.is_some_and(|config| config.idle_detection.opencode_auto_inject))
-    {
-        return Ok(None);
-    }
-    let idle_detection = &config
-        .ok_or_else(|| "missing operator config for OpenCode launch".to_string())?
-        .idle_detection;
-    if !idle_detection.enabled {
-        return Ok(None);
-    }
-    idle_detection.opencode_plugin_dir.clone().ok_or_else(|| {
-        "idle_detection.opencode_plugin_dir is required for OpenCode plugin launch when idle_detection.enabled=true".to_string()
-    }).map(Some)
 }
 
 fn ebpf_seccomp_policy(

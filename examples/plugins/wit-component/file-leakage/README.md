@@ -22,7 +22,7 @@ package at `~/.actrail/plugins/file-leakage` for the user running the installer.
 Set `ACTRAIL_PLUGIN_DIR` to install into another absolute plugin root and set
 the matching `plugins.discovery.directory` in the operator configuration.
 
-Installation does not enable the plugin. A default `actraild init -f`
+Installation does not enable the plugin. A default `actrailctl init -f`
 configuration has an empty, disabled startup-plugin list. Refresh the Plugins
 workspace in `actrailweb`, review the requested host capabilities, and load the
 discovered package explicitly. Unloading the runtime instance does not delete

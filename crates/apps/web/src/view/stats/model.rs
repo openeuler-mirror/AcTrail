@@ -67,7 +67,8 @@ pub(super) struct LlmUsageRow {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct RequestShape {
-    pub canonical_body_bytes: Option<u64>,
+    /// HTTP body bytes; capture-limited recognition may use the declared body length.
+    pub request_payload_bytes: Option<u64>,
     pub block_count: Option<u64>,
 }
 
@@ -150,7 +151,7 @@ pub(super) struct ActivitySnapshot {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) struct RequestShapeSnapshot {
     pub input_tokens_samples: Vec<u64>,
-    pub canonical_body_bytes_samples: Vec<u64>,
+    pub request_payload_bytes_samples: Vec<u64>,
     pub block_count_samples: Vec<u64>,
 }
 
@@ -164,8 +165,8 @@ pub(super) struct Summary {
     pub endpoint_count: usize,
     pub app_count: usize,
     pub totals: TokenTotals,
-    pub canonical_body_bytes: u64,
-    pub canonical_body_bytes_count: usize,
+    pub request_payload_bytes: u64,
+    pub request_payload_bytes_count: usize,
     pub block_count: u64,
     pub block_count_rows: usize,
 }

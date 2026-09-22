@@ -151,6 +151,17 @@ impl BindingStateMap {
         None
     }
 
+    pub(crate) fn processes_for_trace(
+        &self,
+        trace_id: TraceId,
+    ) -> impl Iterator<Item = &TrackedProcess> {
+        self.kernel_tgids_by_trace
+            .get(&trace_id)
+            .into_iter()
+            .flatten()
+            .filter_map(move |pid| self.by_trace_kernel_tgid.get(&(trace_id, *pid)))
+    }
+
     pub fn remove_trace(&mut self, trace_id: TraceId) -> Vec<TrackedProcess> {
         self.capabilities_by_trace.remove(&trace_id);
         self.pid_namespace_by_trace.remove(&trace_id);

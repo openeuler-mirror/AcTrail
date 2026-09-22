@@ -1,7 +1,7 @@
 //! Bounded pending LLM request and response state.
 
 use model_core::diagnostics::LlmPipelineDiagnosticCode;
-use semantic_action::{SemanticAction, SemanticActionCompleteness, SemanticActionStatus};
+use semantic_action::SemanticAction;
 
 use crate::llm_pipeline::projection::correlation::{
     self as call, LlmStreamKey, OpenLlmRequest, PendingLlmResponse,
@@ -64,10 +64,7 @@ impl ProjectionCoordinator {
                 &evicted.action,
                 LlmPipelineDiagnosticCode::PendingRequestCapacityEvicted,
             ));
-            let mut partial_call = call::llm_call_from_request_response(&evicted.action, None);
-            partial_call.status = SemanticActionStatus::Error;
-            partial_call.completeness = SemanticActionCompleteness::Partial;
-            partial_call.end_time = Some(inserted_at);
+            let partial_call = call::llm_call_from_request_response(&evicted.action, None);
             self.push_recorded_action(partial_call, &mut output);
         }
         output

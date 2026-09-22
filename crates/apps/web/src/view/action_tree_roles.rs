@@ -19,6 +19,8 @@ pub(super) const DISPLAY_PARENT_ROLES: &[SemanticActionLinkRole] = &[
     SemanticActionLinkRole::FileWriteContainsFileEvent,
     SemanticActionLinkRole::LlmCallRequest,
     SemanticActionLinkRole::LlmCallResponse,
+    SemanticActionLinkRole::LlmResponseToolCall,
+    SemanticActionLinkRole::LlmRequestToolResult,
     SemanticActionLinkRole::LlmRequestHttpMessage,
     SemanticActionLinkRole::LlmResponseHttpMessage,
     SemanticActionLinkRole::LlmResponseSseStream,

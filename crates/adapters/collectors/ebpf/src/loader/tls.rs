@@ -31,7 +31,7 @@ use config_core::daemon::{
     DisabledOrPath, PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary,
     PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSource,
 };
-use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, UprobeOpts};
+use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, MapType, Object, UprobeOpts};
 
 use crate::loader::LoaderError;
 use boringssl::{
@@ -69,12 +69,89 @@ const TLS_BACKEND_SECCOMP_USER_READ: u32 = 1;
 const TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK: u32 = 2;
 const TLS_BACKEND_BPF_COPY_ONLY: u32 = 3;
 
+/// Readiness of the on-demand direct backend, distinct from installed links.
+pub(super) struct DirectTlsBackend;
+
+impl DirectTlsBackend {
+    pub(super) fn validate_ready(
+        object: &Object,
+        config: &PayloadTlsConfig,
+    ) -> Result<bool, LoaderError> {
+        if !config.enabled || config.capture_backend != PayloadTlsCaptureBackend::BpfCopy {
+            return Ok(false);
+        }
+        validate_payload_backend_config(config)?;
+        let events = object
+            .maps()
+            .find(|map| map.name() == OsStr::new("events"))
+            .ok_or_else(|| LoaderError::new("tls_direct_ready", "events map is missing"))?;
+        if events.map_type() != MapType::RingBuf {
+            return Err(LoaderError::new(
+                "tls_direct_ready",
+                "TLS bpf-copy requires an actual ring-buffer events map",
+            ));
+        }
+        // A successfully loaded Object has loaded every autoload-enabled program.
+        for name in OPENSSL_UPROBE_TARGETS
+            .iter()
+            .chain(BORINGSSL_UPROBE_TARGETS.iter())
+            .map(|target| target.program)
+            .chain([
+                "handle_rustls_buffer_plaintext",
+                "handle_rustls_take_received_plaintext",
+            ])
+            .chain(
+                config
+                    .direct_dynamic_discovery_enabled
+                    .then_some("handle_tls_mapping"),
+            )
+        {
+            if !object
+                .progs()
+                .any(|program| program.name() == OsStr::new(name) && program.autoload())
+            {
+                return Err(LoaderError::new(
+                    "tls_direct_ready",
+                    format!("required direct TLS program {name} is not loaded"),
+                ));
+            }
+        }
+        let map = object
+            .maps()
+            .find(|map| map.name() == OsStr::new("payload_tls_config"))
+            .ok_or_else(|| LoaderError::new("tls_direct_ready", "TLS config map is missing"))?;
+        let value = map
+            .lookup(&0_u32.to_ne_bytes(), MapFlags::ANY)
+            .map_err(|error| LoaderError::new("tls_direct_ready", error.to_string()))?
+            .ok_or_else(|| LoaderError::new("tls_direct_ready", "TLS config map is empty"))?;
+        let expected = [
+            TLS_LIBRARY_AUTO,
+            TLS_BACKEND_BPF_COPY_ONLY,
+            config.max_segment_bytes,
+            config.max_operation_bytes,
+            config.diagnostics_enabled as u32,
+        ];
+        if value.len() != expected.len() * 4
+            || !expected
+                .iter()
+                .zip(value.chunks_exact(4))
+                .all(|(expected, actual)| expected.to_ne_bytes().as_slice() == actual)
+        {
+            return Err(LoaderError::new(
+                "tls_direct_ready",
+                "TLS config map does not match the configured direct backend",
+            ));
+        }
+        Ok(true)
+    }
+}
+
 pub fn validate_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
     if !config.enabled {
         return Ok(());
     }
     validate_payload_backend_config(config)?;
-    if config.capture_backend.is_sync() {
+    if config.capture_backend.uses_probe_plans() {
         return validate_sync_payload_config(config);
     }
     match (config.source, config.resolver, config.library) {
@@ -134,7 +211,7 @@ fn validate_sync_payload_config(config: &PayloadTlsConfig) -> Result<(), LoaderE
     {
         return Err(LoaderError::new(
             "payload_tls_config",
-            "tls-sync auto plan requires payload_tls_binary_path=disabled and payload_tls_pattern_path=disabled",
+            "TLS auto plan requires payload_tls_binary_path=disabled and payload_tls_pattern_path=disabled",
         ));
     }
     Ok(())
@@ -157,7 +234,7 @@ pub fn configure_payload_tls_map(
         })?;
     let key = 0_u32.to_ne_bytes();
     let mut value = Vec::with_capacity(std::mem::size_of::<u32>() * 5);
-    let (library, backend) = if config.capture_backend.is_sync() {
+    let (library, backend) = if config.capture_backend.uses_probe_plans() {
         (TLS_LIBRARY_AUTO, TLS_BACKEND_BPF_COPY_ONLY)
     } else {
         (
@@ -178,7 +255,7 @@ pub fn attach_payload_tls_programs(
     object: &mut Object,
     config: &PayloadTlsConfig,
 ) -> Result<Vec<(Link, String)>, LoaderError> {
-    if !config.enabled || config.capture_backend.is_sync() {
+    if !config.enabled || config.capture_backend.uses_probe_plans() {
         return Ok(Vec::new());
     }
     let attach_points = payload_tls_attach_points(config)?;
@@ -217,6 +294,7 @@ pub fn attach_payload_tls_programs(
 
 pub fn is_payload_tls_program(program_name: &str) -> bool {
     program_name.starts_with("handle_ssl_")
+        || program_name.starts_with("handle_boringssl_")
         || program_name.starts_with("handle_rustls_")
         || program_name.starts_with("handle_go_tls_")
         || program_name.starts_with("handle_gnutls_")
@@ -231,6 +309,7 @@ pub fn is_dynamic_tls_program(program_name: &str) -> bool {
     is_go_tls_program(program_name)
         || OPENSSL_UPROBE_TARGETS
             .iter()
+            .chain(BORINGSSL_UPROBE_TARGETS.iter())
             .any(|target| target.program == program_name)
         || matches!(
             program_name,
@@ -251,9 +330,16 @@ fn validate_disabled_executable_fields(config: &PayloadTlsConfig) -> Result<(), 
 }
 
 fn validate_payload_backend_config(config: &PayloadTlsConfig) -> Result<(), LoaderError> {
+    #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
+    if config.capture_backend == PayloadTlsCaptureBackend::BpfCopy {
+        return Err(LoaderError::new(
+            "payload_tls_config",
+            "TLS bpf-copy requires ring-buffer transport; this build uses perf-buffer",
+        ));
+    }
     match config.capture_backend {
         PayloadTlsCaptureBackend::SeccompUserRead => Ok(()),
-        PayloadTlsCaptureBackend::BpfCopySeccompFallback => {
+        PayloadTlsCaptureBackend::BpfCopy | PayloadTlsCaptureBackend::BpfCopySeccompFallback => {
             if config.max_segment_bytes > TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES {
                 return Err(LoaderError::new(
                     "payload_tls_config",
@@ -267,7 +353,7 @@ fn validate_payload_backend_config(config: &PayloadTlsConfig) -> Result<(), Load
                 return Err(LoaderError::new(
                     "payload_tls_config",
                     format!(
-                        "payload_tls_ring_buffer_bytes {} is too small for bpf-copy-seccomp-fallback; minimum is {}",
+                        "payload_tls_ring_buffer_bytes {} is too small for TLS BPF direct copy; minimum is {}",
                         config.ring_buffer_bytes, TLS_PAYLOAD_DIRECT_COPY_MIN_RING_BUFFER_BYTES
                     ),
                 ));
@@ -531,6 +617,7 @@ fn payload_tls_library_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError>
 
 fn payload_tls_backend_id(config: &PayloadTlsConfig) -> Result<u32, LoaderError> {
     match config.capture_backend {
+        PayloadTlsCaptureBackend::BpfCopy => Ok(TLS_BACKEND_BPF_COPY_ONLY),
         PayloadTlsCaptureBackend::SeccompUserRead => Ok(TLS_BACKEND_SECCOMP_USER_READ),
         PayloadTlsCaptureBackend::BpfCopySeccompFallback => {
             Ok(TLS_BACKEND_BPF_COPY_SECCOMP_FALLBACK)

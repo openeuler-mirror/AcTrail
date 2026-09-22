@@ -28,6 +28,8 @@ pub(in crate::live) struct LiveMcpProjector {
 #[derive(Default)]
 pub(in crate::live) struct McpProjectionOutput {
     pub(in crate::live) actions: Vec<SemanticAction>,
+    pub(in crate::live) updates: Vec<semantic_action::SemanticActionUpdate>,
+    pub(in crate::live) updated_actions: Vec<SemanticAction>,
     pub(in crate::live) links: Vec<SemanticActionLink>,
     pub(in crate::live) contents: Vec<McpJsonRpcContentWrite>,
     pub(in crate::live) payload_segments: Vec<PayloadSegment>,
@@ -36,6 +38,8 @@ pub(in crate::live) struct McpProjectionOutput {
 impl McpProjectionOutput {
     pub(super) fn extend(&mut self, other: Self) {
         self.actions.extend(other.actions);
+        self.updates.extend(other.updates);
+        self.updated_actions.extend(other.updated_actions);
         self.links.extend(other.links);
         self.contents.extend(other.contents);
         self.payload_segments.extend(other.payload_segments);
@@ -43,6 +47,10 @@ impl McpProjectionOutput {
 }
 
 impl LiveMcpProjector {
+    pub(in crate::live) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     pub(in crate::live) fn new(
         config: PayloadMcpConfig,
         content_retention: L0McpCallRetention,
@@ -149,7 +157,7 @@ impl LiveMcpProjector {
         &mut self,
         trace_id: TraceId,
         finished_at: SystemTime,
-    ) -> Vec<SemanticAction> {
+    ) -> McpProjectionOutput {
         let request_keys = self
             .correlation
             .open_calls
@@ -157,7 +165,7 @@ impl LiveMcpProjector {
             .filter(|key| key.response.session.trace_id == trace_id)
             .cloned()
             .collect::<Vec<_>>();
-        let mut actions = Vec::with_capacity(request_keys.len());
+        let mut output = McpProjectionOutput::default();
         for request_key in request_keys {
             let Some(mut open) = self.correlation.open_calls.remove(&request_key) else {
                 continue;
@@ -175,10 +183,16 @@ impl LiveMcpProjector {
                 attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
                 "true".to_string(),
             );
-            actions.push(open.action);
+            output
+                .updates
+                .push(crate::live::ActionUpdateFactory::lifecycle(
+                    &open.action,
+                    Some(semantic_action::SemanticActionFinalizationReason::TraceClosed),
+                ));
+            output.updated_actions.push(open.action);
         }
         self.forget_trace(trace_id);
-        actions
+        output
     }
 
     pub(in crate::live) fn flush_closed_stdio_sessions(

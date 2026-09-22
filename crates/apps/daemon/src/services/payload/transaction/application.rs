@@ -1,6 +1,14 @@
 use super::*;
 
 impl PayloadTransactionContext<'_> {
+    fn next_event_id(&mut self) -> Result<EventId, ControlError> {
+        let raw = *self.next_event_id;
+        *self.next_event_id = (*self.next_event_id)
+            .checked_add(1)
+            .ok_or_else(|| ControlError::new("event_id_overflow", "event id overflow"))?;
+        Ok(EventId::new(raw))
+    }
+
     pub(super) fn prepare_application_events(
         &mut self,
         trace_id: TraceId,
@@ -26,7 +34,7 @@ impl PayloadTransactionContext<'_> {
                 EventPayload::Application(draft.payload),
             );
             let event_actions = self.observe_semantic_actions_for_event(&event);
-            export_batch.extend(event_actions.clone());
+            self.record_semantic_output(export_batch, &event_actions);
             prepared.push(PreparedApplicationEvent {
                 event,
                 semantic_actions: event_actions,

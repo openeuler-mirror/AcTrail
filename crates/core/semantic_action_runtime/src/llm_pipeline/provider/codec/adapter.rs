@@ -62,13 +62,13 @@ impl LlmCodecRegistry {
 
     pub(in crate::llm_pipeline) fn decode_request(
         &self,
-        http: &HttpRequestParts,
+        http: &HttpRequestParts<'_>,
     ) -> Option<LlmCodecDecoded> {
         let request = LlmCodecRequest {
             method: http.method.as_deref(),
             authority: http.authority.as_deref(),
             path: http.path.as_deref(),
-            body: &http.body,
+            body: http.body,
         };
         for plugin in &self.plugins {
             match plugin.decode_request(request.clone()) {

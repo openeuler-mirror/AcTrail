@@ -5,11 +5,11 @@ use semantic_action::{
     SemanticActionLinkRole, attr_keys as attrs,
 };
 
-/// Projects the two direct children already selected by the LLM correlator.
+/// Projects direct children already selected by the LLM correlator.
 ///
 /// The call attributes are the correlation result. Link projection therefore
 /// needs no cross-batch action cache or reverse-owner index: every call update
-/// costs at most two attribute lookups and emits at most two links.
+/// costs at most three attribute lookups and emits at most three links.
 #[derive(Default)]
 pub(super) struct LlmExchangeLinkProjector;
 
@@ -19,7 +19,7 @@ impl LlmExchangeLinkProjector {
             return Vec::new();
         }
 
-        let mut links = Vec::with_capacity(2);
+        let mut links = Vec::with_capacity(3);
         if let Some(request_action_id) = action.attributes.get(attrs::llm_call::REQUEST_ACTION_ID) {
             links.push(Self::direct_link(
                 action,
@@ -33,6 +33,16 @@ impl LlmExchangeLinkProjector {
                 action,
                 response_action_id,
                 SemanticActionLinkRole::LlmCallResponse,
+            ));
+        }
+        if let Some(http_response_id) = action
+            .attributes
+            .get(attrs::llm_call::HTTP_RESPONSE_ACTION_ID)
+        {
+            links.push(Self::direct_link(
+                action,
+                http_response_id,
+                SemanticActionLinkRole::LlmCallHttpResponse,
             ));
         }
         links

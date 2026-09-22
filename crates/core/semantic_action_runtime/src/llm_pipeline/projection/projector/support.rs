@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
 use semantic_action::{
-    LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus, SemanticEvidence,
-    attr_keys as attrs, evidence_roles, validated_model_identifier,
+    LlmResponseTermination, LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus,
+    SemanticEvidence, attr_keys as attrs, evidence_roles, validated_model_identifier,
 };
 
 use crate::llm_pipeline::assembly::router::PayloadStreamGroupKey;
@@ -142,7 +142,10 @@ pub(super) fn raw_llm_response_attributes(
         attrs::llm_response::BODY_FORMAT.to_string(),
         llm_response_body_format(body).to_string(),
     );
-    attributes.insert(attrs::llm_response::DONE.to_string(), body.done.to_string());
+    attributes.insert(
+        attrs::llm_response::DONE.to_string(),
+        body.termination.is_some().to_string(),
+    );
     attributes.insert(
         attrs::llm_response::CHUNK_COUNT.to_string(),
         body.chunk_count.to_string(),
@@ -289,7 +292,7 @@ pub(super) fn llm_response_status(
         evidence,
         http_complete,
         &ProviderStreamUpdate {
-            done: body.done,
+            termination: body.termination,
             stream: body.stream,
             chunk_count: body.chunk_count,
         },
@@ -301,9 +304,13 @@ pub(super) fn llm_response_status_from_progress(
     http_complete: bool,
     progress: &ProviderStreamUpdate,
 ) -> SemanticActionStatus {
-    if evidence.any_operation_failed {
+    if evidence.any_operation_failed
+        || progress
+            .termination
+            .is_some_and(LlmResponseTermination::is_failure)
+    {
         SemanticActionStatus::Error
-    } else if progress.done
+    } else if progress.termination.is_some()
         || http_complete
         || (!progress.stream && evidence.operation_segments_are_complete())
     {

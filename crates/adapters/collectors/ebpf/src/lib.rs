@@ -7,6 +7,8 @@ mod collector_dynamic_go_tls;
 mod collector_dynamic_tls;
 #[path = "collector/events.rs"]
 mod collector_events;
+#[path = "collector/file_io/collector.rs"]
+mod collector_file_io;
 #[path = "collector/instance.rs"]
 mod collector_instance_impl;
 #[path = "collector/net_aggregation.rs"]
@@ -40,7 +42,8 @@ use collector_event::RawCollectorEvent;
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
 use collector_stats::{CollectorStats, DropCounter};
 use config_core::daemon::{
-    EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig, ProcessSeccompConfig,
+    EbpfCollectorConfig, FileCollectionConfig, FileIoSummaryConfig, PayloadConfig,
+    ProcessSeccompConfig,
 };
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
@@ -77,12 +80,14 @@ pub struct EbpfCollector {
     bindings: BindingStateMap,
     runtime: Option<EbpfRuntime>,
     file_tracker: FileTracker,
+    semantic_projection_enabled: bool,
     dynamic_go_tls: DynamicGoTlsAttacher,
     dynamic_tls: DynamicTlsAttacher,
-    file_bulk_read_fast_path: FileBulkReadFastPathConfig,
+    file_io_summaries: collector_file_io::FileIoSummaryCollector,
     tls_capture_requests: Vec<TlsPayloadCaptureRequest>,
     tls_completions: Vec<TlsPayloadCompletion>,
     tls_direct_captures: Vec<TlsPayloadDirectCapture>,
+    tls_mapping_events: Vec<loader::KernelTlsMappingEvent>,
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     launch_binding_failures: Vec<LaunchBindingFailure>,
     socket_completions: Vec<SocketPayloadCompletion>,
@@ -206,19 +211,20 @@ impl EbpfCollector {
         config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         process_config: ProcessSeccompConfig,
-        file_bulk_read_fast_path: FileBulkReadFastPathConfig,
+        file_io_summary_config: FileIoSummaryConfig,
+        semantic_projection_enabled: bool,
+        file_collection: FileCollectionConfig,
+        file_directory_observation: bool,
+        file_tty_observation: bool,
     ) -> Self {
         let mut probe_result = probe();
         if !config.enabled {
             probe_result.reason_unavailable =
                 Some("collector disabled by configuration".to_string());
         }
-        let mcp_stdio_enabled = payload_config.mcp.enabled
-            && payload_config.stdio.enabled
-            && payload_config.stdio.capture_stdin;
         let process_pending_max_entries = process_config.pending_max_entries;
-        let file_tracker = FileTracker::new(config.ipc_lineage, mcp_stdio_enabled);
-        let probe_result = probe_result_for_config(probe_result, &config, &payload_config);
+        let file_tracker = FileTracker::new(config.ipc_lineage, false).with_file_capture(false);
+        let probe_result = probe_result_for_config(probe_result, &payload_config);
         let net_aggregation_enabled = Arc::new(AtomicBool::new(config.net_send_recv_aggregation));
         Self {
             probe_result,
@@ -226,17 +232,22 @@ impl EbpfCollector {
                 config,
                 payload_config.clone(),
                 process_config,
-                file_bulk_read_fast_path.clone(),
+                file_io_summary_config.clone(),
+                file_collection,
+                file_directory_observation,
+                file_tty_observation,
             ),
             bindings: BindingStateMap::default(),
             runtime: None,
             file_tracker,
+            semantic_projection_enabled,
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
             dynamic_tls: DynamicTlsAttacher::default(),
-            file_bulk_read_fast_path,
+            file_io_summaries: collector_file_io::FileIoSummaryCollector::default(),
             tls_capture_requests: Vec::new(),
             tls_completions: Vec::new(),
             tls_direct_captures: Vec::new(),
+            tls_mapping_events: Vec::new(),
             tls_diagnostic_events: Vec::new(),
             launch_binding_failures: Vec::new(),
             socket_completions: Vec::new(),
@@ -279,17 +290,8 @@ fn clock_ticks_per_second() -> Option<u64> {
 
 fn probe_result_for_config(
     mut result: EbpfProbeResult,
-    config: &EbpfCollectorConfig,
     payload: &PayloadConfig,
 ) -> EbpfProbeResult {
-    if !config.ipc_lineage.enabled {
-        result.descriptor.capabilities.retain(|descriptor| {
-            !matches!(
-                &descriptor.capability,
-                Capability::IpcPipeFifo | Capability::IpcUnixSocket
-            )
-        });
-    }
     if payload.tls.enabled && !payload.tls.capture_backend.is_sync() {
         result
             .descriptor
@@ -329,11 +331,7 @@ fn probe_result_for_config(
     result
 }
 
-fn supported_required_capability(
-    capability: &Capability,
-    config: &EbpfCollectorConfig,
-    payload: &PayloadConfig,
-) -> bool {
+fn supported_required_capability(capability: &Capability, payload: &PayloadConfig) -> bool {
     matches!(
         capability,
         Capability::ProcLifecycle
@@ -344,10 +342,9 @@ fn supported_required_capability(
     ) || (matches!(
         capability,
         Capability::IpcPipeFifo | Capability::IpcUnixSocket
-    ) && config.ipc_lineage.enabled)
-        || (matches!(capability, Capability::TlsPlaintextPayload)
-            && payload.tls.enabled
-            && !payload.tls.capture_backend.is_sync())
+    )) || (matches!(capability, Capability::TlsPlaintextPayload)
+        && payload.tls.enabled
+        && !payload.tls.capture_backend.is_sync())
         || (matches!(capability, Capability::SocketPlaintextPayload) && payload.socket.enabled)
         || (matches!(capability, Capability::StdioChunk)
             && stdio_payload_capability_configured(payload))

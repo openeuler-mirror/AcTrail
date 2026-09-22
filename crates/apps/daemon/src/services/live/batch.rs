@@ -9,7 +9,7 @@ use ingest_runtime::{AllowPolicy, IngestPipeline};
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
-use model_core::process::{ProcessIdentity, ProcessRecord};
+use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use recording_runtime::{SemanticActionBatch, TraceStateRecord};
 use semantic_action::{SemanticActionKind, SemanticActionLinkRole, attr_keys as attrs};
 use trace_runtime::registry::TraceRuntime;
@@ -27,11 +27,15 @@ impl StorageAttachService {
             return Ok(());
         }
         let input_events = raw_events.len();
+        let retains_observations = self.storage.retains_observations();
         let mut retained_events = 0usize;
         let mut semantic_action_count = 0usize;
         let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch::default();
         for mut raw_event in raw_events {
+            if !self.discover_direct_exec(&raw_event, trace_runtime) {
+                continue;
+            }
             let observed_at = raw_event.envelope.observed_at;
             let parent_observation = match &raw_event.payload {
                 RawObservationPayload::Process { parent, .. } => parent.clone(),
@@ -39,13 +43,15 @@ impl StorageAttachService {
             };
             let (process, process_record) =
                 self.resolve_process_observation(raw_event.envelope.process.clone())?;
-            if let Some(record) = process_record {
+            if let Some(record) = process_record.filter(|_| retains_observations) {
                 batch.process_records.insert(record.identity, record);
             }
             let parent = parent_observation
                 .map(|observation| self.resolve_process_observation(observation))
                 .transpose()?;
-            if let Some((_, Some(record))) = &parent {
+            if let Some((_, Some(record))) = &parent
+                && retains_observations
+            {
                 batch
                     .process_records
                     .insert(record.identity, record.clone());
@@ -78,6 +84,9 @@ impl StorageAttachService {
 
             if let Some(trace_id) = matched_trace_id {
                 self.mark_semantic_projection_dirty(trace_id);
+                if applied.trace_changed {
+                    batch.trace_state_changes.insert(trace_id);
+                }
                 if let Some(process) = applied.changed_membership {
                     batch
                         .dirty_memberships
@@ -93,6 +102,7 @@ impl StorageAttachService {
                     trace_runtime
                         .fail_trace(trace_id, observed_at)
                         .map_err(|error| ControlError::new("fail_trace", format!("{error:?}")))?;
+                    batch.trace_state_changes.insert(trace_id);
                 }
                 batch.trace_ids.insert(trace_id);
                 for event in outcome.events {
@@ -105,13 +115,15 @@ impl StorageAttachService {
                         .llm_pipeline_diagnostics
                         .append(&mut output.llm_pipeline_diagnostics);
                     let retain_event = output.retain_event;
-                    semantic_action_count =
-                        semantic_action_count.saturating_add(output.actions.len());
+                    semantic_action_count = semantic_action_count
+                        .saturating_add(output.actions.len() + output.updated_actions.len());
                     semantic_link_count = semantic_link_count.saturating_add(output.links.len());
                     batch
                         .semantic_actions
                         .extend(SemanticActionBatch::from_action_output(
                             output.actions,
+                            output.updates,
+                            output.updated_actions,
                             output.links,
                             output.file_observation_paths,
                             output.file_path_sets,
@@ -121,19 +133,41 @@ impl StorageAttachService {
                             output.payload_segments,
                         ));
                     retained_events = retained_events.saturating_add(output.deferred_events.len());
-                    for deferred_event in output.deferred_events {
-                        batch
-                            .events
-                            .push(self.prepare_event_for_storage(deferred_event));
+                    if retains_observations {
+                        for deferred_event in output.deferred_events {
+                            batch
+                                .events
+                                .push(self.prepare_event_for_storage(deferred_event));
+                        }
                     }
                     if retain_event {
                         retained_events = retained_events.saturating_add(1);
-                        batch.events.push(self.prepare_event_for_storage(event));
+                        if retains_observations {
+                            batch.events.push(self.prepare_event_for_storage(event));
+                        }
                     }
                 }
             }
             batch.diagnostics.extend(outcome.diagnostics);
         }
+
+        let output = self.semantic_actions.finish_file_io_batch();
+        semantic_action_count = semantic_action_count.saturating_add(output.actions.len());
+        semantic_link_count = semantic_link_count.saturating_add(output.links.len());
+        batch
+            .semantic_actions
+            .extend(SemanticActionBatch::from_action_output(
+                output.actions,
+                output.updates,
+                output.updated_actions,
+                output.links,
+                output.file_observation_paths,
+                output.file_path_sets,
+                output.llm_request_contents,
+                output.llm_request_lineages,
+                output.mcp_jsonrpc_contents,
+                output.payload_segments,
+            ));
 
         self.workload_diagnostics.record_event_projection(
             input_events,
@@ -141,7 +175,9 @@ impl StorageAttachService {
             semantic_action_count,
             semantic_link_count,
         );
-        if let Some(&trace_id) = batch.trace_ids.iter().next() {
+        if self.semantic_retention.llm_response_tool_calls_enabled()
+            && let Some(&trace_id) = batch.trace_ids.iter().next()
+        {
             Self::propagate_tool_names_to_commands(
                 &mut batch.semantic_actions,
                 self.pending_tool_names.entry(trace_id).or_default(),
@@ -168,12 +204,14 @@ impl StorageAttachService {
             return Ok(());
         }
         let input_events = events.len();
+        let retains_observations = self.storage.retains_observations();
         let mut retained_events = 0usize;
         let mut semantic_action_count = 0usize;
         let mut semantic_link_count = 0usize;
         let mut batch = LiveEventBatch {
             process_records: process_records
                 .into_iter()
+                .filter(|_| retains_observations)
                 .map(|record| (record.identity, record))
                 .collect(),
             ..LiveEventBatch::default()
@@ -189,12 +227,15 @@ impl StorageAttachService {
                 .llm_pipeline_diagnostics
                 .append(&mut output.llm_pipeline_diagnostics);
             let retain_event = output.retain_event;
-            semantic_action_count = semantic_action_count.saturating_add(output.actions.len());
+            semantic_action_count = semantic_action_count
+                .saturating_add(output.actions.len() + output.updated_actions.len());
             semantic_link_count = semantic_link_count.saturating_add(output.links.len());
             batch
                 .semantic_actions
                 .extend(SemanticActionBatch::from_action_output(
                     output.actions,
+                    output.updates,
+                    output.updated_actions,
                     output.links,
                     output.file_observation_paths,
                     output.file_path_sets,
@@ -204,14 +245,18 @@ impl StorageAttachService {
                     output.payload_segments,
                 ));
             retained_events = retained_events.saturating_add(output.deferred_events.len());
-            for deferred_event in output.deferred_events {
-                batch
-                    .events
-                    .push(self.prepare_event_for_storage(deferred_event));
+            if retains_observations {
+                for deferred_event in output.deferred_events {
+                    batch
+                        .events
+                        .push(self.prepare_event_for_storage(deferred_event));
+                }
             }
             if retain_event {
                 retained_events = retained_events.saturating_add(1);
-                batch.events.push(self.prepare_event_for_storage(event));
+                if retains_observations {
+                    batch.events.push(self.prepare_event_for_storage(event));
+                }
             }
         }
         self.workload_diagnostics.record_event_projection(
@@ -220,7 +265,9 @@ impl StorageAttachService {
             semantic_action_count,
             semantic_link_count,
         );
-        if let Some(&trace_id) = batch.trace_ids.iter().next() {
+        if self.semantic_retention.llm_response_tool_calls_enabled()
+            && let Some(&trace_id) = batch.trace_ids.iter().next()
+        {
             Self::propagate_tool_names_to_commands(
                 &mut batch.semantic_actions,
                 self.pending_tool_names.entry(trace_id).or_default(),
@@ -234,17 +281,21 @@ impl StorageAttachService {
         trace_runtime: &TraceRuntime,
         batch: LiveEventBatch,
     ) -> Result<(), ControlError> {
-        let trace_states = self.trace_states_for_persistence(
-            trace_runtime,
-            batch.trace_ids,
-            batch.dirty_memberships,
-        )?;
+        let (trace_states, memberships) = if self.storage.retains_observations() {
+            (
+                self.trace_states_for_persistence(trace_runtime, batch.trace_state_changes)?,
+                self.membership_records_for_batch(trace_runtime, batch.dirty_memberships)?,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let result = self.persist_observed_batch_then_publish(
             trace_runtime,
             batch.events,
             batch.diagnostics,
             batch.semantic_actions,
             trace_states,
+            memberships,
             batch.process_records.into_values().collect(),
         );
         self.persist_llm_pipeline_diagnostics_fail_local(
@@ -258,15 +309,25 @@ impl StorageAttachService {
         &self,
         trace_runtime: &TraceRuntime,
         trace_ids: BTreeSet<TraceId>,
-        mut dirty_memberships: BTreeMap<TraceId, BTreeSet<ProcessIdentity>>,
     ) -> Result<Vec<TraceStateRecord>, ControlError> {
         trace_ids
             .into_iter()
-            .map(|trace_id| {
-                let membership_ids = dirty_memberships.remove(&trace_id).unwrap_or_default();
-                self.trace_state_record_for_memberships(trace_runtime, trace_id, &membership_ids)
-            })
+            .map(|trace_id| self.trace_state_record_for_persistence(trace_runtime, trace_id))
             .collect()
+    }
+
+    fn membership_records_for_batch(
+        &self,
+        trace_runtime: &TraceRuntime,
+        dirty_memberships: BTreeMap<TraceId, BTreeSet<ProcessIdentity>>,
+    ) -> Result<Vec<ProcessMembership>, ControlError> {
+        dirty_memberships
+            .into_iter()
+            .map(|(trace_id, membership_ids)| {
+                self.membership_records_for_persistence(trace_runtime, trace_id, &membership_ids)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|records| records.into_iter().flatten().collect())
     }
 
     fn prepare_event_for_storage(&self, mut event: DomainEvent) -> DomainEvent {
@@ -365,7 +426,7 @@ impl StorageAttachService {
         // 1. 收集 LlmResponse 中的工具名：llm_call_action_id → tool_name
         //    同时缓存到 pending_tool_names 供后续 batch 使用
         let mut response_tool_names: BTreeMap<String, String> = BTreeMap::new();
-        for action in batch.actions() {
+        for action in batch.action_views() {
             if action.kind == SemanticActionKind::LlmResponse {
                 if let Some(tool_calls_json) =
                     action.attributes.get(attrs::llm_response::TOOL_CALLS_JSON)
@@ -387,6 +448,10 @@ impl StorageAttachService {
                     }
                 }
             }
+        }
+
+        if response_tool_names.is_empty() && pending_tool_names.is_empty() {
+            return;
         }
 
         // 2. 通过 links 建立关联链
@@ -431,7 +496,7 @@ impl StorageAttachService {
         // 5. 跨 batch 匹配：用 pending_tool_names 缓存查找尚未匹配的 CommandInvocation
         //    （LlmResponse 在后续 batch 到达时，retroactively 更新之前 batch 中的 CommandInvocation）
         let mut needs_update = false;
-        for action in batch.actions() {
+        for action in batch.action_views() {
             if action.kind == SemanticActionKind::CommandInvocation
                 && !action.attributes.contains_key(attrs::command::TOOL_NAME)
             {
@@ -456,12 +521,41 @@ impl StorageAttachService {
             }
         }
 
+        let mut tool_name_updates = Vec::new();
+        for action in batch.updated_actions_mut() {
+            if action.kind != SemanticActionKind::CommandInvocation {
+                continue;
+            }
+            let Some(tool_name) = command_to_tool_name.get(&action.action_id) else {
+                continue;
+            };
+            if action.attributes.get(attrs::command::TOOL_NAME) == Some(tool_name) {
+                continue;
+            }
+            action
+                .attributes
+                .insert(attrs::command::TOOL_NAME.to_string(), tool_name.clone());
+            tool_name_updates.push(semantic_action::SemanticActionUpdate {
+                action_id: action.action_id.clone(),
+                trace_id: action.trace_id,
+                kind: action.kind,
+                process: action.process,
+                change: semantic_action::SemanticActionChange::CommandToolName {
+                    tool_name: tool_name.clone(),
+                },
+                evidence: Vec::new(),
+            });
+        }
+        for update in tool_name_updates {
+            batch.push_update(update);
+        }
+
         // 6. 将当前 batch 中新发现的工具名存入缓存，供后续 batch 使用
         //    （当 LlmResponse 在 batch N 到达，但 CommandInvocation 在 batch N-1 已写入 DB 时，
         //     这里缓存的映射会在 batch N+1 的 CommandInvocation 到达时被使用）
         for (llm_call_id, tool_name) in &response_tool_names {
             // 找到该 LlmResponse 对应的 LlmCall，再找到对应的 CommandInvocation
-            if let Some(llm_call_action) = batch.actions().iter().find(|a| {
+            if let Some(llm_call_action) = batch.action_views().find(|a| {
                 a.kind == SemanticActionKind::LlmCall
                     && a.attributes
                         .get(attrs::llm_call::RESPONSE_ACTION_ID)
@@ -501,6 +595,7 @@ struct LiveEventBatch {
     llm_pipeline_diagnostics: Vec<LlmPipelineDiagnostic>,
     semantic_actions: SemanticActionBatch,
     trace_ids: BTreeSet<TraceId>,
+    trace_state_changes: BTreeSet<TraceId>,
     dirty_memberships: BTreeMap<TraceId, BTreeSet<ProcessIdentity>>,
     process_records: BTreeMap<ProcessIdentity, ProcessRecord>,
 }

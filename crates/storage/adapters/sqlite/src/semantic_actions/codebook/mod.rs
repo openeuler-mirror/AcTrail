@@ -3,15 +3,17 @@
 mod current;
 mod error;
 pub(in crate::semantic_actions) mod evidence_role;
+mod origin;
 pub(in crate::semantic_actions) mod sqlite;
 
 use semantic_action::{
-    SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkOrigin,
-    SemanticActionLinkRole, SemanticActionStatus, SemanticEvidenceKind,
+    SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkRole, SemanticActionStatus,
+    SemanticEvidenceKind,
 };
 
 pub(crate) use error::CodebookError;
 use error::validate_unique;
+use origin::LinkOriginCodes;
 
 pub(crate) const CURRENT_SCHEMA_VERSION: i32 = current::SCHEMA_VERSION;
 
@@ -364,6 +366,8 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) llm_request_trajectory_fork: i16,
     pub(crate) llm_call_request: i16,
     pub(crate) llm_call_response: i16,
+    pub(crate) llm_call_http_response: i16,
+    pub(crate) llm_request_tool_result: i16,
     pub(crate) llm_response_tool_call: i16,
     pub(crate) llm_tool_call_result: i16,
     pub(crate) llm_tool_call_agent_invocation: i16,
@@ -410,6 +414,8 @@ impl LinkRoleCodes {
             SemanticActionLinkRole::LlmRequestTrajectoryFork => self.llm_request_trajectory_fork,
             SemanticActionLinkRole::LlmCallRequest => self.llm_call_request,
             SemanticActionLinkRole::LlmCallResponse => self.llm_call_response,
+            SemanticActionLinkRole::LlmCallHttpResponse => self.llm_call_http_response,
+            SemanticActionLinkRole::LlmRequestToolResult => self.llm_request_tool_result,
             SemanticActionLinkRole::LlmResponseToolCall => self.llm_response_tool_call,
             SemanticActionLinkRole::LlmToolCallResult => self.llm_tool_call_result,
             SemanticActionLinkRole::LlmToolCallAgentInvocation => {
@@ -476,6 +482,12 @@ impl LinkRoleCodes {
             }
             value if value == self.llm_call_request => Ok(SemanticActionLinkRole::LlmCallRequest),
             value if value == self.llm_call_response => Ok(SemanticActionLinkRole::LlmCallResponse),
+            value if value == self.llm_call_http_response => {
+                Ok(SemanticActionLinkRole::LlmCallHttpResponse)
+            }
+            value if value == self.llm_request_tool_result => {
+                Ok(SemanticActionLinkRole::LlmRequestToolResult)
+            }
             value if value == self.llm_response_tool_call => {
                 Ok(SemanticActionLinkRole::LlmResponseToolCall)
             }
@@ -520,7 +532,7 @@ impl LinkRoleCodes {
         }
     }
 
-    fn entries(self) -> [(&'static str, i16); 27] {
+    fn entries(self) -> [(&'static str, i16); 29] {
         [
             (
                 SemanticActionLinkRole::AgentPerformedAction.as_str(),
@@ -579,6 +591,14 @@ impl LinkRoleCodes {
                 self.llm_call_response,
             ),
             (
+                SemanticActionLinkRole::LlmCallHttpResponse.as_str(),
+                self.llm_call_http_response,
+            ),
+            (
+                SemanticActionLinkRole::LlmRequestToolResult.as_str(),
+                self.llm_request_tool_result,
+            ),
+            (
                 SemanticActionLinkRole::LlmResponseToolCall.as_str(),
                 self.llm_response_tool_call,
             ),
@@ -630,41 +650,6 @@ impl LinkRoleCodes {
                 SemanticActionLinkRole::McpResponseStdin.as_str(),
                 self.mcp_response_stdin,
             ),
-        ]
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct LinkOriginCodes {
-    pub(crate) observed: i16,
-    pub(crate) derived: i16,
-}
-
-impl LinkOriginCodes {
-    pub(crate) const fn code(self, value: SemanticActionLinkOrigin) -> i16 {
-        match value {
-            SemanticActionLinkOrigin::Observed => self.observed,
-            SemanticActionLinkOrigin::Derived => self.derived,
-        }
-    }
-
-    pub(crate) fn decode(self, code: i64) -> Result<SemanticActionLinkOrigin, CodebookError> {
-        let code = i16::try_from(code)
-            .map_err(|_| CodebookError::unknown("semantic_action_link_origin_code", code))?;
-        match code {
-            value if value == self.observed => Ok(SemanticActionLinkOrigin::Observed),
-            value if value == self.derived => Ok(SemanticActionLinkOrigin::Derived),
-            _ => Err(CodebookError::unknown(
-                "semantic_action_link_origin_code",
-                code,
-            )),
-        }
-    }
-
-    fn entries(self) -> [(&'static str, i16); 2] {
-        [
-            (SemanticActionLinkOrigin::Observed.as_str(), self.observed),
-            (SemanticActionLinkOrigin::Derived.as_str(), self.derived),
         ]
     }
 }

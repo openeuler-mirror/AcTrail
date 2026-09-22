@@ -9,5 +9,5 @@ pub(super) mod trajectory;
 pub(crate) use batch::ProjectionBatch;
 pub(in crate::llm_pipeline) use orchestrator::ProjectionCoordinator;
 pub(crate) use projector::ProjectedLlmToolResult;
-pub(crate) use retention::canonical_llm_json;
+pub(crate) use retention::canonical_llm_json_text;
 pub(super) use retention::semantic_payload_draft;

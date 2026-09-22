@@ -453,12 +453,13 @@ LlmTrajectoryRelation {
 
 ### 8.2 Subagent
 
-当前 trajectory scope 含 process identity，所以不同进程的 subagent request 通常不会因为请求前缀自动合并。后续可利用已有：
+trajectory scope 含 process identity，不同上下文的 subagent request 不依赖请求前缀合并。
+Web 查看轨迹时，使用已保存的 invocation、tool call、父 request-response 关系以及子请求原文，
+在浏览器中精确匹配完整委派 prompt，生成独立的 `delegation` 虚线 edge。
+该边从父 request 指向子 trajectory 首请求，携带 `invocation_id`，不标成 fork、不写回 lineage 或数据库。
+采集运行时不执行此 prompt 匹配。缺原文、截断、后台请求或歧义时不推断关系。
 
-- `llm.tool_call.agent_invocation`
-- `agent.invocation.child_llm_request`
-
-把 agent invocation 关系投影为独立的 `subagent` edge。该边和内容前缀关系语义不同，前端不能统一标成 fork。
+推断读取上限、并发与生命周期见 [Live Tool Projector](../../architecture/components/live-tool-projector.md#web-离线委派关联)。
 
 ## 9. 测试计划
 

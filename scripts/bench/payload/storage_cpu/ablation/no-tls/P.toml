@@ -1,0 +1,72 @@
+# P keeps LLM identity, timing and completion with independently disabled content.
+# TLS plaintext is collected by uprobes with bounded capture.
+[capture]
+profile_name = "default-full-monitor"
+capabilities = ["proc-lifecycle", "proc-exec-context", "net-transport"]
+
+[application]
+enabled = false
+http1_enabled = false
+http2_enabled = false
+
+[resource_metrics]
+enabled = false
+
+[payload.stdio]
+enabled = false
+
+[enforcement]
+enabled = false
+[command_control]
+enabled = false
+[network_control]
+enabled = false
+[process_seccomp]
+enabled = false
+
+[payload.tls]
+direct_dynamic_discovery_enabled = false
+enabled = false
+capture_backend = "bpf-copy"
+max_segment_bytes = 65535
+max_operation_bytes = 65535
+[payload.socket]
+enabled = false
+capture_backend = "bpf-copy"
+[seccomp_notify]
+enabled = false
+
+[semantic_retention.l0_llm_call]
+enabled = true
+request_content = "none"
+request_body_export = "none"
+response_content = "none"
+tool_calls = "none"
+tool_results_enabled = false
+tool_result_content_export = "none"
+usage = "none"
+retain_assembled_payload = false
+
+[semantic_retention.l0_llm_call.trajectory]
+enabled = false
+
+[semantic_retention.l1_sse]
+enabled = false
+stream_summary = false
+event_content = "none"
+
+[semantic_retention.l2_http]
+body_content = "none"
+
+[semantic_retention.l3_http2_frame]
+enabled = false
+frame_summary = false
+data_content = "none"
+
+[semantic_retention.l4_payload]
+enabled = false
+body_content = "none"
+
+[application.http]
+sse_enabled = false
+sse_data_policy = "disabled"

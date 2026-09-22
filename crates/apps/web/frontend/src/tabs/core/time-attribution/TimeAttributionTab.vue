@@ -353,17 +353,25 @@ function roundCallLabel(round) {
 
 function attributionCoverageLabel(coverage) {
   const requests = Number(coverage?.llm_request_count ?? 0);
+  const responses = Number(coverage?.llm_response_count ?? 0);
   const observedCalls = Number(coverage?.observed_llm_call_count ?? 0);
-  const pairedCalls = Number(coverage?.llm_call_count ?? 0);
-  const excludedCalls = Number(coverage?.excluded_llm_call_count ?? 0);
+  const pairedCalls = Number(coverage?.paired_llm_call_count ?? 0);
+  const unpairedCalls = Number(coverage?.unpaired_llm_call_count ?? 0);
+  const orphanResponses = Number(coverage?.orphan_llm_response_count ?? 0);
+  const attributedCalls = Number(coverage?.attributed_llm_call_count ?? 0);
+  const excludedCalls = Number(coverage?.excluded_from_attribution_llm_call_count ?? 0);
   const userTurns = Number(coverage?.user_turn_count ?? 0);
   const inputBoundaries = Number(coverage?.strong_user_input_count ?? 0);
   return [
     `${userTurns} user ${userTurns === 1 ? 'request' : 'requests'} attributed`,
     `${inputBoundaries} observed input ${inputBoundaries === 1 ? 'boundary' : 'boundaries'}`,
     `${requests} LLM ${requests === 1 ? 'request' : 'requests'} observed`,
-    `${pairedCalls} of ${observedCalls} calls paired with response evidence`,
-    `${excludedCalls} excluded from model-side time`,
+    `${responses} LLM ${responses === 1 ? 'response' : 'responses'} observed`,
+    `${pairedCalls} of ${observedCalls} calls structurally paired`,
+    `${unpairedCalls} request-only ${unpairedCalls === 1 ? 'call' : 'calls'}`,
+    `${orphanResponses} orphan ${orphanResponses === 1 ? 'response' : 'responses'}`,
+    `${attributedCalls} paired ${attributedCalls === 1 ? 'call' : 'calls'} attributed`,
+    `${excludedCalls} paired ${excludedCalls === 1 ? 'call' : 'calls'} excluded from attribution`,
   ].join(' · ');
 }
 

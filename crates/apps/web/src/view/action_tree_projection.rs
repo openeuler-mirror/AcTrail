@@ -15,6 +15,13 @@ use super::action_tree_roles::{DISPLAY_PARENT_ROLES, ROOT_LINK_ROLES};
 mod legacy_llm_call;
 #[path = "action_tree_projection/link_validity.rs"]
 mod link_validity;
+#[path = "action_tree_projection/llm_call_display.rs"]
+mod llm_call_display;
+#[path = "action_tree_projection/llm_tool_display.rs"]
+mod llm_tool_display;
+
+pub(super) use llm_call_display::LlmCallDisplay;
+pub(super) use llm_tool_display::LlmToolDisplay;
 
 pub(super) const ROOT_PARENT_ID: &str = "";
 
@@ -52,6 +59,8 @@ impl ActionDisplayProjection {
             .collect::<BTreeMap<_, _>>();
         let links = valid_links(links, &action_by_id);
         let mut actions = legacy_llm_call::normalize_finalized_http_error_calls(actions, &links);
+        LlmCallDisplay::normalize_loaded(&mut actions);
+        LlmToolDisplay::normalize_loaded(&mut actions, &links);
         let action_by_id = actions
             .iter()
             .map(|action| (action.action_id.clone(), action.clone()))

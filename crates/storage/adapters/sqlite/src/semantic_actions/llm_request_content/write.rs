@@ -1,7 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{OptionalExtension, params};
-use semantic_action::{LlmRequestContentWrite, SemanticActionStoreError};
+use semantic_action::{
+    LlmRequestBlock, LlmRequestBlockRef, LlmRequestContentWrite, SemanticActionStoreError,
+};
 
 use crate::semantic_actions::action_ids::require_action_key;
 
@@ -24,19 +26,12 @@ fn upsert_llm_request_content(
 ) -> Result<(), SemanticActionStoreError> {
     validate_content_shape(content)?;
     let action_key = require_action(connection, content)?;
+    let mut blocks = BlockWriter::new(connection, content.manifest.trace_id.get());
     for block in &content.blocks {
-        upsert_block(connection, block)?;
+        blocks.resolve(block)?;
     }
     let manifest_id = write_manifest_once(connection, action_key, content)?;
-    let expected_refs = content
-        .block_refs
-        .iter()
-        .map(|block_ref| {
-            let block_id =
-                require_block_id(connection, block_ref.trace_id.get(), &block_ref.block_hash)?;
-            Ok((block_ref.ordinal, block_id))
-        })
-        .collect::<Result<Vec<_>, SemanticActionStoreError>>()?;
+    let expected_refs = blocks.references(&content.block_refs)?;
     write_refs_once(connection, manifest_id, &expected_refs)
 }
 
@@ -64,7 +59,12 @@ fn validate_content_shape(
                 "encoded bytes must match uncompressed bytes for canonical-json-v1 blocks",
             ));
         }
-        provided_blocks.insert(block.block_hash.clone());
+        if !provided_blocks.insert(block.block_hash.as_str()) {
+            return Err(SemanticActionStoreError::new(
+                "llm_request_block_duplicate",
+                "content must provide each block identity exactly once",
+            ));
+        }
     }
     for (index, block_ref) in content.block_refs.iter().enumerate() {
         if block_ref.trace_id != manifest.trace_id || block_ref.action_id != manifest.action_id {
@@ -79,8 +79,11 @@ fn validate_content_shape(
                 "block ref ordinals must be contiguous from zero",
             ));
         }
-        if !provided_blocks.contains(&block_ref.block_hash) {
-            continue;
+        if !provided_blocks.contains(block_ref.block_hash.as_str()) {
+            return Err(SemanticActionStoreError::new(
+                "llm_request_ref_block_missing",
+                "content must provide every referenced block",
+            ));
         }
     }
     Ok(())
@@ -113,98 +116,89 @@ fn require_action(
     }
 }
 
-fn upsert_block(
-    connection: &rusqlite::Connection,
-    block: &semantic_action::LlmRequestBlock,
-) -> Result<(), SemanticActionStoreError> {
-    let block_hash = sha256_hash_blob(&block.block_hash, "llm_request_block_hash")?;
-    connection
-        .execute(
-            "INSERT OR IGNORE INTO llm_request_blocks (
-                trace_id, block_hash, uncompressed_bytes, encoded_bytes
-             ) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                block.trace_id.get(),
-                &block_hash,
-                to_i64(
-                    block.uncompressed_bytes,
-                    "llm_request_block_uncompressed_bytes"
-                )?,
-                &block.encoded_bytes,
-            ],
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new("insert_llm_request_block", error.to_string())
-        })?;
-    verify_block(connection, block, &block_hash)
+/// IDs resolved within one content write. The caller's existing write transaction
+/// covers lookup and insertion; SQLite owns the persistent block identity.
+struct BlockWriter<'a> {
+    connection: &'a rusqlite::Connection,
+    trace_id: u64,
+    ids: BTreeMap<&'a str, i64>,
 }
 
-fn verify_block(
-    connection: &rusqlite::Connection,
-    block: &semantic_action::LlmRequestBlock,
-    block_hash: &[u8],
-) -> Result<(), SemanticActionStoreError> {
-    let existing = connection
-        .query_row(
-            "SELECT uncompressed_bytes, encoded_bytes
-             FROM llm_request_blocks
-             WHERE trace_id = ?1 AND block_hash = ?2",
-            params![block.trace_id.get(), block_hash],
-            |row| {
-                Ok((
-                    row.get::<_, i64>("uncompressed_bytes")?,
-                    row.get::<_, Vec<u8>>("encoded_bytes")?,
-                ))
-            },
-        )
-        .optional()
-        .map_err(|error| {
-            SemanticActionStoreError::new("read_llm_request_block", error.to_string())
-        })?;
-    let Some((uncompressed_bytes, encoded_bytes)) = existing else {
-        return Err(SemanticActionStoreError::new(
-            "llm_request_block_missing",
-            "block insert did not materialize a row",
-        ));
-    };
-    if uncompressed_bytes
-        == to_i64(
+impl<'a> BlockWriter<'a> {
+    fn new(connection: &'a rusqlite::Connection, trace_id: u64) -> Self {
+        Self {
+            connection,
+            trace_id,
+            ids: BTreeMap::new(),
+        }
+    }
+
+    fn resolve(&mut self, block: &'a LlmRequestBlock) -> Result<(), SemanticActionStoreError> {
+        let block_hash = sha256_hash_blob(&block.block_hash, "llm_request_block_hash")?;
+        let expected_size = to_i64(
             block.uncompressed_bytes,
             "llm_request_block_uncompressed_bytes",
-        )?
-        && encoded_bytes == block.encoded_bytes
-    {
-        return Ok(());
-    }
-    Err(SemanticActionStoreError::new(
-        "llm_request_block_hash_collision",
-        "block hash collision changed canonical block bytes",
-    ))
-}
-
-fn require_block_id(
-    connection: &rusqlite::Connection,
-    trace_id: u64,
-    block_hash: &str,
-) -> Result<i64, SemanticActionStoreError> {
-    let block_hash_blob = sha256_hash_blob(block_hash, "llm_request_ref_block_hash")?;
-    connection
-        .query_row(
-            "SELECT block_id FROM llm_request_blocks
-             WHERE trace_id = ?1 AND block_hash = ?2",
-            params![trace_id, &block_hash_blob],
-            |row| row.get::<_, i64>("block_id"),
-        )
-        .optional()
-        .map_err(|error| {
-            SemanticActionStoreError::new("read_llm_request_ref_block", error.to_string())
-        })?
-        .ok_or_else(|| {
-            SemanticActionStoreError::new(
-                "llm_request_ref_block_missing",
-                format!("block ref points at missing block {block_hash}"),
+        )?;
+        let existing = self
+            .connection
+            .query_row(
+                "SELECT block_id, uncompressed_bytes FROM llm_request_blocks
+                 WHERE trace_id = ?1 AND block_hash = ?2",
+                params![self.trace_id, &block_hash],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             )
-        })
+            .optional()
+            .map_err(|error| {
+                SemanticActionStoreError::new("read_llm_request_block", error.to_string())
+            })?;
+        let block_id = if let Some((block_id, stored_size)) = existing {
+            if stored_size != expected_size {
+                return Err(SemanticActionStoreError::new(
+                    "llm_request_block_size_conflict",
+                    "same block identity has a different byte length",
+                ));
+            }
+            block_id
+        } else {
+            self.connection
+                .query_row(
+                    "INSERT INTO llm_request_blocks (
+                        trace_id, block_hash, uncompressed_bytes, encoded_bytes
+                     ) VALUES (?1, ?2, ?3, ?4) RETURNING block_id",
+                    params![
+                        self.trace_id,
+                        &block_hash,
+                        expected_size,
+                        &block.encoded_bytes
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(|error| {
+                    SemanticActionStoreError::new("insert_llm_request_block", error.to_string())
+                })?
+        };
+        self.ids.insert(&block.block_hash, block_id);
+        Ok(())
+    }
+
+    fn references(
+        &self,
+        refs: &[LlmRequestBlockRef],
+    ) -> Result<Vec<(u32, i64)>, SemanticActionStoreError> {
+        refs.iter()
+            .map(|block_ref| {
+                self.ids
+                    .get(block_ref.block_hash.as_str())
+                    .map(|block_id| (block_ref.ordinal, *block_id))
+                    .ok_or_else(|| {
+                        SemanticActionStoreError::new(
+                            "llm_request_ref_block_missing",
+                            "block reference has no resolved ID",
+                        )
+                    })
+            })
+            .collect()
+    }
 }
 
 fn write_manifest_once(
@@ -213,11 +207,9 @@ fn write_manifest_once(
     content: &LlmRequestContentWrite,
 ) -> Result<i64, SemanticActionStoreError> {
     let manifest = &content.manifest;
-    let expected_hash = sha256_hash_blob(&manifest.canonical_body_hash, "llm_request_body_hash")?;
     let existing = connection
         .query_row(
-            "SELECT manifest_id, format_version, canonical_body_hash,
-                    canonical_body_bytes, skeleton_json
+            "SELECT manifest_id, format_version, skeleton_json
              FROM llm_request_manifests
              WHERE trace_id = ?1 AND action_key = ?2",
             params![manifest.trace_id.get(), action_key],
@@ -225,8 +217,6 @@ fn write_manifest_once(
                 Ok((
                     row.get::<_, i64>("manifest_id")?,
                     row.get::<_, i64>("format_version")?,
-                    row.get::<_, Vec<u8>>("canonical_body_hash")?,
-                    row.get::<_, i64>("canonical_body_bytes")?,
                     row.get::<_, String>("skeleton_json")?,
                 ))
             },
@@ -235,14 +225,9 @@ fn write_manifest_once(
         .map_err(|error| {
             SemanticActionStoreError::new("read_llm_request_manifest", error.to_string())
         })?;
-    if let Some((manifest_id, format_version, hash, bytes, skeleton)) = existing {
+    if let Some((manifest_id, format_version, skeleton)) = existing {
         let expected_version = to_i64(manifest.format_version, "llm_request_format_version")?;
-        let expected_bytes = to_i64(manifest.canonical_body_bytes, "llm_request_body_bytes")?;
-        if format_version == expected_version
-            && hash == expected_hash
-            && bytes == expected_bytes
-            && skeleton == manifest.skeleton_json
-        {
+        if format_version == expected_version && skeleton == manifest.skeleton_json {
             return Ok(manifest_id);
         }
         return Err(SemanticActionStoreError::new(
@@ -253,15 +238,12 @@ fn write_manifest_once(
     connection
         .execute(
             "INSERT INTO llm_request_manifests (
-                trace_id, action_key, format_version, canonical_body_hash,
-                canonical_body_bytes, skeleton_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                trace_id, action_key, format_version, skeleton_json
+             ) VALUES (?1, ?2, ?3, ?4)",
             params![
                 manifest.trace_id.get(),
                 action_key,
                 to_i64(manifest.format_version, "llm_request_format_version")?,
-                &expected_hash,
-                to_i64(manifest.canonical_body_bytes, "llm_request_body_bytes")?,
                 &manifest.skeleton_json,
             ],
         )

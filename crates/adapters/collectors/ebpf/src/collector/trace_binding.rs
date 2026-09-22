@@ -53,9 +53,6 @@ impl EbpfCollector {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(ForkTraceLookup::Unavailable);
         };
-        if !runtime.is_attached() {
-            return Ok(ForkTraceLookup::Unavailable);
-        }
         let binding = runtime.fork_trace_binding(host_pid).map_err(loader_error)?;
         let Some((kernel_tgid, binding)) = binding else {
             let failed_publications = runtime
@@ -94,11 +91,8 @@ impl EbpfCollector {
             ));
         }
         if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
-            !supported_required_capability(
-                &request.capability,
-                self.loader.config(),
-                self.loader.payload_config(),
-            ) && request.mode == RequestMode::Required
+            !supported_required_capability(&request.capability, self.loader.payload_config())
+                && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "bind_launch_trace",
@@ -154,11 +148,19 @@ impl EbpfCollector {
         );
         self.bindings
             .set_trace_pid_namespace(request.trace_id, root_pid_namespace);
-        let root_working_directory = request
-            .root_observation
-            .host
-            .as_ref()
-            .and_then(|host| crate::procfs::read_process_cwd(host.pid));
+        let consumers = self
+            .file_tracker
+            .context_consumers(request.trace_id, &self.bindings);
+        let root_working_directory = consumers
+            .file_paths
+            .then(|| {
+                request
+                    .root_observation
+                    .host
+                    .as_ref()
+                    .and_then(|host| crate::procfs::read_process_cwd(host.pid))
+            })
+            .flatten();
         self.pending_launches.insert(
             request.trace_id,
             PendingLaunchBinding {
@@ -211,6 +213,9 @@ impl EbpfCollector {
             .runtime_mut()?
             .resolve_process_identities(&requests)
             .map_err(loader_error)?;
+        let consumers = self
+            .file_tracker
+            .context_consumers(trace_id, &self.bindings);
         for ((observation, observer_tgid, _), resolution) in seeds.into_iter().zip(resolutions) {
             self.runtime_mut()?
                 .track_pid(
@@ -220,14 +225,19 @@ impl EbpfCollector {
                     trace_id,
                 )
                 .map_err(loader_error)?;
-            self.file_tracker.seed_process(
-                trace_id,
-                observation.clone(),
-                observation
-                    .host
-                    .as_ref()
-                    .and_then(|host| crate::procfs::read_process_cwd(host.pid)),
-            );
+            if consumers.any() {
+                let cwd = consumers
+                    .file_paths
+                    .then(|| {
+                        observation
+                            .host
+                            .as_ref()
+                            .and_then(|host| crate::procfs::read_process_cwd(host.pid))
+                    })
+                    .flatten();
+                self.file_tracker
+                    .seed_process(trace_id, observation.clone(), cwd, consumers);
+            }
             self.bindings.track_with_kernel_tgid(
                 trace_id,
                 observation,
@@ -239,7 +249,7 @@ impl EbpfCollector {
     }
 
     pub fn stop_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
-        let tracked = self.bindings.remove_pid(pid);
+        let tracked = self.bindings.by_host_pid(pid).cloned();
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_host_pid(pid).map_err(loader_error)?;
             if let Some(tracked) = tracked.as_ref() {
@@ -247,19 +257,18 @@ impl EbpfCollector {
                 runtime
                     .sweep_suppressed_fds_for_process(kernel_tgid, tracked.kernel_start_time)
                     .map_err(loader_error)?;
-                runtime
-                    .unmark_file_bulk_read_fast_process(kernel_tgid, tracked.kernel_start_time)
-                    .map_err(loader_error)?;
-                runtime
-                    .sweep_file_bulk_read_fast_fds_for_process(
-                        kernel_tgid,
-                        tracked.kernel_start_time,
-                    )
-                    .map_err(loader_error)?;
                 cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, kernel_tgid)?;
                 runtime.untrack_pid(kernel_tgid).map_err(loader_error)?;
             }
         }
+        if let Some(tracked) = tracked {
+            self.finish_file_io_process((
+                tracked.trace_id,
+                tracked.kernel_tgid,
+                tracked.kernel_start_time,
+            ));
+        }
+        self.bindings.remove_pid(pid);
         Ok(())
     }
 
@@ -286,18 +295,16 @@ impl EbpfCollector {
                 runtime
                     .sweep_suppressed_fds_for_process(kernel_tgid, tracked.kernel_start_time)
                     .map_err(loader_error)?;
-                runtime
-                    .unmark_file_bulk_read_fast_process(kernel_tgid, tracked.kernel_start_time)
-                    .map_err(loader_error)?;
-                runtime
-                    .sweep_file_bulk_read_fast_fds_for_process(
-                        kernel_tgid,
-                        tracked.kernel_start_time,
-                    )
-                    .map_err(loader_error)?;
                 cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, kernel_tgid)?;
                 runtime.untrack_pid(kernel_tgid).map_err(loader_error)?;
             }
+        }
+        if let Some(tracked) = tracked {
+            self.finish_file_io_process((
+                tracked.trace_id,
+                tracked.kernel_tgid,
+                tracked.kernel_start_time,
+            ));
         }
         Ok(())
     }

@@ -6,7 +6,6 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 alert_contract = { path = "../../../contracts/alert" }
-idle_contract = { path = "../../../contracts/idle" }
 bincode = "1"
 model_core = { path = "../../../core/model" }
 rusqlite = { version = "0.31.0", features = ["bundled"] }

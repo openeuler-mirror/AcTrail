@@ -206,6 +206,7 @@ pub(super) fn disabled_or_u64_as_string(value: Option<u64>) -> String {
 
 pub(super) fn payload_tls_capture_backend_as_str(value: PayloadTlsCaptureBackend) -> &'static str {
     match value {
+        PayloadTlsCaptureBackend::BpfCopy => "bpf-copy",
         PayloadTlsCaptureBackend::SeccompUserRead => "seccomp-user-read",
         PayloadTlsCaptureBackend::BpfCopySeccompFallback => "bpf-copy-seccomp-fallback",
         PayloadTlsCaptureBackend::TlsSync => "tls-sync",

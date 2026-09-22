@@ -8,6 +8,14 @@ mod fd_io;
 mod file_path;
 #[path = "decode/payload.rs"]
 mod payload;
+#[path = "decode/process.rs"]
+mod process;
+
+use process::{decode_exec, decode_exit, decode_fork, decode_signal};
+pub(crate) use process::{
+    decode_process_exec_failure, decode_process_fork_result, fork_child_observation,
+    fork_parent_observation,
+};
 
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -18,11 +26,9 @@ use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{HostProcessCoordinates, ProcessObservation};
 
 use crate::loader::{
-    KernelEndpoint, KernelEndpointRole, KernelEndpointWithRole, KernelEventIdentity,
-    KernelExecPayload, KernelExitPayload, KernelFdIoPayload, KernelForkPayload,
+    KernelEndpoint, KernelEndpointRole, KernelEndpointWithRole, KernelFdIoPayload,
     KernelNetworkOperation, KernelNetworkPayload, KernelObservationCommon, KernelObservationEvent,
-    KernelObservationPayload, KernelProcessExecAttemptEvent, KernelProcessExecResultEvent,
-    KernelProcessForkAttemptEvent, KernelProcessForkResultEvent, KernelSignalPayload,
+    KernelObservationPayload,
 };
 use crate::maps::BindingStateMap;
 
@@ -47,7 +53,6 @@ pub const FILE_EVENT_RMDIR: u32 = 304;
 pub const FILE_EVENT_TRUNCATE: u32 = 305;
 pub const FILE_EVENT_MMAP: u32 = 306;
 pub const FILE_EVENT_CONTEXT: u32 = 307;
-pub const FILE_EVENT_READ_SUMMARY: u32 = 308;
 const SYSCALL_FAMILY_SOCKET: u32 = 1;
 const SYSCALL_FAMILY_FD_IO: u32 = 2;
 const SYSCALL_FAMILY_FD_IO_WRITEV: u32 = 3;
@@ -56,8 +61,14 @@ const FD_CATEGORY_NET: u32 = 1;
 const FD_CATEGORY_IPC_UNIX_SOCKET: u32 = 2;
 const FD_CATEGORY_IPC_PIPE: u32 = 3;
 const FD_CATEGORY_FILE: u32 = 4;
+const FD_CATEGORY_IPC_FIFO: u32 = 5;
 
-use file_path::FdIpcKind;
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum FdIpcKind {
+    Pipe,
+    UnixSocket,
+}
+
 pub(crate) use file_path::FileTracker;
 pub use payload::{
     SOCKET_PAYLOAD_DIRECTION_INBOUND, SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
@@ -99,6 +110,7 @@ pub(crate) fn decode_observation(
     event: &KernelObservationEvent,
     bindings: &mut BindingStateMap,
     file_tracker: &mut FileTracker,
+    dynamic_tls_exec_enabled: bool,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let lifecycle_requested =
         bindings.trace_has_capability(event.common.trace_id, &Capability::ProcLifecycle);
@@ -110,7 +122,13 @@ pub(crate) fn decode_observation(
             decode_fork(&event.common, payload, bindings)?,
         ),
         KernelObservationPayload::Exec(payload) => maybe_lifecycle_event(
-            lifecycle_requested || exec_context_requested,
+            lifecycle_requested
+                || exec_context_requested
+                || (dynamic_tls_exec_enabled
+                    && bindings.trace_has_capability(
+                        event.common.trace_id,
+                        &Capability::TlsPlaintextPayload,
+                    )),
             decode_exec(&event.common, payload, bindings)?,
         ),
         KernelObservationPayload::Exit(payload) => maybe_lifecycle_event(
@@ -136,369 +154,6 @@ fn maybe_lifecycle_event(
     event: Option<RawCollectorEvent>,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     if enabled { Ok(event) } else { Ok(None) }
-}
-
-fn decode_fork(
-    common: &KernelObservationCommon,
-    payload: &KernelForkPayload,
-    bindings: &mut BindingStateMap,
-) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let parent = resolve_fork_observation(common.trace_id, &payload.parent, bindings)
-        .map_err(|error| DecodeError::new("parent_identity", error))?;
-    let child = resolve_fork_observation(common.trace_id, &common.subject, bindings)
-        .map_err(|error| DecodeError::new("fork_identity", error))?;
-    bindings.track_with_kernel_tgid(
-        common.trace_id,
-        child.clone(),
-        common.subject.binding_tgid(),
-        common.subject.start_boottime_ns,
-    );
-
-    Ok(Some(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(common.trace_id),
-            observed_at: clock::wall_from_ktime(common.observed_ktime_ns),
-            process: child,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::Process {
-            operation: "fork".to_string(),
-            parent: Some(parent),
-            metadata: BTreeMap::new(),
-        },
-    }))
-}
-
-pub(crate) fn fork_parent_observation(
-    event: &KernelObservationEvent,
-    bindings: &BindingStateMap,
-) -> Result<ProcessObservation, DecodeError> {
-    let KernelObservationPayload::Fork(payload) = &event.payload else {
-        return Err(DecodeError::new("parent_identity", "event is not fork"));
-    };
-    resolve_fork_observation(event.common.trace_id, &payload.parent, bindings)
-        .map_err(|error| DecodeError::new("parent_identity", error))
-}
-
-pub(crate) fn fork_child_observation(
-    event: &KernelObservationEvent,
-    bindings: &BindingStateMap,
-) -> Result<ProcessObservation, DecodeError> {
-    let KernelObservationPayload::Fork(_) = &event.payload else {
-        return Err(DecodeError::new("fork_identity", "event is not fork"));
-    };
-    resolve_fork_observation(event.common.trace_id, &event.common.subject, bindings)
-        .map_err(|error| DecodeError::new("fork_identity", error))
-}
-
-fn resolve_fork_observation(
-    trace_id: TraceId,
-    identity: &KernelEventIdentity,
-    bindings: &BindingStateMap,
-) -> Result<ProcessObservation, String> {
-    if identity.observer_namespace_tgid == 0
-        || identity.kernel_tgid == 0
-        || identity.start_boottime_ns == 0
-    {
-        return Err(
-            "fork event requires observer-namespace TGID, kernel TGID, and start boottime"
-                .to_string(),
-        );
-    }
-    if let Some(observation) = bindings
-        .tracked_event_observation(
-            trace_id,
-            identity.binding_tgid(),
-            identity.start_boottime_ns,
-        )
-        .cloned()
-    {
-        return Ok(observation);
-    }
-    Ok(ProcessObservation::host(
-        HostProcessCoordinates::new(identity.observer_namespace_tgid, 0)
-            .with_start_boottime_ns(identity.start_boottime_ns),
-    ))
-}
-
-fn decode_exec(
-    common: &KernelObservationCommon,
-    payload: &KernelExecPayload,
-    bindings: &mut BindingStateMap,
-) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let observation = resolve_typed_event_observation(common, bindings)
-        .map_err(|error| DecodeError::new("exec_identity", error))?;
-    bindings.track_with_kernel_tgid(
-        common.trace_id,
-        observation.clone(),
-        common.subject.binding_tgid(),
-        common.subject.start_boottime_ns,
-    );
-    let mut metadata = BTreeMap::new();
-    if let Some(exec_filename) = &payload.filename {
-        metadata.insert("executable".to_string(), exec_filename.path.clone());
-        metadata.insert("exec_filename".to_string(), exec_filename.path.clone());
-        metadata.insert(
-            "exec_filename_source".to_string(),
-            "sched_process_exec".to_string(),
-        );
-        if exec_filename.truncated {
-            metadata.insert("exec_filename_truncated".to_string(), "true".to_string());
-        }
-    }
-    if let Some(attempt) = &payload.exec_attempt {
-        append_exec_attempt_metadata(&mut metadata, attempt);
-        metadata.insert("exec.result".to_string(), "success".to_string());
-        metadata.insert("result".to_string(), "0".to_string());
-    }
-
-    Ok(Some(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(common.trace_id),
-            observed_at: clock::wall_from_ktime(common.observed_ktime_ns),
-            process: observation,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::Process {
-            operation: "exec".to_string(),
-            parent: None,
-            metadata,
-        },
-    }))
-}
-
-pub(crate) fn decode_process_exec_failure(
-    event: KernelProcessExecResultEvent,
-    attempt: Option<KernelProcessExecAttemptEvent>,
-    bindings: &BindingStateMap,
-) -> Result<RawCollectorEvent, DecodeError> {
-    let observation = resolve_event_observation(
-        event.trace_id,
-        event.pid,
-        event.host_pid,
-        event.pid_generation,
-        bindings,
-    )
-    .map_err(|error| DecodeError::new("exec_identity", error))?;
-    let mut metadata = BTreeMap::new();
-    metadata.insert("exec.attempt_id".to_string(), event.attempt_id.to_string());
-    metadata.insert("exec.result".to_string(), "failed".to_string());
-    metadata.insert("result".to_string(), event.result.to_string());
-    metadata.insert(
-        "errno".to_string(),
-        event.result.saturating_neg().to_string(),
-    );
-    metadata.insert(
-        "syscall".to_string(),
-        exec_syscall_name(event.syscall).to_string(),
-    );
-    if let Some(attempt) = attempt {
-        append_exec_attempt_metadata(&mut metadata, &attempt);
-    }
-    Ok(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(event.trace_id),
-            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
-            process: observation,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::Process {
-            operation: "exec".to_string(),
-            parent: None,
-            metadata,
-        },
-    })
-}
-
-pub(crate) fn decode_process_fork_result(
-    event: KernelProcessForkResultEvent,
-    attempt: Option<KernelProcessForkAttemptEvent>,
-    bindings: &BindingStateMap,
-) -> Result<RawCollectorEvent, DecodeError> {
-    let observation = resolve_event_observation(
-        event.trace_id,
-        event.pid,
-        event.host_pid,
-        event.pid_generation,
-        bindings,
-    )
-    .map_err(|error| DecodeError::new("fork_identity", error))?;
-    let mut metadata = BTreeMap::new();
-    metadata.insert("fork.attempt_id".to_string(), event.attempt_id.to_string());
-    metadata.insert(
-        "syscall".to_string(),
-        fork_syscall_name(event.syscall).to_string(),
-    );
-    metadata.insert("result".to_string(), event.result.to_string());
-    if event.result < 0 {
-        metadata.insert(
-            "errno".to_string(),
-            event.result.saturating_neg().to_string(),
-        );
-    }
-    if let Some(attempt) = attempt {
-        metadata.insert("clone.flags".to_string(), attempt.flags.to_string());
-        metadata.insert("clone.thread".to_string(), "false".to_string());
-        if attempt.syscall == 6 {
-            metadata.insert(
-                "clone3.args_ptr".to_string(),
-                attempt.clone3_args_ptr.to_string(),
-            );
-            metadata.insert(
-                "clone3.args_size".to_string(),
-                attempt.clone3_args_size.to_string(),
-            );
-        }
-        if attempt.capture_flags != 0 {
-            metadata.insert(
-                "fork.capture_flags".to_string(),
-                attempt.capture_flags.to_string(),
-            );
-        }
-    } else {
-        metadata.insert(
-            "fork.capture_flags".to_string(),
-            "attempt_missing".to_string(),
-        );
-    }
-    Ok(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(event.trace_id),
-            observed_at: clock::wall_from_ktime(event.observed_ktime_ns),
-            process: observation,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::Process {
-            operation: "fork_attempt".to_string(),
-            parent: None,
-            metadata,
-        },
-    })
-}
-
-fn append_exec_attempt_metadata(
-    metadata: &mut BTreeMap<String, String>,
-    attempt: &KernelProcessExecAttemptEvent,
-) {
-    metadata.insert(
-        "exec.attempt_id".to_string(),
-        attempt.attempt_id.to_string(),
-    );
-    metadata.insert(
-        "syscall".to_string(),
-        exec_syscall_name(attempt.syscall).to_string(),
-    );
-    if !attempt.path.is_empty() {
-        metadata.insert("executable".to_string(), attempt.path.clone());
-        metadata.insert("exec.path".to_string(), attempt.path.clone());
-    }
-    if !attempt.argv.is_empty() {
-        metadata.insert("argv".to_string(), attempt.argv.join("\n"));
-        metadata.insert("argv_count".to_string(), attempt.argv.len().to_string());
-        metadata.insert("command_line".to_string(), attempt.argv.join(" "));
-    }
-    if attempt.syscall == 2 {
-        metadata.insert(
-            "execveat.dirfd".to_string(),
-            attempt.execveat_dirfd.to_string(),
-        );
-        metadata.insert(
-            "execveat.flags".to_string(),
-            attempt.execveat_flags.to_string(),
-        );
-    }
-    metadata.insert("env_captured".to_string(), "false".to_string());
-    metadata.insert(
-        "args_truncated".to_string(),
-        (attempt.capture_flags != 0).to_string(),
-    );
-    if attempt.capture_flags != 0 {
-        metadata.insert(
-            "exec.capture_flags".to_string(),
-            attempt.capture_flags.to_string(),
-        );
-    }
-}
-
-fn exec_syscall_name(syscall: u32) -> &'static str {
-    match syscall {
-        1 => "execve",
-        2 => "execveat",
-        _ => "unknown",
-    }
-}
-
-fn fork_syscall_name(syscall: u32) -> &'static str {
-    match syscall {
-        3 => "fork",
-        4 => "vfork",
-        5 => "clone",
-        6 => "clone3",
-        _ => "unknown",
-    }
-}
-
-fn decode_exit(
-    common: &KernelObservationCommon,
-    payload: &KernelExitPayload,
-    bindings: &mut BindingStateMap,
-) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let observation = resolve_typed_event_observation(common, bindings)
-        .map_err(|error| DecodeError::new("exit_identity", error))?;
-
-    let mut metadata = BTreeMap::new();
-    if let Some(exit_code) = payload.exit_code {
-        metadata.insert("exit_code".to_string(), exit_code.to_string());
-    }
-
-    Ok(Some(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(common.trace_id),
-            observed_at: clock::wall_from_ktime(common.observed_ktime_ns),
-            process: observation,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::Process {
-            operation: "exit".to_string(),
-            parent: None,
-            metadata,
-        },
-    }))
-}
-
-fn decode_signal(
-    common: &KernelObservationCommon,
-    payload: &KernelSignalPayload,
-    bindings: &mut BindingStateMap,
-) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let observation = resolve_typed_event_observation(common, bindings)
-        .map_err(|error| DecodeError::new("process_coordination_identity", error))?;
-    let mut metadata = BTreeMap::from([
-        ("operation".to_string(), "signal".to_string()),
-        ("result".to_string(), payload.signal_result.to_string()),
-        ("syscall".to_string(), "signal_generate".to_string()),
-    ]);
-    metadata.insert(
-        "target_kernel_tid".to_string(),
-        payload.target_kernel_tid.to_string(),
-    );
-    metadata.insert("signal".to_string(), payload.signal.to_string());
-    if payload.target_group != 0 {
-        metadata.insert("target_group".to_string(), payload.target_group.to_string());
-    }
-    Ok(Some(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(common.trace_id),
-            observed_at: clock::wall_from_ktime(common.observed_ktime_ns),
-            process: observation,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::Process {
-            operation: "signal".to_string(),
-            parent: None,
-            metadata,
-        },
-    }))
 }
 
 fn decode_connection_event(
@@ -545,11 +200,13 @@ fn decode_fd_io_event(
                 file_tracker,
             );
         }
-        Some(category @ (FD_CATEGORY_IPC_PIPE | FD_CATEGORY_IPC_UNIX_SOCKET)) => {
-            let classified_kind = if category == FD_CATEGORY_IPC_PIPE {
-                FdIpcKind::Pipe
-            } else {
-                FdIpcKind::UnixSocket
+        Some(
+            category @ (FD_CATEGORY_IPC_PIPE | FD_CATEGORY_IPC_FIFO | FD_CATEGORY_IPC_UNIX_SOCKET),
+        ) => {
+            let classified_kind = match category {
+                FD_CATEGORY_IPC_PIPE => fd_io::FdTargetKind::Pipe,
+                FD_CATEGORY_IPC_FIFO => fd_io::FdTargetKind::Fifo,
+                _ => fd_io::FdTargetKind::UnixSocket,
             };
             return fd_io::decode_ipc(
                 common,
@@ -558,8 +215,8 @@ fn decode_fd_io_event(
                 observation,
                 operation,
                 direction,
+                classified_kind,
                 file_tracker,
-                Some(classified_kind),
             );
         }
         Some(FD_CATEGORY_NET) => {
@@ -822,3 +479,4 @@ pub(crate) fn resolve_event_observation(
         kernel_start_time
     ))
 }
+pub(crate) use clock::wall_from_ktime;

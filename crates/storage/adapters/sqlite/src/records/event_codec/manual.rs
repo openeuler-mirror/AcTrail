@@ -24,6 +24,9 @@ const UNKNOWN_KEY: u8 = 0xFF;
 const RESOURCE_LEGACY_TAG: u8 = 6;
 const RESOURCE_V2_TAG: u8 = 11;
 
+#[path = "manual_file_summary.rs"]
+mod file_summary;
+
 pub struct ManualCodec;
 
 impl EventPayloadCodec for ManualCodec {
@@ -119,6 +122,7 @@ fn encode_file(out: &mut Vec<u8>, p: &FilePayload) {
     write_option_string(out, &p.path);
     write_option_i32(out, p.result);
     write_map(out, &p.metadata);
+    file_summary::encode(out, &p.io_summary);
 }
 
 fn encode_net(out: &mut Vec<u8>, p: &NetPayload) {
@@ -224,6 +228,7 @@ fn decode_file(bytes: &[u8], c: &mut usize) -> Result<FilePayload, String> {
         path: read_option_string(bytes, c)?,
         result: read_option_i32(bytes, c)?,
         metadata: read_map(bytes, c)?,
+        io_summary: file_summary::decode(bytes, c)?,
     })
 }
 

@@ -138,6 +138,7 @@ impl LiveMcpProjector {
             actions: vec![tool_call, request, stdout],
             contents,
             payload_segments: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -232,7 +233,12 @@ impl LiveMcpProjector {
                 ),
                 self.link(&response, &stdin, SemanticActionLinkRole::McpResponseStdin),
             ],
-            actions: vec![open.action, response, stdin],
+            updates: vec![crate::live::ActionUpdateFactory::lifecycle(
+                &open.action,
+                None,
+            )],
+            updated_actions: vec![open.action],
+            actions: vec![response, stdin],
             contents,
             payload_segments: Vec::new(),
         }

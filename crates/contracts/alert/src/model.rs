@@ -36,6 +36,7 @@ define_alert_id!(AlertDefinitionId, "alert-definition");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AlertSubmitOutcome {
     Stored(AlertId),
+    NotPersisted,
     DuplicateSuppressed,
     RejectedTraceToken,
 }

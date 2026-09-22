@@ -157,9 +157,10 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
                     "inherited membership is missing",
                 )
             })?;
-        self.storage
-            .upsert_membership(membership)
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
+        if let Err(error) = self.storage.upsert_membership(membership) {
+            tracing::warn!(trace_id = %trace_id, stage = %error.stage, message = %error.message,
+                "Process membership storage failed locally");
+        }
         let resolved = TraceIdentityResolver::new(trace_runtime, self.process_manager)
             .match_process_in_trace(trace_id, process)
             .ok_or_else(|| {
@@ -213,9 +214,11 @@ impl<'a> SeccompNotificationIdentityRegistrar<'a> {
                     format!("process record {} is missing", process.get()),
                 )
             })?;
-        self.storage
-            .upsert_process_record(record)
-            .map_err(|error| ControlError::new(error.stage, error.message))
+        if let Err(error) = self.storage.upsert_process_record(record) {
+            tracing::warn!(process_id = %process, stage = %error.stage, message = %error.message,
+                "Process identity storage failed locally");
+        }
+        Ok(())
     }
 
     fn read_identity(
@@ -433,6 +436,7 @@ pub(crate) struct RuntimeProcessEventApplier<'a> {
 pub(crate) struct RuntimeProcessEventApplyResult {
     pub(crate) matched: Option<IngestMatch>,
     pub(crate) changed_membership: Option<ProcessIdentity>,
+    pub(crate) trace_changed: bool,
 }
 
 impl RuntimeProcessEventApplyResult {
@@ -440,14 +444,20 @@ impl RuntimeProcessEventApplyResult {
         Self {
             matched,
             changed_membership: None,
+            trace_changed: false,
         }
     }
 
-    fn changed(matched: Option<IngestMatch>, process: ProcessIdentity) -> Self {
+    fn membership_changed(
+        matched: Option<IngestMatch>,
+        process: ProcessIdentity,
+        trace_changed: bool,
+    ) -> Self {
         let changed_membership = matched.as_ref().map(|_| process);
         Self {
             matched,
             changed_membership,
+            trace_changed,
         }
     }
 }
@@ -510,7 +520,9 @@ impl<'a> RuntimeProcessEventApplier<'a> {
             child,
             raw_event.envelope.observed_at,
         )?;
-        Ok(RuntimeProcessEventApplyResult::changed(matched, child))
+        Ok(RuntimeProcessEventApplyResult::membership_changed(
+            matched, child, false,
+        ))
     }
 
     fn apply_exec(
@@ -543,7 +555,9 @@ impl<'a> RuntimeProcessEventApplier<'a> {
             process,
             raw_event.envelope.observed_at,
         )?;
-        Ok(RuntimeProcessEventApplyResult::changed(matched, process))
+        Ok(RuntimeProcessEventApplyResult::membership_changed(
+            matched, process, false,
+        ))
     }
 
     fn apply_exit(
@@ -556,6 +570,11 @@ impl<'a> RuntimeProcessEventApplier<'a> {
             return Ok(RuntimeProcessEventApplyResult::unchanged(None));
         };
         let trace_id = matched.trace_id;
+        let lifecycle_before = self
+            .trace_runtime
+            .get_trace(trace_id)
+            .map(|entry| entry.trace.lifecycle_state)
+            .ok_or_else(|| ControlError::new("mark_process_exited", "trace not found"))?;
         self.trace_runtime
             .mark_process_exited(
                 trace_id,
@@ -567,10 +586,15 @@ impl<'a> RuntimeProcessEventApplier<'a> {
                 },
             )
             .map_err(|error| ControlError::new("mark_process_exited", format!("{error:?}")))?;
+        let trace_changed = self
+            .trace_runtime
+            .get_trace(trace_id)
+            .is_some_and(|entry| entry.trace.lifecycle_state != lifecycle_before);
         self.process_manager.mark_exited(process);
-        Ok(RuntimeProcessEventApplyResult::changed(
+        Ok(RuntimeProcessEventApplyResult::membership_changed(
             Some(matched.into_ingest_match()),
             process,
+            trace_changed,
         ))
     }
 

@@ -192,7 +192,7 @@ actraild stop
 然后输入：
 
 ```bash
-actraild init --force
+actrailctl init --force
 ```
 
 默认配置已经启用 seccomp notify 和命令治理，并在 capture profile 中请求 `proc-lifecycle` 与 `enforcement-command-execution-seccomp`。核对以下关键值，不需要另建专用配置：

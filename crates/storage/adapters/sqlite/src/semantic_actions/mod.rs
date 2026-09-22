@@ -17,8 +17,8 @@ pub(crate) mod storage_meta;
 mod store;
 mod tree;
 mod tree_metadata;
-mod upsert_merge;
 
+pub(crate) use cold_fields::ColdFieldEncoder;
 pub use root_tree::{SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow};
 pub use tree::{
     SemanticActionChildPage, SemanticActionChildPageQuery, SemanticActionChildRow,

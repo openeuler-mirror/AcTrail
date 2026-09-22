@@ -2,12 +2,8 @@ use rusqlite::params;
 use semantic_action::{SemanticAction, SemanticActionStoreError, attr_keys as attrs};
 
 use crate::records::encode_time;
-use crate::semantic_actions::codebook::sqlite::{
-    action_completeness_code, action_kind_code, action_status_code,
-};
-use crate::semantic_actions::cold_fields::upsert_action_attributes;
-use crate::semantic_actions::evidence;
-use crate::semantic_actions::storage_meta::ColdFieldCompression;
+use crate::semantic_actions::codebook::sqlite::action_kind_code;
+use crate::semantic_actions::cold_fields::{ColdFieldEncoder, upsert_action_attributes};
 
 pub(super) fn write_action_row(
     connection: &mut rusqlite::Connection,
@@ -15,15 +11,15 @@ pub(super) fn write_action_row(
     action: &SemanticAction,
     file_path_id: Option<u64>,
     stored_title: Option<&str>,
-    compression: ColdFieldCompression,
-) -> Result<(), SemanticActionStoreError> {
-    connection
+    encoder: &ColdFieldEncoder,
+) -> Result<bool, SemanticActionStoreError> {
+    let inserted = connection
         .prepare_cached(
-            "INSERT OR REPLACE INTO semantic_actions (
-                action_key, trace_id, kind_code, title, file_path_id, start_time, end_time, process_id,
-                status_code, completeness_code,
-                action_valid_code, process_parent_conflict, evidence_blob
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO semantic_actions (
+                action_key, trace_id, kind_code, title, file_path_id, start_time, process_id,
+                action_valid_code, process_parent_conflict
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(action_key) DO NOTHING",
         )
         .and_then(|mut statement| {
             statement.execute(params![
@@ -33,44 +29,23 @@ pub(super) fn write_action_row(
                 stored_title,
                 file_path_id,
                 encode_time(action.start_time),
-                action.end_time.map(encode_time),
                 action.process.get(),
-                action_status_code(action.status),
-                action_completeness_code(action.completeness),
                 action_valid_code(action),
                 process_parent_conflict(action),
-                evidence::encode(&action.evidence)?,
             ])
         })
         .map_err(|error| {
             SemanticActionStoreError::new("upsert_semantic_action", error.to_string())
         })?;
-    upsert_action_attributes(connection, action_key, &action.attributes, compression).map_err(
+    if inserted == 0 {
+        return Ok(false);
+    }
+    upsert_action_attributes(connection, action_key, &action.attributes, encoder).map_err(
         |error| {
             SemanticActionStoreError::new("upsert_semantic_action_attributes", error.to_string())
         },
-    )
-}
-
-pub(super) fn update_action_evidence(
-    connection: &mut rusqlite::Connection,
-    action_key: i64,
-    action: &SemanticAction,
-) -> Result<(), SemanticActionStoreError> {
-    let evidence_blob = evidence::encode(&action.evidence).map_err(|error| {
-        SemanticActionStoreError::new("encode_semantic_action_evidence", error.to_string())
-    })?;
-    connection
-        .prepare_cached("UPDATE semantic_actions SET evidence_blob = ?2 WHERE action_key = ?1")
-        .and_then(|mut statement| statement.execute(params![action_key, evidence_blob]))
-        .and_then(|changed| {
-            (changed == 1)
-                .then_some(())
-                .ok_or(rusqlite::Error::InvalidQuery)
-        })
-        .map_err(|error| {
-            SemanticActionStoreError::new("update_semantic_action_evidence", error.to_string())
-        })
+    )?;
+    Ok(true)
 }
 
 pub(super) fn write_agent_identity(
@@ -92,19 +67,6 @@ pub(super) fn write_agent_identity(
             SemanticActionStoreError::new("write_agent_identity", error.to_string())
         })?;
     Ok(())
-}
-
-pub(super) fn action_row_matches(left: &SemanticAction, right: &SemanticAction) -> bool {
-    left.action_id == right.action_id
-        && left.trace_id == right.trace_id
-        && left.kind == right.kind
-        && left.title == right.title
-        && left.start_time == right.start_time
-        && left.end_time == right.end_time
-        && left.process == right.process
-        && left.status == right.status
-        && left.completeness == right.completeness
-        && left.attributes == right.attributes
 }
 
 fn action_valid_code(action: &SemanticAction) -> i16 {

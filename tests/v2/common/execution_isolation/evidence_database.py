@@ -21,11 +21,6 @@ class SandboxEvidenceDatabase:
             timeout=1,
         )
         try:
-            version = connection.execute(
-                "SELECT schema_version FROM sandbox_schema_meta WHERE singleton = 1"
-            ).fetchone()
-            if version != (3,):
-                raise AssertionError(f"unsupported sandbox evidence schema: {version}")
             row = connection.execute(
                 "SELECT COUNT(*) FROM sandbox_evidence"
             ).fetchone()

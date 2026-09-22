@@ -129,11 +129,12 @@ impl LiveLlmProjector {
             &websocket.completed_exchange_streams,
             &websocket.partial_exchange_streams,
         );
-        self.forget_websocket_exchange_streams(
+        changed.extend(self.finalize_websocket_exchange_streams(
             trace_id,
             &process,
             &websocket.forgotten_exchange_streams,
-        );
+            observed_at,
+        ));
         if websocket.capacity_evicted_entries > 0 {
             let mut diagnostic = LlmPipelineDiagnostic::new(
                 trace_id,

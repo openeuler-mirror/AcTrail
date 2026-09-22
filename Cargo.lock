@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "actrail_plugin_abi"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "addr2line"
@@ -20,6 +20,23 @@ name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
+name = "agent_host"
+version = "0.8.0"
+dependencies = [
+ "agent_lifecycle_contract",
+ "model_core",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "agent_lifecycle_contract"
+version = "0.8.0"
+dependencies = [
+ "model_core",
+]
 
 [[package]]
 name = "ahash"
@@ -46,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "alert-delivery-contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -54,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "alert-proxy"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert-delivery-contract",
  "clap",
@@ -69,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "alert_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "serde",
@@ -77,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "alert_forwarding"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert-delivery-contract",
  "arc-swap",
@@ -199,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "attach_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_binding",
  "collector_event",
@@ -419,7 +436,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cluster"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "config_core",
@@ -444,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "collector_binding"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -453,21 +470,21 @@ dependencies = [
 
 [[package]]
 name = "collector_capability"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_event"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_instance"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -479,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "collector_stats"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -492,8 +509,9 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "config_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "idle_detector",
  "model_core",
  "payload_capability",
  "serde",
@@ -503,9 +521,9 @@ dependencies = [
 
 [[package]]
 name = "control_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
- "idle_contract",
+ "agent_lifecycle_contract",
  "model_core",
  "plugin_system",
 ]
@@ -684,12 +702,13 @@ dependencies = [
 
 [[package]]
 name = "ctl"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "agent_host",
+ "agent_lifecycle_contract",
  "clap",
  "config_core",
  "control_contract",
- "idle_contract",
  "libc",
  "linux_platform",
  "model_core",
@@ -701,8 +720,10 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "agent_host",
+ "agent_lifecycle_contract",
  "alert-delivery-contract",
  "alert_contract",
  "alert_forwarding",
@@ -719,7 +740,6 @@ dependencies = [
  "export_factory",
  "gateway_ingest_runtime",
  "getrandom 0.3.4",
- "idle_contract",
  "idle_detector",
  "ingest_runtime",
  "jsonschema",
@@ -791,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "ebpf_collector"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -808,22 +828,6 @@ dependencies = [
  "process_identity",
  "process_tree_snapshot_contract",
  "tls_probe_point_finder",
-]
-
-[[package]]
-name = "ebpf_probe"
-version = "0.7.1"
-dependencies = [
- "config_core",
- "control_contract",
- "daemon",
- "libc",
- "model_core",
- "payload_capability",
- "semantic_action",
- "storage_core",
- "storage_factory",
- "uds_control_transport",
 ]
 
 [[package]]
@@ -880,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "export_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "plugin_system",
@@ -890,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "export_factory"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "export_otel_http",
@@ -902,7 +906,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_codec"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "opentelemetry-proto",
@@ -913,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_http"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -928,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_jsonl"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -1096,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "gateway_ingest_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
@@ -1160,14 +1164,14 @@ dependencies = [
 
 [[package]]
 name = "graph_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "graph_inspect"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "hashbrown"
@@ -1352,19 +1356,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
-name = "idle_contract"
-version = "0.7.1"
-dependencies = [
- "model_core",
-]
-
-[[package]]
 name = "idle_detector"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
- "idle_contract",
+ "agent_host",
+ "alert_contract",
  "model_core",
- "semantic_action",
+ "serde_json",
 ]
 
 [[package]]
@@ -1402,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "ingest_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_event",
  "model_core",
@@ -1455,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "json_graph_export"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "graph_contract",
  "model_core",
@@ -1545,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "libbpf_tracepoint_attach"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libbpf-rs",
  "libc",
@@ -1582,7 +1580,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "linux_cgroup"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -1590,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "linux_platform"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "config_core",
  "libc",
@@ -1671,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "model_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "process_identity",
  "serde",
@@ -1880,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "otel_export"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_otel_codec",
 ]
@@ -1916,18 +1914,18 @@ dependencies = [
 
 [[package]]
 name = "payload_binding"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "payload_capability"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "payload_event"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -1952,7 +1950,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin_system"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "actrail_plugin_abi",
  "alert_contract",
@@ -1966,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_wasm_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "model_core",
@@ -1978,7 +1976,7 @@ dependencies = [
 
 [[package]]
 name = "policy_evaluate_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -2030,14 +2028,14 @@ dependencies = [
 
 [[package]]
 name = "process_identity"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "process_tree_snapshot_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -2067,11 +2065,11 @@ dependencies = [
 
 [[package]]
 name = "provider_evidence"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "provider_label"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "provider_evidence",
 ]
@@ -2151,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "recording_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "model_core",
@@ -2264,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "rule_set_provider"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "config_core",
  "provider_evidence",
@@ -2353,7 +2351,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "sandbox_agent_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_control",
  "sandbox_observation",
@@ -2362,7 +2360,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox_alert_sqlite"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "rusqlite",
  "sandbox_alert_store",
@@ -2371,18 +2369,18 @@ dependencies = [
 
 [[package]]
 name = "sandbox_alert_store"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_control"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "sandbox_control_uds"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "sandbox_control",
@@ -2390,7 +2388,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox_evidence_sqlite"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "rusqlite",
  "sandbox_evidence_store",
@@ -2401,14 +2399,14 @@ dependencies = [
 
 [[package]]
 name = "sandbox_evidence_store"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_linux_collector"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
@@ -2421,21 +2419,21 @@ dependencies = [
 
 [[package]]
 name = "sandbox_observation"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "sandbox_plugin_delivery"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_resource_alert"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "arc-swap",
  "plugin_system",
@@ -2448,11 +2446,11 @@ dependencies = [
 
 [[package]]
 name = "sandbox_upstream_contract"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "sandbox_upstream_transport"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "gateway_ingest_runtime",
  "sandbox_upstream_contract",
@@ -2461,14 +2459,14 @@ dependencies = [
 
 [[package]]
 name = "sandbox_vsock_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_vsock_transport"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "sandbox_agent_runtime",
@@ -2477,7 +2475,7 @@ dependencies = [
 
 [[package]]
 name = "sb"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "libc",
@@ -2499,7 +2497,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "semantic_action"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "serde_json",
@@ -2507,7 +2505,7 @@ dependencies = [
 
 [[package]]
 name = "semantic_action_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "base64",
  "config_core",
@@ -2516,6 +2514,7 @@ dependencies = [
  "model_core",
  "plugin_system",
  "semantic_action",
+ "serde",
  "serde_json",
  "sha1",
  "sha2",
@@ -2654,15 +2653,14 @@ dependencies = [
 
 [[package]]
 name = "sqlite_inspect"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "sqlite_storage"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "bincode",
- "idle_contract",
  "model_core",
  "rusqlite",
  "semantic_action",
@@ -2687,10 +2685,9 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
- "idle_contract",
  "model_core",
  "semantic_action",
  "store_read_contract",
@@ -2702,40 +2699,51 @@ dependencies = [
 
 [[package]]
 name = "storage_factory"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sqlite_storage",
+ "storage_core",
+ "storage_noop",
+]
+
+[[package]]
+name = "storage_noop"
+version = "0.8.0"
+dependencies = [
+ "alert_contract",
+ "model_core",
+ "semantic_action",
  "storage_core",
 ]
 
 [[package]]
 name = "store_read_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_retention_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_snapshot_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_tx_contract"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "store_write_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -2843,11 +2851,11 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_core"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "tls_payload_probe"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "brotli",
  "clap",
@@ -2862,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_probe_sync"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "libc",
@@ -2875,7 +2883,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_sync"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "payload_capability",
@@ -2885,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "tls_probe_point_finder"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anstyle",
  "clap",
@@ -2939,7 +2947,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "trace_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -2999,7 +3007,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uds_control_client"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "control_contract",
  "libc",
@@ -3008,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_server"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "control_contract",
  "libc",
@@ -3018,10 +3026,10 @@ dependencies = [
 
 [[package]]
 name = "uds_control_transport"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "agent_lifecycle_contract",
  "control_contract",
- "idle_contract",
  "model_core",
  "plugin_system",
 ]
@@ -3137,7 +3145,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "config_core",
@@ -3158,7 +3166,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vsock_gateway"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "libc",
@@ -3170,7 +3178,7 @@ dependencies = [
 
 [[package]]
 name = "vsock_gateway_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_upstream_contract",
  "sandbox_vsock_contract",
@@ -3563,13 +3571,12 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "config_core",
  "control_contract",
  "flate2",
- "idle_contract",
  "model_core",
  "plugin_system",
  "rusqlite",

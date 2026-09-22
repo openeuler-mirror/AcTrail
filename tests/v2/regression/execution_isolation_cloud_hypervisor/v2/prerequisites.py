@@ -48,6 +48,7 @@ class CloudHypervisorExecutionIsolationPrerequisites:
     def _release_problem(self) -> TestResult | None:
         required = (
             "actraild",
+            "actrailctl",
             "actraild-alert-proxy",
             "actrail-sb",
             "actrail-vsock-gateway",

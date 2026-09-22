@@ -52,6 +52,10 @@ pub(crate) struct ProbeArgs {
     #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = DEFAULT_MAX_PAYLOAD_BYTES)]
     max_payload_bytes: usize,
 
+    /// Maximum complete TLS IPC frame bytes, including the header.
+    #[arg(long, value_name = "N", value_parser = parse_usize, default_value_t = tls_payload_sync::DEFAULT_TLS_SYNC_MAX_FRAME_BYTES as usize)]
+    max_frame_bytes: usize,
+
     /// Equal-byte UTF-8 rewrite rule: direction:from=to.
     #[arg(long = "replace-text", value_name = "RULE")]
     replace_text: Vec<String>,
@@ -89,6 +93,13 @@ impl ProbeArgs {
         if self.max_payload_bytes == 0 {
             return Err(ToolError::new("max_payload_bytes must be positive"));
         }
+        if self.max_frame_bytes < tls_payload_sync::FrameCodec::HEADER_LEN
+            || self.max_frame_bytes - tls_payload_sync::FrameCodec::HEADER_LEN > u32::MAX as usize
+        {
+            return Err(ToolError::new(
+                "max_frame_bytes exceeds TLS frame wire limits",
+            ));
+        }
         let rules = parse_rules(&self.replace_text, &self.replace_hex)?;
         Ok(ProbeConfig {
             command: self.command,
@@ -100,6 +111,7 @@ impl ProbeArgs {
             library_search_dirs: self.library_search_dirs,
             rules,
             max_payload_bytes: self.max_payload_bytes,
+            max_frame_bytes: self.max_frame_bytes,
             redaction: self.redaction.into(),
             events: event_filter_from_events(
                 &self

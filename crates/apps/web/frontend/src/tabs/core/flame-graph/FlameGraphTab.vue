@@ -13,6 +13,14 @@
         </div>
         <div class="flame-toolbar-actions">
           <button
+            type="button"
+            class="tree-action"
+            :aria-pressed="showModelMessages"
+            @click="showModelMessages = !showModelMessages"
+          >
+            {{ showModelMessages ? 'Hide model messages' : 'Show model messages' }}
+          </button>
+          <button
             v-if="waterfall.partial"
             type="button"
             class="tree-action"
@@ -295,6 +303,7 @@ defineEmits(['load-full-waterfall']);
 const model = shallowRef(emptyFlameGraphModel());
 const modelBuilding = ref(false);
 const unavailableRequestCount = ref(0);
+const showModelMessages = ref(false);
 const loadRequestContexts = createRequestContextLoader(readActionLlmRequestContent);
 const viewport = ref(null);
 const canvasViewport = markRaw({ startMs: 0, spanMs: 1 });
@@ -311,8 +320,10 @@ let modelIdleHandle = null;
 
 const bounds = computed(() => ({ startMs: 0, spanMs: model.value.window.spanMs }));
 const activeViewport = computed(() => viewport.value ?? bounds.value);
-const filteredLayers = computed(() => filterFlameGraph(model.value, props.query));
-const overviewLanes = computed(() => flameOverviewLanes(model.value));
+const filteredLayers = computed(() => filterFlameGraph(model.value, props.query, {
+  showModelMessages: showModelMessages.value,
+}));
+const overviewLanes = computed(() => flameOverviewLanes({ layers: filteredLayers.value }));
 const viewportLabel = computed(() => {
   const current = activeViewport.value;
   return current.spanMs >= bounds.value.spanMs - 0.001

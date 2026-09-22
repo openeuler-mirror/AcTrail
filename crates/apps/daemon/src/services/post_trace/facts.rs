@@ -122,12 +122,16 @@ pub(super) fn project_llm_exchanges(
             model: call
                 .attributes
                 .get(attr_keys::llm_call::MODEL)
+                .or_else(|| {
+                    response
+                        .and_then(|action| action.attributes.get(attr_keys::llm_response::MODEL))
+                })
                 .or_else(|| request.attributes.get(attr_keys::llm_request::MODEL))
                 .cloned(),
             server_address: request.attributes.get(attr_keys::server::ADDRESS).cloned(),
             url_path: request.attributes.get(attr_keys::url::PATH).cloned(),
             started_at: call.start_time,
-            completed_at: call.end_time,
+            completed_at: response.and_then(|action| action.end_time),
             request_body_bytes: required_u64_attribute(
                 request,
                 attr_keys::llm_request::PAYLOAD_BYTES,

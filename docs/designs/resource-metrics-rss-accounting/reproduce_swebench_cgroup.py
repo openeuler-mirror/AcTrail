@@ -293,7 +293,7 @@ def run(args):
             write_patch(patch, run_dir, service_cgroup)
             command(
                 [
-                    str(actraild),
+                    str(actrailctl),
                     "--config",
                     str(config),
                     "init",

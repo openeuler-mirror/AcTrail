@@ -20,7 +20,7 @@ pub(crate) use model_core::diagnostics::{
 pub(super) use facade::{
     ActionBatch, LlmActionPipeline, LlmHttpRequestLink, LlmHttpResponseLink, PipelineEvent,
 };
-pub(crate) use projection::{ProjectedLlmToolResult, canonical_llm_json};
+pub(crate) use projection::{ProjectedLlmToolResult, canonical_llm_json_text};
 pub use provider::codec::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry,
     LlmCodecRequest, LlmCodecSseEvent,

@@ -154,6 +154,49 @@ fn insert_file_payload(attributes: &mut BTreeMap<String, String>, payload: &File
         attributes.insert("result".to_string(), result.to_string());
     }
     insert_metadata(attributes, "metadata.", &payload.metadata);
+    if let Some(summary) = &payload.io_summary {
+        attributes.insert("file.token".to_string(), summary.file_token.to_string());
+        attributes.insert("file.errno".to_string(), summary.errno.to_string());
+        attributes.insert(
+            "file.interval_complete".to_string(),
+            summary.interval_complete.to_string(),
+        );
+        attributes.insert(
+            "file.path_observation".to_string(),
+            "first_observed".to_string(),
+        );
+        attributes.insert(
+            "file.path_state".to_string(),
+            match summary.path_state {
+                model_core::event::FileSummaryPathState::Resolved => "resolved",
+                model_core::event::FileSummaryPathState::Truncated => "truncated",
+                model_core::event::FileSummaryPathState::Unavailable => "unavailable",
+            }
+            .to_string(),
+        );
+        attributes.insert(
+            "file.target_kind".to_string(),
+            match summary.target_kind {
+                model_core::event::FileIoTargetKind::RegularFile => "regular_file",
+                model_core::event::FileIoTargetKind::CharacterDevice => "character_device",
+            }
+            .to_string(),
+        );
+        if let Some(count) = summary.operations {
+            attributes.insert("file.operations".to_string(), count.to_string());
+        }
+        if let Some(bytes) = summary.bytes {
+            attributes.insert("file.bytes".to_string(), bytes.to_string());
+        }
+        for (key, time) in [
+            ("file.interval_start_unix_nanos", summary.interval_start),
+            ("file.interval_end_unix_nanos", summary.interval_end),
+        ] {
+            if let Ok(duration) = time.duration_since(std::time::UNIX_EPOCH) {
+                attributes.insert(key.to_string(), duration.as_nanos().to_string());
+            }
+        }
+    }
 }
 
 fn insert_net_payload(attributes: &mut BTreeMap<String, String>, payload: &NetPayload) {

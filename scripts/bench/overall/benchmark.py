@@ -87,6 +87,16 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--config-patch",
+        type=Path,
+        help="operator TOML patch; benchmark isolation and --no-* options take precedence",
+    )
+    parser.add_argument(
+        "--profile-label",
+        default="",
+        help="configuration label recorded in the benchmark report",
+    )
+    parser.add_argument(
         "--no-tls-capture",
         action="store_true",
         help="disable payload.tls capture in the actraild config patch",
@@ -157,8 +167,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bin-dir",
         type=Path,
-        default=Path("/usr/local/bin"),
-        help="directory containing actraild/actrailctl",
+        default=REPO_ROOT / "target" / "release",
+        help="directory containing actraild/actrailctl (default: workspace target/release)",
     )
     parser.add_argument(
         "--out",
@@ -205,8 +215,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent=args.agent,
         rounds=args.rounds,
         max_turns=max_turns,
+        profile_label=args.profile_label,
+        config_patch_path=str(args.config_patch.resolve()) if args.config_patch else None,
     )
     actrail_work_dir = Path(tempfile.mkdtemp(prefix="bench-actrail-"))
+    report.effective_config_path = str(actrail_work_dir / "actraild.conf")
     commit = ReleaseBuild(REPO_ROOT).ensure(
         timeout_seconds=args.build_timeout_seconds,
     )
@@ -222,6 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         no_tls_capture=args.no_tls_capture,
         no_stdio_capture=args.no_stdio_capture,
         no_seccomp=args.no_seccomp,
+        config_patch=args.config_patch,
     )
     replay_server = MaaSServerProcess(
         [
@@ -360,10 +374,19 @@ def dump_table_sizes(work_dir: Path) -> None:
         rows = connection.execute(
             "SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC"
         ).fetchall()
-        variant_rows = connection.execute(
-            "SELECT payload_variant, COUNT(*), SUM(length(payload)) "
-            "FROM events GROUP BY payload_variant ORDER BY 3 DESC"
+        event_rows = connection.execute(
+            "SELECT event.kind_code, COUNT(*), "
+            "COALESCE(SUM(length(COALESCE(event.payload_inline, dictionary.payload))), 0), "
+            "SUM(event.payload_inline IS NOT NULL), SUM(event.payload_id IS NOT NULL) "
+            "FROM events event "
+            "LEFT JOIN event_payload_dictionary dictionary "
+            "ON dictionary.payload_id = event.payload_id "
+            "GROUP BY event.kind_code ORDER BY 3 DESC"
         ).fetchall()
+        dictionary_rows = connection.execute(
+            "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) "
+            "FROM event_payload_dictionary"
+        ).fetchone()
         block_rows = connection.execute(
             "SELECT COUNT(*), COALESCE(SUM(length(encoded_bytes)), 0) "
             "FROM event_payload_blocks"
@@ -374,9 +397,16 @@ def dump_table_sizes(work_dir: Path) -> None:
     for name, size in rows:
         if size >= 64 * 1024:
             print(f"  {name}: {size}")
-    print("events variant (count, payload bytes):")
-    for variant, count, size in variant_rows:
-        print(f"  {variant}: {count} rows, {size} bytes")
+    print("events by kind (count, logical payload bytes, inline, dictionary):")
+    for kind_code, count, size, inline_count, dictionary_count in event_rows:
+        print(
+            f"  {kind_code}: {count} rows, {size} bytes, "
+            f"{inline_count} inline, {dictionary_count} dictionary"
+        )
+    print(
+        f"event_payload_dictionary: {dictionary_rows[0]} rows, "
+        f"{dictionary_rows[1]} bytes"
+    )
     print(f"event_payload_blocks: {block_rows[0]} rows, {block_rows[1]} bytes")
 
 

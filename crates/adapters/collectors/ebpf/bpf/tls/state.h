@@ -67,6 +67,7 @@ struct actrail_pending_tls_payload_op {
 
 struct actrail_tls_payload_op_args {
     __u32 metadata;
+    __u32 library;
     __u64 stream_key;
     __u64 buffer_ptr;
     __u64 requested_size;

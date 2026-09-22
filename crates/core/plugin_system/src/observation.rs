@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use model_core::payload::PayloadSegment;
+use model_core::payload::{PayloadRedactionState, PayloadSegmentId, PayloadTruncationState};
 use model_core::trace::TraceRecord;
 use semantic_action::{
     FileChangeKind, FileObservationPath, SemanticAction, SemanticActionCompleteness,
@@ -31,6 +31,33 @@ pub enum ObservationEventFamily {
     PayloadMetadata,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayloadReference {
+    pub segment_id: PayloadSegmentId,
+    pub trace_id: model_core::ids::TraceId,
+    pub metadata: Option<PayloadReferenceMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PayloadReferenceMetadata {
+    pub captured_size: u64,
+    pub original_size: u64,
+    pub redaction: PayloadRedactionState,
+    pub truncation: PayloadTruncationState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PayloadReadResult {
+    Chunk {
+        bytes: Vec<u8>,
+        total_bytes: usize,
+        truncated: bool,
+    },
+    NotFound,
+    Denied,
+    Failed,
+}
+
 pub struct ObservationBatch<'a> {
     pub trace: &'a TraceRecord,
     /// True only for the final semantic projection batch for this trace.
@@ -39,7 +66,7 @@ pub struct ObservationBatch<'a> {
     pub semantic_actions: &'a [SemanticAction],
     pub semantic_links: &'a [SemanticActionLink],
     pub file_observation_paths: &'a [FileObservationPath],
-    pub payload_segments: &'a [PayloadSegment],
+    pub payload_refs: &'a [PayloadReference],
 }
 
 pub trait ObservationConsumer: Send + Sync {
@@ -58,10 +85,6 @@ pub trait ObservationConsumer: Send + Sync {
     }
 
     fn operational_metrics_source(&self) -> Option<Arc<dyn PluginOperationalMetricsSource>> {
-        None
-    }
-
-    fn payload_snapshot_limit(&self) -> Option<usize> {
         None
     }
 
@@ -212,6 +235,14 @@ pub struct TraceFileState {
 }
 
 pub trait PostTraceHost: Send + Sync {
+    fn read_payload(
+        &self,
+        trace_id: model_core::ids::TraceId,
+        segment_id: u64,
+        offset: u64,
+        max_bytes: usize,
+    ) -> PayloadReadResult;
+
     fn analysis_context(
         &self,
         trace_id: model_core::ids::TraceId,

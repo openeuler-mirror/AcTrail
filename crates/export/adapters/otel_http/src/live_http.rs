@@ -1613,7 +1613,7 @@ mod request_body_export_tests {
                 semantic_actions: std::slice::from_ref(&action),
                 semantic_links: &[],
                 file_observation_paths: &[],
-                payload_segments: &[],
+                payload_refs: &[],
             })
             .expect("consume semantic action");
 

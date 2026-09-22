@@ -3,6 +3,7 @@
 
 #include "completion.h"
 #include "rustls.h"
+#include "boringssl.h"
 
 
 SEC("uprobe")

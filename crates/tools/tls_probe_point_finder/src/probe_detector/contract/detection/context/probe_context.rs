@@ -10,6 +10,7 @@ pub enum ProbeConsumer {
     Standalone,
     Sync,
     Daemon,
+    Direct,
 }
 
 impl ProbeConsumer {
@@ -19,6 +20,7 @@ impl ProbeConsumer {
             Self::Standalone => "standalone",
             Self::Sync => "sync",
             Self::Daemon => "daemon",
+            Self::Direct => "direct",
         }
     }
 }

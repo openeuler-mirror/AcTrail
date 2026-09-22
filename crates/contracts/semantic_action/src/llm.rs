@@ -9,6 +9,43 @@ pub enum LlmProviderMatch {
     Strong,
 }
 
+/// Content retained by a response parser; recognition and completion are always parsed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LlmResponseRetention {
+    pub content: bool,
+    pub tool_calls: bool,
+    pub usage: bool,
+}
+
+impl Default for LlmResponseRetention {
+    fn default() -> Self {
+        Self {
+            content: true,
+            tool_calls: true,
+            usage: true,
+        }
+    }
+}
+
+/// Observed provider termination. Transport closure is tracked separately.
+/// Failure takes precedence if a batch also carries a normal completion marker.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum LlmResponseTermination {
+    Completed,
+    Incomplete,
+    Failed,
+}
+
+impl LlmResponseTermination {
+    pub fn combine(current: Option<Self>, observed: Option<Self>) -> Option<Self> {
+        current.max(observed)
+    }
+
+    pub fn is_failure(self) -> bool {
+        matches!(self, Self::Failed | Self::Incomplete)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct LlmJsonResponseInput<'a> {
     pub text: &'a str,
@@ -38,13 +75,28 @@ pub trait LlmProviderResponseParser: Send + Sync {
 
     fn match_sse_response(&self, input: LlmSseResponseInput<'_>) -> LlmProviderMatch;
 
-    fn parse_json_response(&self, input: LlmJsonResponseInput<'_>) -> Option<LlmParsedResponse>;
+    fn parse_json_response(
+        &self,
+        input: LlmJsonResponseInput<'_>,
+        retention: LlmResponseRetention,
+    ) -> Option<LlmParsedResponse>;
 
-    fn parse_sse_response(&self, input: LlmSseResponseInput<'_>) -> Option<LlmParsedResponse>;
+    fn parse_sse_response(
+        &self,
+        input: LlmSseResponseInput<'_>,
+        retention: LlmResponseRetention,
+    ) -> Option<LlmParsedResponse>;
 
-    fn parse_sse_event(&self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent;
+    fn parse_sse_event(
+        &self,
+        event: LlmSseEvent<'_>,
+        retention: LlmResponseRetention,
+    ) -> LlmParsedSseEvent;
 
-    fn new_stream_parser(&self) -> Box<dyn LlmProviderResponseStreamParser + Send>;
+    fn new_stream_parser(
+        &self,
+        retention: LlmResponseRetention,
+    ) -> Box<dyn LlmProviderResponseStreamParser + Send>;
 }
 
 pub trait LlmProviderResponseStreamParser {
@@ -62,17 +114,21 @@ pub struct LlmParsedResponse {
     pub tool_calls: Vec<LlmToolCall>,
     pub token_usage: Option<LlmTokenUsage>,
     pub chunk_count: usize,
-    pub done: bool,
+    pub termination: Option<LlmResponseTermination>,
     pub stream: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LlmParsedSseEvent {
+    /// Text/reasoning chunks observed on the wire, including discarded content.
+    pub text_chunk_count: usize,
+    /// Recognized response content or tool evidence, independent of retention.
+    pub response_observed: bool,
     pub model: Option<String>,
     pub content_text: Option<String>,
     pub reasoning_text: Option<String>,
     pub tool_calls: Vec<LlmToolCall>,
-    pub done: bool,
+    pub termination: Option<LlmResponseTermination>,
     pub finish_reason: Option<String>,
 }
 

@@ -18,7 +18,6 @@ use super::subscription_worker::{
 use super::{
     ExportDroppedRecord, ExportRuntimeFailure, PostTraceCompletion, SemanticActionExportBatch,
 };
-use model_core::payload::PayloadSegment;
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
     PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
@@ -34,7 +33,6 @@ pub(super) struct ObservationConsumerSlot {
     warnings: Vec<String>,
     hostcall_metrics: Option<Arc<dyn PluginHostcallMetricsSource>>,
     operational_metrics: Option<Arc<dyn PluginOperationalMetricsSource>>,
-    payload_snapshot_limit: Option<usize>,
     queue_capacity: Option<u32>,
     delivery: ObservationDelivery,
     metrics: Arc<ObservationConsumerMetrics>,
@@ -55,7 +53,6 @@ impl ObservationConsumerSlot {
         let hostcall_metrics = consumer.hostcall_metrics_source();
         let operational_metrics = consumer.operational_metrics_source();
         let event_families = consumer.subscribed_event_families();
-        let payload_snapshot_limit = consumer.payload_snapshot_limit();
         let has_post_trace_analyzer = consumer.post_trace_analyzer().is_some();
         let metrics = Arc::new(ObservationConsumerMetrics {
             observed_records: AtomicU64::new(0),
@@ -112,7 +109,6 @@ impl ObservationConsumerSlot {
             warnings,
             hostcall_metrics,
             operational_metrics,
-            payload_snapshot_limit,
             queue_capacity,
             delivery,
             metrics,
@@ -123,10 +119,6 @@ impl ObservationConsumerSlot {
 
     pub(super) fn instance_id(&self) -> &str {
         &self.instance_id
-    }
-
-    pub(super) fn payload_snapshot_limit(&self) -> Option<usize> {
-        self.payload_snapshot_limit
     }
 
     pub(super) fn has_post_trace_analyzer(&self) -> bool {
@@ -261,7 +253,6 @@ impl ObservationConsumerSlot {
     pub(super) fn publish(
         &self,
         batch: &SemanticActionExportBatch<'_>,
-        payload_segments: &[PayloadSegment],
         dropped: &mut ReportAccumulator,
     ) {
         match &self.delivery {
@@ -272,7 +263,7 @@ impl ObservationConsumerSlot {
                     semantic_actions: batch.actions,
                     semantic_links: batch.links,
                     file_observation_paths: batch.file_observation_paths,
-                    payload_segments,
+                    payload_refs: batch.payload_refs,
                 };
                 consume_observation_batch(
                     self,
@@ -285,7 +276,7 @@ impl ObservationConsumerSlot {
             ObservationDelivery::Queued {
                 sender: Some(sender),
                 ..
-            } => enqueue_observation_batch(self, sender, batch, payload_segments, dropped),
+            } => enqueue_observation_batch(self, sender, batch, dropped),
             ObservationDelivery::Queued { sender: None, .. } | ObservationDelivery::Stopped => {
                 dropped.record_drop(
                     Some(batch.trace.trace_id),
@@ -428,7 +419,6 @@ fn enqueue_observation_batch(
     slot: &ObservationConsumerSlot,
     sender: &SyncSender<ObservationWorkItem>,
     batch: &SemanticActionExportBatch<'_>,
-    payload_segments: &[PayloadSegment],
     dropped: &mut ReportAccumulator,
 ) {
     if !slot.try_reserve_queue_slot() {
@@ -451,7 +441,7 @@ fn enqueue_observation_batch(
         semantic_actions: batch.actions.to_vec(),
         semantic_links: batch.links.to_vec(),
         file_observation_paths: batch.file_observation_paths.to_vec(),
-        payload_segments: payload_segments.to_vec(),
+        payload_refs: batch.payload_refs.to_vec(),
     };
     match sender.try_send(ObservationWorkItem::Batch(queued_batch)) {
         Ok(()) => {}

@@ -57,7 +57,7 @@ AcTrail binaries 均可执行；环境默认 Qoder CLI 成功输出
 ### 手动指令
 
 ```bash
-sudo -E target/release/actraild init -f
+sudo -E target/release/actrailctl init -f
 sudo -E target/release/actraild stop
 sudo -E target/release/actrailctl clean
 sudo -E target/release/actraild start
@@ -172,9 +172,10 @@ jq --arg marker "$CASE_MARKER" '
         $requests[]
         | select(
             .attributes["llm.request.content_state"] == "canonical_blocks"
-            and ((.attributes["llm.request.canonical_body_hash"] // "")
-                 | startswith("sha256:"))
-            and (((.attributes["llm.request.canonical_body_bytes"] // "0")
+            and .status == "success" and .completeness == "complete"
+            and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
+            and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
+            and (((.attributes["llm.request.payload_bytes"] // "0")
                   | tonumber) > 0)
           )
         | .action_id

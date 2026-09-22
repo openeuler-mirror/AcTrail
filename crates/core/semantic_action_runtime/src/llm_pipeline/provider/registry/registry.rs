@@ -2,7 +2,7 @@
 
 use semantic_action::{
     LlmJsonResponseInput, LlmParsedResponse, LlmProviderMatch, LlmProviderResponseParser,
-    LlmProviderResponseStreamParser, LlmSseResponseInput,
+    LlmProviderResponseStreamParser, LlmResponseRetention, LlmSseResponseInput,
 };
 
 use crate::llm_pipeline::provider::anthropic::AnthropicMessagesResponseParser;
@@ -27,15 +27,17 @@ pub(in crate::llm_pipeline) struct ParsedSseResponse {
 
 pub(in crate::llm_pipeline) fn parse_json_response(
     input: LlmJsonResponseInput<'_>,
+    retention: LlmResponseRetention,
 ) -> Option<LlmParsedResponse> {
-    select_json_parser(input)?.parse_json_response(input)
+    select_json_parser(input)?.parse_json_response(input, retention)
 }
 
 pub(in crate::llm_pipeline) fn parse_sse_response(
     input: LlmSseResponseInput<'_>,
+    retention: LlmResponseRetention,
 ) -> Option<ParsedSseResponse> {
     let parser = select_sse_parser(input)?;
-    let response = parser.parse_sse_response(input)?;
+    let response = parser.parse_sse_response(input, retention)?;
     Some(ParsedSseResponse { response })
 }
 
@@ -47,11 +49,13 @@ pub(in crate::llm_pipeline) fn parse_sse_response(
 /// newly-appended events parsed instead of re-parsing the entire stream.
 pub(in crate::llm_pipeline) fn new_sse_stream_parser(
     input: LlmSseResponseInput<'_>,
+    retention: LlmResponseRetention,
 ) -> Option<(
     Box<dyn LlmProviderResponseStreamParser + Send>,
     &'static str,
 )> {
-    select_sse_parser(input).map(|parser| (parser.new_stream_parser(), parser.provider_id()))
+    select_sse_parser(input)
+        .map(|parser| (parser.new_stream_parser(retention), parser.provider_id()))
 }
 
 fn select_json_parser(

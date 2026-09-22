@@ -53,6 +53,9 @@ impl RetentionStore for SqliteStorage {
                 "active trace lease blocks purge",
             ));
         }
+        self.payload_retention
+            .borrow_mut()
+            .forget_trace(trace_id.get());
         let mut connection = self.connection().borrow_mut();
         let transaction = connection
             .transaction()
@@ -170,6 +173,27 @@ impl RetentionStore for SqliteStorage {
             )
             .map_err(|error| {
                 RetentionError::new("delete_semantic_action_links", error.to_string())
+            })?;
+        for table in ["semantic_action_state", "semantic_action_evidence"] {
+            transaction
+                .execute(
+                    &format!(
+                        "DELETE FROM {table} WHERE action_key IN (
+                SELECT action_key FROM semantic_actions WHERE trace_id=?1)"
+                    ),
+                    params![trace_id.get()],
+                )
+                .map_err(|error| {
+                    RetentionError::new("delete_semantic_action_facts", error.to_string())
+                })?;
+        }
+        transaction
+            .execute(
+                "DELETE FROM semantic_action_state_revisions WHERE trace_id=?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_state_revision", error.to_string())
             })?;
         transaction
             .execute(

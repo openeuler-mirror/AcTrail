@@ -39,6 +39,7 @@ pub fn build_wasm_observation_consumer(
                 manifest,
                 plugin_config.unwrap_or_default(),
                 host_grants,
+                post_trace_host,
             )?;
             Ok(WasmObservationConsumer::new(Box::new(consumer)))
         }
@@ -87,10 +88,6 @@ impl ObservationConsumer for WasmObservationConsumer {
         self.inner.hostcall_metrics_source()
     }
 
-    fn payload_snapshot_limit(&self) -> Option<usize> {
-        self.inner.payload_snapshot_limit()
-    }
-
     fn observation_queue_capacity(&self) -> u32 {
         self.inner.observation_queue_capacity()
     }
@@ -116,7 +113,6 @@ struct LegacyWasmObservationConsumer {
     plugin_id: String,
     host_grants: Vec<String>,
     event_families: Vec<ObservationEventFamily>,
-    payload_snapshot_limit: Option<usize>,
     queue_capacity: u32,
     hostcall_metrics: Arc<WasmHostcallMetrics>,
     state: Mutex<WasmObservationState>,
@@ -128,6 +124,7 @@ impl LegacyWasmObservationConsumer {
         manifest: &PluginManifest,
         plugin_config: &str,
         host_grants: PluginHostGrants,
+        post_trace_host: Option<Arc<dyn PostTraceHost>>,
     ) -> Result<Self, PluginRuntimeError> {
         let artifact_path = manifest
             .selected_wasm()
@@ -143,11 +140,12 @@ impl LegacyWasmObservationConsumer {
         let fuel_per_call = fuel_per_call(manifest);
         let memory_max_bytes = memory_max_bytes(manifest)?;
         let host_limits = host_limits(manifest)?;
-        let payload_snapshot_limit = if host_grants.can_read_payload() {
-            Some(host_limits.payload_segment_max_count)
-        } else {
-            None
-        };
+        if host_grants.can_read_payload() && post_trace_host.is_none() {
+            return Err(PluginRuntimeError::new(
+                "payload_read_host",
+                "payload read grant requires a host broker",
+            ));
+        }
         let queue_capacity = manifest
             .observation_queue_capacity()
             .unwrap_or(DEFAULT_OBSERVATION_QUEUE_CAPACITY);
@@ -167,6 +165,7 @@ impl LegacyWasmObservationConsumer {
             Arc::clone(&hostcall_metrics),
         );
         let linker = host_linker(&engine)?;
+        store.data_mut().set_post_trace_host(post_trace_host);
         let instance = linker.instantiate(&mut store, &module).map_err(|error| {
             PluginRuntimeError::new(
                 "wasm_runtime",
@@ -216,7 +215,6 @@ impl LegacyWasmObservationConsumer {
             plugin_id: manifest.id().to_string(),
             host_grants: host_grant_values,
             event_families,
-            payload_snapshot_limit,
             queue_capacity,
             hostcall_metrics,
             state: Mutex::new(WasmObservationState {
@@ -251,10 +249,6 @@ impl ObservationConsumer for LegacyWasmObservationConsumer {
         Some(self.hostcall_metrics.clone())
     }
 
-    fn payload_snapshot_limit(&self) -> Option<usize> {
-        self.payload_snapshot_limit
-    }
-
     fn observation_queue_capacity(&self) -> u32 {
         self.queue_capacity
     }
@@ -267,22 +261,28 @@ impl ObservationConsumer for LegacyWasmObservationConsumer {
         &self,
         batch: ObservationBatch<'_>,
     ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
-        let envelope = observation_envelope(&batch)?;
         let mut state = self.state.lock().map_err(|error| {
             PluginRuntimeError::new("wasm_runtime", format!("wasm state lock poisoned: {error}"))
         })?;
+        let envelope = observation_envelope(
+            &batch,
+            state.store.data().host_limits().payload_segment_max_count,
+        )?;
         let memory = state.memory;
         let alloc = state.alloc.clone();
         let fuel_per_call = state.fuel_per_call;
         reset_fuel(&mut state.store, fuel_per_call)?;
-        state
-            .store
-            .data_mut()
-            .set_payload_snapshot(batch.payload_segments);
         let (ptr, len) = write_guest_bytes(&mut state.store, memory, alloc, envelope.as_bytes())?;
+        state.store.data_mut().set_observation_trace_context(
+            batch.trace.trace_id,
+            batch.trace.root_working_directory.clone(),
+            &batch.trace.alert_token,
+            0,
+            0,
+        );
         let consume = state.consume.clone();
         let result = consume.call(&mut state.store, (ptr, len));
-        state.store.data_mut().clear_payload_snapshot();
+        state.store.data_mut().clear_observation_trace_context();
         let consumed = result
             .map_err(|error| call_error(&mut state.store, "wasm observation consume", error))?;
         if consumed < 0 {
@@ -303,21 +303,27 @@ struct WasmObservationState {
     fuel_per_call: u64,
 }
 
-fn observation_envelope(batch: &ObservationBatch<'_>) -> Result<String, PluginRuntimeError> {
+fn observation_envelope(
+    batch: &ObservationBatch<'_>,
+    payload_ref_limit: usize,
+) -> Result<String, PluginRuntimeError> {
     serde_json::to_string(&json!({
         "schema_version": "actrail.observation.v0",
         "trace_id": batch.trace.trace_id.to_string(),
         "semantic_action_count": batch.semantic_actions.len(),
         "semantic_link_count": batch.semantic_links.len(),
-        "payload_refs": batch.payload_segments.iter().map(|segment| {
-            json!({
-                "id": segment.segment_id.to_string(),
-                "trace_id": segment.trace_id.to_string(),
-                "captured_size": segment.captured_size,
-                "original_size": segment.original_size,
-                "redaction": format!("{:?}", segment.redaction),
-                "truncation": segment.truncation.as_str(),
-            })
+        "payload_refs": batch.payload_refs.iter().take(payload_ref_limit).map(|reference| {
+            let mut value = json!({
+                "id": reference.segment_id.to_string(),
+                "trace_id": reference.trace_id.to_string(),
+            });
+            if let Some(metadata) = &reference.metadata {
+                value["captured_size"] = json!(metadata.captured_size);
+                value["original_size"] = json!(metadata.original_size);
+                value["redaction"] = json!(format!("{:?}", metadata.redaction));
+                value["truncation"] = json!(metadata.truncation.as_str());
+            }
+            value
         }).collect::<Vec<_>>(),
         "actions": batch.semantic_actions.iter().map(|action| {
             json!({

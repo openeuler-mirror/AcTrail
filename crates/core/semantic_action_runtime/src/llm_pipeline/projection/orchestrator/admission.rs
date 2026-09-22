@@ -2,13 +2,11 @@
 
 use std::time::SystemTime;
 
+use crate::llm_pipeline::projection::correlation::{self as call, LlmStreamKey, StreamAdmission};
 use model_core::diagnostics::{
     LlmPipelineDiagnostic, LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSeverity,
     LlmPipelineDiagnosticStage,
 };
-use semantic_action::{SemanticActionCompleteness, SemanticActionStatus};
-
-use crate::llm_pipeline::projection::correlation::{self as call, LlmStreamKey, StreamAdmission};
 
 use super::super::ProjectionBatch;
 use super::ProjectionCoordinator;
@@ -39,10 +37,7 @@ impl ProjectionCoordinator {
             discarded_entries =
                 discarded_entries.saturating_add(u64::try_from(requests.len()).unwrap_or(u64::MAX));
             for request in requests.into_values() {
-                let mut partial_call = call::llm_call_from_request_response(&request.action, None);
-                partial_call.status = SemanticActionStatus::Error;
-                partial_call.completeness = SemanticActionCompleteness::Partial;
-                partial_call.end_time = Some(observed_at);
+                let partial_call = call::llm_call_from_request_response(&request.action, None);
                 self.push_recorded_action(partial_call, output);
             }
         }
@@ -120,12 +115,9 @@ impl ProjectionCoordinator {
             .saturating_add(u64::try_from(active_bindings.len()).unwrap_or(u64::MAX));
         for key in active_bindings {
             if let Some(binding) = self.correlation.active_response_requests.remove(&key) {
-                let mut partial_call =
+                let partial_call =
                     call::llm_call_from_request_response(&binding.request, Some(&binding.response));
-                partial_call.status = SemanticActionStatus::Error;
-                partial_call.completeness = SemanticActionCompleteness::Partial;
-                partial_call.end_time = Some(observed_at);
-                self.push_recorded_action(partial_call, output);
+                output.updated_actions.push(partial_call);
             }
         }
         output.diagnostics.push(correlation_stream_diagnostic(

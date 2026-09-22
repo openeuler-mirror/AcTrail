@@ -1,11 +1,10 @@
-//! Transaction-local compaction of repeated semantic persistence updates.
+//! Ordered semantic fact writes within a recording transaction.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionLink};
+use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionUpdate};
 use storage_core::StorageBackend;
 
 use super::{RecordingError, SemanticActionBatch, SemanticActionRecorder};
@@ -13,7 +12,7 @@ use super::{RecordingError, SemanticActionBatch, SemanticActionRecorder};
 #[derive(Default)]
 pub(crate) struct SemanticActionPersistenceAccumulator {
     actions: Vec<SemanticAction>,
-    action_indexes: HashMap<TraceId, HashMap<String, usize>>,
+    updates: Vec<SemanticActionUpdate>,
     links: Vec<SemanticActionLink>,
     link_indexes: HashMap<u64, Vec<usize>>,
     auxiliary_batches: Vec<SemanticActionBatch>,
@@ -25,13 +24,13 @@ impl SemanticActionPersistenceAccumulator {
         &mut self,
         mut batch: SemanticActionBatch,
     ) -> Result<(), RecordingError> {
-        for action in batch
-            .take_persistence_actions()
-            .into_iter()
-            .filter(|action| SemanticActionRecorder::persists_action_kind(action.kind))
-        {
-            self.push_action(action)?;
-        }
+        self.actions.extend(
+            batch
+                .take_persistence_actions()
+                .into_iter()
+                .filter(|action| SemanticActionRecorder::persists_action_kind(action.kind)),
+        );
+        self.updates.extend(batch.take_persistence_updates());
         for link in batch.take_persistence_links() {
             self.push_link(link);
         }
@@ -45,15 +44,15 @@ impl SemanticActionPersistenceAccumulator {
     pub(crate) fn persist(self, storage: &mut dyn StorageBackend) -> Result<(), RecordingError> {
         let Self {
             actions,
+            updates,
             links,
             auxiliary_batches,
             payload_segments,
             ..
         } = self;
         let mut recorder = SemanticActionRecorder::new(storage);
-        if !actions.is_empty() || !links.is_empty() {
-            let graph = SemanticActionBatch::from_parts(actions, links);
-            recorder.persist_batch(graph.as_record_batch())?;
+        if !actions.is_empty() || !updates.is_empty() || !links.is_empty() {
+            recorder.persist_graph(actions, updates, links)?;
         }
         for auxiliary in auxiliary_batches {
             recorder.persist_batch(auxiliary.as_record_batch())?;
@@ -61,23 +60,6 @@ impl SemanticActionPersistenceAccumulator {
         for segment in payload_segments {
             storage.append_payload_segment(segment)?;
         }
-        Ok(())
-    }
-
-    fn push_action(&mut self, action: SemanticAction) -> Result<(), RecordingError> {
-        let indexes = self.action_indexes.entry(action.trace_id).or_default();
-        if let Some(index) = indexes.get(action.action_id.as_str()).copied() {
-            self.actions[index]
-                .merge_persistence_update(action)
-                .map_err(|error| {
-                    RecordingError::new("merge_semantic_action", error.into_message())
-                })?;
-            return Ok(());
-        }
-
-        let index = self.actions.len();
-        indexes.insert(action.action_id.clone(), index);
-        self.actions.push(action);
         Ok(())
     }
 

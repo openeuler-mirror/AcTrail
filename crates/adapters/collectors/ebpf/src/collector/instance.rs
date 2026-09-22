@@ -26,11 +26,8 @@ impl CollectorInstance for EbpfCollector {
             return Err(CollectorError::new("bind_trace", reason.clone()));
         }
         if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
-            !supported_required_capability(
-                &request.capability,
-                self.loader.config(),
-                self.loader.payload_config(),
-            ) && request.mode == RequestMode::Required
+            !supported_required_capability(&request.capability, self.loader.payload_config())
+                && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "bind_trace",
@@ -117,15 +114,27 @@ impl CollectorInstance for EbpfCollector {
             root_kernel_tgid,
             root_start_time,
         );
-        self.file_tracker.seed_process(
-            request.trace_id,
-            request.root_observation.clone(),
-            request
-                .root_observation
-                .host
-                .as_ref()
-                .and_then(|host| crate::procfs::read_process_cwd(host.pid)),
-        );
+        let consumers = self
+            .file_tracker
+            .context_consumers(request.trace_id, &self.bindings);
+        if consumers.any() {
+            let cwd = consumers
+                .file_paths
+                .then(|| {
+                    request
+                        .root_observation
+                        .host
+                        .as_ref()
+                        .and_then(|host| crate::procfs::read_process_cwd(host.pid))
+                })
+                .flatten();
+            self.file_tracker.seed_process(
+                request.trace_id,
+                request.root_observation.clone(),
+                cwd,
+                consumers,
+            );
+        }
         Ok(TraceBindingHandle {
             collector: self.probe_result.descriptor.clone(),
             bound_at: SystemTime::now(),
@@ -144,7 +153,7 @@ impl CollectorInstance for EbpfCollector {
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
             cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
-            for tracked in self.bindings.remove_trace(trace_id) {
+            for tracked in self.bindings.processes_for_trace(trace_id) {
                 runtime
                     .untrack_pid(tracked.kernel_tgid)
                     .map_err(loader_error)?;
@@ -152,9 +161,9 @@ impl CollectorInstance for EbpfCollector {
             runtime
                 .unregister_trace_pid_namespace(trace_id)
                 .map_err(loader_error)?;
-        } else {
-            let _ = self.bindings.remove_trace(trace_id);
         }
+        self.finish_file_io_trace(trace_id);
+        let _ = self.bindings.remove_trace(trace_id);
         self.file_tracker.remove_trace(trace_id);
         Ok(())
     }
@@ -216,7 +225,7 @@ impl CollectorInstance for EbpfCollector {
                 });
             }
         }
-        for (reason, count) in self.file_tracker.lineage_gap_diagnostics() {
+        for (reason, count) in self.file_tracker.mcp_stdio_diagnostics() {
             dropped.push(DropCounter {
                 reason: format!("ebpf_stdio_bundle_lineage_gap:{reason}"),
                 count,

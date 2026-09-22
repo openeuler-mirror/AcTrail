@@ -24,6 +24,9 @@ impl ProjectionCoordinator {
         mut output: LiveLlmOutput,
     ) -> LiveLlmOutput {
         let mut changed = LiveLlmOutput::default();
+        changed.updates.append(&mut output.updates);
+        changed.updated_actions.append(&mut output.updated_actions);
+        changed.links.append(&mut output.links);
         changed.diagnostics.append(&mut output.diagnostics);
         changed
             .payload_segments
@@ -153,6 +156,7 @@ impl ProjectionCoordinator {
                         if let Some(content) = evicted.content {
                             changed.llm_request_contents.push(content);
                         }
+
                         changed.llm_tool_results.extend(evicted.tool_results);
                         self.push_recorded_action(evicted.action, &mut changed);
                     }
@@ -171,7 +175,14 @@ impl ProjectionCoordinator {
                 changed
                     .llm_tool_results
                     .extend(tool_results.remove(&action.action_id).unwrap_or_default());
-                changed.actions.push(action);
+                if action_record.existing {
+                    changed
+                        .updates
+                        .push(crate::live::ActionUpdateFactory::lifecycle(&action, None));
+                    changed.updated_actions.push(action);
+                } else {
+                    changed.actions.push(action);
+                }
             }
             match state_action.kind {
                 SemanticActionKind::LlmRequest => {
@@ -222,7 +233,10 @@ impl ProjectionCoordinator {
                             binding,
                             response_closed,
                         ));
-                        self.push_recorded_action(call, &mut changed);
+                        changed
+                            .updates
+                            .push(crate::live::ActionUpdateFactory::lifecycle(&call, None));
+                        changed.updated_actions.push(call);
                     } else if !non_reusable_response_ids.contains(&state_action.action_id) {
                         changed.extend(self.remember_pending_response(
                             state_action.clone(),
@@ -233,6 +247,8 @@ impl ProjectionCoordinator {
                             changed.extend(self.reconcile_exact_websocket_exchange(&stream_key));
                             changed.extend(self.reconcile_confirmed_http_exchanges(&stream_key));
                         }
+                    } else {
+                        changed.extend(self.bind_terminal_http2_response(&state_action));
                     }
                 }
                 _ => {}
@@ -252,6 +268,7 @@ impl ProjectionCoordinator {
             self.update_open_request(request);
         }
         changed.actions.extend(resolved.actions);
+
         changed.llm_request_contents.extend(resolved.contents);
         changed.llm_request_lineages.extend(resolved.lineages);
         changed.llm_tool_results.extend(resolved.tool_results);

@@ -57,7 +57,8 @@
         </div>
         <div class="coverage-line">
           {{ activity.coverage.trace_count }} traces ·
-          {{ activity.coverage.llm_call_count }} model calls ·
+          {{ activity.coverage.paired_llm_call_count }} paired model calls ·
+          {{ activity.coverage.attributed_llm_call_count }} attributed ·
           {{ activity.coverage.tool_interval_count }} Agent Tool intervals ·
           {{ activity.coverage.command_interval_count ?? 0 }} command processes
         </div>

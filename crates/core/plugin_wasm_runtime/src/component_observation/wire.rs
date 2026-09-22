@@ -17,6 +17,7 @@ pub(super) fn observation_batch_val(
     batch: &ObservationBatch<'_>,
     sequence: u64,
     lifecycle_transition: Option<TraceLifecycleState>,
+    payload_ref_limit: usize,
 ) -> Val {
     Val::Record(vec![
         (
@@ -50,8 +51,9 @@ pub(super) fn observation_batch_val(
             "payload-refs".to_string(),
             Val::List(
                 batch
-                    .payload_segments
+                    .payload_refs
                     .iter()
+                    .take(payload_ref_limit)
                     .map(|segment| {
                         Val::Record(vec![
                             (
@@ -81,7 +83,7 @@ fn observation_families(
     if !batch.semantic_links.is_empty() {
         families.push(Val::Enum("semantic-action-link".to_string()));
     }
-    if !batch.payload_segments.is_empty() {
+    if !batch.payload_refs.is_empty() {
         families.push(Val::Enum("payload-metadata".to_string()));
     }
     if lifecycle_transition.is_some() {

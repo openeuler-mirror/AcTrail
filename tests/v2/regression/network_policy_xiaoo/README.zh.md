@@ -57,7 +57,7 @@ sudo -E python3 tests/v2/regression/test_all.py --case network_policy_xiaoo
 执行。若 release 或官方插件尚未安装，先从仓库根目录运行
 `scripts/install-release.sh`。
 
-> `actraild init -f` 会覆盖默认 operator config，`actrailctl clean` 会清理
+> `actrailctl init -f` 会覆盖默认 operator config，`actrailctl clean` 会清理
 > 默认 AcTrail 数据；共享或生产环境不得执行以下流程。
 
 ### 步骤 1：检查前提并启动 AcTrail
@@ -87,7 +87,7 @@ test -f "$PLUGIN_ROOT/network-policy-dynamic/component-network-policy-dynamic.wa
 mkdir -p "$REPO/temp"
 rm -f "$MARKER" "$XIAOO_CONFIG"
 
-actraild init -f
+actrailctl init -f
 actraild stop
 actrailctl clean
 actraild start

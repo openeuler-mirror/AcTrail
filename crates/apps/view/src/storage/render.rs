@@ -307,6 +307,21 @@ fn network_detail(payload: &NetPayload) -> String {
 }
 
 fn file_detail(payload: &model_core::event::FilePayload) -> String {
+    if let Some(summary) = &payload.io_summary {
+        let mut detail = format!(
+            "path={} token={} errno={}",
+            payload.path.as_deref().unwrap_or("unavailable"),
+            summary.file_token,
+            summary.errno
+        );
+        if let Some(count) = summary.operations {
+            detail.push_str(&format!(" operations={count}"));
+        }
+        if let Some(bytes) = summary.bytes {
+            detail.push_str(&format!(" bytes={bytes}"));
+        }
+        return detail;
+    }
     let result = payload
         .result
         .map(|value| value.to_string())

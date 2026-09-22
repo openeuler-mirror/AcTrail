@@ -19,6 +19,9 @@ sudo -E CONTAINER_AUTO_E2E_BASE_IMAGE=ubuntu:24.04 \
 `tail -f /dev/null` 长驻，再通过 `docker exec` 执行
 `actrailctl launch --host-ebpf auto --seccomp-notify auto`。测试覆盖 host eBPF 与
 seccomp notify 的四种组合，并验证容器隔离和 `required` 权限失败语义。
+每轮 daemon 启动均通过 `actrailctl init -f --patch` 刷新默认配置并应用场景设置。
+跨 trace 注入使用 `fixtures/tls_injection.py` 发送当前 TLS-sync 二进制 payload 帧，
+携带发送进程的真实身份，验证授权拒绝审计及目标 trace 未写入伪造数据。
 同一 aggregate case 会先执行 `test_deployment.py`，覆盖 openEuler/Ubuntu 一键部署
 解析、严格 systemd active 判定、OTLP endpoint 安全渲染和真实 launch/delivery smoke
 合同；这些断言不是仓库中孤立、不会运行的 unittest。
@@ -28,7 +31,7 @@ seccomp notify 的四种组合，并验证容器隔离和 `required` 权限失�
 
 1. 检查 release 二进制和 Docker daemon。
 2. 按 Dockerfile、基础镜像、`actrailctl` 和 TLS probe 的内容生成镜像标签；已存在
-   的同标签镜像直接复用。
+   的同标签镜像直接复用，准备镜像时删除该仓库下的其他旧标签。
 3. 验证 `host eBPF enabled + seccomp notify enabled`。
 4. 验证 `host eBPF enabled + seccomp notify disabled`。
 5. 验证 `host eBPF disabled + seccomp notify enabled`。
@@ -93,6 +96,8 @@ docker image inspect --format '{{.RepoTags}}' "$AUTO_IMAGE"
 自动脚本不使用固定 `manual` 标签，而是计算内容摘要并生成
 `actrail/container-auto-v2:<content-hash>`。本地已有该标签时不执行
 `docker build`，固定输入改变或设置 `CONTAINER_AUTO_E2E_REBUILD_IMAGE=1` 时才重建。
+每次准备镜像先清理 `actrail/container-auto-v2` 下除当前标签外的版本，
+保留当前版本供后续测试复用；清理使用非强制删除，失败时报告 Docker 错误。
 镜像一次性安装 `curl`、Python、证书和 `tini`，每轮测试不再刷新这些固定依赖。
 
 ## 步骤3：启动 host eBPF 可用的隔离 daemon

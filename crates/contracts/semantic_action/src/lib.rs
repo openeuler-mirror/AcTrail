@@ -4,17 +4,22 @@ pub mod attr_keys;
 pub mod evidence_roles;
 pub mod link_roles;
 pub mod llm;
-mod merge;
 pub mod model;
 pub mod model_identity;
 pub mod store;
+mod update;
+
+pub use update::{
+    SemanticActionChange, SemanticActionFinalizationReason, SemanticActionUpdate,
+    SemanticCommandKind, SemanticToolResultBinding,
+};
 
 pub use llm::{
     LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
-    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
-    LlmTokenUsage, LlmToolCall, LlmToolFunction,
+    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmResponseRetention,
+    LlmResponseTermination, LlmSseEvent, LlmSseResponseInput, LlmTokenUsage, LlmToolCall,
+    LlmToolFunction,
 };
-pub use merge::SemanticActionMergeError;
 pub use model::{
     FileChangeKind, FileObservationPath, FilePathSetIdentity, FilePathSetPath, FilePathSetPathPage,
     FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef, LlmRequestContentPage,

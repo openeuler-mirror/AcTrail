@@ -132,6 +132,7 @@ impl PlainStreamAssembly {
                     break;
                 };
                 output.actions.extend(projection.actions);
+
                 output
                     .llm_request_contents
                     .extend(projection.llm_request_contents);
@@ -221,6 +222,7 @@ impl PlainStreamAssembly {
                 ResponseFinalizer::finalize_incomplete(action, reason, finished_at);
             }
             output.actions.extend(projection.actions);
+
             output
                 .llm_request_contents
                 .extend(projection.llm_request_contents);

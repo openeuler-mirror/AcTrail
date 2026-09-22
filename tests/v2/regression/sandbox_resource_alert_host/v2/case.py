@@ -40,6 +40,7 @@ class SandboxResourceAlertHostCase(TestCase):
     def _repository_problem(self) -> TestResult | None:
         required = (
             self._config.bin_dir / "actraild",
+            self._config.bin_dir / "actrailctl",
             self._config.bin_dir / "actrail-sb",
             self._config.bin_dir / "actrail-vsock-gateway",
             self._config.bin_dir / "actraild-alert-proxy",
@@ -55,7 +56,7 @@ class SandboxResourceAlertHostCase(TestCase):
         missing = [path for path in required if not path.is_file()]
         non_executable = [
             path
-            for path in required[:6]
+            for path in required[:7]
             if path.is_file() and not os.access(path, os.X_OK)
         ]
         if not missing and not non_executable:

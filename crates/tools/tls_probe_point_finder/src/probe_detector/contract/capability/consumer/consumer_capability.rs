@@ -10,6 +10,10 @@ pub(crate) struct ConsumerCapability {
 }
 
 impl ConsumerCapability {
+    pub(crate) fn supports_direct_symbol(symbol: &str) -> bool {
+        DAEMON_DIRECT_SYMBOLS.contains(&symbol)
+    }
+
     pub(crate) fn evaluate(
         key: CapabilityKey,
         points: &[ProbePoint],
@@ -53,7 +57,14 @@ impl ConsumerCapability {
             ProbeConsumer::Daemon if target_has_interpreter => {
                 Self::sync_rejection(key.provider, points)
             }
-            ProbeConsumer::Daemon => {
+            ProbeConsumer::Daemon | ProbeConsumer::Direct => {
+                if key.provider == TlsProvider::BoringSsl {
+                    return Self::first_unsupported_symbol(
+                        points,
+                        &["SSL_write", "SSL_read"],
+                        "daemon-direct",
+                    );
+                }
                 if !matches!(key.provider, TlsProvider::OpenSsl | TlsProvider::Rustls) {
                     return Some(format!(
                         "daemon-direct-does-not-support-provider:{}",

@@ -9,29 +9,42 @@ struct actrail_tls_direct_capture_chunk {
     __u64 offset;
     __u32 capture_size;
     __u32 original_size;
+    __u32 flags;
 };
 
-static __noinline int emit_tls_direct_capture_chunk(
+#ifndef ACTRAIL_EVENT_TRANSPORT_PERF
+/* These capacities define transport record layouts, not capture limits. Each
+ * reservation remains constant-sized for the verifier; the payload length and
+ * configured capture budget continue to determine the bytes read from userspace.
+ */
+static __always_inline int emit_tls_direct_capture_sized(
     void *ctx,
     const struct actrail_pending_tls_payload_op *op,
     __u32 tgid,
     __u32 tid,
-    const struct actrail_tls_direct_capture_chunk *chunk
+    const struct actrail_tls_direct_capture_chunk *chunk,
+    __u32 capacity
 ) {
-#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
-    tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_COPY_TOO_LARGE);
-    return 0;
-#else
     __u64 kernel_pid_tgid = current_kernel_pid_tgid();
     struct actrail_tls_direct_capture_event *event;
-    __u32 capture_size =
+    __u64 capture_size =
         chunk->capture_size & ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES;
 
     if (!capture_size) {
         return 0;
     }
+    /* Keep the upper-bound check visible to the verifier: Clang otherwise
+     * combines both tests into a subtraction-based range check. Keep the value
+     * in a full BPF register so the comparison and helper share that bound.
+     */
+    actrail_barrier_var(capture_size);
+    if (capture_size > capacity) {
+        return 0;
+    }
 
-    event = actrail_event_reserve(sizeof(*event));
+    event = actrail_event_reserve(
+        __builtin_offsetof(struct actrail_tls_direct_capture_event, bytes) + capacity
+    );
     if (!event) {
         tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_RESERVE_FAIL);
         return 0;
@@ -46,7 +59,7 @@ static __noinline int emit_tls_direct_capture_chunk(
     event->operation_id = op->operation_id;
     event->original_size = chunk->original_size;
     event->captured_size = capture_size;
-    event->flags = 0;
+    event->flags = chunk->flags;
     event->symbol = op->symbol;
     event->library = op->library;
     event->operation_offset = (__u32)chunk->offset;
@@ -65,6 +78,58 @@ static __noinline int emit_tls_direct_capture_chunk(
     actrail_event_submit(ctx, event);
     tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_SUBMIT_OK);
     return 1;
+}
+
+/* Separate entry points keep each reservation and read bound constant after
+ * inlining, even when the dispatching program handles several record sizes.
+ */
+#define ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET(capacity) \
+static __noinline int emit_tls_direct_capture_##capacity( \
+    void *ctx, \
+    const struct actrail_pending_tls_payload_op *op, \
+    __u32 tgid, \
+    __u32 tid, \
+    const struct actrail_tls_direct_capture_chunk *chunk \
+) { \
+    return emit_tls_direct_capture_sized(ctx, op, tgid, tid, chunk, capacity); \
+}
+
+ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET(256)
+ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET(1024)
+ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET(4096)
+ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET(16384)
+ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET(65536)
+
+#undef ACTRAIL_TLS_DIRECT_CAPTURE_BUCKET
+#endif
+
+static __always_inline int emit_tls_direct_capture_chunk(
+    void *ctx,
+    const struct actrail_pending_tls_payload_op *op,
+    __u32 tgid,
+    __u32 tid,
+    const struct actrail_tls_direct_capture_chunk *chunk
+) {
+#ifdef ACTRAIL_EVENT_TRANSPORT_PERF
+    tls_diag_inc(ACTRAIL_TLS_DIAG_DIRECT_COPY_TOO_LARGE);
+    return 0;
+#else
+    __u32 capture_size =
+        chunk->capture_size & ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES;
+
+    if (capture_size <= 256) {
+        return emit_tls_direct_capture_256(ctx, op, tgid, tid, chunk);
+    }
+    if (capture_size <= 1024) {
+        return emit_tls_direct_capture_1024(ctx, op, tgid, tid, chunk);
+    }
+    if (capture_size <= 4096) {
+        return emit_tls_direct_capture_4096(ctx, op, tgid, tid, chunk);
+    }
+    if (capture_size <= 16384) {
+        return emit_tls_direct_capture_16384(ctx, op, tgid, tid, chunk);
+    }
+    return emit_tls_direct_capture_65536(ctx, op, tgid, tid, chunk);
 #endif
 }
 
@@ -119,6 +184,9 @@ static __always_inline int emit_tls_direct_capture(
         chunk.offset = offset;
         chunk.capture_size = (__u32)bounded_size;
         chunk.original_size = (__u32)requested_size;
+        if (requested_size > capture_size && offset + bounded_size == capture_size) {
+            chunk.flags = ACTRAIL_TLS_PAYLOAD_POLICY_LIMITED;
+        }
         if (emit_tls_direct_capture_chunk(ctx, op, tgid, tid, &chunk) != 1) {
             copied_full = 0;
             break;
@@ -248,7 +316,7 @@ static __always_inline int store_tls_payload_op_args(
     op.pid_generation = current_process_start_time(tgid);
     op.direction = metadata & 0xffff;
     op.symbol = metadata >> 16;
-    op.library = payload_tls_library_for_symbol(op.symbol);
+    op.library = args->library ? args->library : payload_tls_library_for_symbol(op.symbol);
     op.capture_state = ACTRAIL_TLS_CAPTURE_STATE_NEEDS_SECCOMP;
     if (op.direction == ACTRAIL_TLS_PAYLOAD_OUTBOUND &&
         payload_tls_bpf_copy_enabled() &&

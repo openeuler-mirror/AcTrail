@@ -2,7 +2,6 @@
 
 #[path = "launch/controlled.rs"]
 pub(crate) mod controlled;
-mod idle_opencode;
 #[path = "launch/java_agent.rs"]
 mod java_agent;
 #[path = "launch/permission_policy.rs"]
@@ -19,8 +18,9 @@ mod timing;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use agent_host::AgentLaunchIntegration;
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     EnforcementSeccompSyscall, NetworkControlSeccompSyscall, PayloadSocketSeccompSyscall,
@@ -54,9 +54,6 @@ use crate::platform_probe::{
 };
 use linux_platform::capability_probe::{probe_no_new_privs, probe_unix_socket};
 
-const ENV_TRACE_ID: &str = "ACTRAIL_TRACE_ID";
-const ENV_CONTROL_SOCKET: &str = "ACTRAIL_CONTROL_SOCKET";
-
 pub(crate) struct LaunchRequest {
     pub control_socket_path: PathBuf,
     pub display_name: TraceName,
@@ -73,7 +70,7 @@ pub(crate) struct LaunchRequest {
     pub agent_invocation_commands: Vec<String>,
     pub supervision_poll_interval_ms: u64,
     pub ebpf_seccomp_policy: DeploymentPermissionPolicy,
-    pub opencode_plugin_dir: Option<PathBuf>,
+    pub agent_integration: AgentLaunchIntegration,
     pub argv: Vec<String>,
 }
 
@@ -82,7 +79,6 @@ pub(crate) fn run_launch(
     request_id: RequestId,
     request: LaunchRequest,
 ) -> Result<i32, String> {
-    idle_opencode::validate_plugin_dir(request.opencode_plugin_dir.as_deref())?;
     let mut timing = LaunchTiming::from_env();
     timing.mark("start");
     let tls_sync_enabled =
@@ -168,7 +164,12 @@ pub(crate) fn run_launch(
     timing.mark("build_child_setup");
 
     let raw_argv = request.argv;
-    let sync_launch = if tls_sync_enabled {
+    let sync_launch = if request.payload_tls_config.enabled
+        && request
+            .payload_tls_config
+            .capture_backend
+            .uses_probe_plans()
+    {
         Some(sync_launch(
             client,
             request_id,
@@ -185,7 +186,7 @@ pub(crate) fn run_launch(
         .is_some_and(SyncLaunch::has_direct_probe_plans)
         && !permission_reply.selected_host_ebpf
     {
-        return Err("static TLS plans require Host eBPF for launch-time attachment".to_string());
+        return Err("direct TLS plans require Host eBPF for launch-time attachment".to_string());
     }
     timing.mark_detail("sync_launch", format_args!("enabled={tls_sync_enabled}"));
     let command = sync_launch
@@ -295,7 +296,7 @@ pub(crate) fn run_launch(
     let envs = match launch_envs(
         trace_id,
         &request.control_socket_path,
-        request.opencode_plugin_dir.as_deref(),
+        &request.agent_integration,
         &request.payload_tls_config,
         request.payload_socket_max_segment_bytes,
         sync_launch.as_ref(),
@@ -465,7 +466,7 @@ fn register_seccomp_listener_if_needed(
 fn launch_envs(
     trace_id: TraceId,
     control_socket_path: &Path,
-    opencode_plugin_dir: Option<&Path>,
+    agent_integration: &AgentLaunchIntegration,
     payload_tls_config: &PayloadTlsConfig,
     payload_socket_max_segment_bytes: u32,
     sync_launch: Option<&SyncLaunch>,
@@ -483,17 +484,7 @@ fn launch_envs(
         ),
         None => Ok(Vec::new()),
     }?;
-    if opencode_plugin_dir.is_some() {
-        envs.push((
-            OsString::from(ENV_TRACE_ID),
-            OsString::from(trace_id.get().to_string()),
-        ));
-        envs.push((
-            OsString::from(ENV_CONTROL_SOCKET),
-            control_socket_path.as_os_str().to_os_string(),
-        ));
-        idle_opencode::push_launch_env(&mut envs, opencode_plugin_dir);
-    }
+    agent_integration.append_env(trace_id, control_socket_path, &mut envs);
     Ok(envs)
 }
 

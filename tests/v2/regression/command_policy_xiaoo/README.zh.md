@@ -41,7 +41,7 @@ sudo -E python3.11 \
 operator patch；它直接使用已安装的 release、AcTrail 默认配置和 Xiaoo 现有配置。
 以下命令均从仓库根目录执行。
 
-> `actraild init -f` 会覆盖默认 operator config，`actrailctl clean` 会清理默认
+> `actrailctl init -f` 会覆盖默认 operator config，`actrailctl clean` 会清理默认
 > AcTrail 数据。只在专用测试环境执行。若 release 或官方插件尚未安装，先运行
 > `scripts/install-release.sh`，不要用旧产物继续测试。
 
@@ -80,7 +80,7 @@ rm -f "$MARKER"
 "$XIAOO_BIN" --cli run --no-tools --max-turns 1 \
   --prompt 'Reply with exactly "XIAOO_COMMAND_POLICY_READY" and nothing else.'
 
-actraild init -f
+actrailctl init -f
 actraild stop
 actrailctl clean
 actraild start

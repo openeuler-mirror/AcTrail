@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use config_core::daemon::SemanticRetentionConfig;
+use config_core::daemon::{
+    ApplicationProtocolConfig, Http2DataContentRetention, SemanticRetentionConfig,
+    SseEventContentRetention,
+};
 use model_core::ids::TraceId;
 use model_core::payload::{
     PayloadContentState, PayloadDirection, PayloadSegment, PayloadSourceBoundary,
@@ -54,6 +57,7 @@ pub(in crate::services) struct PayloadBodyRetentionGate {
     http2_probe_bytes: BTreeMap<BodyStreamKey, u64>,
     http2_probe_max_bytes: u64,
     semantic_retention: SemanticRetentionConfig,
+    http_summary_only: bool,
 }
 
 impl PayloadBodyRetentionGate {
@@ -65,14 +69,25 @@ impl PayloadBodyRetentionGate {
     }
 
     pub(in crate::services) fn new(
-        http2_probe_max_bytes: u64,
+        application: &ApplicationProtocolConfig,
         semantic_retention: SemanticRetentionConfig,
     ) -> Self {
+        // Resolve body consumers once, before any per-stream classification or
+        // buffering. LLM assembly consumes the original segment independently.
+        let http_summary_only = !semantic_retention.http_body_content_needed(false)
+            && !application.sse_enabled
+            && !semantic_retention.sse_stream_summary_enabled()
+            && semantic_retention.sse_event_content_for_llm_response()
+                == SseEventContentRetention::None
+            && !semantic_retention.http2_frame_summary_enabled()
+            && semantic_retention.http2_data_content() == Http2DataContentRetention::None
+            && !semantic_retention.retain_transport_payload_body(false);
         Self {
             streams: BTreeMap::new(),
             http2_probe_bytes: BTreeMap::new(),
-            http2_probe_max_bytes,
+            http2_probe_max_bytes: application.http2_max_data_preview_bytes,
             semantic_retention,
+            http_summary_only,
         }
     }
 
@@ -90,6 +105,12 @@ impl PayloadBodyRetentionGate {
         if !plaintext_http_transport(segment) {
             return PayloadBodyRetentionDecision::transient(
                 PayloadBodyRetention::Full,
+                PayloadSemanticLayer::None,
+            );
+        }
+        if self.http_summary_only {
+            return PayloadBodyRetentionDecision::transient(
+                PayloadBodyRetention::SummaryOnly,
                 PayloadSemanticLayer::None,
             );
         }

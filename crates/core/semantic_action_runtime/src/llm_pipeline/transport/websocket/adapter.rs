@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use model_core::ids::TraceId;
 use model_core::payload::{
-    PayloadDirection, PayloadSegment, PayloadSourceBoundary, PayloadStreamKey,
+    PayloadDirection, PayloadSegment, PayloadSegmentId, PayloadSourceBoundary, PayloadStreamKey,
     PayloadTruncationState,
 };
 use model_core::process::ProcessIdentity;
@@ -237,6 +237,7 @@ impl ProcessWebSocket {
                 continue;
             };
             let mut connection = WebSocketConnection::new(
+                accepted.handshake_segment_id,
                 accepted.outbound_stream_key,
                 accepted.inbound_stream_key,
                 accepted.path,
@@ -444,6 +445,7 @@ impl ProcessWebSocket {
                 break;
             };
             let mut connection = WebSocketConnection::new(
+                accepted.handshake_segment_id,
                 accepted.outbound_stream_key,
                 accepted.inbound_stream_key,
                 accepted.path,
@@ -577,6 +579,7 @@ impl ProcessWebSocket {
                             "accepted WebSocket LLM handshake"
                         );
                         self.push_accepted(AcceptedHandshake {
+                            handshake_segment_id: segment.segment_id,
                             path: offer.path,
                             outbound_stream_key: offer.outbound_stream_key,
                             inbound_stream_key,
@@ -687,6 +690,7 @@ impl PendingOffer {
 
 #[derive(Clone)]
 struct AcceptedHandshake {
+    handshake_segment_id: PayloadSegmentId,
     path: String,
     outbound_stream_key: PayloadStreamKey,
     inbound_stream_key: PayloadStreamKey,

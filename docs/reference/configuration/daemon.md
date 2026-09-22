@@ -10,6 +10,45 @@ actrailctl init --output /tmp/actraild.reference.conf
 
 始终用部署版本的 binary 生成模板。未知字段、无效值和缺少的必需关系会在启动时失败。
 
+## `[file_observation.collection]`
+
+文件采集需求由下列字段指定，并与文件观测、语义投影和实际采集能力共同决定是否启用。原事件的 `raw_event_retention` 只控制留存，不启用采集需求。
+
+| 字段 | 默认值 | 所需输出 |
+| --- | --- | --- |
+| `writable_open` | `true` | 可写、创建或截断打开的意图及结果；打开成功不代表实际发生写入 |
+| `path_mutations` | `true` | rename、unlink、mkdir、rmdir、truncate 等路径修改及结果 |
+| `fd_mutations` | `false` | ftruncate、共享可写 mmap 等需要 FD 路径关联的修改及结果 |
+
+`[file_observation.collection.read]` 和 `[file_observation.collection.write]` 分别声明读取和写入需求：
+
+| 字段 | 默认值 | 所需输出 |
+| --- | --- | --- |
+| `observed` | `false` | 文件上发生相应 I/O 的事实 |
+| `counts` | `false` | I/O 次数摘要 |
+| `bytes` | `false` | 实际读取或写入的字节数摘要 |
+| `errors` | `false` | 相应 I/O 的错误信息 |
+
+四项表达下游需求；任意一项启用才需要相应 I/O 采集。当前读取和写入分别按四项的合并需求启停。
+
+P 模板采用上述默认值。C 模板显式开启 FD 修改及读取、写入需求，用于文件动作与统计展示。即使普通文件 I/O 全关，路径修改所需的目录 FD 与 cwd 上下文仍按需维护。
+
+`file_observation.tty.enabled` 和 `file_observation.enumerate.enabled` 默认及 P 模板均为 `false`，C 模板显式开启。目录枚举消费目录打开与关闭事实，独立于普通文件读取；TTY 的读取、写入分析需要显式启用对应方向的 collection 需求。文件观测与 TTY 启用时，`tty.operations` 包含 `read/readv` 而读取需求全关，或包含 `write/writev` 而写入需求全关，均在启动时拒绝；不会自动开启 I/O。
+
+## `[file_observation.summary]`
+
+读取和写入在内核按实际文件对象累计，并按进程归属输出摘要。单个文件也能输出，不依赖扫描程序名单或跨文件数量阈值。
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `flush_interval_ms` | `100` | 用户态读取内核 I/O 累计状态的间隔，单位毫秒 |
+| `max_entries` | `16384` | 内核文件 I/O 累计条目容量 |
+| `object_max_entries` | `16384` | 内核文件对象身份条目容量 |
+
+三个值均须大于零。`collection.read/write` 的 `observed`、`counts`、`bytes`、`errors` 独立控制所需事实、次数、字节和错误输出；全部关闭的方向不启动 I/O 汇总。`raw_event_retention` 不改变内核采集需求。`bulk_read` 仅消费文件摘要形成跨文件路径集合，不缓存完整 syscall 事件，不作候选回放。
+
+TTY 同样使用此刷新间隔。`tty.operations` 默认且仅允许 `read/readv/write/writev`，其他操作在启动时拒绝。`read` 或 `readv` 任意一项选择读取方向，`write` 或 `writev` 任意一项选择写入方向；摘要不区分这两种 syscall。只请求 `errors` 时输出错误发生事实与 errno，不输出未请求的次数。
+
 ## `[control]`
 
 | 字段 | 当前默认值 | 含义 |
@@ -28,7 +67,7 @@ actrailctl init --output /tmp/actraild.reference.conf
 
 | 字段 | 当前默认值 | 含义 |
 | --- | --- | --- |
-| `backend` | `sqlite` | 当前 operator storage backend |
+| `backend` | `sqlite` | `sqlite` 保存观测历史；`noop` 丢弃观测写入、历史查询为空，不创建主 SQLite |
 | `[storage.sqlite].path` | `/var/lib/actrail/actrail.sqlite` | SQLite 主文件 |
 | `busy_timeout_ms` | `5000` | 遇到暂时 lock 时的等待时间 |
 | `cold_field_compression_min_bytes` | `64` | cold attribute 启用 zstd 的最小序列化大小；`0` 关闭 |

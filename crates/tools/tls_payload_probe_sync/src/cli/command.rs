@@ -64,6 +64,7 @@ fn run_probe(config: crate::cli::config::ProbeConfig) -> ToolResult<()> {
     let env_config = RuntimeEnvConfig {
         rules: config.rules.clone(),
         max_payload_bytes: config.max_payload_bytes,
+        max_frame_bytes: config.max_frame_bytes,
         flow_control: Default::default(),
         redaction: config.redaction,
         events: config.events.clone(),

@@ -173,6 +173,7 @@ export function flameActivityTitle(activity) {
   return [
     activity.label,
     activity.target,
+    activity.kind === 'llm.tool_call' || activity.kind === 'llm.tool_result' ? activity.statusLabel : '',
     `start +${formatOffset(activity.startOffsetMs)}`,
     activity.live ? 'running' : `duration ${formatOffset(activity.durMs ?? 0)}`,
     activity.backgroundKind ? `background ${activity.backgroundKind}` : '',

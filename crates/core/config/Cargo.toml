@@ -5,6 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+idle_detector = { path = "../idle_detector" }
 model_core = { path = "../model" }
 payload_capability = { path = "../../contracts/payload/capability" }
 serde = { version = "1", features = ["derive"] }

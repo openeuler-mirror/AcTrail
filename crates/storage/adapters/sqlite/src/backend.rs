@@ -4,7 +4,6 @@ use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDefinitionStore, AlertDraft, AlertId, AlertListLimit,
     AlertReadStore, AlertStoreError, AlertView, AlertWriteStore,
 };
-use idle_contract::{IdleInterval, IdleReadStore, IdleStoreError, IdleStoreOp, IdleWriteStore};
 use model_core::diagnostics::{
     DiagnosticRecord, LlmPipelineDiagnostic, LlmPipelineDiagnosticCode,
     LlmPipelineDiagnosticSeverity, LlmPipelineDiagnosticStage,
@@ -20,6 +19,7 @@ use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
     McpJsonRpcContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
+    SemanticActionWriteStore,
 };
 use storage_core::{
     PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
@@ -59,6 +59,10 @@ impl StorageTransaction for LegacyTransaction {
 }
 
 impl StorageBackend for SqliteStorage {
+    fn retains_observations(&self) -> bool {
+        true
+    }
+
     fn next_trace_id_seed(&self) -> Result<u64, StorageError> {
         SqliteStorage::next_trace_id_seed(self)
             .map_err(|error| StorageError::new("trace_id_seed", error.to_string()))
@@ -77,11 +81,6 @@ impl StorageBackend for SqliteStorage {
     fn next_payload_segment_id_seed(&self) -> Result<u64, StorageError> {
         SqliteStorage::next_payload_segment_id_seed(self)
             .map_err(|error| StorageError::new("payload_segment_id_seed", error.to_string()))
-    }
-
-    fn next_idle_interval_id_seed(&self) -> Result<u64, StorageError> {
-        SqliteStorage::next_idle_interval_id_seed(self)
-            .map_err(|error| StorageError::new("idle_interval_id_seed", error.to_string()))
     }
 
     fn reserve_process_id_block(&mut self, count: u64) -> Result<(u64, u64), StorageError> {
@@ -576,20 +575,15 @@ impl StorageBackend for SqliteStorage {
         AlertReadStore::trace_alerts(self, trace_id, limit)
     }
 
-    fn apply_idle_ops(&mut self, ops: &[IdleStoreOp]) -> Result<(), IdleStoreError> {
-        IdleWriteStore::apply_idle_ops(self, ops)
+    fn insert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError> {
+        SemanticActionWriteStore::insert_semantic_action(self, action).map_err(StorageError::from)
     }
 
-    fn idle_intervals_for_trace(
-        &self,
-        trace_id: TraceId,
-    ) -> Result<Vec<IdleInterval>, IdleStoreError> {
-        IdleReadStore::idle_intervals_for_trace(self, trace_id)
-    }
-
-    fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError> {
-        semantic_action::SemanticActionWriteStore::upsert_semantic_action(self, action)
-            .map_err(StorageError::from)
+    fn update_semantic_action(
+        &mut self,
+        update: semantic_action::SemanticActionUpdate,
+    ) -> Result<(), StorageError> {
+        SemanticActionWriteStore::update_semantic_action(self, update).map_err(StorageError::from)
     }
 
     fn upsert_semantic_action_link(

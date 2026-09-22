@@ -66,6 +66,43 @@ pub struct FilePayload {
     pub path: Option<String>,
     pub result: Option<i32>,
     pub metadata: BTreeMap<String, String>,
+    pub io_summary: Option<FileIoSummary>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileIoDirection {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileIoTargetKind {
+    RegularFile,
+    CharacterDevice,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileSummaryPathState {
+    Resolved,
+    Truncated,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FileIoSummary {
+    pub file_token: u64,
+    pub direction: FileIoDirection,
+    pub target_kind: FileIoTargetKind,
+    pub errno: u32,
+    pub interval_start: SystemTime,
+    pub interval_end: SystemTime,
+    pub interval_complete: bool,
+    pub operations: Option<u64>,
+    pub bytes: Option<u64>,
+    pub path_state: FileSummaryPathState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -20,7 +20,8 @@ use crate::semantic_actions::codebook::sqlite::{
 use crate::semantic_actions::cold_fields::decode_attributes_from_row_with_prefix;
 use crate::semantic_actions::evidence;
 use crate::semantic_actions::store::{
-    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, link_cold_field_join,
+    ACTION_SELECT_COLUMNS, ActionReadHydrator, action_cold_field_join, action_from_row,
+    link_cold_field_join,
 };
 use crate::semantic_actions::tree_metadata::{
     child_count_for_parent, effective_incoming_link_absence_predicate, effective_link_value_count,
@@ -121,7 +122,12 @@ impl SqliteStorage {
             .map_err(|error| {
                 SemanticActionStoreError::new("revision_semantic_action_links", error.to_string())
             })?;
+        let state_revision = connection.query_row(
+            "SELECT COALESCE((SELECT revision FROM semantic_action_state_revisions WHERE trace_id=?1), 0)",
+            params![trace_id.get()], |row| row.get(0),
+        ).map_err(|error| SemanticActionStoreError::new("revision_semantic_action_state", error.to_string()))?;
         Ok(SemanticActionTraceRevision {
+            state_revision,
             action_count,
             action_max_key,
             link_count,
@@ -257,9 +263,10 @@ impl SqliteStorage {
         else {
             return Ok(None);
         };
-        let action = action_from_row(row).map_err(|error| {
+        let mut action = action_from_row(row).map_err(|error| {
             SemanticActionStoreError::new("map_semantic_action_for_process_kind", error.to_string())
         })?;
+        ActionReadHydrator::hydrate(&connection, std::iter::once(&mut action), true)?;
         Ok(Some(action))
     }
 
@@ -369,6 +376,11 @@ impl SqliteStorage {
             }
             children.push(child);
         }
+        ActionReadHydrator::hydrate(
+            &connection,
+            children.iter_mut().map(|child| &mut child.action),
+            true,
+        )?;
         Ok(children)
     }
 
@@ -481,6 +493,10 @@ fn query_observed_agent_identity(
         .map_err(|error| {
             SemanticActionStoreError::new("query_observed_agent_identity", error.to_string())
         })
+        .and_then(|mut action| {
+            ActionReadHydrator::hydrate(connection, action.iter_mut(), true)?;
+            Ok(action)
+        })
 }
 
 fn query_observed_agent_process_exec(
@@ -517,6 +533,10 @@ fn query_observed_agent_process_exec(
         .optional()
         .map_err(|error| {
             SemanticActionStoreError::new("query_observed_agent_process_exec", error.to_string())
+        })
+        .and_then(|mut action| {
+            ActionReadHydrator::hydrate(connection, action.iter_mut(), true)?;
+            Ok(action)
         })
 }
 

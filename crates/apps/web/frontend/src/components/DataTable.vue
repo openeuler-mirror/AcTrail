@@ -338,13 +338,15 @@ function badgeClass(column, cell) {
   text-transform: capitalize;
 }
 
-.badge-status-success {
+.badge-status-success,
+.badge-status-started {
   border-color: var(--trace-badge-success-border);
   background: var(--trace-badge-success-bg);
   color: var(--trace-badge-success-text);
 }
 
-.badge-status-error {
+.badge-status-error,
+.badge-status-start-failed {
   border-color: var(--trace-badge-error-border);
   background: var(--trace-badge-error-bg);
   color: var(--trace-badge-error-text);

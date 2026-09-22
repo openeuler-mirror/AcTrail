@@ -43,6 +43,27 @@ impl StreamFinalizationReason {
 pub(in crate::llm_pipeline) struct ResponseFinalizer;
 
 impl ResponseFinalizer {
+    /// Closes a request-side call whose response was not observed.
+    ///
+    /// A stream boundary is evidence about observation completeness, not the
+    /// model outcome. In particular, a late trace close must not manufacture
+    /// either an error or a response end time for an otherwise successful
+    /// request observation.
+    pub(in crate::llm_pipeline) fn finalize_response_unobserved(
+        action: &mut SemanticAction,
+        reason: StreamFinalizationReason,
+    ) {
+        action.end_time = None;
+        action.status = SemanticActionStatus::Unknown;
+        action.completeness = SemanticActionCompleteness::Partial;
+        if reason == StreamFinalizationReason::TraceClosed {
+            action.attributes.insert(
+                attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.to_string(),
+                "true".to_string(),
+            );
+        }
+    }
+
     pub(in crate::llm_pipeline) fn finalize_incomplete(
         action: &mut SemanticAction,
         reason: StreamFinalizationReason,

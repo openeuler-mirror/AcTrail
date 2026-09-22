@@ -19,6 +19,7 @@ from .assertion import ProjectSubagentEvidence, ProjectSubagentTrajectoryAsserti
 from .agent import ProjectSubagentAgent
 from .config import ProjectSubagentTrajectoryConfig
 from .scenario import ProjectSubagentTrajectoryScenario
+from .web.assertion import OfflineDelegationAssertion
 
 
 class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
@@ -99,6 +100,18 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 f"graph returned {graph.node_count} nodes, {graph.edge_count} "
                 f"edges, and {graph.trajectory_count} trajectories with "
                 "lineage-derived fields and statistics",
+            )
+            test_context.report_progress(
+                "web-offline-delegation",
+                "running the Web correlation module against recorded request content",
+            )
+            delegated = OfflineDelegationAssertion(self._environment, trace_id).require(
+                self._viewer_json(["actions", "--trace-id", str(trace_id)])
+            )
+            results["web-offline-delegation"] = TestResult(
+                TestStatus.PASSED,
+                f"{delegated} long prompts have unique offline child links; "
+                "runtime persisted no prompt-derived child links",
             )
             analysis = assertion.require_real_analysis_scenario()
             results["web-analysis-scenario"] = TestResult(

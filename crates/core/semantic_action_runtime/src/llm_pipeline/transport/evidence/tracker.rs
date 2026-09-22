@@ -88,8 +88,7 @@ impl EvidenceSnapshot {
         if !self.seen_segment_ids.insert(segment.segment_id.get()) {
             return;
         }
-        let mut metadata = segment.clone();
-        metadata.bytes.clear();
+        let metadata = EvidenceTracker::segment_metadata(segment);
         if self.first.is_none() {
             self.first = Some(metadata.clone());
         }
@@ -121,6 +120,33 @@ impl EvidenceSnapshot {
 }
 
 impl EvidenceTracker {
+    fn segment_metadata(segment: &PayloadSegment) -> PayloadSegment {
+        PayloadSegment {
+            segment_id: segment.segment_id,
+            trace_id: segment.trace_id,
+            observed_at: segment.observed_at,
+            process: segment.process,
+            source_boundary: segment.source_boundary,
+            content_state: segment.content_state,
+            direction: segment.direction,
+            stream_key: segment.stream_key.clone(),
+            sequence: segment.sequence,
+            original_size: segment.original_size,
+            captured_size: segment.captured_size,
+            operation_id: segment.operation_id,
+            operation_offset: segment.operation_offset,
+            operation_original_size: segment.operation_original_size,
+            operation_captured_size: segment.operation_captured_size,
+            operation_completion_state: segment.operation_completion_state,
+            truncation: segment.truncation,
+            redaction: segment.redaction,
+            library: segment.library.clone(),
+            symbol: segment.symbol.clone(),
+            protocol_hint: segment.protocol_hint.clone(),
+            bytes: Vec::new(),
+        }
+    }
+
     pub(in crate::llm_pipeline) fn cursor(&self, message_start: usize) -> EvidenceCursor {
         let next_range_id = self
             .ranges
@@ -136,8 +162,7 @@ impl EvidenceTracker {
         end: usize,
         segment: &PayloadSegment,
     ) {
-        let mut metadata = segment.clone();
-        metadata.bytes.clear();
+        let metadata = Self::segment_metadata(segment);
         let id = self.next_range_id;
         self.next_range_id = self.next_range_id.saturating_add(1);
         self.ranges.push_back(EvidenceRange {

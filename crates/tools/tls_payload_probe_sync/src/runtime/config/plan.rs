@@ -11,6 +11,7 @@ use tls_probe_point_finder::BinaryIdentity;
 use crate::runtime::maps;
 
 use super::codec::parse_points;
+use super::factory::RuntimeConfigFactory;
 use super::state::HookPoint;
 
 static PLAN_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Option<RuntimePlan>>>> = OnceLock::new();
@@ -95,7 +96,12 @@ fn lookup_daemon_plan_for_current_process(
         return Ok(None);
     };
     let socket_path = PathBuf::from(socket_path);
-    match lookup_runtime_plan(&socket_path, current_exe) {
+    match lookup_runtime_plan(
+        &socket_path,
+        current_exe,
+        RuntimeConfigFactory::required_max_frame_bytes()?,
+        RuntimeConfigFactory::plan_lookup_timeout()?,
+    ) {
         Ok(PlanLookupResponse::Found(plan)) => {
             let plan = descriptor_to_runtime_plan(plan)?;
             if plan_matches_current_process(&plan, current_exe) {
@@ -105,10 +111,8 @@ fn lookup_daemon_plan_for_current_process(
             }
         }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
-        Err(error) => Err(format!(
-            "dynamic TLS plan lookup for {} failed: {error}",
-            current_exe.display()
-        )),
+        // An unavailable plan disables only these probe points; the application keeps running.
+        Err(_) => Ok(None),
     }
 }
 
@@ -117,7 +121,12 @@ fn lookup_daemon_plan(binary: &Path) -> Result<Option<RuntimePlan>, String> {
         return Ok(None);
     };
     let socket_path = PathBuf::from(socket_path);
-    match lookup_runtime_plan(&socket_path, binary) {
+    match lookup_runtime_plan(
+        &socket_path,
+        binary,
+        RuntimeConfigFactory::required_max_frame_bytes()?,
+        RuntimeConfigFactory::plan_lookup_timeout()?,
+    ) {
         Ok(PlanLookupResponse::Found(plan)) => {
             let plan = descriptor_to_runtime_plan(plan)?;
             if plan_matches_probe_binary(&plan, binary) {
@@ -127,10 +136,7 @@ fn lookup_daemon_plan(binary: &Path) -> Result<Option<RuntimePlan>, String> {
             }
         }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
-        Err(error) => Err(format!(
-            "dynamic TLS plan lookup for {} failed: {error}",
-            binary.display()
-        )),
+        Err(_) => Ok(None),
     }
 }
 
@@ -139,7 +145,12 @@ fn lookup_daemon_plan_without_mapping(binary: &Path) -> Result<Option<RuntimePla
         return Ok(None);
     };
     let socket_path = PathBuf::from(socket_path);
-    match lookup_runtime_plan(&socket_path, binary) {
+    match lookup_runtime_plan(
+        &socket_path,
+        binary,
+        RuntimeConfigFactory::required_max_frame_bytes()?,
+        RuntimeConfigFactory::plan_lookup_timeout()?,
+    ) {
         Ok(PlanLookupResponse::Found(plan)) => {
             let plan = descriptor_to_runtime_plan(plan)?;
             if same_binary(&plan.binary, binary) {
@@ -149,10 +160,7 @@ fn lookup_daemon_plan_without_mapping(binary: &Path) -> Result<Option<RuntimePla
             }
         }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
-        Err(error) => Err(format!(
-            "dynamic TLS plan prefetch for {} failed: {error}",
-            binary.display()
-        )),
+        Err(_) => Ok(None),
     }
 }
 

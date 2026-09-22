@@ -175,6 +175,9 @@ enum actrail_tls_payload_library {
 enum actrail_tls_completion_flags {
     ACTRAIL_TLS_PAYLOAD_COMPLETION_FAILED = 2,
 };
+enum actrail_tls_direct_capture_flags {
+    ACTRAIL_TLS_PAYLOAD_POLICY_LIMITED = 1,
+};
 enum actrail_tls_payload_copy_limit {
     ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_ABI_BYTES = 65536,
     ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES = 65535,

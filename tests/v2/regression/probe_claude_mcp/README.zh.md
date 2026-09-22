@@ -21,6 +21,8 @@ runner 会先刷新 release 产物。Claude 缺失或外部可用性检查失败
 测例在 case work directory 内生成独立 operator config，隔离 control socket、
 PID、日志、SQLite、TLS-sync socket、export 和 plugin 路径，不会停止默认或其他
 显式配置启动的 daemon。
+配置通过 `actrailctl init -f --patch` 从当前默认值生成，并显式开启
+`[payload.mcp] enabled = true`，以采集本测例要求的 MCP 语义图和诊断。
 
 ## 验证范围
 
@@ -186,6 +188,8 @@ toml_string() {
   printf '\n[payload.tls]\n'
   printf 'sync_event_socket_path = %s\n' \
     "$(toml_string "$TLS_SYNC_SOCKET")"
+  printf '\n[payload.mcp]\n'
+  printf 'enabled = true\n'
   printf '\n[cluster.report]\n'
   printf 'spool_dir = %s\n' \
     "$(toml_string "$RUNTIME_DIR/data/cluster-spool")"
@@ -242,7 +246,7 @@ Unix socket 的 108-byte 上限。probe 参数与当前代码中的
 #### 手动指令
 
 ```bash
-"${DAEMON[@]}" init -f --patch "$OPERATOR_PATCH"
+"${CONTROL[@]}" init -f --patch "$OPERATOR_PATCH"
 "${DAEMON[@]}" stop
 "${CONTROL[@]}" clean
 "${DAEMON[@]}" start

@@ -37,6 +37,7 @@ pub(in crate::llm_pipeline) struct ActionProjector {
 
 pub(in crate::llm_pipeline) struct ActionRecord {
     pub(in crate::llm_pipeline) changed: bool,
+    pub(in crate::llm_pipeline) existing: bool,
     pub(in crate::llm_pipeline) diagnostic: Option<LlmPipelineDiagnostic>,
 }
 
@@ -90,9 +91,11 @@ impl ActionProjector {
         action: &SemanticAction,
     ) -> ActionRecord {
         let key = (action.trace_id, action.action_id.clone());
+        let existing = self.open_action_versions.contains_key(&key);
         if self.open_action_versions.get(&key) == Some(action) {
             return ActionRecord {
                 changed: false,
+                existing,
                 diagnostic: None,
             };
         }
@@ -111,6 +114,7 @@ impl ActionProjector {
                     StateAdmission::SequenceExhausted => {
                         return ActionRecord {
                             changed: true,
+                            existing,
                             diagnostic: Some(capacity_diagnostic(
                                 action,
                                 LlmPipelineDiagnosticCode::ActionVersionSequenceExhausted,
@@ -127,6 +131,7 @@ impl ActionProjector {
         }
         ActionRecord {
             changed: true,
+            existing,
             diagnostic,
         }
     }

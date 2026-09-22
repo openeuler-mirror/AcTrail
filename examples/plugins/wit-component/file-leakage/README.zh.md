@@ -44,7 +44,7 @@ cp examples/plugins/wit-component/file-leakage/target/wasm32-wasip2/release/actr
 
 ```bash
 export CONFIG="$HOME/.config/actrail/operator.conf"
-sudo target/release/actraild --config "$CONFIG" init --force
+sudo target/release/actrailctl --config "$CONFIG" init --force
 ```
 
 确认 capture profile 至少包含文件基础观测能力，并且插件发现目录与安装目录一致：

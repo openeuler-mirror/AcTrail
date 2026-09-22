@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use crate::records::{decode_map, escape};
+use crate::records::decode_map;
 
 /// Statically known attribute keys, assigned 1-based codes in declaration order.
 /// This list mirrors `crates/contracts/semantic_action/src/attr_keys.rs`; keys
@@ -125,8 +125,6 @@ const KNOWN_KEYS: &[&str] = &[
     "llm.request.block_count",
     "llm.request.body_json",
     "llm.request.body_text",
-    "llm.request.canonical_body_bytes",
-    "llm.request.canonical_body_hash",
     "llm.request.classifier_id",
     "llm.request.content_format_version",
     "llm.request.content_state",
@@ -271,45 +269,68 @@ fn key_for_code(code: u16) -> Option<&'static str> {
 /// - `u32` LE unknown-text length
 /// - unknown text (`k=v\n` escaped, reusing the legacy text escape rules)
 pub(in crate::semantic_actions) fn encode_attributes(map: &BTreeMap<String, String>) -> Vec<u8> {
-    let mut known: Vec<(u16, &str)> = Vec::new();
-    let mut unknown: Vec<(&str, &str)> = Vec::new();
-    for (key, value) in map {
-        match key_code(key) {
-            Some(code) => known.push((code, value.as_str())),
-            None => unknown.push((key.as_str(), value.as_str())),
-        }
-    }
-    let mut out = Vec::with_capacity(map.len() * 16);
-    out.extend_from_slice(
-        &u32::try_from(known.len())
-            .expect("attribute count fits u32")
-            .to_le_bytes(),
-    );
-    for (code, value) in known {
-        out.extend_from_slice(&code.to_le_bytes());
-        out.extend_from_slice(
-            &u32::try_from(value.len())
-                .expect("attribute value length fits u32")
-                .to_le_bytes(),
-        );
-        out.extend_from_slice(value.as_bytes());
-    }
-    let unknown_text = encode_unknown(&unknown);
-    out.extend_from_slice(
-        &u32::try_from(unknown_text.len())
-            .expect("unknown attribute text fits u32")
-            .to_le_bytes(),
-    );
-    out.extend_from_slice(unknown_text.as_bytes());
-    out
+    AttributeEncoder::encode(map)
 }
 
-fn encode_unknown(unknown: &[(&str, &str)]) -> String {
-    unknown
-        .iter()
-        .map(|(key, value)| format!("{}={}", escape(key), escape(value)))
-        .collect::<Vec<_>>()
-        .join("\n")
+struct AttributeEncoder {
+    bytes: Vec<u8>,
+}
+
+impl AttributeEncoder {
+    fn encode(map: &BTreeMap<String, String>) -> Vec<u8> {
+        let mut encoder = Self {
+            bytes: Vec::with_capacity(map.len() * 16),
+        };
+        encoder.bytes.extend_from_slice(&0u32.to_le_bytes());
+        let mut known_count = 0usize;
+        for (key, value) in map {
+            if let Some(code) = key_code(key) {
+                encoder.bytes.extend_from_slice(&code.to_le_bytes());
+                encoder.bytes.extend_from_slice(
+                    &u32::try_from(value.len())
+                        .expect("attribute value length fits u32")
+                        .to_le_bytes(),
+                );
+                encoder.bytes.extend_from_slice(value.as_bytes());
+                known_count += 1;
+            }
+        }
+        encoder.bytes[..4].copy_from_slice(
+            &u32::try_from(known_count)
+                .expect("attribute count fits u32")
+                .to_le_bytes(),
+        );
+        let length_offset = encoder.bytes.len();
+        encoder.bytes.extend_from_slice(&0u32.to_le_bytes());
+        let text_offset = encoder.bytes.len();
+        if known_count != map.len() {
+            for (key, value) in map {
+                if key_code(key).is_none() {
+                    if encoder.bytes.len() != text_offset {
+                        encoder.bytes.push(b'\n');
+                    }
+                    encoder.append_escaped(key);
+                    encoder.bytes.push(b'=');
+                    encoder.append_escaped(value);
+                }
+            }
+        }
+        let text_length = u32::try_from(encoder.bytes.len() - text_offset)
+            .expect("unknown attribute text fits u32");
+        encoder.bytes[length_offset..text_offset].copy_from_slice(&text_length.to_le_bytes());
+        encoder.bytes
+    }
+
+    fn append_escaped(&mut self, value: &str) {
+        for byte in value.bytes() {
+            match byte {
+                b'\\' => self.bytes.extend_from_slice(b"\\\\"),
+                b'\n' => self.bytes.extend_from_slice(b"\\n"),
+                b'=' => self.bytes.extend_from_slice(b"\\e"),
+                _ => self.bytes.push(byte),
+            }
+        }
+    }
 }
 
 pub(in crate::semantic_actions) fn decode_attributes(

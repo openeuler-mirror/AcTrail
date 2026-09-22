@@ -47,9 +47,8 @@ class ActrailRuntime:
         self._operator_config = operator_config
         self._operator_config_patch = operator_config_patch
         self.actraild = self._require_binary("actraild")
-        self.actrailctl = (
-            self._require_binary("actrailctl") if clean_control_state else None
-        )
+        self.actrailctl = self._require_binary("actrailctl")
+        self._clean_control_state = clean_control_state
         self.actrailviewer = self._require_binary("actrailviewer")
         self._started = False
 
@@ -98,7 +97,7 @@ class ActrailRuntime:
             self.run_checked(self._init_command()),
             self.run_checked([*self._daemon_command(), "stop"]),
         ]
-        if self.actrailctl is not None:
+        if self._clean_control_state:
             results.append(
                 self.run_checked([*self._control_command(), "clean"])
             )
@@ -182,7 +181,7 @@ class ActrailRuntime:
         return binary
 
     def _init_command(self) -> list[Path | str]:
-        command = [*self._daemon_command(), "init", "-f"]
+        command = [*self._control_command(), "init", "-f"]
         if self._operator_config_patch is not None:
             command.extend(["--patch", self._operator_config_patch])
         return command
@@ -194,8 +193,6 @@ class ActrailRuntime:
         return command
 
     def _control_command(self) -> list[Path | str]:
-        if self.actrailctl is None:
-            raise RuntimeError("actrailctl is disabled for this isolated runtime")
         command: list[Path | str] = [self.actrailctl]
         if self._operator_config is not None:
             command.extend(["--config", self._operator_config])

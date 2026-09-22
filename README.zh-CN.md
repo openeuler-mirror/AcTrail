@@ -119,7 +119,7 @@ sudo rpm -Uvh AcTrail-<VERSION>-<RELEASE>.<DISTRO>.<ARCH>.rpm
 安装后，初始化配置、启动 daemon、运行一条受观测命令，然后启动本地 Web UI：
 
 ```bash
-sudo actraild init
+sudo actrailctl init
 sudo actraild start
 sudo actrailctl launch --name quickstart -- \
   bash -lc 'echo ACTRAIL_QUICKSTART_OK; id >/dev/null; ls /etc/hosts >/dev/null'

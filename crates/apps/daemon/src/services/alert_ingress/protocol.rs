@@ -41,6 +41,7 @@ impl AlertHostClient {
             trace_id,
             alert_token,
             QueuedAlertDraft::FileAccessBoundary(alert),
+            AlertAuthorization::RuntimeAuthorized,
         )
     }
 
@@ -54,6 +55,7 @@ impl AlertHostClient {
             trace_id,
             alert_token,
             QueuedAlertDraft::CommandExecutionBoundary(alert),
+            AlertAuthorization::RuntimeAuthorized,
         )
     }
 
@@ -62,6 +64,7 @@ impl AlertHostClient {
         trace_id: TraceId,
         alert_token: TraceAlertToken,
         draft: QueuedAlertDraft,
+        authorization: AlertAuthorization,
     ) -> Result<(), PluginRuntimeError> {
         self.admission.begin()?;
         let request = AlertRequest {
@@ -69,6 +72,7 @@ impl AlertHostClient {
             trace_id,
             alert_token,
             draft,
+            authorization,
             created_at: SystemTime::now(),
         };
         match self.request_sender.try_send(request) {
@@ -106,7 +110,27 @@ impl AlertHost for AlertHostClient {
         draft: AlertDraft,
     ) -> Result<(), PluginRuntimeError> {
         self.admission.validate(&draft)?;
-        self.enqueue(trace_id, alert_token, QueuedAlertDraft::Ready(draft))
+        self.enqueue(
+            trace_id,
+            alert_token,
+            QueuedAlertDraft::Ready(draft),
+            AlertAuthorization::PersistedToken,
+        )
+    }
+
+    fn submit_observation_alert(
+        &self,
+        trace_id: TraceId,
+        alert_token: TraceAlertToken,
+        draft: AlertDraft,
+    ) -> Result<(), PluginRuntimeError> {
+        self.admission.validate(&draft)?;
+        self.enqueue(
+            trace_id,
+            alert_token,
+            QueuedAlertDraft::Ready(draft),
+            AlertAuthorization::RuntimeAuthorized,
+        )
     }
 }
 
@@ -244,6 +268,12 @@ impl RegisteredOutput {
                 format!("alert payload is not valid JSON: {error}"),
             )
         })?;
+        if !payload.is_object() {
+            return Err(PluginRuntimeError::new(
+                "alert_payload",
+                "alert payload must encode a JSON object",
+            ));
+        }
         let errors = self
             .validator
             .iter_errors(&payload)
@@ -268,7 +298,14 @@ pub(super) struct AlertRequest {
     pub(super) trace_id: TraceId,
     pub(super) alert_token: TraceAlertToken,
     pub(super) draft: QueuedAlertDraft,
+    pub(super) authorization: AlertAuthorization,
     pub(super) created_at: SystemTime,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum AlertAuthorization {
+    RuntimeAuthorized,
+    PersistedToken,
 }
 
 pub(super) enum QueuedAlertDraft {

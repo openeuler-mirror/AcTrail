@@ -1,7 +1,8 @@
 //! Dispatch from validated input to control-plane contracts.
 
 use control_contract::command::{
-    ControlCommand, DoctorCommand, ListTracesCommand, TrackAddCommand, TrackRemoveCommand,
+    ControlCommand, DoctorCommand, ListTracesCommand, ReportSessionClosedCommand,
+    ReportWorkLifecycleCommand, TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{ControlError, ControlReply};
 use model_core::ids::RequestId;
@@ -40,6 +41,30 @@ pub fn dispatch(
             selector,
         }),
         CtlCommand::Doctor => ControlCommand::Doctor(DoctorCommand { request_id }),
+        CtlCommand::WorkLifecycle {
+            trace_id,
+            session_id,
+            task_id,
+            kind,
+            state,
+        } => ControlCommand::ReportWorkLifecycle(ReportWorkLifecycleCommand {
+            request_id,
+            trace_id,
+            session_id,
+            task_id,
+            kind,
+            state,
+            observed_at: std::time::SystemTime::now(),
+        }),
+        CtlCommand::SessionClosed {
+            trace_id,
+            session_id,
+        } => ControlCommand::ReportSessionClosed(ReportSessionClosedCommand {
+            request_id,
+            trace_id,
+            session_id,
+            observed_at: std::time::SystemTime::now(),
+        }),
         CtlCommand::TlsPlanQuery { binary } => {
             return query_launch_tls_plan_reply(client, request_id, &binary)
                 .map(ControlReply::LaunchTlsPlan);

@@ -2,7 +2,7 @@
   <aside v-if="shouldRender" class="detail-panel">
     <div class="detail-header">
       <div>
-        <span>{{ detailKind }}</span>
+        <span v-if="detailKind !== detailTitle">{{ detailKind }}</span>
         <h2>{{ detailTitle }}</h2>
       </div>
       <button class="icon-button subtle-button" type="button" title="Clear" @click="$emit('clear')">
@@ -200,17 +200,12 @@ const llmRequestContentMetadata = computed(() => {
   const attributes = action.attributes ?? {};
   return {
     state: attributes['llm.request.content_state'],
-    bytes: attributes['llm.request.canonical_body_bytes'],
+    payloadBytes: attributes['llm.request.payload_bytes'],
     blocks: attributes['llm.request.block_count'],
-    hash: attributes['llm.request.canonical_body_hash'],
   };
 });
 const llmRequestContentAvailable = computed(() => {
-  const metadata = llmRequestContentMetadata.value;
-  const bytes = Number(metadata?.bytes);
-  return metadata?.state === 'canonical_blocks'
-    && Number.isFinite(bytes)
-    && bytes <= LLM_REQUEST_DETAIL_MAX_BYTES;
+  return llmRequestContentMetadata.value?.state === 'canonical_blocks';
 });
 const panelError = computed(() => props.error || genericPayloadError.value || filePathSetError.value);
 const shouldRender = computed(() => !props.hideWhenEmpty || Boolean(props.detail || panelError.value));
@@ -362,7 +357,12 @@ async function loadLlmRequestContent() {
       maxBytes: LLM_REQUEST_DETAIL_MAX_BYTES,
     });
     if (activeLlmRequestLoad === token) {
-      llmRequestContent.value = response.content ?? null;
+      if (response.content?.truncated) {
+        llmRequestError.value = `Request insights exceed the ${LLM_REQUEST_DETAIL_MAX_BYTES / 1024} KiB view limit. Open Canonical request body to browse the content.`;
+        llmRequestContent.value = null;
+      } else {
+        llmRequestContent.value = response.content ?? null;
+      }
     }
   } catch (err) {
     if (activeLlmRequestLoad === token) {

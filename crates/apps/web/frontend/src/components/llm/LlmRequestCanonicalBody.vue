@@ -2,7 +2,7 @@
   <section v-if="available" class="detail-section canonical-request-body">
     <h3>Canonical request body</h3>
     <p class="canonical-request-meta">
-      {{ metadata.state }} · {{ formatBytes(metadata.bytes) }}
+      {{ metadata.state }} · request payload: {{ formatBytes(metadata.payloadBytes) }}
       <template v-if="metadata.blocks"> · {{ metadata.blocks }} blocks</template>
     </p>
     <LazyJsonTreeNode

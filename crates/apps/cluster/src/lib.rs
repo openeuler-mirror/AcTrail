@@ -541,8 +541,11 @@ fn export_sqlite_snapshot(
 ) -> Result<Option<Vec<u8>>, String> {
     match storage_config.backend() {
         StorageBackendKind::Sqlite => {}
+        StorageBackendKind::NoOp => return Ok(None),
     }
-    let source = storage_config.path();
+    let source = storage_config
+        .path()
+        .ok_or("SQLite snapshot requires a storage path")?;
     if !source.exists() {
         return Err(format!(
             "sqlite storage path does not exist: {}",

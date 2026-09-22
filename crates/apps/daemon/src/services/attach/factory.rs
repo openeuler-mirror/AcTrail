@@ -10,7 +10,6 @@ use config_core::daemon::{
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
 use export_core::ExportRuntime;
-use idle_detector::IdleDetector;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
 use semantic_action_runtime::LiveSemanticActionRuntime;
@@ -24,7 +23,6 @@ use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::enforcement::FanotifyEnforcementService;
-use crate::services::idle_detector::IdleRuntime;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
@@ -96,10 +94,10 @@ impl StorageAttachService {
     }
 
     pub(in crate::services) fn new_with_provider_classifier(
-        profiles: DaemonProfileRegistry,
+        mut profiles: DaemonProfileRegistry,
         mut storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
-        payload_config: PayloadConfig,
+        mut payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify_config: SeccompNotifyConfig,
         process_seccomp_config: ProcessSeccompConfig,
@@ -122,6 +120,18 @@ impl StorageAttachService {
         provider_classifier: Box<dyn ProviderClassifier>,
         provider_classification_enabled: bool,
     ) -> Result<Self, control_contract::reply::ControlError> {
+        payload_config.resolve_stdio_capture(&semantic_retention);
+        let mut file_collection = file_observation.collection;
+        if !file_observation.enabled || !semantic_retention.projection_enabled {
+            file_collection.writable_open = false;
+            file_collection.path_mutations = false;
+            file_collection.fd_mutations = false;
+            file_collection.read = Default::default();
+            file_collection.write = Default::default();
+        }
+        if !payload_config.stdio.enabled {
+            profiles.disable_stdio_capture();
+        }
         let process_records = storage.list_process_records().map_err(storage_error)?;
         let block_size = process_id_block_size()?;
         let (block_start, block_end) = storage
@@ -137,19 +147,13 @@ impl StorageAttachService {
                 })?;
         let payload_tls_enabled = payload_config.tls.enabled;
         let payload_tls_redaction_policy = payload_config.tls.redaction_policy;
-        let payload_tls_retention_max_bytes_per_trace =
-            payload_config.tls.retention_max_bytes_per_trace;
         let payload_stdio_enabled = payload_config.stdio.enabled;
         let payload_stdio_redaction_policy = payload_config.stdio.redaction_policy;
-        let payload_stdio_retention_max_bytes_per_trace =
-            payload_config.stdio.retention_max_bytes_per_trace;
         let payload_stdio_stdin_storage_mode = payload_config.stdio.stdin_storage_mode;
         let payload_stdio_stdout_storage_mode = payload_config.stdio.stdout_storage_mode;
         let payload_stdio_stderr_storage_mode = payload_config.stdio.stderr_storage_mode;
         let payload_socket_enabled = payload_config.socket.enabled;
         let payload_socket_redaction_policy = payload_config.socket.redaction_policy;
-        let payload_socket_retention_max_bytes_per_trace =
-            payload_config.socket.retention_max_bytes_per_trace;
         let payload_mcp = payload_config.mcp;
         let launch_seccomp_requirements = launch_seccomp_requirements(
             &payload_config,
@@ -162,10 +166,8 @@ impl StorageAttachService {
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
         );
-        let payload_body_retention_gate = PayloadBodyRetentionGate::new(
-            application_protocol.http2_max_data_preview_bytes,
-            semantic_retention.clone(),
-        );
+        let payload_body_retention_gate =
+            PayloadBodyRetentionGate::new(&application_protocol, semantic_retention.clone());
         let finalization_traces_per_cycle = usize::try_from(trace_finalization.traces_per_cycle)
             .map_err(|error| {
                 control_contract::reply::ControlError::new(
@@ -187,24 +189,26 @@ impl StorageAttachService {
         let network_control = NetworkControlService::new(&network_control_config)?;
         let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
         let post_trace_coordinator = PostTraceCoordinator::new(trace_finalization.post_trace)?;
-        let alert_ingress = AlertIngress::new(
+        let mut alert_ingress = AlertIngress::new(
             plugin_alert_runtime,
             storage.as_mut(),
             alert_forwarding.plugin(),
         )?;
-        let resource_metrics = ResourceMetricsSampler::new(resource_metrics, storage.as_mut())?;
-        let idle_detector = if idle_detection.enabled {
-            let idle_interval_id_seed = storage
-                .next_idle_interval_id_seed()
-                .map_err(storage_error)?;
-            Some(IdleDetector::new(
-                idle_detection.threshold,
-                idle_interval_id_seed,
-            ))
+        let idle_detection_alert_host = if idle_detection.enabled {
+            Some(alert_ingress.register_producer(
+                idle_detector::IdleDetector::PRODUCER_ID,
+                idle_detector::IdleDetector::alert_definitions(),
+                storage.as_mut(),
+            )?)
         } else {
             None
         };
-        let idle_runtime = IdleRuntime::new(idle_detector);
+        let agent_executions = agent_host::ExecutionStates::new(idle_detection.enabled);
+        let idle_detection =
+            idle_detector::IdleDetector::new(idle_detection).map_err(|message| {
+                control_contract::reply::ControlError::new("idle_detection_config", message)
+            })?;
+        let resource_metrics = ResourceMetricsSampler::new(resource_metrics, storage.as_mut())?;
         Ok(Self {
             profiles,
             host_id: crate::host_id::get(),
@@ -216,7 +220,15 @@ impl StorageAttachService {
                 ebpf_config,
                 payload_config,
                 process_seccomp_config.clone(),
-                file_observation.bulk_read.fast_path.clone(),
+                file_observation.summary.clone(),
+                semantic_retention.projection_enabled,
+                file_collection,
+                file_observation.enabled
+                    && semantic_retention.projection_enabled
+                    && file_observation.enumerate.enabled,
+                file_observation.enabled
+                    && semantic_retention.projection_enabled
+                    && file_observation.tty.enabled,
             ),
             host_ebpf_preflight: Default::default(),
             identity_reader: ProcfsIdentityReader,
@@ -228,16 +240,13 @@ impl StorageAttachService {
             diagnostic_log_level,
             last_payload_tls_diagnostics: None,
             payload_tls_redaction_policy,
-            payload_tls_retention_max_bytes_per_trace,
             payload_stdio_enabled,
             payload_stdio_redaction_policy,
-            payload_stdio_retention_max_bytes_per_trace,
             payload_stdio_stdin_storage_mode,
             payload_stdio_stdout_storage_mode,
             payload_stdio_stderr_storage_mode,
             payload_socket_enabled,
             payload_socket_redaction_policy,
-            payload_socket_retention_max_bytes_per_trace,
             socket_payload_gate,
             payload_body_retention_gate,
             payload_reorderer: Default::default(),
@@ -269,12 +278,13 @@ impl StorageAttachService {
             ),
             export_runtime,
             alert_ingress,
-            idle_runtime,
+            idle_detection,
+            idle_detection_alert_host,
+            agent_executions,
             alert_forwarding,
             post_trace_broker,
             post_trace_coordinator,
             workload_diagnostics,
-            retained_payload_bytes_by_trace: Default::default(),
             finalized_terminal_traces: Default::default(),
             pending_terminal_finalizations: Default::default(),
             terminal_finalization_queued_at: Default::default(),

@@ -75,7 +75,7 @@ WASM core module 观测插件收到的 batch envelope 是一个 JSON object。�
 | `payload_refs` | array | 是 | 可按授权读取的 payload 引用摘要。 |
 | `actions` | array | 是 | 当前 batch 中的 action 摘要。 |
 
-`payload_refs` 中的元素当前包含：
+`payload_refs` 来自当前批次的 payload evidence 引用。`id` 和 `trace_id` 总是提供；只有当前批次已有实际元数据时，才提供捕获长度、原始长度、脱敏与截断字段。缺失元数据字段会省略。
 
 | 字段 | JSON 类型 | 含义 |
 | --- | --- | --- |
@@ -115,6 +115,12 @@ WIT component 观测插件收到的是结构化 `observation-batch` record：
 
 插件如果需要读取 payload 内容，必须在 manifest 声明 `payload-read` capability，并在加载时获得对应 `--grant`。插件如果只需要 action 摘要，不需要额外 payload 授权。
 
+在线发布只传递引用，不预取历史 payload 内容。插件显式调用 `payload_read`（legacy）或 `read-payload`（WIT）时，宿主通过有界请求队列按当前 trace 和 segment ID 查询存储，并校验实际 segment 的 source boundary 授权。每次响应受 `max_bytes` 和 manifest 读取上限约束；消费回调结束后不保留 payload 内容快照。
+
+未保存或已删除的内容返回 `not-found`；权限不足返回 `denied`。数据库故障、broker 关闭或超时返回 `failed`，legacy 对应 `-5`，并计入 `payload_read.failed`。NoOp 后端返回 `not-found`。`truncated` 表示此次读取后仍有未返回的存储字节；offset 超过内容末尾时返回空内容。WIT 保留实际 `total-bytes`，无需为读取复制整个 trace 的 payload。
+
+`payload_segment_max_count` 限制每个 WASM 批次暴露的引用数量；`payload_read_max_bytes` 限制单次读取字节数。引用列表没有原始内容字节。
+
 ### WIT Component 定时复评
 
 WIT component 可以在 `consume` 中使用 `observation-context-read`：
@@ -144,6 +150,8 @@ analyze: func(task: post-trace-task) -> result<_, string>
 | `trace-file-state-read` | 成功文件写 action 对应的终态文件状态 | 只能按当前 trace 的 action ID 查询，受次数和超时限制。 |
 | `trace-activity-read` | LLM exchange 字节计数、命令行与起止时间、trace 容器归属 | 不包含请求/响应正文；可在 `consume` 中读取当前 observation trace，也可在 `analyze` 中读取当前终态 trace；两种调用都受独立的分页和总行数限制。 |
 | `alert-write` | 无读取能力；向独立告警队列提交 manifest 已声明的告警 | 请求必须携带当前 trace 授权 token；`alert-draft.deduplication-key` 非空时，相同 trace、告警定义和 key 只持久化一次。 |
+
+在线 `alert-write` 先由宿主校验当前 callback 的 trace/token。授权通过后，NoOp 或观测写入失败不会取消在线告警转发；SQLite 已确认的重复告警仍不转发。历史 `analyze` 调用通过持久化授权校验，没有对应历史授权时不转发。
 
 `trace-activity-read` 将已经持久化的 `llm.call`、request 和可选 response 组合为一条 LLM exchange，并提供命令行、起止时间、Agent 顶层子命令标记和容器归属。实时 observation worker 调用时，宿主从 batch 携带的 trace 上下文确定唯一可读的 trace ID；插件不能把 hostcall 切换到其他 trace。
 

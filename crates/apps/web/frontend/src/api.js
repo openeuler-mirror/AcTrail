@@ -191,8 +191,8 @@ export function readActionTree(traceId) {
   return fetchJson(`/api/traces/${traceId}/action-tree`);
 }
 
-export function readWaterfall(traceId) {
-  return fetchJson(`/api/traces/${traceId}/waterfall`);
+export function readWaterfall(traceId, { signal } = {}) {
+  return fetchJson(`/api/traces/${traceId}/waterfall`, { signal });
 }
 
 export function readActionTreeRoot(traceId) {
@@ -219,8 +219,8 @@ export function readLlmTrajectoryGraph(traceId, { signal } = {}) {
   );
 }
 
-export function readActionDetail(traceId, actionId) {
-  return fetchJson(`/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}`);
+export function readActionDetail(traceId, actionId, { signal } = {}) {
+  return fetchJson(`/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}`, { signal });
 }
 
 export function readActionFilePathSet(traceId, actionId, { offset, limit }) {
@@ -229,9 +229,10 @@ export function readActionFilePathSet(traceId, actionId, { offset, limit }) {
   );
 }
 
-export function readActionLlmRequestContent(traceId, actionId, { maxBytes }) {
+export function readActionLlmRequestContent(traceId, actionId, { maxBytes, signal }) {
   return fetchJson(
     `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/llm-request?max_bytes=${maxBytes}`,
+    { signal },
   );
 }
 

@@ -138,9 +138,13 @@ impl StorageAttachService {
         )
         .with_metadata("code", issue.code)
         .with_metadata("plugin_instance", issue.instance_id);
-        RecordingWriter::new(self.storage.as_mut())
-            .persist_diagnostic(diagnostic)
-            .map_err(|error| ControlError::new(error.stage, error.message))
+        if let Err(error) =
+            RecordingWriter::new(self.storage.as_mut()).persist_diagnostic(diagnostic)
+        {
+            tracing::warn!(trace_id = %issue.trace_id, stage = %error.stage, message = %error.message,
+                "post-trace diagnostic storage delivery failed locally");
+        }
+        Ok(())
     }
 }
 

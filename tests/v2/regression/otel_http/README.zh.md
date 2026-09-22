@@ -116,7 +116,7 @@ root_dir = "$WORK/data/cluster"
 directory = "$REPO/examples/plugins/builtin"
 EOF
 
-"$BIN/actraild" --config "$WORK/actraild.conf" \
+"$BIN/actrailctl" --config "$WORK/actraild.conf" \
   init -f --patch "$WORK/actraild.patch.toml"
 "$BIN/actraild" --config "$WORK/actraild.conf" stop
 "$BIN/actrailctl" --config "$WORK/actraild.conf" clean

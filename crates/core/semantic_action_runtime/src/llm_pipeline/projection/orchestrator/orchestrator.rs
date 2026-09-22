@@ -34,7 +34,14 @@ impl ProjectionCoordinator {
         let record = self.projector.record_action(&action);
         output.diagnostics.extend(record.diagnostic);
         if record.changed {
-            output.actions.push(action);
+            if record.existing {
+                output
+                    .updates
+                    .push(crate::live::ActionUpdateFactory::lifecycle(&action, None));
+                output.updated_actions.push(action);
+            } else {
+                output.actions.push(action);
+            }
         }
     }
 }

@@ -1,0 +1,20 @@
+# Fixed work per cell; the same values are used for 0, P and C.
+rounds = 3
+warmups = 1
+timeout_seconds = 120.0
+drain_timeout_seconds = 60.0
+poll_seconds = 0.01
+lock_timeout_seconds = 5.0
+build_timeout_seconds = 3600.0
+fork_operations = 1000
+exec_operations = 100
+task_iterations = 1000000
+read_operations = 8192
+write_operations = 8192
+block_bytes = 4096
+idle_seconds = 1.0
+agent_turns = 120
+agent_input_bytes = 128
+maas_max_request_bytes = 16777216
+stdio_operations = 10000
+agent_tpot_ms = [3]

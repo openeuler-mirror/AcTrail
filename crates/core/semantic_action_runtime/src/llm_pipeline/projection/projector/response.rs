@@ -2,7 +2,9 @@
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus};
+use semantic_action::{
+    LlmResponseRetention, SemanticAction, SemanticActionKind, SemanticActionStatus,
+};
 
 use crate::llm_pipeline::config::StreamClassifierConfig;
 use crate::llm_pipeline::transport::HttpResponseParts;
@@ -71,11 +73,17 @@ pub(super) fn project_stream_llm_response_message_actions(
     force_terminal: bool,
 ) -> Option<LlmResponseProjection> {
     let classifier_config = StreamClassifierConfig::from_semantic_retention(config);
+    let retention = LlmResponseRetention {
+        content: config.llm_response_assembled_provider_enabled(),
+        tool_calls: config.llm_response_tool_calls_enabled(),
+        usage: config.llm_response_usage_enabled(),
+    };
     let progress = parse_llm_response_progress(
         SseBodySource::SplitHttp,
         &http.body,
         codecs,
         classifier_config,
+        retention,
         sse_cache,
         http.complete || force_terminal,
     )?;
@@ -91,6 +99,7 @@ pub(super) fn project_stream_llm_response_message_actions(
         &http.body,
         codecs,
         classifier_config,
+        retention,
         sse_cache,
     )?;
     let attributes = llm_response_attributes(config, evidence, raw_bytes, &http, &body);
@@ -132,11 +141,17 @@ pub(super) fn project_raw_stream_llm_response_actions(
     force_terminal: bool,
 ) -> Option<LlmResponseProjection> {
     let classifier_config = StreamClassifierConfig::from_semantic_retention(config);
+    let retention = LlmResponseRetention {
+        content: config.llm_response_assembled_provider_enabled(),
+        tool_calls: config.llm_response_tool_calls_enabled(),
+        usage: config.llm_response_usage_enabled(),
+    };
     let progress = parse_llm_response_progress(
         SseBodySource::RawBytes,
         bytes,
         codecs,
         classifier_config,
+        retention,
         sse_cache,
         force_terminal,
     )?;
@@ -150,6 +165,7 @@ pub(super) fn project_raw_stream_llm_response_actions(
         bytes,
         codecs,
         classifier_config,
+        retention,
         sse_cache,
     )?;
     let attributes = raw_llm_response_attributes(config, evidence, bytes, &body);

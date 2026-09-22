@@ -1,5 +1,6 @@
 //! Stateful HTTP/1 wire decoder.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 const HEADER_END: &[u8] = b"\r\n\r\n";
@@ -33,6 +34,35 @@ impl Http1DecodeFailure {
 }
 
 #[derive(Clone, Debug)]
+pub(in crate::llm_pipeline) enum DecodedHttp1Body {
+    Shared(Arc<Vec<u8>>),
+    WireRange(Range<usize>),
+}
+
+impl DecodedHttp1Body {
+    pub(in crate::llm_pipeline) fn len(&self) -> usize {
+        match self {
+            Self::Shared(bytes) => bytes.len(),
+            Self::WireRange(range) => range.len(),
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn bytes<'a>(&'a self, wire: &'a [u8]) -> Option<&'a [u8]> {
+        match self {
+            Self::Shared(bytes) => Some(bytes.as_slice()),
+            Self::WireRange(range) => wire.get(range.clone()),
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn into_shared(self) -> Option<Arc<Vec<u8>>> {
+        match self {
+            Self::Shared(bytes) => Some(bytes),
+            Self::WireRange(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(in crate::llm_pipeline) struct DecodedHttp1Message {
     pub(in crate::llm_pipeline) protocol: &'static str,
     pub(in crate::llm_pipeline) method: Option<String>,
@@ -41,7 +71,7 @@ pub(in crate::llm_pipeline) struct DecodedHttp1Message {
     pub(in crate::llm_pipeline) status_code: Option<String>,
     pub(in crate::llm_pipeline) reason: Option<String>,
     pub(in crate::llm_pipeline) headers_text: String,
-    pub(in crate::llm_pipeline) body: Arc<Vec<u8>>,
+    pub(in crate::llm_pipeline) body: DecodedHttp1Body,
     pub(in crate::llm_pipeline) declared_body_len: Option<usize>,
     pub(in crate::llm_pipeline) encoded_len: usize,
     pub(in crate::llm_pipeline) complete: bool,
@@ -73,7 +103,7 @@ struct ActiveMessage {
     status_code: Option<String>,
     reason: Option<String>,
     headers_text: String,
-    body: Arc<Vec<u8>>,
+    body: Option<Arc<Vec<u8>>>,
     body_start: usize,
     wire_cursor: usize,
     framing: BodyFraming,
@@ -117,7 +147,7 @@ impl Http1Decoder {
                 status_code: None,
                 reason: None,
                 headers_text: String::new(),
-                body: Arc::new(Vec::new()),
+                body: Some(Arc::new(Vec::new())),
                 body_start: 0,
                 wire_cursor: 0,
                 framing: BodyFraming::Chunked,
@@ -182,7 +212,16 @@ impl Http1Decoder {
             status_code: parsed.status_code,
             reason: parsed.reason,
             headers_text,
-            body: Arc::new(Vec::new()),
+            // Fixed-length requests are projected synchronously from the
+            // caller's wire buffer. Only decoded/chunked bodies and responses
+            // need separate owned storage.
+            body: if self.direction == Http1Direction::Request
+                && matches!(parsed.framing, BodyFraming::Fixed(_))
+            {
+                None
+            } else {
+                Some(Arc::new(Vec::new()))
+            },
             body_start,
             wire_cursor: body_start,
             framing: parsed.framing,
@@ -245,7 +284,9 @@ impl Http1Decoder {
                             // field; an arbitrary malformed chunk stays local.
                             active.framing = BodyFraming::UntilEof;
                             active.wire_cursor = active.body_start;
-                            Arc::make_mut(&mut active.body).clear();
+                            if let Some(body) = &mut active.body {
+                                Arc::make_mut(body).clear();
+                            }
                             active.copy_wire_delta(wire, wire.len());
                             return Ok(());
                         }
@@ -329,7 +370,9 @@ impl ActiveMessage {
         if end <= self.wire_cursor {
             return;
         }
-        Arc::make_mut(&mut self.body).extend_from_slice(&wire[self.wire_cursor..end]);
+        if let Some(body) = &mut self.body {
+            Arc::make_mut(body).extend_from_slice(&wire[self.wire_cursor..end]);
+        }
         self.wire_cursor = end;
     }
 
@@ -342,7 +385,10 @@ impl ActiveMessage {
             status_code: self.status_code.clone(),
             reason: self.reason.clone(),
             headers_text: self.headers_text.clone(),
-            body: Arc::clone(&self.body),
+            body: match &self.body {
+                Some(body) => DecodedHttp1Body::Shared(Arc::clone(body)),
+                None => DecodedHttp1Body::WireRange(self.body_start..self.wire_cursor),
+            },
             declared_body_len: match self.framing {
                 BodyFraming::None => Some(0),
                 BodyFraming::Fixed(length) => Some(length),

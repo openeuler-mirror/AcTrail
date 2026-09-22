@@ -15,10 +15,9 @@ use storage_factory::{
 use super::super::{
     AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
     ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig, DEFAULT_ACTIVE_TRACE_MAX,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
-    DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
-    DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
-    DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+    DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
+    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
@@ -37,17 +36,17 @@ use super::super::{
     DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
     EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
     EnforcementScope, EnforcementSeccompSyscall, ExistingContainerCgroups,
-    FileBulkReadFastPathConfig, FileBulkReadObservationConfig, FileMetadataRetention,
-    FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
-    FsEnumerateObservationConfig, Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig,
-    HttpHeadersRetention, IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention,
-    L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig,
-    LlmProjectionStateConfig, LlmRequestBodyExportRetention, LlmRequestContentRetention,
-    LlmResponseContentRetention, LlmStreamClassifierConfig, LlmToolCallRetention,
-    LlmToolResultContentExportRetention, LlmTrajectoryConfig, LlmUsageRetention,
-    MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS, McpJsonRpcContentRetention, MemlockRlimit,
-    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
-    PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    FileBulkReadObservationConfig, FileCollectionConfig, FileIoCollectionConfig,
+    FileIoSummaryConfig, FileMetadataRetention, FileObservationConfig, FileRawEventRetention,
+    FileTtyObservationConfig, FsEnumerateObservationConfig, Http2DataContentRetention,
+    HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention, IpcLineageConfig,
+    L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention,
+    L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig, LlmRequestBodyExportRetention,
+    LlmRequestContentRetention, LlmResponseContentRetention, LlmStreamClassifierConfig,
+    LlmToolCallRetention, LlmToolResultContentExportRetention, LlmTrajectoryConfig,
+    LlmUsageRetention, McpJsonRpcContentRetention, MemlockRlimit, NetworkControlConfig,
+    NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
@@ -83,8 +82,8 @@ mod file;
 mod hand_observation;
 #[path = "document/helpers.rs"]
 mod helpers;
-#[path = "document/idle.rs"]
-mod idle;
+#[path = "document/idle_detection.rs"]
+mod idle_detection;
 #[path = "document/network.rs"]
 mod network;
 #[path = "document/payload.rs"]
@@ -108,7 +107,7 @@ use command::*;
 use file::*;
 use hand_observation::*;
 use helpers::*;
-use idle::*;
+use idle_detection::*;
 use network::*;
 use payload::*;
 use plugin::*;
@@ -215,34 +214,23 @@ impl OperatorDocument {
         }
         let storage = StorageDocument {
             backend: config.storage.backend().as_str().to_string(),
-            sqlite: SqliteStorageDocument {
-                path: config.storage.path().display().to_string(),
-                busy_timeout_ms: config.storage.sqlite_busy_timeout_ms(),
-                cold_field_compression_min_bytes: config
-                    .storage
-                    .sqlite_cold_field_compression_min_bytes(),
-                cold_field_zstd_level: config.storage.sqlite_cold_field_zstd_level(),
-                event_payload_dictionary_cache_bytes: config
-                    .storage
-                    .sqlite_event_payload_dictionary_cache_bytes(),
-                event_path_dictionary_cache_bytes: config
-                    .storage
-                    .sqlite_event_path_dictionary_cache_bytes(),
-                event_record_layout: config
-                    .storage
-                    .sqlite_event_record_layout()
-                    .as_str()
-                    .to_string(),
-                event_record_block_max_events: config
-                    .storage
-                    .sqlite_event_record_block_max_events(),
-                event_record_block_max_uncompressed_bytes: config
-                    .storage
-                    .sqlite_event_record_block_max_uncompressed_bytes(),
-                event_record_block_zstd_level: config
-                    .storage
-                    .sqlite_event_record_block_zstd_level(),
-            },
+            sqlite: config
+                .storage
+                .sqlite_config()
+                .map(|sqlite| SqliteStorageDocument {
+                    path: sqlite.path.display().to_string(),
+                    busy_timeout_ms: sqlite.busy_timeout_ms,
+                    cold_field_compression_min_bytes: sqlite.cold_field_compression_min_bytes,
+                    cold_field_zstd_level: sqlite.cold_field_zstd_level,
+                    event_payload_dictionary_cache_bytes: sqlite
+                        .event_payload_dictionary_cache_bytes,
+                    event_path_dictionary_cache_bytes: sqlite.event_path_dictionary_cache_bytes,
+                    event_record_layout: sqlite.event_record_layout.as_str().to_string(),
+                    event_record_block_max_events: sqlite.event_record_block_max_events,
+                    event_record_block_max_uncompressed_bytes: sqlite
+                        .event_record_block_max_uncompressed_bytes,
+                    event_record_block_zstd_level: sqlite.event_record_block_zstd_level,
+                }),
             retention: StorageRetentionDocument::from_config(&config.storage_retention),
         };
         Self {
@@ -338,7 +326,6 @@ impl OperatorDocument {
             ebpf: EbpfDocument {
                 enabled: config.ebpf_config.enabled_mode.to_string(),
                 memlock_rlimit: memlock_rlimit_as_str(config.ebpf_config.memlock_rlimit),
-                preflight_link_teardown_workers: config.ebpf_config.preflight_link_teardown_workers,
                 tracked_process_max_entries: config.ebpf_config.tracked_process_max_entries,
                 pending_operation_max_entries: config.ebpf_config.pending_operation_max_entries,
                 fd_per_process_max_entries: config.ebpf_config.fd_per_process_max_entries,
@@ -347,6 +334,7 @@ impl OperatorDocument {
                     .ebpf_config
                     .suppressed_fd_index_slots_per_process,
                 event_ring_buffer_max_bytes: config.ebpf_config.event_ring_buffer_max_bytes,
+                diagnostics_summary_interval_ms: config.ebpf_config.diagnostics_summary_interval_ms,
                 file_path_capture_enabled: config.ebpf_config.file_path_capture_enabled,
                 file_path_max_bytes: config.ebpf_config.file_path_max_bytes,
                 net_send_recv_aggregation: config.ebpf_config.net_send_recv_aggregation,
@@ -491,6 +479,14 @@ impl OperatorDocument {
     }
 
     pub(super) fn to_config(&self) -> Result<OperatorConfig, String> {
+        if !self.semantic_retention.projection_enabled
+            && self.capture.agent_descendant_observation_depth()? != -1
+        {
+            return Err(
+                "semantic_retention.projection_enabled=false requires capture.agent_descendant_observation_depth=-1 because agent depth depends on semantic agent identification"
+                    .to_string(),
+            );
+        }
         let capabilities = self.capture.capability_requests()?;
         if capabilities.is_empty() {
             return Err("at least one capability is required".to_string());
@@ -502,7 +498,12 @@ impl OperatorDocument {
             mcp: self.payload.mcp.to_config()?,
         };
         let ebpf_config = self.ebpf.to_config()?;
-        validate_ipc_lineage_config(&ebpf_config.ipc_lineage, &capabilities)?;
+        validate_ipc_lineage_config(
+            &ebpf_config.ipc_lineage,
+            &capabilities,
+            &payload_config,
+            self.semantic_retention.projection_enabled,
+        )?;
         let seccomp_notify = self.seccomp_notify.to_config();
         let process_seccomp = self.process_seccomp.to_config()?;
         let application_protocol = self.application.to_config()?;

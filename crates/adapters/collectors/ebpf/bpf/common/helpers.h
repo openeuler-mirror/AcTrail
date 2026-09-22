@@ -89,12 +89,15 @@ static long (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsa
 static long (*bpf_loop)(__u32 nr_loops, void *callback_fn, void *callback_ctx, __u64 flags) =
     (void *)ACTRAIL_BPF_FUNC_LOOP;
 #endif
+static long (*bpf_tail_call)(void *ctx, void *map, __u32 index) =
+    (void *)BPF_FUNC_tail_call;
 static long (*bpf_get_ns_current_pid_tgid)(
     __u64 dev,
     __u64 ino,
     struct actrail_bpf_pidns_info *nsdata,
     __u32 size
 ) = (void *)ACTRAIL_BPF_FUNC_GET_NS_CURRENT_PID_TGID;
+#define ACTRAIL_CORE_FIELD_EXISTS(field) __builtin_preserve_field_info(field, 2)
 #define ACTRAIL_CORE_READ(dst, source, field) \
     bpf_probe_read_kernel( \
         (dst), \

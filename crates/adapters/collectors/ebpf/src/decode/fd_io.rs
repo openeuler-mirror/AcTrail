@@ -1,7 +1,6 @@
 //! File-descriptor I/O decoding for non-socket targets.
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::FileTypeExt;
 
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
@@ -9,7 +8,6 @@ use model_core::ids::CollectorName;
 use model_core::process::ProcessObservation;
 
 use crate::decode::DecodeError;
-use crate::decode::FdIpcKind;
 use crate::decode::FileTracker;
 use crate::loader::{KernelFdIoOperation, KernelFdIoPayload, KernelObservationCommon};
 use crate::maps::BindingStateMap;
@@ -17,7 +15,7 @@ use crate::maps::BindingStateMap;
 const SYSCALL_FAMILY_FD_IO_WRITEV: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FdTargetKind {
+pub(super) enum FdTargetKind {
     Pipe,
     Fifo,
     UnixSocket,
@@ -41,7 +39,7 @@ pub(super) fn operation(
     }
 }
 
-/// 无类别码事件（fd 不在内核 fd_table）时的完整 fallback：先问 lineage 再问 path。
+/// 无类别码事件仅使用文件路径事实。
 pub(super) fn decode(
     common: &KernelObservationCommon,
     event: &KernelFdIoPayload,
@@ -51,18 +49,6 @@ pub(super) fn decode(
     direction: &'static str,
     file_tracker: &mut FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    if let Some(event) = decode_ipc(
-        common,
-        event,
-        bindings,
-        identity.clone(),
-        operation,
-        direction,
-        file_tracker,
-        None,
-    )? {
-        return Ok(Some(event));
-    }
     decode_file(
         common,
         event,
@@ -74,7 +60,7 @@ pub(super) fn decode(
     )
 }
 
-/// 内核 fd_table 已判定为 IPC（pipe/socketpair）时的直达分支：只查 lineage。
+/// 内核 fd_table 已判定为 IPC 时的直达分支。
 pub(super) fn decode_ipc(
     common: &KernelObservationCommon,
     event: &KernelFdIoPayload,
@@ -82,30 +68,25 @@ pub(super) fn decode_ipc(
     identity: ProcessObservation,
     operation: &'static str,
     direction: &'static str,
-    file_tracker: &mut FileTracker,
-    classified_kind: Option<FdIpcKind>,
+    kind: FdTargetKind,
+    file_tracker: &FileTracker,
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let tracked_kind = file_tracker.resolve_fd_ipc_kind(common.trace_id, &identity, event.fd);
-    let Some(kind) = classified_kind.or(tracked_kind) else {
-        return Ok(None);
-    };
-    if !ipc_capability_enabled(kind.into(), bindings, common.trace_id) {
+    if !ipc_capability_enabled(kind, bindings, common.trace_id) {
         return Ok(None);
     }
+    let known_path = if kind == FdTargetKind::Fifo {
+        file_tracker.resolve_fd_path(common.trace_id, &identity, event.fd)
+    } else {
+        None
+    };
+    let (target, source) = match known_path {
+        Some(path) => (path, "file_tracker"),
+        None => (ipc_fd_target(kind, common, event), "kernel_fd_table"),
+    };
     let observation = FdObservation {
-        kind: kind.into(),
-        target: anonymous_ipc_target(kind, common, event),
-        metadata: BTreeMap::from([(
-            "fd_target_source".to_string(),
-            match classified_kind {
-                Some(classified) if tracked_kind == Some(classified) => {
-                    "kernel_fd_table+ipc_fd_tracker"
-                }
-                Some(_) => "kernel_fd_table",
-                None => "ipc_fd_tracker",
-            }
-            .to_string(),
-        )]),
+        kind,
+        target,
+        metadata: BTreeMap::from([("fd_target_source".to_string(), source.to_string())]),
     };
     Ok(Some(build_ipc_observation(
         common,
@@ -117,8 +98,7 @@ pub(super) fn decode_ipc(
     )))
 }
 
-/// 内核 fd_table 已判定为 FILE 时的直达分支：查 path 表；命名 fifo/socket 文件
-/// 用一次 stat 回退补判（内核在 open 出口拿不到 inode 类型，只能登记成 FILE）。
+/// 内核按 inode 类型判定为 FILE 后，仅解析文件路径和文件观测字段。
 pub(super) fn decode_file(
     common: &KernelObservationCommon,
     event: &KernelFdIoPayload,
@@ -131,32 +111,14 @@ pub(super) fn decode_file(
     if !bindings.trace_has_capability(common.trace_id, &Capability::FsAccessBasic) {
         return Ok(None);
     }
-    let Some(path) = file_tracker.resolve_fd_path(common.trace_id, &identity, event.fd) else {
+    let Some(descriptor) =
+        file_tracker.resolve_file_descriptor(common.trace_id, &identity, event.fd)
+    else {
         return Ok(None);
     };
-    if let Some(kind) = tracked_path_ipc_kind(&path)
-        && ipc_capability_enabled(kind, bindings, common.trace_id)
-    {
-        let observation = FdObservation {
-            kind,
-            target: path,
-            metadata: BTreeMap::from([(
-                "fd_target_source".to_string(),
-                "file_tracker".to_string(),
-            )]),
-        };
-        return Ok(Some(build_ipc_observation(
-            common,
-            event,
-            identity,
-            observation,
-            operation,
-            direction,
-        )));
-    }
-    let creation_requested =
-        file_tracker.fd_creation_requested(common.trace_id, &identity, event.fd);
-    let metadata = tracked_file_metadata(event, operation, direction, &path, creation_requested);
+    let path = descriptor.path;
+    let metadata =
+        tracked_file_metadata(event, operation, direction, descriptor.creation_requested);
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
             trace_id: Some(common.trace_id),
@@ -196,17 +158,6 @@ fn build_ipc_observation(
     }
 }
 
-fn tracked_path_ipc_kind(path: &str) -> Option<FdTargetKind> {
-    let metadata = std::fs::metadata(path).ok()?;
-    if metadata.file_type().is_fifo() {
-        Some(FdTargetKind::Fifo)
-    } else if metadata.file_type().is_socket() {
-        Some(FdTargetKind::UnixSocket)
-    } else {
-        None
-    }
-}
-
 fn fd_io_metadata(
     event: &KernelFdIoPayload,
     operation: &str,
@@ -241,7 +192,6 @@ fn tracked_file_metadata(
     event: &KernelFdIoPayload,
     operation: &str,
     direction: &str,
-    path: &str,
     creation_requested: bool,
 ) -> BTreeMap<String, String> {
     let mut metadata = BTreeMap::from([
@@ -249,7 +199,6 @@ fn tracked_file_metadata(
         ("direction".to_string(), direction.to_string()),
         ("fd".to_string(), event.fd.to_string()),
         ("result".to_string(), event.syscall_result.to_string()),
-        ("fd_target".to_string(), path.to_string()),
         ("fd_target_kind".to_string(), "regular_file".to_string()),
         ("fd_target_source".to_string(), "file_tracker".to_string()),
     ]);
@@ -306,23 +255,15 @@ fn fd_target_kind(kind: FdTargetKind) -> &'static str {
     }
 }
 
-fn anonymous_ipc_target(
-    kind: FdIpcKind,
+// 仅作观测位置展示；跨进程的 MCP 通道身份由独立 stdio_bundle 提供。
+fn ipc_fd_target(
+    kind: FdTargetKind,
     common: &KernelObservationCommon,
     event: &KernelFdIoPayload,
 ) -> String {
-    let channel = fd_channel(kind.into());
+    let channel = fd_channel(kind);
     format!(
         "{channel}:pid:{}:fd:{}",
         common.subject.observer_namespace_tgid, event.fd
     )
-}
-
-impl From<FdIpcKind> for FdTargetKind {
-    fn from(kind: FdIpcKind) -> Self {
-        match kind {
-            FdIpcKind::Pipe => Self::Pipe,
-            FdIpcKind::UnixSocket => Self::UnixSocket,
-        }
-    }
 }

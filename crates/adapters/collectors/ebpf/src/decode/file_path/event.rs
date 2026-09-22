@@ -2,12 +2,14 @@
 
 use std::collections::BTreeMap;
 
+use super::state::FileContextConsumers;
+
 use collector_event::{RawCollectorEvent, RawEventEnvelope, RawObservationPayload};
 use model_core::capability::Capability;
 use model_core::ids::CollectorName;
 
 use crate::decode::{
-    DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN, FILE_EVENT_READ_SUMMARY,
+    DecodeError, FILE_EVENT_CONTEXT, FILE_EVENT_MMAP, FILE_EVENT_OPEN,
     resolve_bound_event_observation,
 };
 use crate::loader::KernelFilePathEvent;
@@ -22,8 +24,8 @@ use super::state::{
     FILE_SYSCALL_OPEN, FILE_SYSCALL_OPENAT, FILE_SYSCALL_OPENAT2, FILE_SYSCALL_PIPE,
     FILE_SYSCALL_PIPE2, FILE_SYSCALL_RENAME, FILE_SYSCALL_RENAMEAT, FILE_SYSCALL_RENAMEAT2,
     FILE_SYSCALL_RMDIR, FILE_SYSCALL_SOCKETPAIR, FILE_SYSCALL_TRUNCATE, FILE_SYSCALL_UNLINK,
-    FILE_SYSCALL_UNLINKAT, FileSyscallOutcome, FileTracker, PATH_FLAG_FAULT, PATH_FLAG_TRUNCATED,
-    dup_target_fd, fcntl_duplicates_fd,
+    FILE_SYSCALL_UNLINKAT, FileSyscallOutcome, FileTracker, PATH_FLAG_FAULT,
+    PATH_FLAG_INTERNAL_CONTEXT, PATH_FLAG_TRUNCATED, dup_target_fd, fcntl_duplicates_fd,
 };
 
 pub(in crate::decode) fn decode(
@@ -33,8 +35,19 @@ pub(in crate::decode) fn decode(
 ) -> Result<Option<RawCollectorEvent>, DecodeError> {
     let trace_id = event.trace_id;
     let observed_ktime_ns = event.observed_ktime_ns;
-    if let Some(capability) = ipc_pair_capability(&event) {
-        if !bindings.trace_has_capability(event.trace_id, &capability) {
+    let fs_access_enabled = tracker.file_capture_enabled()
+        && bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic);
+    let file_context_enabled = tracker.file_capture_enabled()
+        && (fs_access_enabled
+            || bindings.trace_has_capability(event.trace_id, &Capability::FsMmap));
+    let mcp_stdio_enabled = tracker.mcp_stdio_enabled()
+        && bindings.trace_has_capability(event.trace_id, &Capability::StdioChunk);
+    let consumers = FileContextConsumers {
+        file_paths: file_context_enabled,
+        mcp_stdio: mcp_stdio_enabled,
+    };
+    if ipc_pair_capability(&event).is_some() {
+        if !file_context_enabled && !mcp_stdio_enabled {
             return Ok(None);
         }
         let identity = resolve_bound_event_observation(
@@ -44,19 +57,16 @@ pub(in crate::decode) fn decode(
             bindings,
         )
         .map_err(|error| DecodeError::new("file_identity", error))?;
-        tracker.record_ipc_fd_pair(&event, identity);
+        tracker.record_ipc_fd_pair(&event, identity, consumers);
         return Ok(None);
     }
-    let fs_access_enabled =
-        bindings.trace_has_capability(event.trace_id, &Capability::FsAccessBasic);
-    let lineage_context_enabled = ipc_lineage_context_event(&event)
-        && (bindings.trace_has_capability(event.trace_id, &Capability::IpcPipeFifo)
-            || bindings.trace_has_capability(event.trace_id, &Capability::IpcUnixSocket));
+    let mcp_context_enabled =
+        mcp_stdio_enabled && (mcp_stdio_context_event(&event) || event.kind == FILE_EVENT_OPEN);
     if event.kind == FILE_EVENT_MMAP {
         if !bindings.trace_has_capability(event.trace_id, &Capability::FsMmap) {
             return Ok(None);
         }
-    } else if !fs_access_enabled && !lineage_context_enabled {
+    } else if !file_context_enabled && !mcp_context_enabled {
         return Ok(None);
     }
 
@@ -68,21 +78,36 @@ pub(in crate::decode) fn decode(
         bindings,
     )
     .map_err(|error| DecodeError::new("file_identity", error))?;
-    if event.kind == FILE_EVENT_READ_SUMMARY {
-        return decode_read_summary(event, identity, tracker);
+    if !file_context_enabled && event.kind == FILE_EVENT_OPEN {
+        if event.phase == FILE_PHASE_EXIT
+            && let Ok(fd) = u32::try_from(event.result)
+        {
+            tracker.invalidate_mcp_fd_binding(
+                event.trace_id,
+                &identity,
+                fd,
+                event.observed_ktime_ns,
+            );
+        }
+        return Ok(None);
     }
     let is_exit = event.phase == FILE_PHASE_EXIT;
-    let outcome = tracker.record(event, identity.clone());
+    let outcome = tracker.record(event, identity.clone(), consumers);
     let Some(outcome) = outcome else {
         return Ok(None);
     };
-    if !fs_access_enabled && lineage_context_enabled {
+    if outcome.syscall.path_flags & PATH_FLAG_INTERNAL_CONTEXT != 0
+        || (outcome.syscall.aux == FILE_SYSCALL_CLOSE_RANGE && outcome.result >= 0)
+    {
         return Ok(None);
     }
-    if outcome.enter.kind == FILE_EVENT_CONTEXT && !observable_context_event(&outcome) {
+    if !fs_access_enabled && outcome.syscall.kind != FILE_EVENT_MMAP {
         return Ok(None);
     }
-    if outcome.enter.kind == FILE_EVENT_MMAP && !mmap_is_shared_writable(&outcome) {
+    if outcome.syscall.kind == FILE_EVENT_CONTEXT && !observable_context_event(&outcome) {
+        return Ok(None);
+    }
+    if outcome.syscall.kind == FILE_EVENT_MMAP && !mmap_is_shared_writable(&outcome) {
         return Ok(None);
     }
     if !is_exit {
@@ -93,16 +118,25 @@ pub(in crate::decode) fn decode(
     let path = outcome
         .primary_path
         .resolved
-        .clone()
-        .or_else(|| outcome.fd_path.clone())
+        .as_deref()
+        .or(outcome.fd_path.as_deref())
         .or_else(|| {
             if outcome.result < 0 {
-                outcome.primary_path.raw.clone()
+                outcome.primary_path.raw.as_deref()
             } else {
                 None
             }
         });
-    let metadata = file_metadata(&outcome, operation);
+    let metadata = file_metadata(&outcome, operation, path);
+    let path = outcome
+        .primary_path
+        .resolved
+        .or(outcome.fd_path)
+        .or_else(|| {
+            (outcome.result < 0)
+                .then_some(outcome.primary_path.raw)
+                .flatten()
+        });
 
     Ok(Some(RawCollectorEvent {
         envelope: RawEventEnvelope {
@@ -132,7 +166,7 @@ fn ipc_pair_capability(event: &KernelFilePathEvent) -> Option<Capability> {
     }
 }
 
-fn ipc_lineage_context_event(event: &KernelFilePathEvent) -> bool {
+fn mcp_stdio_context_event(event: &KernelFilePathEvent) -> bool {
     event.kind == FILE_EVENT_CONTEXT
         && matches!(
             event.aux,
@@ -147,72 +181,24 @@ fn ipc_lineage_context_event(event: &KernelFilePathEvent) -> bool {
         )
 }
 
-fn decode_read_summary(
-    event: KernelFilePathEvent,
-    identity: model_core::process::ProcessObservation,
-    tracker: &mut FileTracker,
-) -> Result<Option<RawCollectorEvent>, DecodeError> {
-    let path = tracker.resolve_fd_path(event.trace_id, &identity, event.fd);
-    let mut metadata = BTreeMap::from([
-        ("operation".to_string(), "read_summary".to_string()),
-        ("result".to_string(), "0".to_string()),
-        ("syscall".to_string(), "read_summary".to_string()),
-        ("fd".to_string(), event.fd.to_string()),
-        ("read_count".to_string(), event.arg0.to_string()),
-        ("size".to_string(), event.arg1.to_string()),
-        ("bytes_read".to_string(), event.arg1.to_string()),
-        ("error_count".to_string(), event.arg2.to_string()),
-        ("fast_path".to_string(), "true".to_string()),
-    ]);
-    if let Some(first_ktime_ns) = nonzero_u64(event.arg3) {
-        metadata.insert("first_ktime_ns".to_string(), first_ktime_ns.to_string());
-    }
-    if let Some(last_ktime_ns) = nonzero_u64(event.arg4) {
-        metadata.insert("last_ktime_ns".to_string(), last_ktime_ns.to_string());
-    }
-    if let Some(path) = &path {
-        metadata.insert("fd_target".to_string(), path.clone());
-        metadata.insert("fd_target_source".to_string(), "file_tracker".to_string());
-        metadata.insert("fd_target_kind".to_string(), "regular_file".to_string());
-    } else {
-        metadata.insert("path_resolution".to_string(), "unresolved_fd".to_string());
-    }
-    Ok(Some(RawCollectorEvent {
-        envelope: RawEventEnvelope {
-            trace_id: Some(event.trace_id),
-            observed_at: super::super::clock::wall_from_ktime(event.observed_ktime_ns),
-            process: identity,
-            collector: CollectorName::new("ebpf"),
-        },
-        payload: RawObservationPayload::File {
-            operation: "read_summary".to_string(),
-            path,
-            metadata,
-        },
-    }))
-}
-
-fn nonzero_u64(value: u64) -> Option<u64> {
-    (value != 0).then_some(value)
-}
-
 fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {
-    match outcome.enter.kind {
+    match outcome.syscall.kind {
         FILE_EVENT_OPEN => "open",
-        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE => "close",
-        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_CLOSE_RANGE => {
+        crate::decode::FILE_EVENT_CONTEXT if outcome.syscall.aux == FILE_SYSCALL_CLOSE => "close",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.syscall.aux == FILE_SYSCALL_CLOSE_RANGE => {
             "close_range"
         }
-        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP => "dup",
-        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP2 => "dup2",
-        crate::decode::FILE_EVENT_CONTEXT if outcome.enter.aux == FILE_SYSCALL_DUP3 => "dup3",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.syscall.aux == FILE_SYSCALL_DUP => "dup",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.syscall.aux == FILE_SYSCALL_DUP2 => "dup2",
+        crate::decode::FILE_EVENT_CONTEXT if outcome.syscall.aux == FILE_SYSCALL_DUP3 => "dup3",
         crate::decode::FILE_EVENT_CONTEXT
-            if outcome.enter.aux == FILE_SYSCALL_FCNTL && fcntl_duplicates_fd(&outcome.enter) =>
+            if outcome.syscall.aux == FILE_SYSCALL_FCNTL
+                && fcntl_duplicates_fd(&outcome.syscall) =>
         {
             "fcntl_dup"
         }
         crate::decode::FILE_EVENT_CONTEXT => "context",
-        crate::decode::FILE_EVENT_UNLINK if unlinkat_removes_directory(&outcome.enter) => "rmdir",
+        crate::decode::FILE_EVENT_UNLINK if unlinkat_removes_directory(&outcome.syscall) => "rmdir",
         crate::decode::FILE_EVENT_UNLINK => "unlink",
         crate::decode::FILE_EVENT_RENAME => "rename",
         crate::decode::FILE_EVENT_MKDIR => "mkdir",
@@ -223,8 +209,12 @@ fn file_operation(outcome: &FileSyscallOutcome) -> &'static str {
     }
 }
 
-fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<String, String> {
-    let event = &outcome.enter;
+fn file_metadata(
+    outcome: &FileSyscallOutcome,
+    operation: &str,
+    path: Option<&str>,
+) -> BTreeMap<String, String> {
+    let event = &outcome.syscall;
     let mut metadata = BTreeMap::from([
         ("operation".to_string(), operation.to_string()),
         ("result".to_string(), normalized_result(outcome).to_string()),
@@ -238,10 +228,14 @@ fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<Stri
             outcome.primary_path.source.to_string(),
         ),
     ]);
-    if let Some(raw_path) = &outcome.primary_path.raw {
+    if let Some(raw_path) = &outcome.primary_path.raw
+        && Some(raw_path.as_str()) != path
+    {
         metadata.insert("raw_path".to_string(), raw_path.clone());
     }
-    if let Some(fd_path) = &outcome.fd_path {
+    if let Some(fd_path) = &outcome.fd_path
+        && Some(fd_path.as_str()) != path
+    {
         metadata.insert("fd_target".to_string(), fd_path.clone());
     }
     insert_fd_metadata(&mut metadata, outcome);
@@ -250,7 +244,12 @@ fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<Stri
         if let Some(path) = target_path.resolved.as_ref().or(target_path.raw.as_ref()) {
             metadata.insert("target_path".to_string(), path.clone());
         }
-        if let Some(raw_path) = &target_path.raw {
+        if let Some(raw_path) = &target_path.raw
+            && target_path
+                .resolved
+                .as_ref()
+                .is_some_and(|resolved| resolved != raw_path)
+        {
             metadata.insert("raw_target_path".to_string(), raw_path.clone());
         }
         metadata.insert(
@@ -269,7 +268,7 @@ fn file_metadata(outcome: &FileSyscallOutcome, operation: &str) -> BTreeMap<Stri
 }
 
 fn insert_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSyscallOutcome) {
-    let event = &outcome.enter;
+    let event = &outcome.syscall;
     let fd = match event.aux {
         FILE_SYSCALL_OPEN | FILE_SYSCALL_OPENAT | FILE_SYSCALL_CREAT | FILE_SYSCALL_OPENAT2
             if outcome.result >= 0 =>
@@ -294,7 +293,7 @@ fn insert_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSys
 }
 
 fn insert_dup_fd_metadata(metadata: &mut BTreeMap<String, String>, outcome: &FileSyscallOutcome) {
-    let event = &outcome.enter;
+    let event = &outcome.syscall;
     metadata.insert("source_fd".to_string(), (event.arg0 as u32).to_string());
     if let Some(target_fd) = dup_target_fd(event, outcome.result) {
         metadata.insert("target_fd".to_string(), target_fd.to_string());
@@ -318,7 +317,7 @@ fn insert_path_metadata(
 }
 
 fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSyscallOutcome) {
-    let event = &outcome.enter;
+    let event = &outcome.syscall;
     match event.aux {
         FILE_SYSCALL_OPEN => {
             metadata.insert("flags".to_string(), event.arg1.to_string());
@@ -355,6 +354,9 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
         FILE_SYSCALL_RENAMEAT | FILE_SYSCALL_RENAMEAT2 => {
             metadata.insert("old_dirfd".to_string(), (event.arg0 as i32).to_string());
             metadata.insert("new_dirfd".to_string(), (event.arg2 as i32).to_string());
+            if event.aux == FILE_SYSCALL_RENAMEAT2 {
+                metadata.insert("flags".to_string(), event.arg4.to_string());
+            }
         }
         FILE_SYSCALL_MKDIR => {
             metadata.insert("mode".to_string(), event.arg1.to_string());
@@ -402,20 +404,20 @@ fn insert_syscall_args(metadata: &mut BTreeMap<String, String>, outcome: &FileSy
 }
 
 fn normalized_result(outcome: &FileSyscallOutcome) -> i64 {
-    if outcome.enter.aux == FILE_SYSCALL_MMAP && outcome.result >= 0 {
+    if outcome.syscall.aux == FILE_SYSCALL_MMAP && outcome.result >= 0 {
         return 0;
     }
     outcome.result
 }
 
 fn observable_context_event(outcome: &FileSyscallOutcome) -> bool {
-    match outcome.enter.aux {
+    match outcome.syscall.aux {
         FILE_SYSCALL_CLOSE
         | FILE_SYSCALL_CLOSE_RANGE
         | FILE_SYSCALL_DUP
         | FILE_SYSCALL_DUP2
         | FILE_SYSCALL_DUP3 => true,
-        FILE_SYSCALL_FCNTL => fcntl_duplicates_fd(&outcome.enter),
+        FILE_SYSCALL_FCNTL => fcntl_duplicates_fd(&outcome.syscall),
         _ => false,
     }
 }
@@ -469,8 +471,8 @@ fn open_truncates(event: &KernelFilePathEvent) -> bool {
 }
 
 fn mmap_is_shared_writable(outcome: &FileSyscallOutcome) -> bool {
-    outcome.enter.aux == FILE_SYSCALL_MMAP
+    outcome.syscall.aux == FILE_SYSCALL_MMAP
         && outcome.result >= 0
-        && outcome.enter.arg2 & libc::PROT_WRITE as u64 != 0
-        && outcome.enter.arg3 & libc::MAP_SHARED as u64 != 0
+        && outcome.syscall.arg2 & libc::PROT_WRITE as u64 != 0
+        && outcome.syscall.arg3 & libc::MAP_SHARED as u64 != 0
 }

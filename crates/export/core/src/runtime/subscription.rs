@@ -1,7 +1,6 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use model_core::payload::PayloadSegment;
 use plugin_system::{
     ObservationConsumer, PluginInstanceStatus, PluginLifecycleState, PostTraceTask,
 };
@@ -16,6 +15,7 @@ use super::{
 
 pub(crate) struct SemanticActionSubscriptionManager {
     consumers: Vec<ObservationConsumerSlot>,
+    semantic_consumer_count: usize,
     post_trace_completion_sender: Sender<PostTraceCompletion>,
     post_trace_completion_receiver: Receiver<PostTraceCompletion>,
 }
@@ -23,20 +23,30 @@ pub(crate) struct SemanticActionSubscriptionManager {
 impl SemanticActionSubscriptionManager {
     pub(crate) fn new(consumers: Vec<Box<dyn ObservationConsumer>>) -> Self {
         let (post_trace_completion_sender, post_trace_completion_receiver) = channel();
+        let consumers = consumers
+            .into_iter()
+            .map(|consumer| {
+                ObservationConsumerSlot::new(
+                    consumer,
+                    Vec::new(),
+                    post_trace_completion_sender.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let semantic_consumer_count = consumers
+            .iter()
+            .filter(|slot| slot.receives_semantic_action_batch())
+            .count();
         Self {
-            consumers: consumers
-                .into_iter()
-                .map(|consumer| {
-                    ObservationConsumerSlot::new(
-                        consumer,
-                        Vec::new(),
-                        post_trace_completion_sender.clone(),
-                    )
-                })
-                .collect(),
+            consumers,
+            semantic_consumer_count,
             post_trace_completion_sender,
             post_trace_completion_receiver,
         }
+    }
+
+    pub(crate) fn has_semantic_consumers(&self) -> bool {
+        self.semantic_consumer_count != 0
     }
 
     pub(crate) fn consumer_instance_ids(&self) -> Vec<String> {
@@ -125,6 +135,9 @@ impl SemanticActionSubscriptionManager {
             self.post_trace_completion_sender.clone(),
         );
         let status = slot.status(PluginLifecycleState::Active);
+        if slot.receives_semantic_action_batch() {
+            self.semantic_consumer_count += 1;
+        }
         self.consumers.push(slot);
         Ok(status)
     }
@@ -144,6 +157,10 @@ impl SemanticActionSubscriptionManager {
             ));
         };
         let mut slot = self.consumers.remove(index);
+        if slot.receives_semantic_action_batch() {
+            debug_assert!(self.semantic_consumer_count != 0);
+            self.semantic_consumer_count -= 1;
+        }
         let runtime_failures = slot.stop();
         let status = slot.status(PluginLifecycleState::Stopped);
         let mut report = ReportAccumulator::default();
@@ -179,28 +196,14 @@ impl SemanticActionSubscriptionManager {
     ) -> ExportPublishReport {
         let mut report = ReportAccumulator::default();
         self.drain_pending_reports(&mut report);
-        let mut metadata_payload_segments = None;
         for slot in &self.consumers {
             if !slot.receives_semantic_action_batch() {
                 continue;
             }
-            let payload_segments = payload_segments_for_consumer(
-                slot.payload_snapshot_limit(),
-                batch.payload_segments,
-                &mut metadata_payload_segments,
-            );
-            slot.publish(&batch, payload_segments, &mut report);
+            slot.publish(&batch, &mut report);
         }
         self.drain_pending_reports(&mut report);
         report.into_report()
-    }
-
-    pub(crate) fn payload_snapshot_limit(&self) -> Option<usize> {
-        self.consumers
-            .iter()
-            .filter(|slot| slot.receives_semantic_action_batch())
-            .filter_map(ObservationConsumerSlot::payload_snapshot_limit)
-            .max()
     }
 
     fn drain_pending_reports(&self, report: &mut ReportAccumulator) {
@@ -208,28 +211,4 @@ impl SemanticActionSubscriptionManager {
             slot.drain_pending_reports(report);
         }
     }
-}
-
-fn payload_segments_for_consumer<'a>(
-    payload_snapshot_limit: Option<usize>,
-    payload_segments: &'a [PayloadSegment],
-    metadata_payload_segments: &'a mut Option<Vec<PayloadSegment>>,
-) -> &'a [PayloadSegment] {
-    let Some(limit) = payload_snapshot_limit else {
-        return metadata_payload_segments
-            .get_or_insert_with(|| payload_metadata_only(payload_segments))
-            .as_slice();
-    };
-    &payload_segments[..limit.min(payload_segments.len())]
-}
-
-fn payload_metadata_only(payload_segments: &[PayloadSegment]) -> Vec<PayloadSegment> {
-    payload_segments
-        .iter()
-        .map(|segment| {
-            let mut segment = segment.clone();
-            segment.bytes.clear();
-            segment
-        })
-        .collect()
 }

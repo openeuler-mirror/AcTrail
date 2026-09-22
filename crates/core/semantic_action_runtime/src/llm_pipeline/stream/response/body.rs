@@ -1,8 +1,8 @@
 //! LLM response body and SSE framing adapter.
 
 use semantic_action::{
-    LlmJsonResponseInput, LlmParsedResponse, LlmProviderResponseStreamParser,
-    LlmSseEvent as ProviderSseEvent, LlmSseResponseInput, LlmTokenUsage,
+    LlmJsonResponseInput, LlmParsedResponse, LlmProviderResponseStreamParser, LlmResponseRetention,
+    LlmResponseTermination, LlmSseEvent as ProviderSseEvent, LlmSseResponseInput, LlmTokenUsage,
 };
 use serde_json::Value;
 
@@ -29,13 +29,13 @@ pub(in crate::llm_pipeline) struct LlmResponseBody {
     pub(in crate::llm_pipeline) tool_calls_json: Option<String>,
     pub(in crate::llm_pipeline) token_usage: Option<LlmTokenUsage>,
     pub(in crate::llm_pipeline) chunk_count: usize,
-    pub(in crate::llm_pipeline) done: bool,
+    pub(in crate::llm_pipeline) termination: Option<LlmResponseTermination>,
     pub(in crate::llm_pipeline) stream: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::llm_pipeline) struct ProviderStreamUpdate {
-    pub(in crate::llm_pipeline) done: bool,
+    pub(in crate::llm_pipeline) termination: Option<LlmResponseTermination>,
     pub(in crate::llm_pipeline) stream: bool,
     pub(in crate::llm_pipeline) chunk_count: usize,
 }
@@ -43,8 +43,9 @@ pub(in crate::llm_pipeline) struct ProviderStreamUpdate {
 pub(in crate::llm_pipeline) fn parse_llm_response_body(
     body: &[u8],
     codecs: &LlmCodecRegistry,
+    retention: LlmResponseRetention,
 ) -> Option<LlmResponseBody> {
-    LlmResponseBodyParser { codecs }.parse(body)
+    LlmResponseBodyParser { codecs, retention }.parse(body)
 }
 
 /// Byte-source of the body passed to the incremental SSE parser.
@@ -65,6 +66,7 @@ pub(in crate::llm_pipeline) enum SseBodySource {
 /// parses only newly appended events through a provider stream parser and
 /// accumulates the aggregate response body instead.
 pub(crate) struct IncrementalSseCache {
+    retention: LlmResponseRetention,
     source: SseBodySource,
     codec_revision: u64,
     framer: IncrementalSseFramer,
@@ -73,7 +75,7 @@ pub(crate) struct IncrementalSseCache {
     provider_id_override: Option<String>,
     provider_response_id: Option<String>,
     token_usage: Option<LlmTokenUsage>,
-    done: bool,
+    termination: Option<LlmResponseTermination>,
     chunk_count: usize,
 }
 
@@ -87,6 +89,7 @@ impl IncrementalSseCache {
         body: &[u8],
         codecs: &LlmCodecRegistry,
         classifier_config: StreamClassifierConfig,
+        retention: LlmResponseRetention,
     ) -> Option<(Self, Option<ProviderStreamUpdate>)> {
         let mut framer = IncrementalSseFramer::default();
         let complete_events = framer.advance(body).ok()?;
@@ -102,17 +105,18 @@ impl IncrementalSseCache {
             .iter()
             .filter(|event| classifier.belongs_to_initial_window(event.end_offset))
             .collect::<Vec<_>>();
-        let mut stream_parser = select_stream_parser(&initial_window);
+        let mut stream_parser = select_stream_parser(&initial_window, retention);
         if stream_parser.is_none() {
             stream_parser = normalized
                 .iter()
                 .filter(|event| !classifier_config.can_sniff_through(event.end_offset))
-                .find_map(|event| select_stream_parser(&[event]));
+                .find_map(|event| select_stream_parser(&[event], retention));
         }
         if stream_parser.is_some() {
             classifier.confirm_llm();
         }
         let mut cache = Self {
+            retention,
             source,
             codec_revision: codecs.revision(),
             framer,
@@ -121,7 +125,7 @@ impl IncrementalSseCache {
             provider_id_override: None,
             provider_response_id: None,
             token_usage: None,
-            done: false,
+            termination: None,
             chunk_count: 0,
         };
         if cache.classifier.is_confirmed_llm() {
@@ -147,13 +151,17 @@ impl IncrementalSseCache {
         }) {
             self.provider_response_id = Some(response_id);
         }
-        if let Some(usage) = event.event.json.as_ref().and_then(extract_token_usage) {
+        if let Some(usage) = event
+            .event
+            .json
+            .as_ref()
+            .filter(|_| self.retention.usage)
+            .and_then(extract_token_usage)
+        {
             self.token_usage = Some(usage);
         }
-        if parsed.done || parsed.finish_reason.is_some() {
-            self.done = true;
-        }
-        if parsed.content_text.is_some() || parsed.reasoning_text.is_some() {
+        self.termination = LlmResponseTermination::combine(self.termination, parsed.termination);
+        if parsed.text_chunk_count > 0 {
             self.chunk_count += 1;
         }
         Some(())
@@ -182,7 +190,7 @@ impl IncrementalSseCache {
         }
         for event in &events {
             self.classifier.belongs_to_initial_window(event.end_offset);
-            if let Some(parser) = select_stream_parser(&[event]) {
+            if let Some(parser) = select_stream_parser(&[event], self.retention) {
                 self.stream_parser = Some(parser);
                 self.classifier.confirm_llm();
                 self.replay_retained_body(body, codecs)?;
@@ -196,7 +204,7 @@ impl IncrementalSseCache {
         self.provider_id_override = None;
         self.provider_response_id = None;
         self.token_usage = None;
-        self.done = false;
+        self.termination = None;
         self.chunk_count = 0;
         let mut replay = IncrementalSseFramer::default();
         for event in replay.advance(body).map_err(|_| ())? {
@@ -211,7 +219,12 @@ impl IncrementalSseCache {
         if let Some(usage) = self.token_usage.clone() {
             parsed.token_usage = Some(usage);
         }
-        let mut body = response_body(false, parsed, self.provider_response_id.clone());
+        let mut body = response_body(
+            false,
+            parsed,
+            self.provider_response_id.clone(),
+            self.retention,
+        );
         if let Some(provider_id) = self.provider_id_override.clone() {
             body.provider_id = provider_id;
         }
@@ -222,7 +235,7 @@ impl IncrementalSseCache {
         self.classifier
             .is_confirmed_llm()
             .then_some(ProviderStreamUpdate {
-                done: self.done,
+                termination: self.termination,
                 stream: true,
                 chunk_count: self.chunk_count,
             })
@@ -234,11 +247,12 @@ fn advance_cache(
     body: &[u8],
     codecs: &LlmCodecRegistry,
     classifier_config: StreamClassifierConfig,
+    retention: LlmResponseRetention,
     cache: &mut Option<IncrementalSseCache>,
     allow_batch: bool,
 ) -> CacheAdvance {
     if let Some(existing) = cache.as_ref() {
-        if existing.source != source {
+        if existing.source != source || existing.retention != retention {
             *cache = None;
         }
     }
@@ -249,7 +263,7 @@ fn advance_cache(
             Err(()) => {
                 *cache = None;
                 if allow_batch {
-                    batch_advance(body, codecs)
+                    batch_advance(body, codecs, retention)
                 } else {
                     CacheAdvance::Unparseable
                 }
@@ -257,13 +271,13 @@ fn advance_cache(
         },
         None => {
             if let Some((seeded, progress)) =
-                IncrementalSseCache::seed(source, body, codecs, classifier_config)
+                IncrementalSseCache::seed(source, body, codecs, classifier_config, retention)
             {
                 *cache = Some(seeded);
                 progress.map_or(CacheAdvance::Unparseable, CacheAdvance::Incremental)
             } else {
                 if allow_batch {
-                    batch_advance(body, codecs)
+                    batch_advance(body, codecs, retention)
                 } else {
                     CacheAdvance::Unparseable
                 }
@@ -316,6 +330,7 @@ fn normalized_event(
 
 fn select_stream_parser(
     events: &[&IncrementalNormalizedEvent],
+    retention: LlmResponseRetention,
 ) -> Option<Box<dyn LlmProviderResponseStreamParser + Send>> {
     if events.is_empty() {
         return None;
@@ -324,13 +339,16 @@ fn select_stream_parser(
         .iter()
         .map(|event| provider_normalized_sse_event(&event.event))
         .collect::<Vec<_>>();
-    new_sse_stream_parser(LlmSseResponseInput {
-        // Built-in stream classifiers operate on complete normalized events.
-        // Keeping the accumulated text out of this hot path avoids validating
-        // or materializing the complete body after every network append.
-        text: "",
-        events: &provider_events,
-    })
+    new_sse_stream_parser(
+        LlmSseResponseInput {
+            // Built-in stream classifiers operate on complete normalized events.
+            // Keeping the accumulated text out of this hot path avoids validating
+            // or materializing the complete body after every network append.
+            text: "",
+            events: &provider_events,
+        },
+        retention,
+    )
     .map(|(parser, _provider_id)| parser)
 }
 
@@ -356,8 +374,12 @@ enum CacheAdvance {
     Unparseable,
 }
 
-fn batch_advance(body: &[u8], codecs: &LlmCodecRegistry) -> CacheAdvance {
-    match parse_llm_response_body(body, codecs) {
+fn batch_advance(
+    body: &[u8],
+    codecs: &LlmCodecRegistry,
+    retention: LlmResponseRetention,
+) -> CacheAdvance {
+    match parse_llm_response_body(body, codecs, retention) {
         Some(parsed) => CacheAdvance::Batch(parsed),
         None => CacheAdvance::Unparseable,
     }
@@ -373,13 +395,22 @@ pub(in crate::llm_pipeline) fn parse_llm_response_progress(
     body: &[u8],
     codecs: &LlmCodecRegistry,
     classifier_config: StreamClassifierConfig,
+    retention: LlmResponseRetention,
     cache: &mut Option<IncrementalSseCache>,
     allow_batch: bool,
 ) -> Option<ProviderStreamUpdate> {
-    match advance_cache(source, body, codecs, classifier_config, cache, allow_batch) {
+    match advance_cache(
+        source,
+        body,
+        codecs,
+        classifier_config,
+        retention,
+        cache,
+        allow_batch,
+    ) {
         CacheAdvance::Incremental(progress) => Some(progress),
         CacheAdvance::Batch(parsed) => Some(ProviderStreamUpdate {
-            done: parsed.done,
+            termination: parsed.termination,
             stream: parsed.stream,
             chunk_count: parsed.chunk_count,
         }),
@@ -394,9 +425,18 @@ pub(in crate::llm_pipeline) fn parse_llm_response_body_incremental(
     body: &[u8],
     codecs: &LlmCodecRegistry,
     classifier_config: StreamClassifierConfig,
+    retention: LlmResponseRetention,
     cache: &mut Option<IncrementalSseCache>,
 ) -> Option<LlmResponseBody> {
-    match advance_cache(source, body, codecs, classifier_config, cache, true) {
+    match advance_cache(
+        source,
+        body,
+        codecs,
+        classifier_config,
+        retention,
+        cache,
+        true,
+    ) {
         CacheAdvance::Incremental(_) => cache.as_mut()?.body(),
         CacheAdvance::Batch(parsed) => Some(parsed),
         CacheAdvance::Unparseable => None,
@@ -419,21 +459,30 @@ fn parse_sse_events_with_trailing(text: &str) -> (Vec<SseCodecEvent>, bool) {
 
 struct LlmResponseBodyParser<'a> {
     codecs: &'a LlmCodecRegistry,
+    retention: LlmResponseRetention,
 }
 
 impl LlmResponseBodyParser<'_> {
     fn parse(&self, body: &[u8]) -> Option<LlmResponseBody> {
-        let text = String::from_utf8_lossy(body).into_owned();
+        let text = String::from_utf8_lossy(body);
         if let Some(sse) = self.parse_sse_response_body(&text) {
             return Some(sse);
         }
         let json = serde_json::from_slice::<Value>(body).ok();
         let value = json.as_ref()?;
-        let parsed = parse_json_response(LlmJsonResponseInput {
-            text: &text,
-            json: value,
-        })?;
-        Some(response_body(true, parsed, provider_response_id(value)))
+        let parsed = parse_json_response(
+            LlmJsonResponseInput {
+                text: &text,
+                json: value,
+            },
+            self.retention,
+        )?;
+        Some(response_body(
+            true,
+            parsed,
+            provider_response_id(value),
+            self.retention,
+        ))
     }
 
     fn parse_sse_response_body(&self, text: &str) -> Option<LlmResponseBody> {
@@ -442,20 +491,24 @@ impl LlmResponseBodyParser<'_> {
             return None;
         }
         if let Some((provider_id, normalized)) = self.normalized_sse_events(&raw_events) {
-            return decoded_sse_response(text, raw_events, provider_id, normalized);
+            return decoded_sse_response(text, raw_events, provider_id, normalized, self.retention);
         }
         let provider_events = raw_events
             .iter()
             .map(provider_sse_event)
             .collect::<Vec<_>>();
-        let parsed = parse_sse_response(LlmSseResponseInput {
-            text,
-            events: &provider_events,
-        })?;
+        let parsed = parse_sse_response(
+            LlmSseResponseInput {
+                text,
+                events: &provider_events,
+            },
+            self.retention,
+        )?;
         Some(response_body(
             false,
             parsed.response,
             provider_response_id_from_events(&raw_events),
+            self.retention,
         ))
     }
 
@@ -493,17 +546,21 @@ fn decoded_sse_response(
     _raw_events: Vec<SseCodecEvent>,
     provider_id: Option<String>,
     normalized: Vec<NormalizedSseEvent>,
+    retention: LlmResponseRetention,
 ) -> Option<LlmResponseBody> {
     let provider_events = normalized
         .iter()
         .map(provider_normalized_sse_event)
         .collect::<Vec<_>>();
-    let parsed = parse_sse_response(LlmSseResponseInput {
-        text,
-        events: &provider_events,
-    })?;
+    let parsed = parse_sse_response(
+        LlmSseResponseInput {
+            text,
+            events: &provider_events,
+        },
+        retention,
+    )?;
     let response_id = provider_response_id_from_normalized_events(&normalized);
-    let mut body = response_body(false, parsed.response, response_id);
+    let mut body = response_body(false, parsed.response, response_id, retention);
     if let Some(provider_id) = provider_id {
         body.provider_id = provider_id;
     }
@@ -514,8 +571,12 @@ fn response_body(
     json_valid: bool,
     parsed: LlmParsedResponse,
     provider_response_id: Option<String>,
+    retention: LlmResponseRetention,
 ) -> LlmResponseBody {
-    let tool_calls_json = tool_calls_json(&parsed.tool_calls);
+    let tool_calls_json = retention
+        .tool_calls
+        .then(|| tool_calls_json(&parsed.tool_calls))
+        .flatten();
     LlmResponseBody {
         provider_id: parsed.provider_id.to_string(),
         provider_response_id,
@@ -526,7 +587,7 @@ fn response_body(
         tool_calls_json,
         token_usage: parsed.token_usage,
         chunk_count: parsed.chunk_count,
-        done: parsed.done,
+        termination: parsed.termination,
         stream: parsed.stream,
     }
 }

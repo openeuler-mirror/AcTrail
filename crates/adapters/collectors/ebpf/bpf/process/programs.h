@@ -3,10 +3,20 @@
 
 #include "../fd/lifecycle.h"
 #include "../file/observe.h"
+#include "../file/io/state.h"
 #include "../payload/socket_types.h"
 #include "observe.h"
 
-static __noinline int emit_process_exec_attempt(
+#ifdef ACTRAIL_BPF_LOOP
+#define ACTRAIL_PROCESS_EXEC_HELPER __noinline
+#else
+/* Tail calls are rejected on this kernel when the caller still has
+ * BPF-to-BPF calls. Inline the two exec helpers in the pre-5.17 fallback so
+ * the entry and continuation programs contain no subprogram calls. */
+#define ACTRAIL_PROCESS_EXEC_HELPER __always_inline
+#endif
+
+static ACTRAIL_PROCESS_EXEC_HELPER int emit_process_exec_attempt(
     struct trace_event_raw_sys_enter *ctx,
     struct actrail_pending_process_exec *pending,
     __u64 path_ptr,
@@ -14,6 +24,8 @@ static __noinline int emit_process_exec_attempt(
     __u32 execveat_flags
 ) {
     struct actrail_process_exec_config *config = current_process_exec_config();
+    __u32 scratch_key = 0;
+    union actrail_process_exec_scratch *scratch;
     struct actrail_process_exec_attempt_event *event;
     __u32 max_arg_bytes;
     __u32 path_read_limit;
@@ -32,10 +44,12 @@ static __noinline int emit_process_exec_attempt(
         path_read_limit = ACTRAIL_PROCESS_EXEC_PATH_ABI_MAX_BYTES;
     }
 
-    event = actrail_event_reserve(sizeof(*event));
-    if (!event) {
+    scratch = bpf_map_lookup_elem(&process_exec_scratch, &scratch_key);
+    if (!scratch) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL);
         return 0;
     }
+    event = &scratch->attempt;
     event->kind = ACTRAIL_PROC_EXEC_ATTEMPT;
     event->pid = pending->pid;
     event->tid = pending->tid;
@@ -68,7 +82,12 @@ static __noinline int emit_process_exec_attempt(
         }
     }
 
-    return actrail_event_submit(ctx, event) == 0;
+    __u64 event_size = __builtin_offsetof(struct actrail_process_exec_attempt_event, path)
+        + (__u64)event->path_size;
+    if (event_size > sizeof(*event)) {
+        event_size = sizeof(*event);
+    }
+    return emit_event(ctx, event, event_size) == 0;
 }
 
 /* Marker values are used only when read_limit is zero, so they are never
@@ -81,20 +100,24 @@ enum actrail_process_exec_arg_marker {
     ACTRAIL_PROCESS_EXEC_ARG_MARK_TOTAL = 3,
 };
 
-static __noinline long emit_process_exec_arg(
+static ACTRAIL_PROCESS_EXEC_HELPER long emit_process_exec_arg(
     struct trace_event_raw_sys_enter *ctx,
     struct actrail_pending_process_exec *pending,
     __u32 index,
     __u64 arg_ptr,
     __u32 read_limit
 ) {
-    struct actrail_process_exec_arg_event *event =
-        actrail_event_reserve(sizeof(*event));
+    __u32 scratch_key = 0;
+    union actrail_process_exec_scratch *scratch =
+        bpf_map_lookup_elem(&process_exec_scratch, &scratch_key);
+    struct actrail_process_exec_arg_event *event;
     long arg_size;
 
-    if (!event) {
+    if (!scratch) {
+        event_transport_diag_inc(ACTRAIL_EVENT_TRANSPORT_RESERVE_FAIL);
         return -1;
     }
+    event = &scratch->arg;
     event->kind = ACTRAIL_PROC_EXEC_ARG;
     event->pid = pending->pid;
     event->tid = pending->tid;
@@ -121,10 +144,11 @@ static __noinline long emit_process_exec_arg(
         } else {
             event->capture_flags = ACTRAIL_PROCESS_EXEC_ARGV_TRUNCATED;
         }
-        actrail_event_submit(ctx, event);
+        emit_event(ctx, event, __builtin_offsetof(struct actrail_process_exec_arg_event, arg));
         return 0;
     }
 
+#ifdef ACTRAIL_BPF_LOOP
     /* Mask to u32 and clamp to the ABI maximum before the helper call; old
      * verifiers otherwise track the noinline parameter with a possibly
      * negative 64-bit range and reject the load. */
@@ -133,6 +157,13 @@ static __noinline long emit_process_exec_arg(
         bounded_read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
     }
     actrail_barrier_var(bounded_read_limit);
+#else
+    /* The fallback helper is inlined to avoid BPF-to-BPF calls in tail-call
+     * programs. A fixed upper bound keeps the verifier from tracking the
+     * caller's wrapped 32-bit arithmetic as an unbounded helper size. The
+     * output is still truncated to read_limit below. */
+    __u32 bounded_read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
+#endif
     arg_size = bpf_probe_read_user_str(
         event->arg,
         bounded_read_limit,
@@ -140,17 +171,32 @@ static __noinline long emit_process_exec_arg(
     );
     if (arg_size < 0) {
         event->capture_flags = ACTRAIL_PROCESS_EXEC_READ_FAILED;
-        actrail_event_submit(ctx, event);
+        emit_event(ctx, event, __builtin_offsetof(struct actrail_process_exec_arg_event, arg));
         return -1;
     }
     if (arg_size > 0) {
-        event->arg_size = (__u32)(arg_size - 1);
-        if ((__u32)arg_size == read_limit) {
-            event->capture_flags = ACTRAIL_PROCESS_EXEC_ARGV_TRUNCATED;
+        __u32 captured_size = (__u32)arg_size;
+#ifndef ACTRAIL_BPF_LOOP
+        if (captured_size > read_limit) {
+            captured_size = read_limit;
         }
+#endif
+        event->arg_size = captured_size ? captured_size - 1 : 0;
     }
-    actrail_event_submit(ctx, event);
-    return arg_size;
+    if ((__u32)arg_size >= read_limit) {
+        event->capture_flags = ACTRAIL_PROCESS_EXEC_ARGV_TRUNCATED;
+    }
+    __u64 event_size = __builtin_offsetof(struct actrail_process_exec_arg_event, arg)
+        + (__u64)event->arg_size;
+    if (event_size > sizeof(*event)) {
+        event_size = sizeof(*event);
+    }
+    if (emit_event(ctx, event, event_size) != 0) {
+        return -1;
+    }
+    /* Some kernels return zero for a successfully read empty string. Keep
+     * walking argv: only the marker path or a read failure ends the walk. */
+    return arg_size ? arg_size : 1;
 }
 
 #ifdef ACTRAIL_BPF_LOOP
@@ -237,6 +283,116 @@ static long process_exec_arg_loop_callback(__u32 index, void *opaque) {
 }
 #endif
 
+#ifndef ACTRAIL_BPF_LOOP
+static __always_inline void process_exec_argv_chunk(
+    struct trace_event_raw_sys_enter *ctx,
+    struct actrail_pending_process_exec *pending
+) {
+    __u32 captured_total = pending->argv_captured_total;
+    __u32 chunk_index;
+
+#pragma clang loop unroll(disable)
+    for (chunk_index = 0; chunk_index < ACTRAIL_PROCESS_EXEC_ARG_CHUNK;
+         chunk_index++) {
+        __u32 index = pending->argv_index;
+        __u64 arg_ptr = 0;
+        __u32 remaining;
+        __u32 read_limit;
+        long arg_size;
+
+        if (index >= pending->argv_max_args ||
+            index >= ACTRAIL_PROCESS_EXEC_ARG_MAX) {
+            emit_process_exec_arg(
+                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT, 0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        if (captured_total >= pending->argv_max_total_arg_bytes) {
+            emit_process_exec_arg(
+                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_TOTAL, 0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        if (bpf_probe_read_user(
+                &arg_ptr,
+                sizeof(arg_ptr),
+                (void *)(unsigned long)(
+                    pending->argv_ptr + ((__u64)index * sizeof(__u64))
+                )
+            ) != 0) {
+            emit_process_exec_arg(
+                ctx,
+                pending,
+                index,
+                ACTRAIL_PROCESS_EXEC_ARG_MARK_READ_FAILED,
+                0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        if (!arg_ptr) {
+            emit_process_exec_arg(
+                ctx,
+                pending,
+                index,
+                ACTRAIL_PROCESS_EXEC_ARG_MARK_COMPLETE,
+                0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        remaining = pending->argv_max_total_arg_bytes - captured_total;
+        read_limit = pending->argv_max_arg_bytes;
+        if (read_limit > remaining) {
+            read_limit = remaining;
+        }
+        read_limit++;
+        if (read_limit > ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES) {
+            read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
+        }
+        arg_size = emit_process_exec_arg(ctx, pending, index, arg_ptr, read_limit);
+        if (arg_size <= 0) {
+            pending->argv_stopped = 1;
+            return;
+        }
+        captured_total += (__u32)arg_size - 1;
+        pending->argv_index = index + 1;
+        pending->argv_captured_total = captured_total;
+        if ((__u32)arg_size == read_limit) {
+            pending->argv_stopped = 1;
+            return;
+        }
+    }
+
+    if (pending->argv_index >= pending->argv_max_args ||
+        pending->argv_index >= ACTRAIL_PROCESS_EXEC_ARG_MAX) {
+        emit_process_exec_arg(
+            ctx,
+            pending,
+            pending->argv_index,
+            ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+            0
+        );
+        pending->argv_stopped = 1;
+    }
+}
+
+static __always_inline void process_exec_argv_persist_cursor(
+    struct actrail_pending_process_exec *target,
+    const struct actrail_pending_process_exec *source
+) {
+    target->argv_ptr = source->argv_ptr;
+    target->argv_index = source->argv_index;
+    target->argv_captured_total = source->argv_captured_total;
+    target->argv_stopped = source->argv_stopped;
+    target->argv_max_args = source->argv_max_args;
+    target->argv_max_arg_bytes = source->argv_max_arg_bytes;
+    target->argv_max_total_arg_bytes = source->argv_max_total_arg_bytes;
+}
+#endif
+
 static __always_inline void emit_process_exec_args(
     struct trace_event_raw_sys_enter *ctx,
     struct actrail_pending_process_exec *pending,
@@ -289,62 +445,82 @@ static __always_inline void emit_process_exec_args(
         );
     }
 #else
-    __u32 captured_total = 0;
-#pragma clang loop unroll(full)
-    for (__u32 index = 0; index < ACTRAIL_PROCESS_EXEC_ARG_MAX; index++) {
-        __u64 arg_ptr = 0;
-        __u32 remaining;
-        __u32 read_limit;
-        long arg_size;
+    pending->argv_ptr = argv_ptr;
+    pending->argv_index = 0;
+    pending->argv_captured_total = 0;
+    pending->argv_stopped = 0;
+    pending->argv_max_args = max_args;
+    pending->argv_max_arg_bytes = max_arg_bytes;
+    pending->argv_max_total_arg_bytes = max_total_arg_bytes;
 
-        if (index >= max_args) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT, 0
-            );
-            break;
-        }
-        if (bpf_probe_read_user(
-                &arg_ptr,
-                sizeof(arg_ptr),
-                (void *)(unsigned long)(argv_ptr + ((__u64)index * sizeof(__u64)))
-            ) != 0) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_READ_FAILED, 0
-            );
-            break;
-        }
-        if (!arg_ptr) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_COMPLETE, 0
-            );
-            break;
-        }
-        if (captured_total >= max_total_arg_bytes) {
-            emit_process_exec_arg(
-                ctx, pending, index, ACTRAIL_PROCESS_EXEC_ARG_MARK_TOTAL, 0
-            );
-            break;
-        }
-        remaining = max_total_arg_bytes - captured_total;
-        read_limit = max_arg_bytes;
-        if (read_limit > remaining) {
-            read_limit = remaining;
-        }
-        read_limit++;
-        if (read_limit > ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES) {
-            read_limit = ACTRAIL_PROCESS_EXEC_ARGV_ABI_MAX_BYTES;
-        }
-        arg_size = emit_process_exec_arg(ctx, pending, index, arg_ptr, read_limit);
-        if (arg_size <= 0) {
-            break;
-        }
-        captured_total += (__u32)arg_size - 1;
-        if ((__u32)arg_size == read_limit) {
-            break;
-        }
+    process_exec_argv_chunk(ctx, pending);
+    if (pending->argv_stopped) {
+        return;
     }
+
+    {
+        __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+        struct actrail_pending_process_exec *stored =
+            bpf_map_lookup_elem(&pending_process_exec_ops, &kernel_pid_tgid);
+
+        if (!stored) {
+            emit_process_exec_arg(
+                ctx,
+                pending,
+                pending->argv_index,
+                ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+                0
+            );
+            pending->argv_stopped = 1;
+            return;
+        }
+        process_exec_argv_persist_cursor(stored, pending);
+    }
+
+    {
+        __u32 tail_call_index = 0;
+        bpf_tail_call(ctx, &process_exec_argv_tail_calls, tail_call_index);
+    }
+    emit_process_exec_arg(
+        ctx,
+        pending,
+        pending->argv_index,
+        ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+        0
+    );
+    pending->argv_stopped = 1;
 #endif
 }
+
+#ifndef ACTRAIL_BPF_LOOP
+SEC("tracepoint/syscalls/sys_enter_execve")
+int handle_process_exec_argv_continue(struct trace_event_raw_sys_enter *ctx) {
+    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+    struct actrail_pending_process_exec *pending =
+        bpf_map_lookup_elem(&pending_process_exec_ops, &kernel_pid_tgid);
+
+    if (!pending || pending->argv_stopped) {
+        return 0;
+    }
+    process_exec_argv_chunk(ctx, pending);
+    if (pending->argv_stopped) {
+        return 0;
+    }
+    {
+        __u32 tail_call_index = 0;
+        bpf_tail_call(ctx, &process_exec_argv_tail_calls, tail_call_index);
+    }
+    emit_process_exec_arg(
+        ctx,
+        pending,
+        pending->argv_index,
+        ACTRAIL_PROCESS_EXEC_ARG_MARK_LIMIT,
+        0
+    );
+    pending->argv_stopped = 1;
+    return 0;
+}
+#endif
 
 static __always_inline int store_process_exec_attempt(
     struct trace_event_raw_sys_enter *ctx,
@@ -626,381 +802,6 @@ static __always_inline int emit_process_fork_result(
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_fork")
-int handle_sys_enter_fork(struct trace_event_raw_sys_enter *ctx) {
-    return store_process_fork_attempt(ctx, ACTRAIL_PROCESS_FORK, 0, 0, 0);
-}
-
-SEC("tracepoint/syscalls/sys_exit_fork")
-int handle_sys_exit_fork(struct trace_event_raw_sys_exit *ctx) {
-    return emit_process_fork_result(ctx);
-}
-
-SEC("tracepoint/syscalls/sys_enter_vfork")
-int handle_sys_enter_vfork(struct trace_event_raw_sys_enter *ctx) {
-    return store_process_fork_attempt(ctx, ACTRAIL_PROCESS_VFORK, 0, 0, 0);
-}
-
-SEC("tracepoint/syscalls/sys_exit_vfork")
-int handle_sys_exit_vfork(struct trace_event_raw_sys_exit *ctx) {
-    return emit_process_fork_result(ctx);
-}
-
-SEC("tracepoint/syscalls/sys_enter_clone")
-int handle_sys_enter_clone(struct trace_event_raw_sys_enter *ctx) {
-    return store_process_fork_attempt(
-        ctx,
-        ACTRAIL_PROCESS_CLONE,
-        (__u64)ctx->args[0],
-        0,
-        0
-    );
-}
-
-SEC("tracepoint/syscalls/sys_exit_clone")
-int handle_sys_exit_clone(struct trace_event_raw_sys_exit *ctx) {
-    return emit_process_fork_result(ctx);
-}
-
-SEC("tracepoint/syscalls/sys_enter_clone3")
-int handle_sys_enter_clone3(struct trace_event_raw_sys_enter *ctx) {
-    return store_process_fork_attempt(
-        ctx,
-        ACTRAIL_PROCESS_CLONE3,
-        0,
-        (__u64)ctx->args[0],
-        (__u64)ctx->args[1]
-    );
-}
-
-SEC("tracepoint/syscalls/sys_exit_clone3")
-int handle_sys_exit_clone3(struct trace_event_raw_sys_exit *ctx) {
-    return emit_process_fork_result(ctx);
-}
-SEC("raw_tracepoint/sched_process_fork")
-int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx) {
-    struct task_struct *parent_task = (struct task_struct *)ctx->args[0];
-    struct task_struct *child_task = (struct task_struct *)ctx->args[1];
-    __u32 parent_pid = 0;
-    __u32 parent_tid = 0;
-    __u32 lookup_flags = 0;
-    __u32 context_parent_pid = 0;
-    __u32 parent_host_pid = 0;
-    __u32 child_host_pid = 0;
-    __u32 parent_observer_pid = 0;
-    __u32 child_observer_pid = 0;
-    __u64 child_start_boottime_ns = 0;
-    __u64 inherited_trace_id = 0;
-
-    if (!parent_task || !child_task) {
-        return 0;
-    }
-    if (ACTRAIL_CORE_READ(&context_parent_pid, parent_task, pid) != 0 ||
-        ACTRAIL_CORE_READ(&parent_host_pid, parent_task, tgid) != 0 ||
-        ACTRAIL_CORE_READ(&child_host_pid, child_task, tgid) != 0 ||
-        ACTRAIL_CORE_READ(&child_start_boottime_ns, child_task, start_boottime) != 0) {
-        return 0;
-    }
-    __u64 *trace_id = lookup_trace_for_context_pid(
-        context_parent_pid,
-        &parent_pid,
-        &parent_tid,
-        &lookup_flags
-    );
-    struct actrail_fork_trace_binding binding = {};
-    struct actrail_observer_fork_binding observer_binding = {};
-    struct actrail_process_fork_event event = {};
-    struct actrail_process_observation_scope *parent_observation_scope;
-    struct actrail_process_observation_scope child_observation_scope = {};
-    __u32 child_kernel_pid = child_host_pid;
-
-    if (trace_id) {
-        inherited_trace_id = *trace_id;
-    } else {
-        struct actrail_fork_trace_binding *parent_binding =
-            bpf_map_lookup_elem(&fork_trace_bindings, &parent_host_pid);
-
-        if (parent_binding) {
-            inherited_trace_id = parent_binding->trace_id;
-            parent_pid = parent_host_pid;
-            lookup_flags = ACTRAIL_TRACE_LOOKUP_FLAG_HOST_FALLBACK;
-        }
-    }
-
-    if (!parent_pid || !inherited_trace_id) {
-        return 0;
-    }
-    if (!child_kernel_pid || !child_start_boottime_ns) {
-        return 0;
-    }
-    if (child_host_pid == parent_host_pid) {
-        return 0;
-    }
-
-    child_observer_pid = observer_tgid_for_task(child_task);
-    parent_observer_pid = observer_tgid_for_task(parent_task);
-    if (!child_observer_pid || !parent_observer_pid) {
-        return 0;
-    }
-
-    binding.trace_id = inherited_trace_id;
-    binding.parent_generation = current_process_start_time(parent_pid);
-    binding.child_generation = child_start_boottime_ns;
-    binding.parent_pid = parent_pid;
-
-    /* sched_process_fork runs before wake_up_new_task().  Publish the child
-     * binding here so its first post-fork syscall is already controlled. */
-    if (bpf_map_update_elem(
-            &fork_trace_bindings,
-            &child_kernel_pid,
-            &binding,
-            BPF_ANY) != 0) {
-        event_transport_diag_inc(ACTRAIL_FORK_IDENTITY_PUBLISH_FAIL);
-        return 0;
-    }
-    if (set_process_identity(
-            child_kernel_pid,
-            child_start_boottime_ns,
-            child_observer_pid) != 0) {
-        bpf_map_delete_elem(&fork_trace_bindings, &child_kernel_pid);
-        event_transport_diag_inc(ACTRAIL_FORK_IDENTITY_PUBLISH_FAIL);
-        return 0;
-    }
-    parent_observation_scope = lookup_process_observation_scope(parent_host_pid);
-    if (!parent_observation_scope) {
-        bpf_map_delete_elem(&process_observation_depths, &child_kernel_pid);
-    } else {
-        child_observation_scope.start_boottime_ns = child_start_boottime_ns;
-        child_observation_scope.remaining_depth =
-            parent_observation_scope->remaining_depth;
-        if (child_observation_scope.remaining_depth == 0) {
-            child_observation_scope.remaining_depth =
-                ACTRAIL_OBSERVATION_DEPTH_LIFECYCLE_ONLY;
-        } else if (child_observation_scope.remaining_depth > 0) {
-            child_observation_scope.remaining_depth--;
-        }
-        bpf_map_update_elem(
-            &process_observation_depths,
-            &child_kernel_pid,
-            &child_observation_scope,
-            BPF_ANY
-        );
-    }
-    observer_binding.binding = binding;
-    observer_binding.kernel_tgid = child_kernel_pid;
-    if (bpf_map_update_elem(
-            &observer_fork_trace_bindings,
-            &child_observer_pid,
-            &observer_binding,
-            BPF_ANY) != 0) {
-        bpf_map_delete_elem(&process_observation_depths, &child_kernel_pid);
-        if (bpf_map_delete_elem(&process_identities, &child_kernel_pid) != 0) {
-            event_transport_diag_inc(ACTRAIL_PROCESS_IDENTITY_CLEANUP_FAIL);
-        }
-        bpf_map_delete_elem(&fork_trace_bindings, &child_kernel_pid);
-        observer_pid_diag_inc(ACTRAIL_OBSERVER_PID_INDEX_PUBLISH_FAIL);
-        return 0;
-    }
-
-    init_event_header(
-        &event.header,
-        ACTRAIL_PROC_FORK,
-        sizeof(event),
-        inherited_trace_id,
-        child_observer_pid,
-        child_host_pid,
-        child_start_boottime_ns
-    );
-    event.parent_observer_namespace_tgid = parent_observer_pid;
-    event.parent_kernel_tgid = parent_host_pid;
-    event.parent_start_boottime_ns = binding.parent_generation;
-    event.attempt_id = current_process_fork_attempt_id();
-    return emit_event(ctx, &event, sizeof(event));
-}
-
-SEC("tracepoint/sched/sched_process_exec")
-int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
-    __u32 pid = 0;
-    __u32 tid = 0;
-    __u32 lookup_flags = 0;
-    __u32 context_pid = (__u32)ctx->old_pid;
-    __u64 *trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
-    __u64 exec_trace_id = 0;
-
-    if (!pid) {
-        return 0;
-    }
-    finalize_fork_trace_binding(current_kernel_tgid());
-    trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
-    if (!trace_id && actrail_launch_binding_promote_current(ctx, pid)) {
-        trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
-    }
-    if (trace_id) {
-        exec_trace_id = *trace_id;
-    }
-    if (!exec_trace_id) {
-        return 0;
-    }
-
-    return emit_exec_proc_event(ctx, pid, exec_trace_id);
-}
-
-SEC("tracepoint/sched/sched_process_exit")
-int handle_sched_process_exit(struct sched_process_exit_ctx *ctx) {
-    __u32 pid = 0;
-    __u32 tid = 0;
-    __u32 state_pid;
-    __u32 lookup_flags = 0;
-    __u64 kernel_pid_tgid = current_kernel_pid_tgid();
-    __u64 *trace_id;
-    struct actrail_process_identity *identity;
-    __u64 exit_trace_id = 0;
-    __u64 exit_generation;
-    __u32 exit_observer_pid;
-    __u32 context_pid = (__u32)ctx->pid;
-    __u32 host_pid = kernel_pid_tgid >> 32;
-    __u32 host_tid = (__u32)kernel_pid_tgid;
-    __u32 observer_pid = 0;
-    struct actrail_process_exit_event event = {};
-
-    actrail_launch_binding_cleanup_current(ctx, host_pid);
-    delete_pending_process_exec(host_pid, kernel_pid_tgid);
-    bpf_map_delete_elem(&pending_process_fork_ops, &kernel_pid_tgid);
-    fd_pending_thread_cleanup(kernel_pid_tgid, ctx);
-    delete_trace_namespace_thread_identity(kernel_pid_tgid);
-    bpf_map_delete_elem(&process_exec_sequences, &kernel_pid_tgid);
-    bpf_map_delete_elem(&process_fork_sequences, &kernel_pid_tgid);
-    bpf_map_delete_elem(&payload_socket_operation_sequence, &kernel_pid_tgid);
-    if (!host_pid || !current_process_group_dead()) {
-        discard_thread_exit_code(kernel_pid_tgid);
-        return 0;
-    }
-    bpf_map_delete_elem(&process_observation_depths, &host_pid);
-    trace_id = lookup_trace_for_context_pid(context_pid, &pid, &tid, &lookup_flags);
-    if (!pid) {
-        pid = host_pid;
-        tid = host_tid;
-    }
-    if (trace_id) {
-        exit_trace_id = *trace_id;
-    }
-    state_pid = pid;
-    identity = lookup_process_identity(state_pid);
-    if (!identity && state_pid != host_pid) {
-        state_pid = host_pid;
-        identity = lookup_process_identity(state_pid);
-    }
-    if (!identity) {
-        discard_thread_exit_code(kernel_pid_tgid);
-        return 0;
-    }
-    if (!claim_process_exit(identity, state_pid)) {
-        discard_thread_exit_code(kernel_pid_tgid);
-        return 0;
-    }
-    exit_generation = identity->start_boottime_ns;
-    exit_observer_pid = identity->observer_namespace_tgid;
-    if (fd_tracking_enabled()) {
-        fd_process_exit_cleanup(host_pid, exit_trace_id, ctx);
-    }
-    if (bpf_map_delete_elem(&process_identities, &state_pid) != 0) {
-        event_transport_diag_inc(ACTRAIL_PROCESS_IDENTITY_CLEANUP_FAIL);
-        discard_thread_exit_code(kernel_pid_tgid);
-        return 0;
-    }
-    actrail_once_u64_release(state_pid);
-    if (exit_trace_id) {
-        init_event_header(
-            &event.header,
-            ACTRAIL_PROC_EXIT,
-            sizeof(event),
-            exit_trace_id,
-            exit_observer_pid,
-            host_pid,
-            exit_generation
-        );
-        attach_exit_code(&event, kernel_pid_tgid);
-        emit_event(ctx, &event, sizeof(event));
-        cleanup_suppressed_fds_for_process(pid, exit_generation);
-        delete_file_bulk_read_fast_process(pid, exit_generation);
-    } else {
-        discard_process_exit_codes(kernel_pid_tgid);
-    }
-    bpf_map_delete_elem(&tracked_traces, &pid);
-    if (state_pid != pid) {
-        bpf_map_delete_elem(&tracked_traces, &state_pid);
-    }
-    bpf_map_delete_elem(&fork_trace_bindings, &host_pid);
-    observer_pid = observer_tgid_for_task(
-        (struct task_struct *)actrail_bpf_get_current_task());
-    if (observer_pid) {
-        bpf_map_delete_elem(&observer_fork_trace_bindings, &observer_pid);
-    }
-    return 0;
-}
-
-SEC("raw_tracepoint/sched_process_fork")
-int handle_fd_sched_process_fork(struct bpf_raw_tracepoint_args *ctx) {
-    struct task_struct *parent_task = (struct task_struct *)ctx->args[0];
-    struct task_struct *child_task = (struct task_struct *)ctx->args[1];
-    __u32 parent_host_pid = 0;
-    __u32 child_host_pid = 0;
-
-    if (!parent_task || !child_task || !fd_tracking_enabled()) {
-        return 0;
-    }
-    if (ACTRAIL_CORE_READ(&parent_host_pid, parent_task, tgid) != 0 ||
-        ACTRAIL_CORE_READ(&child_host_pid, child_task, tgid) != 0 ||
-        !parent_host_pid || !child_host_pid || parent_host_pid == child_host_pid) {
-        return 0;
-    }
-    if (!process_observation_child_is_detailed(parent_host_pid)) {
-        return 0;
-    }
-    fd_fork_seed(parent_host_pid, child_host_pid);
-    return 0;
-}
-
-SEC("tracepoint/sched/sched_process_exec")
-int handle_fd_sched_process_exec(struct sched_process_exec_ctx *ctx) {
-    fd_process_exec_cleanup(current_kernel_tgid(), 0, ctx);
-    return 0;
-}
-
-SEC("tracepoint/syscalls/sys_enter_exit")
-int handle_sys_enter_exit(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_exit_op(ctx, 0);
-}
-
-SEC("tracepoint/syscalls/sys_enter_exit_group")
-int handle_sys_enter_exit_group(struct trace_event_raw_sys_enter *ctx) {
-    return store_pending_exit_op(ctx, 1);
-}
-
-SEC("tracepoint/signal/signal_generate")
-int handle_signal_generate(struct signal_generate_ctx *ctx) {
-    __u32 pid = 0;
-    __u32 tid = 0;
-    __u32 lookup_flags = 0;
-    __u64 *trace_id = lookup_current_trace(&pid, &tid, &lookup_flags);
-    struct actrail_process_signal_event event = {};
-
-    if (!pid || !trace_id) {
-        return 0;
-    }
-
-    init_current_event_header(
-        &event.header,
-        ACTRAIL_PROC_SIGNAL,
-        sizeof(event),
-        *trace_id
-    );
-    event.signal_result = ctx->signal_result;
-    event.signal = (__u32)ctx->sig;
-    event.target_kernel_tid = (__u32)ctx->pid;
-    event.target_group = (__u32)ctx->group;
-    return emit_event(ctx, &event, sizeof(event));
-}
-
+#include "lifecycle_programs.h"
 
 #endif

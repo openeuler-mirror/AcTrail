@@ -624,6 +624,7 @@ fn process_event(
         payload: RawObservationPayload::Process {
             operation: operation.to_string(),
             parent,
+            exec_file_identity: None,
             metadata,
         },
     }

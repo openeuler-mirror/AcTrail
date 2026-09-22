@@ -13,10 +13,7 @@ use crate::decode::{
     decode_socket_payload_completion, decode_tls_capture_request, decode_tls_completion,
     decode_tls_diagnostic, decode_tls_direct_capture,
 };
-use crate::loader::{
-    KernelEvent, KernelExecPayload, KernelObservationCommon, KernelObservationEvent,
-    KernelObservationPayload,
-};
+use crate::loader::{KernelEvent, KernelObservationEvent, KernelObservationPayload};
 
 use super::collector_net_aggregation::ObserveOutcome;
 use super::{EbpfCollector, loader_error};
@@ -99,13 +96,26 @@ impl EbpfCollector {
             payload_stream_closes: Vec::new(),
         };
         batch.observations.append(&mut self.net_aggregation_backlog);
+        batch
+            .observations
+            .append(&mut self.file_io_summaries.backlog);
         let mut exit_retires = Vec::new();
+        let mut exit_events = Vec::new();
         for event in raw_events {
-            let exit_retire = ExitRetire::from_event(&event);
-            self.handle_batch_event(event, &mut batch)?;
-            if let Some(exit_retire) = exit_retire {
-                exit_retires.push(exit_retire);
+            if let Some(retire) = ExitRetire::from_event(&event) {
+                exit_retires.push(retire);
+                exit_events.push(event);
+            } else {
+                self.handle_batch_event(event, &mut batch)?;
             }
+        }
+        let exited = exit_retires
+            .iter()
+            .map(|exit| (exit.trace_id, exit.binding_tgid, exit.generation))
+            .collect();
+        self.collect_file_io_summaries(&exited, None, None, &mut batch.observations);
+        for event in exit_events {
+            self.handle_batch_event(event, &mut batch)?;
         }
         for exit_retire in exit_retires {
             let _ = self.bindings.remove_event_pid(
@@ -127,6 +137,21 @@ impl EbpfCollector {
         match event {
             KernelEvent::TlsCompletion(event) => {
                 self.tls_completions.push(decode_tls_completion(event));
+            }
+            KernelEvent::TlsMapping(event) => {
+                let config = &self.loader.payload_config().tls;
+                if config.enabled
+                    && config.direct_dynamic_discovery_enabled
+                    && config.capture_backend
+                        == config_core::daemon::PayloadTlsCaptureBackend::BpfCopy
+                    && self.tls_mapping_events.len() < config.dynamic_discovery_capacity as usize
+                    && self.bindings.trace_has_capability(
+                        event.common.trace_id,
+                        &model_core::capability::Capability::TlsPlaintextPayload,
+                    )
+                {
+                    self.tls_mapping_events.push(event);
+                }
             }
             KernelEvent::TlsCaptureRequest(event) => {
                 self.tls_capture_requests
@@ -197,8 +222,13 @@ impl EbpfCollector {
                     _ => 0,
                 };
                 if let Some(event) =
-                    decode_observation(&event, &mut self.bindings, &mut self.file_tracker)
-                        .map_err(|error| CollectorError::new(error.stage, error.message))?
+                    decode_observation(&event, &mut self.bindings, &mut self.file_tracker, {
+                        let config = &self.loader.payload_config().tls;
+                        config.enabled
+                            && config.capture_backend
+                                == config_core::daemon::PayloadTlsCaptureBackend::BpfCopy
+                    })
+                    .map_err(|error| CollectorError::new(error.stage, error.message))?
                 {
                     if let Some((transport, local, remote, fd)) = net_flush_identity(&event) {
                         batch
@@ -369,7 +399,13 @@ impl EbpfCollector {
         }
 
         let root_observation = pending.root_observation.clone();
-        let root_working_directory = pending.root_working_directory.clone();
+        let consumers = self
+            .file_tracker
+            .context_consumers(common.trace_id, &self.bindings);
+        let root_working_directory = consumers
+            .file_paths
+            .then(|| pending.root_working_directory.clone())
+            .flatten();
         let initial_suppressed_fds = pending.initial_suppressed_fds.clone();
         self.bindings.track_with_kernel_tgid(
             common.trace_id,
@@ -377,8 +413,14 @@ impl EbpfCollector {
             common.subject.kernel_tgid,
             common.subject.start_boottime_ns,
         );
-        self.file_tracker
-            .seed_process(common.trace_id, root_observation, root_working_directory);
+        if consumers.any() {
+            self.file_tracker.seed_process(
+                common.trace_id,
+                root_observation,
+                root_working_directory,
+                consumers,
+            );
+        }
         let process = KernelProcessCoordinates {
             pid: common.subject.kernel_tgid,
             start_time: common.subject.start_boottime_ns,
@@ -432,14 +474,6 @@ impl EbpfCollector {
                 .is_ok()
                 {
                     self.cleanup_suppressed_fds_for_process(binding_tgid, generation)?;
-                    if let Some(runtime) = self.runtime.as_ref() {
-                        runtime
-                            .unmark_file_bulk_read_fast_process(binding_tgid, generation)
-                            .map_err(loader_error)?;
-                        runtime
-                            .sweep_file_bulk_read_fast_fds_for_process(binding_tgid, generation)
-                            .map_err(loader_error)?;
-                    }
                 } else {
                     self.record_exit_lifecycle_binding_gap();
                 }
@@ -453,6 +487,20 @@ impl EbpfCollector {
         &mut self,
         event: &KernelObservationEvent,
     ) -> Result<(), CollectorError> {
+        if !matches!(
+            &event.payload,
+            KernelObservationPayload::Fork(_)
+                | KernelObservationPayload::Exec(_)
+                | KernelObservationPayload::Exit(_)
+        ) {
+            return Ok(());
+        }
+        let consumers = self
+            .file_tracker
+            .context_consumers(event.common.trace_id, &self.bindings);
+        if !consumers.any() {
+            return Ok(());
+        }
         match &event.payload {
             KernelObservationPayload::Fork(_) => {
                 let parent = decode::fork_parent_observation(event, &self.bindings)
@@ -460,9 +508,9 @@ impl EbpfCollector {
                 let child = decode::fork_child_observation(event, &self.bindings)
                     .map_err(|error| CollectorError::new(error.stage, error.message))?;
                 self.file_tracker
-                    .inherit_process(event.common.trace_id, &parent, child);
+                    .inherit_process(event.common.trace_id, &parent, child, consumers);
             }
-            KernelObservationPayload::Exec(exec) => {
+            KernelObservationPayload::Exec(_) => {
                 let common = &event.common;
                 let binding_tgid = common.subject.binding_tgid();
                 let process = decode::resolve_bound_event_observation(
@@ -472,9 +520,12 @@ impl EbpfCollector {
                     &self.bindings,
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_exec", error))?;
-                self.file_tracker
-                    .exec_process(common.trace_id, process, common.observed_ktime_ns);
-                self.configure_file_bulk_read_fast_process(common, exec)?;
+                self.file_tracker.exec_process(
+                    common.trace_id,
+                    process,
+                    common.observed_ktime_ns,
+                    consumers,
+                );
             }
             KernelObservationPayload::Exit(_) => {
                 let common = &event.common;
@@ -485,56 +536,16 @@ impl EbpfCollector {
                     &self.bindings,
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_exit", error))?;
-                self.file_tracker
-                    .exit_process(common.trace_id, process, common.observed_ktime_ns);
+                self.file_tracker.exit_process(
+                    common.trace_id,
+                    process,
+                    common.observed_ktime_ns,
+                    consumers,
+                );
             }
             _ => {}
         }
         Ok(())
-    }
-
-    fn configure_file_bulk_read_fast_process(
-        &mut self,
-        common: &KernelObservationCommon,
-        event: &KernelExecPayload,
-    ) -> Result<(), CollectorError> {
-        let Some(runtime) = self.runtime.as_ref() else {
-            return Ok(());
-        };
-        let binding_tgid = common.subject.binding_tgid();
-        runtime
-            .unmark_file_bulk_read_fast_process(binding_tgid, common.subject.start_boottime_ns)
-            .map_err(loader_error)?;
-        if !self.file_bulk_read_fast_path.enabled {
-            return Ok(());
-        }
-        let Some(exec_filename) = &event.filename else {
-            return Ok(());
-        };
-        if exec_filename.truncated {
-            return Ok(());
-        }
-        let Some(command) = std::path::Path::new(&exec_filename.path)
-            .file_name()
-            .and_then(|value| value.to_str())
-        else {
-            return Ok(());
-        };
-        if !self
-            .file_bulk_read_fast_path
-            .scanner_commands
-            .iter()
-            .any(|candidate| candidate == command)
-        {
-            return Ok(());
-        }
-        runtime
-            .mark_file_bulk_read_fast_process(
-                binding_tgid,
-                common.subject.start_boottime_ns,
-                common.trace_id,
-            )
-            .map_err(loader_error)
     }
 
     fn maybe_attach_go_tls_after_exec(

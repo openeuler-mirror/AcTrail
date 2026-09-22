@@ -44,6 +44,7 @@ class SandboxOomKilledAlertHostCase(TestCase):
             bin_dir / name
             for name in (
                 "actraild",
+                "actrailctl",
                 "actrail-sb",
                 "actrail-vsock-gateway",
                 "actraild-alert-proxy",

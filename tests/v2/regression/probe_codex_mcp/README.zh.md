@@ -260,7 +260,7 @@ Unix socket 的 108-byte 上限。probe 参数与当前代码中的
 #### 手动指令
 
 ```bash
-"${DAEMON[@]}" init -f --patch "$OPERATOR_PATCH"
+"${CONTROL[@]}" init -f --patch "$OPERATOR_PATCH"
 "${DAEMON[@]}" stop
 "${CONTROL[@]}" clean
 "${DAEMON[@]}" start

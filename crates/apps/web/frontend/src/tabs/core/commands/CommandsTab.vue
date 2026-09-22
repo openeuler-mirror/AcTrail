@@ -89,7 +89,9 @@ const expandedIds = ref(new Set());
 const visibleLimit = ref(TABLE_RENDER_LIMITS.initialRows);
 const selectedDetail = ref(null);
 
-const roots = computed(() => buildCommandTree(props.commands?.actions, props.commands?.links));
+const roots = computed(() => buildCommandTree(
+  props.commands?.actions, props.commands?.links, props.commands?.processes,
+));
 const parentIds = computed(() => collectParentIds(roots.value));
 const hasTree = computed(() => parentIds.value.length > 0);
 const normalizedQuery = computed(() => normalizeTableQuery(props.query));

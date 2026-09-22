@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
-use idle_contract::{TurnLifecycleKind, UserInteractionState};
+use agent_lifecycle_contract::{TurnLifecycleKind, UserInteractionState, WorkKind, WorkState};
 use model_core::binary_identity::BinaryIdentity;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
@@ -111,6 +111,7 @@ pub struct DoctorCommand {
 pub struct ReportTurnLifecycleCommand {
     pub request_id: RequestId,
     pub trace_id: TraceId,
+    pub session_id: String,
     pub task_id: String,
     pub kind: TurnLifecycleKind,
     pub observed_at: std::time::SystemTime,
@@ -121,9 +122,29 @@ pub struct ReportTurnLifecycleCommand {
 pub struct ReportUserInteractionCommand {
     pub request_id: RequestId,
     pub trace_id: TraceId,
+    pub session_id: String,
     pub task_id: String,
     pub interaction_id: String,
     pub state: UserInteractionState,
+    pub observed_at: std::time::SystemTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportWorkLifecycleCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub session_id: String,
+    pub task_id: String,
+    pub kind: WorkKind,
+    pub state: WorkState,
+    pub observed_at: std::time::SystemTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportSessionClosedCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub session_id: String,
     pub observed_at: std::time::SystemTime,
 }
 
@@ -191,6 +212,8 @@ pub enum ControlCommand {
     Doctor(DoctorCommand),
     ReportTurnLifecycle(ReportTurnLifecycleCommand),
     ReportUserInteraction(ReportUserInteractionCommand),
+    ReportSessionClosed(ReportSessionClosedCommand),
+    ReportWorkLifecycle(ReportWorkLifecycleCommand),
     PluginList(PluginListCommand),
     PluginStatus(PluginStatusCommand),
     PluginLoad(PluginLoadCommand),

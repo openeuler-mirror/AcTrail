@@ -1,17 +1,20 @@
 import { compactRows, formatTime, row, valuesMatchQuery } from '../../tableModel';
 import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../actionLabels';
+import { CommandLaunchDisplay } from '../../../command/launchDisplay.js';
 
 export const COMMAND_COLUMNS = Object.freeze([
   { key: 'title', label: 'Command', tree: true },
-  { key: 'time', label: 'Time', align: 'numeric' },
-  { key: 'duration', label: 'Duration', align: 'numeric', badge: 'duration' },
-  { key: 'pid', label: 'PID', align: 'numeric' },
+  { key: 'time', label: 'Start time', align: 'numeric' },
+  { key: 'pid', label: 'Host PID', align: 'numeric' },
   { key: 'kind', label: 'Kind', badge: 'kind' },
-  { key: 'status', label: 'Status', badge: 'status' },
+  { key: 'status', label: 'Start result', badge: 'status' },
 ]);
 
-export function buildCommandTree(actions = [], links = []) {
-  const nodes = new Map(actions.map((action) => [action.id, { action, parent: null, children: [] }]));
+export function buildCommandTree(actions = [], links = [], processes = []) {
+  const hostPids = new Map(processes.map((process) => [String(process.process_id), process.pid]));
+  const nodes = new Map(actions.map((action) => [action.id, {
+    action, parent: null, children: [], pid: hostPids.get(String(action.process?.process_id)),
+  }]));
   const assigned = new Set();
   for (const link of links) {
     const parent = nodes.get(link.parent);
@@ -90,7 +93,7 @@ export function flattenMatchingCommands(roots, query) {
         continue;
       }
       visited.add(node.action.id);
-      if (commandMatchesQuery(node.action, query)) {
+      if (commandMatchesQuery(node.action, query, node.pid)) {
         out.push(commandRow(node, depth, node.children.length > 0, node.children.length > 0));
       }
       walk(node.children, depth + 1);
@@ -105,15 +108,15 @@ function commandRow(node, depth, hasChildren, expanded) {
   const label = semanticActionLabel(action);
   const target = semanticActionTarget(action);
   const title = target || action.title || label;
+  const launch = new CommandLaunchDisplay(action);
   return row(
     action.id,
     {
       title: { text: title, indent: depth, hasChildren, expanded },
       time: formatTime(action.start_time),
-      duration: action.duration,
-      pid: action.process?.pid,
+      pid: node.pid,
       kind: label,
-      status: action.status,
+      status: launch.status,
     },
     {
       title,
@@ -122,12 +125,10 @@ function commandRow(node, depth, hasChildren, expanded) {
         semantic_label: label,
         raw_action_kind: action.kind,
         target,
-        status: action.status,
+        start_result: launch.status,
         completeness: action.completeness,
-        pid: action.process?.pid,
+        pid: node.pid,
         started: action.start_time,
-        ended: action.end_time,
-        duration: action.duration,
       }),
       attributes: action.attributes,
       raw: action,
@@ -135,16 +136,15 @@ function commandRow(node, depth, hasChildren, expanded) {
   );
 }
 
-function commandMatchesQuery(action, query) {
+function commandMatchesQuery(action, query, pid) {
   return valuesMatchQuery(
     [
       formatTime(action.start_time),
-      action.duration,
-      action.process?.pid,
+      pid,
       action.kind,
       semanticActionLabel(action),
       semanticActionTarget(action),
-      action.status,
+      new CommandLaunchDisplay(action).status,
       action.title,
       action.completeness,
     ],

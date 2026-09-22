@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::SystemTime;
 
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
     SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
-    SemanticActionLinkRole, SemanticEvidence,
+    SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
 };
 
 use super::super::process_parent::{
@@ -13,10 +14,11 @@ use super::super::process_parent::{
     parent_process_from_action,
 };
 use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
+use crate::live::actions::action_for_live_state;
 
 #[derive(Default)]
 pub(super) struct CommandChildActionLinkProjector {
-    commands_by_process: BTreeMap<(TraceId, ProcessIdentity), SemanticAction>,
+    latest_command_by_process: BTreeMap<(TraceId, ProcessIdentity), CommandContext>,
     command_ids_by_process: BTreeMap<(TraceId, ProcessIdentity), BTreeSet<String>>,
     fork_edges: BTreeMap<(TraceId, ProcessIdentity), ForkProcessEdge>,
     fork_children: BTreeMap<(TraceId, ProcessIdentity), BTreeSet<ProcessIdentity>>,
@@ -27,6 +29,11 @@ pub(super) struct CommandChildActionLinkProjector {
     pending_candidate_owners:
         BTreeMap<(TraceId, ProcessIdentity), BTreeSet<(TraceId, ProcessIdentity)>>,
     emitted_links: BTreeSet<ActionLinkKey>,
+}
+
+struct CommandContext {
+    action_id: String,
+    started_at: SystemTime,
 }
 
 pub(super) struct ProcessForkLinkUpdate {
@@ -45,8 +52,18 @@ impl CommandChildActionLinkProjector {
         if action.kind != SemanticActionKind::CommandInvocation {
             return;
         }
-        self.commands_by_process
-            .insert((action.trace_id, action.process.clone()), action.clone());
+        self.latest_command_by_process
+            .entry((action.trace_id, action.process.clone()))
+            .and_modify(|current| {
+                if action.start_time >= current.started_at {
+                    current.action_id.clone_from(&action.action_id);
+                    current.started_at = action.start_time;
+                }
+            })
+            .or_insert_with(|| CommandContext {
+                action_id: action.action_id.clone(),
+                started_at: action.start_time,
+            });
         self.command_ids_by_process
             .entry((action.trace_id, action.process.clone()))
             .or_default()
@@ -117,6 +134,19 @@ impl CommandChildActionLinkProjector {
         let Some(role) = command_child_role(action) else {
             return Vec::new();
         };
+        if action.kind == SemanticActionKind::ProcessExec {
+            // A failed exec leaves the executing image intact. Only an
+            // already observed command can own the attempt; do not queue it
+            // for a future successful exec to claim.
+            return self
+                .latest_command_by_process
+                .get(&(action.trace_id, action.process.clone()))
+                .filter(|command| command.started_at <= action.start_time)
+                .map(|command| command.action_id.clone())
+                .and_then(|command_id| self.link(&command_id, action))
+                .into_iter()
+                .collect();
+        }
         if parent_identity_has_conflict(action) {
             self.remove_pending_child(action);
             return invalidate_child_links(
@@ -130,15 +160,16 @@ impl CommandChildActionLinkProjector {
         let Some(parent_process) = parent_command_process(action) else {
             return Vec::new();
         };
-        let Some(command) = self.command_for_parent(action.trace_id, parent_process.clone()) else {
+        let Some(command_id) = self.command_id_for_parent(action.trace_id, parent_process.clone())
+        else {
             self.remember_pending(action);
             return Vec::new();
         };
-        self.link(&command, action).into_iter().collect()
+        self.link(&command_id, action).into_iter().collect()
     }
 
     pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
-        self.commands_by_process
+        self.latest_command_by_process
             .retain(|(candidate, _), _| *candidate != trace_id);
         self.command_ids_by_process
             .retain(|(candidate, _), _| *candidate != trace_id);
@@ -157,18 +188,14 @@ impl CommandChildActionLinkProjector {
         self.emitted_links.retain(|key| key.trace_id != trace_id);
     }
 
-    fn link(
-        &mut self,
-        command: &SemanticAction,
-        action: &SemanticAction,
-    ) -> Option<SemanticActionLink> {
-        if command.action_id == action.action_id {
+    fn link(&mut self, command_id: &str, action: &SemanticAction) -> Option<SemanticActionLink> {
+        if command_id == action.action_id.as_str() {
             return None;
         }
         let role = command_child_role(action)?;
         let key = ActionLinkKey {
             trace_id: action.trace_id,
-            parent_action_id: command.action_id.clone(),
+            parent_action_id: command_id.to_owned(),
             child_action_id: action.action_id.clone(),
             role,
         };
@@ -177,7 +204,7 @@ impl CommandChildActionLinkProjector {
         }
         Some(SemanticActionLink {
             trace_id: action.trace_id,
-            parent_action_id: command.action_id.clone(),
+            parent_action_id: command_id.to_owned(),
             child_action_id: action.action_id.clone(),
             role,
             origin: SemanticActionLinkOrigin::Observed,
@@ -207,9 +234,9 @@ impl CommandChildActionLinkProjector {
             .iter_mut()
             .find(|candidate| candidate.action_id == action.action_id)
         {
-            *existing = action.clone();
+            *existing = action_for_live_state(action);
         } else {
-            pending.push(action.clone());
+            pending.push(action_for_live_state(action));
         }
         self.pending_key_by_child
             .insert(child_key, (action.trace_id, parent_process));
@@ -238,18 +265,18 @@ impl CommandChildActionLinkProjector {
         }
     }
 
-    fn command_for_parent(
+    fn command_id_for_parent(
         &self,
         trace_id: TraceId,
         parent_process: ProcessIdentity,
-    ) -> Option<SemanticAction> {
+    ) -> Option<String> {
         let mut candidate = parent_process;
         let mut visited = BTreeSet::new();
         loop {
             if let Some(command) = self
-                .commands_by_process
+                .latest_command_by_process
                 .get(&(trace_id, candidate.clone()))
-                .cloned()
+                .map(|command| command.action_id.clone())
             {
                 return Some(command);
             }
@@ -268,7 +295,7 @@ impl CommandChildActionLinkProjector {
         &mut self,
         parent_key: &(TraceId, ProcessIdentity),
     ) -> Vec<SemanticActionLink> {
-        let Some(parent_command) = self.command_for_parent(parent_key.0, parent_key.1.clone())
+        let Some(parent_command) = self.command_id_for_parent(parent_key.0, parent_key.1.clone())
         else {
             return Vec::new();
         };
@@ -278,7 +305,7 @@ impl CommandChildActionLinkProjector {
     fn link_pending_to_command(
         &mut self,
         parent_key: &(TraceId, ProcessIdentity),
-        parent_command: &SemanticAction,
+        parent_command: &str,
     ) -> Vec<SemanticActionLink> {
         let Some(pending) = self.pending_by_process.remove(parent_key) else {
             return Vec::new();
@@ -289,7 +316,7 @@ impl CommandChildActionLinkProjector {
             .filter_map(|action| {
                 self.pending_key_by_child
                     .remove(&(action.trace_id, action.action_id.clone()));
-                self.link(&parent_command, action)
+                self.link(parent_command, action)
             })
             .collect()
     }
@@ -306,13 +333,13 @@ impl CommandChildActionLinkProjector {
             .unwrap_or_default();
         let mut links = Vec::new();
         for key in pending_keys {
-            let Some(candidate) = self.command_for_parent(key.0, key.1.clone()) else {
+            let Some(candidate) = self.command_id_for_parent(key.0, key.1.clone()) else {
                 continue;
             };
-            if candidate.action_id != command.action_id {
+            if candidate != command.action_id {
                 continue;
             }
-            links.extend(self.link_pending_to_command(&key, command));
+            links.extend(self.link_pending_to_command(&key, &command.action_id));
         }
         links
     }
@@ -427,6 +454,10 @@ impl CommandChildActionLinkProjector {
 }
 
 fn command_child_role(action: &SemanticAction) -> Option<SemanticActionLinkRole> {
+    if action.kind == SemanticActionKind::ProcessExec {
+        return (action.status == SemanticActionStatus::Error)
+            .then_some(SemanticActionLinkRole::CommandContainsProcessExec);
+    }
     if is_nested_file_write_event(action) {
         return None;
     }

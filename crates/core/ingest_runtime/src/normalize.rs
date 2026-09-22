@@ -16,7 +16,8 @@ pub fn normalize_event(
 ) -> DomainEvent {
     let kind = match &raw_event.payload {
         collector_event::RawObservationPayload::Process { .. } => EventKind::Process,
-        collector_event::RawObservationPayload::File { .. } => EventKind::File,
+        collector_event::RawObservationPayload::File { .. }
+        | collector_event::RawObservationPayload::FileIoSummary { .. } => EventKind::File,
         collector_event::RawObservationPayload::Net { .. } => EventKind::Net,
         collector_event::RawObservationPayload::Ipc { .. } => EventKind::Ipc,
         collector_event::RawObservationPayload::Stdio { .. } => EventKind::Stdio,
@@ -35,6 +36,7 @@ pub fn normalize_event(
         collector_event::RawObservationPayload::Process {
             operation,
             parent: _,
+            exec_file_identity: _,
             metadata,
         } => {
             let executable = metadata
@@ -59,7 +61,21 @@ pub fn normalize_event(
                 .get("result")
                 .and_then(|value| value.parse::<i32>().ok()),
             metadata,
+            io_summary: None,
         }),
+        collector_event::RawObservationPayload::FileIoSummary { path, summary } => {
+            EventPayload::File(FilePayload {
+                operation: match summary.direction {
+                    model_core::event::FileIoDirection::Read => "read_summary",
+                    model_core::event::FileIoDirection::Write => "write_summary",
+                }
+                .to_string(),
+                path,
+                result: None,
+                metadata: Default::default(),
+                io_summary: Some(summary),
+            })
+        }
         collector_event::RawObservationPayload::Net {
             transport,
             local,

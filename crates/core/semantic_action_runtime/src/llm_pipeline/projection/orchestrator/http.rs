@@ -165,7 +165,7 @@ impl ProjectionCoordinator {
             llm_request: binding.request,
             http_request: matched.request.clone(),
         });
-        self.push_recorded_action(failed_response, &mut output);
+        output.updated_actions.push(failed_response);
         Some(output)
     }
 
@@ -206,7 +206,10 @@ impl ProjectionCoordinator {
                     llm_response: matched.clone(),
                     http_response: response.clone(),
                 });
-                self.push_recorded_action(matched, &mut output);
+                if let Some(update) = crate::live::ActionUpdateFactory::response_failure(&matched) {
+                    output.updates.push(update);
+                    output.updated_actions.push(matched);
+                }
                 return output;
             }
         }

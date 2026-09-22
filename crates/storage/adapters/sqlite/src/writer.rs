@@ -2,7 +2,6 @@
 
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
-use model_core::payload::PayloadSegment;
 use model_core::process::ProcessMembership;
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
 use rusqlite::{Connection, params};
@@ -10,16 +9,14 @@ use store_write_contract::WriteError;
 use store_write_contract::diagnostics::DiagnosticWriteStore;
 use store_write_contract::events::EventWriteStore;
 use store_write_contract::memberships::MembershipWriteStore;
-use store_write_contract::payloads::PayloadWriteStore;
 use store_write_contract::traces::TraceWriteStore;
 
 use crate::SqliteStorage;
 use crate::records::{
-    EventMeta, PayloadSegmentMeta, StoredEventPayload, bool_to_i64, encode_diagnostic_kind,
-    encode_diagnostic_severity, encode_event_kind, encode_event_payload,
-    encode_exit_observation_source, encode_map, encode_membership_state, encode_policy_record,
-    encode_tags, encode_time, encode_trace_health, encode_trace_lifecycle, payload_kind,
-    take_shared_path,
+    EventMeta, StoredEventPayload, bool_to_i64, encode_diagnostic_kind, encode_diagnostic_severity,
+    encode_event_kind, encode_event_payload, encode_exit_observation_source, encode_map,
+    encode_membership_state, encode_policy_record, encode_tags, encode_time, encode_trace_health,
+    encode_trace_lifecycle, payload_kind, take_shared_path,
 };
 
 impl TraceWriteStore for SqliteStorage {
@@ -479,7 +476,7 @@ impl SqliteStorage {
         for (block_order, block) in encoded.blocks.iter().enumerate() {
             let compressed = zstd::stream::encode_all(
                 block.bytes.as_slice(),
-                self.cold_field_compression.zstd_level,
+                self.cold_field_encoder.zstd_level(),
             )
             .map_err(|error| WriteError::new("encode_event_payload_block", error.to_string()))?;
             connection
@@ -522,46 +519,6 @@ const fn trace_lifecycle_is_terminal(state: TraceLifecycleState) -> bool {
         state,
         TraceLifecycleState::Completed | TraceLifecycleState::Exited | TraceLifecycleState::Failed
     )
-}
-
-impl PayloadWriteStore for SqliteStorage {
-    fn append_payload_segment(&mut self, segment: PayloadSegment) -> Result<(), WriteError> {
-        let connection = self.connection().borrow_mut();
-        connection
-            .prepare_cached(
-                "INSERT OR REPLACE INTO payload_segments (
-                    segment_id, trace_id, observed_at, process_id, segment_meta,
-                    stream_key, sequence,
-                    original_size, captured_size, operation_id, operation_offset,
-                    operation_original_size, operation_captured_size,
-                    library, symbol, protocol_hint, bytes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-            )
-            .and_then(|mut statement| {
-                let segment_meta = PayloadSegmentMeta::from_segment(&segment);
-                statement.execute(params![
-                    segment.segment_id.get(),
-                    segment.trace_id.get(),
-                    encode_time(segment.observed_at),
-                    segment.process.get(),
-                    segment_meta.code(),
-                    segment.stream_key.to_string(),
-                    segment.sequence,
-                    segment.original_size,
-                    segment.captured_size,
-                    segment.operation_id,
-                    segment.operation_offset,
-                    segment.operation_original_size,
-                    segment.operation_captured_size,
-                    segment.library,
-                    segment.symbol,
-                    segment.protocol_hint,
-                    segment.bytes,
-                ])
-            })
-            .map(|_| ())
-            .map_err(|error| WriteError::new("append_payload_segment", error.to_string()))
-    }
 }
 
 impl DiagnosticWriteStore for SqliteStorage {

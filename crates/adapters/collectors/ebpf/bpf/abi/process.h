@@ -15,12 +15,32 @@ struct actrail_process_fork_event {
     __u64 attempt_id;
 } __attribute__((packed));
 
+struct actrail_exec_file_identity {
+    __u32 valid;
+    __u32 device_major;
+    __u32 device_minor;
+    __u64 inode;
+    __u64 size;
+    __s64 mtime_seconds;
+    __s64 ctime_seconds;
+    __u32 mtime_nanoseconds;
+    __u32 ctime_nanoseconds;
+} __attribute__((packed));
+
 struct actrail_process_exec_event {
     struct actrail_event_header header;
     __u64 attempt_id;
     __u32 filename_size;
     __u32 filename_flags;
     char filename[ACTRAIL_EXEC_FILENAME_ABI_MAX_BYTES];
+    struct actrail_exec_file_identity file_identity;
+} __attribute__((packed));
+
+struct actrail_tls_mapping_event {
+    struct actrail_event_header header;
+    struct actrail_exec_file_identity file_identity;
+    __u64 start;
+    __u64 end;
 } __attribute__((packed));
 
 struct actrail_process_exit_event {

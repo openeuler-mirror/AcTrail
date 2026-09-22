@@ -35,7 +35,11 @@ pub(crate) fn current_config_json(
     json::field(
         &mut summary,
         "storage_path",
-        &json::string(&config.storage.path().display().to_string()),
+        &config
+            .storage
+            .path()
+            .map(|path| json::string(&path.display().to_string()))
+            .unwrap_or_else(|| "null".to_string()),
     );
     summary.push(',');
     json::field(

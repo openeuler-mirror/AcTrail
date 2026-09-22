@@ -4,40 +4,16 @@ use std::collections::BTreeMap;
 
 use rusqlite::{Row, params};
 
-use crate::semantic_actions::attribute_codes::{decode_attributes, encode_attributes};
-use crate::semantic_actions::storage_meta::{ColdFieldCompression, ColdFieldMeta, current};
+use crate::semantic_actions::attribute_codes::decode_attributes;
+use crate::semantic_actions::storage_meta::{ColdFieldMeta, current};
+
+mod encoder;
+pub(crate) use encoder::ColdFieldEncoder;
 
 pub(in crate::semantic_actions) struct EncodedColdField {
     pub encoding_code: i16,
     pub uncompressed_bytes: i64,
     pub payload: Vec<u8>,
-}
-
-fn encode_compact(
-    attributes: &BTreeMap<String, String>,
-    compression: ColdFieldCompression,
-) -> Result<EncodedColdField, rusqlite::Error> {
-    let meta = current().cold_fields;
-    let raw = encode_attributes(attributes);
-    let uncompressed_bytes = i64::try_from(raw.len()).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let (encoding_code, payload) = if compression.compression_min_bytes != 0
-        && raw.len() >= compression.compression_min_bytes
-    {
-        let compressed = zstd::stream::encode_all(raw.as_slice(), compression.zstd_level)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?;
-        if compressed.len() < raw.len() {
-            (meta.compact_zstd, compressed)
-        } else {
-            (meta.compact_plain, raw)
-        }
-    } else {
-        (meta.compact_plain, raw)
-    };
-    Ok(EncodedColdField {
-        encoding_code,
-        uncompressed_bytes,
-        payload,
-    })
 }
 
 pub(in crate::semantic_actions) fn decode_attributes_from_row(
@@ -69,22 +45,20 @@ pub(in crate::semantic_actions) fn upsert_action_attributes(
     connection: &mut rusqlite::Connection,
     action_key: i64,
     attributes: &BTreeMap<String, String>,
-    compression: ColdFieldCompression,
+    encoder: &ColdFieldEncoder,
 ) -> Result<(), rusqlite::Error> {
-    let field_code = current().cold_fields.action_attributes;
     if attributes.is_empty() {
-        return delete_action_field(connection, action_key, field_code);
+        return Ok(());
     }
-    let encoded = encode_compact(attributes, compression)?;
+    let encoded = encoder.encode_compact(attributes)?;
     connection
         .prepare_cached(
             "INSERT OR REPLACE INTO semantic_action_cold_fields (
-            owner_key, field_code, encoding_code, uncompressed_bytes, payload
-         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            owner_key, encoding_code, uncompressed_bytes, payload
+         ) VALUES (?1, ?2, ?3, ?4)",
         )?
         .execute(params![
             action_key,
-            field_code,
             encoded.encoding_code,
             encoded.uncompressed_bytes,
             encoded.payload,
@@ -99,9 +73,8 @@ pub(in crate::semantic_actions) fn upsert_link_attributes(
     child_action_key: i64,
     role_code: i16,
     attributes: &BTreeMap<String, String>,
-    compression: ColdFieldCompression,
+    encoder: &ColdFieldEncoder,
 ) -> Result<(), rusqlite::Error> {
-    let field_code = current().cold_fields.link_attributes;
     if attributes.is_empty() {
         return delete_link_field(
             connection,
@@ -109,41 +82,25 @@ pub(in crate::semantic_actions) fn upsert_link_attributes(
             parent_action_key,
             child_action_key,
             role_code,
-            field_code,
         );
     }
-    let encoded = encode_compact(attributes, compression)?;
+    let encoded = encoder.encode_compact(attributes)?;
     connection
         .prepare_cached(
             "INSERT OR REPLACE INTO semantic_action_link_cold_fields (
-            trace_id, parent_action_key, child_action_key, role_code, field_code,
+            trace_id, parent_action_key, child_action_key, role_code,
             encoding_code, uncompressed_bytes, payload
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?
         .execute(params![
             trace_id,
             parent_action_key,
             child_action_key,
             role_code,
-            field_code,
             encoded.encoding_code,
             encoded.uncompressed_bytes,
             encoded.payload,
         ])?;
-    Ok(())
-}
-
-fn delete_action_field(
-    connection: &mut rusqlite::Connection,
-    action_key: i64,
-    field_code: i16,
-) -> Result<(), rusqlite::Error> {
-    connection
-        .prepare_cached(
-            "DELETE FROM semantic_action_cold_fields
-         WHERE owner_key = ?1 AND field_code = ?2",
-        )?
-        .execute(params![action_key, field_code])?;
     Ok(())
 }
 
@@ -153,7 +110,6 @@ fn delete_link_field(
     parent_action_key: i64,
     child_action_key: i64,
     role_code: i16,
-    field_code: i16,
 ) -> Result<(), rusqlite::Error> {
     connection
         .prepare_cached(
@@ -161,15 +117,13 @@ fn delete_link_field(
          WHERE trace_id = ?1
            AND parent_action_key = ?2
            AND child_action_key = ?3
-           AND role_code = ?4
-           AND field_code = ?5",
+           AND role_code = ?4",
         )?
         .execute(params![
             trace_id,
             parent_action_key,
             child_action_key,
             role_code,
-            field_code,
         ])?;
     Ok(())
 }

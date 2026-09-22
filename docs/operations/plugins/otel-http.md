@@ -47,7 +47,7 @@ attribute_mode = "full"
 
 此外 `[action_kinds]` 必须允许 `llm.request`。这三层分别控制本地保留、动作属性生成和
 出境，不能互相替代。工具结果正文同理，需要 operator 配置中的
-`tool_result_content_export = "canonical_json"`、大小上限、`attribute_mode = "full"`，
+`tool_results_enabled = true`、`tool_result_content_export = "canonical_json"`、大小上限、`attribute_mode = "full"`，
 并允许 `llm.tool_result`。插件管理员需要在启用前确认本地留存、Collector 和传输链路都能承载敏感内容。
 
 ## 加载

@@ -7,8 +7,7 @@
 static __always_inline int fd_fork_object_acquire(
     __u32 child_pid,
     __u64 generation,
-    const struct actrail_fd_object_snapshot *parent_object,
-    __u64 file_identity
+    const struct actrail_fd_object_snapshot *parent_object
 ) {
     struct actrail_fd_object_key key = { .pid = child_pid, .generation = generation };
     struct actrail_fd_object_state *existing = bpf_map_lookup_elem(&fd_objects, &key);
@@ -16,14 +15,12 @@ static __always_inline int fd_fork_object_acquire(
         .refcount = 1,
         .category = parent_object->category,
         .trace_id = parent_object->trace_id,
-        .file_identity = file_identity,
         .remote = parent_object->remote,
     };
 
     if (existing) {
         if (existing->category != parent_object->category
-            || existing->trace_id != parent_object->trace_id
-            || existing->file_identity != file_identity) {
+            || existing->trace_id != parent_object->trace_id) {
             return 0;
         }
         __sync_fetch_and_add(&existing->refcount, 1);
@@ -65,8 +62,7 @@ static __noinline int fd_fork_seed_slot(
     struct actrail_fd_key child_fd_key;
     struct actrail_fd_state *parent_state;
     struct actrail_fd_state child_state;
-    struct actrail_fd_object_snapshot parent_object;
-    struct actrail_fd_object_state *parent_object_state;
+    struct actrail_fd_object_snapshot parent_object = {};
     __u64 file_identity;
     __u32 *child_active_count;
 
@@ -83,22 +79,18 @@ static __noinline int fd_fork_seed_slot(
         return 0;
     }
     child_state = *parent_state;
-    if (!fd_object_snapshot(parent_pid, child_state.generation, &parent_object)) {
+    if (child_state.category == ACTRAIL_FD_CATEGORY_NET
+        && !fd_object_snapshot(parent_pid, child_state.generation, &parent_object)) {
         return 0;
     }
-    parent_object_state = fd_object_lookup(parent_pid, child_state.generation);
-    if (!parent_object_state) {
-        return 0;
-    }
-    file_identity = parent_object_state->file_identity;
+    file_identity = child_state.file_identity;
     parent_slot = bpf_map_lookup_elem(&fd_index_slots, &parent_slot_key);
     parent_state = bpf_map_lookup_elem(&fd_table, &parent_fd_key);
     if (!parent_slot || parent_slot->fd != child_slot.fd
         || parent_slot->generation != child_slot.generation || !parent_state
         || parent_state->generation != child_slot.generation
         || parent_state->index_slot != slot_index
-        || !(parent_object_state = fd_object_lookup(parent_pid, child_state.generation))
-        || parent_object_state->file_identity != file_identity) {
+        || parent_state->file_identity != file_identity) {
         return 0;
     }
 
@@ -111,18 +103,19 @@ static __noinline int fd_fork_seed_slot(
         bpf_map_delete_elem(&fd_index_slots, &child_slot_key);
         return 0;
     }
-    if (!fd_fork_object_acquire(
+    if (child_state.category == ACTRAIL_FD_CATEGORY_NET && !fd_fork_object_acquire(
             child_pid,
             child_state.generation,
-            &parent_object,
-            file_identity)) {
+            &parent_object)) {
         bpf_map_delete_elem(&fd_table, &child_fd_key);
         bpf_map_delete_elem(&fd_index_slots, &child_slot_key);
         return 0;
     }
     child_active_count = bpf_map_lookup_elem(&fd_process_active_counts, &child_pid);
     if (!child_active_count) {
-        fd_fork_object_release(child_pid, child_state.generation);
+        if (child_state.category == ACTRAIL_FD_CATEGORY_NET) {
+            fd_fork_object_release(child_pid, child_state.generation);
+        }
         bpf_map_delete_elem(&fd_table, &child_fd_key);
         bpf_map_delete_elem(&fd_index_slots, &child_slot_key);
         return 0;
@@ -201,7 +194,6 @@ static __noinline void fd_exec_cleanup_slot(
     struct actrail_fd_index_slot_key slot_key = { .pid = pid, .slot = slot_index };
     struct actrail_fd_index_slot *slot = bpf_map_lookup_elem(&fd_index_slots, &slot_key);
     struct actrail_fd_state *state;
-    struct actrail_fd_object_state *object;
     __u64 file_identity = 0;
 
     if (!slot) {
@@ -217,8 +209,7 @@ static __noinline void fd_exec_cleanup_slot(
         if (file_identity == ACTRAIL_FD_FILE_IDENTITY_READ_FAILED) {
             return;
         }
-        object = fd_object_lookup(pid, generation);
-        if (!file_identity || !object || object->file_identity != file_identity) {
+        if (!file_identity || state->file_identity != file_identity) {
             fd_release(pid, fd, generation, trace_id, ctx);
         }
     }
@@ -396,9 +387,7 @@ static __noinline void fd_close_range_slot(
     if (!state || state->generation != slot->generation || state->index_slot != slot_index) {
         return;
     }
-    if (sweep->flags & ACTRAIL_FD_CLOSE_RANGE_CLOEXEC) {
-        state->flags |= ACTRAIL_FD_FLAG_CLOEXEC;
-    } else {
+    {
         __u64 generation = slot->generation;
         fd_release(
             sweep->pid,

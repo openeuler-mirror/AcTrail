@@ -8,12 +8,14 @@ use crate::parser::parse_storage_config;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageBackendKind {
     Sqlite,
+    NoOp,
 }
 
 impl StorageBackendKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Sqlite => "sqlite",
+            Self::NoOp => "noop",
         }
     }
 }
@@ -24,7 +26,8 @@ impl FromStr for StorageBackendKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "sqlite" => Ok(Self::Sqlite),
-            _ => Err("expected sqlite".to_string()),
+            "noop" => Ok(Self::NoOp),
+            _ => Err("expected sqlite or noop".to_string()),
         }
     }
 }
@@ -32,9 +35,27 @@ impl FromStr for StorageBackendKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageConfig {
     Sqlite(SqliteStorageConfig),
+    NoOp,
 }
 
 impl StorageConfig {
+    /// Configure write-side limits. The cache capacity is only a performance
+    /// hint; zero disables caching without disabling retention limits.
+    pub fn with_payload_retention_limits(
+        mut self,
+        limits: storage_core::PayloadRetentionLimits,
+        max_cached_traces: usize,
+    ) -> Self {
+        match &mut self {
+            Self::Sqlite(config) => {
+                config.payload_retention_limits = Some(limits);
+                config.payload_retention_max_cached_traces = max_cached_traces;
+            }
+            Self::NoOp => {}
+        }
+        self
+    }
+
     pub fn parse(raw: &str) -> Result<Self, String> {
         parse_storage_config(raw)
     }
@@ -82,6 +103,8 @@ impl StorageConfig {
         event_record_block_zstd_level: i32,
     ) -> Self {
         Self::Sqlite(SqliteStorageConfig {
+            payload_retention_limits: None,
+            payload_retention_max_cached_traces: 0,
             path: path.as_ref().to_path_buf(),
             busy_timeout_ms,
             cold_field_compression_min_bytes,
@@ -98,66 +121,18 @@ impl StorageConfig {
     pub const fn backend(&self) -> StorageBackendKind {
         match self {
             Self::Sqlite(_) => StorageBackendKind::Sqlite,
+            Self::NoOp => StorageBackendKind::NoOp,
         }
     }
 
-    pub fn path(&self) -> &Path {
-        match self {
-            Self::Sqlite(config) => &config.path,
-        }
+    pub fn path(&self) -> Option<&Path> {
+        self.sqlite_config().map(|config| config.path.as_path())
     }
 
-    pub const fn sqlite_busy_timeout_ms(&self) -> u64 {
+    pub const fn sqlite_config(&self) -> Option<&SqliteStorageConfig> {
         match self {
-            Self::Sqlite(config) => config.busy_timeout_ms,
-        }
-    }
-
-    pub const fn sqlite_cold_field_compression_min_bytes(&self) -> usize {
-        match self {
-            Self::Sqlite(config) => config.cold_field_compression_min_bytes,
-        }
-    }
-
-    pub const fn sqlite_cold_field_zstd_level(&self) -> i32 {
-        match self {
-            Self::Sqlite(config) => config.cold_field_zstd_level,
-        }
-    }
-
-    pub const fn sqlite_event_payload_dictionary_cache_bytes(&self) -> usize {
-        match self {
-            Self::Sqlite(config) => config.event_payload_dictionary_cache_bytes,
-        }
-    }
-
-    pub const fn sqlite_event_path_dictionary_cache_bytes(&self) -> usize {
-        match self {
-            Self::Sqlite(config) => config.event_path_dictionary_cache_bytes,
-        }
-    }
-
-    pub const fn sqlite_event_record_layout(&self) -> EventRecordLayout {
-        match self {
-            Self::Sqlite(config) => config.event_record_layout,
-        }
-    }
-
-    pub const fn sqlite_event_record_block_max_events(&self) -> usize {
-        match self {
-            Self::Sqlite(config) => config.event_record_block_max_events,
-        }
-    }
-
-    pub const fn sqlite_event_record_block_max_uncompressed_bytes(&self) -> usize {
-        match self {
-            Self::Sqlite(config) => config.event_record_block_max_uncompressed_bytes,
-        }
-    }
-
-    pub const fn sqlite_event_record_block_zstd_level(&self) -> i32 {
-        match self {
-            Self::Sqlite(config) => config.event_record_block_zstd_level,
+            Self::Sqlite(config) => Some(config),
+            Self::NoOp => None,
         }
     }
 }

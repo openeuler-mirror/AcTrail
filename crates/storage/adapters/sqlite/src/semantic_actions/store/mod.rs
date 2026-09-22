@@ -1,52 +1,46 @@
 //! SQLite storage for semantic actions.
 
-use std::sync::OnceLock;
-
 use model_core::ids::TraceId;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
     McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
-    SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError,
+    SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError, SemanticActionUpdate,
     SemanticActionWriteStore, attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
 use crate::records::PathInterner;
-use crate::semantic_actions::action_ids::{intern_action_id, require_action_key};
+use crate::semantic_actions::action_ids::{create_action_id, intern_action_id};
 use crate::semantic_actions::codebook::sqlite::{link_origin_code, link_role_code};
 use crate::semantic_actions::cold_fields::upsert_link_attributes;
 use crate::semantic_actions::evidence;
 use crate::semantic_actions::path_sets::intern_path;
-use crate::semantic_actions::storage_meta::current;
-use crate::semantic_actions::upsert_merge::merge_action;
 
+mod hydration;
 mod rows;
+mod state;
 mod write;
 
-pub(super) use rows::{action_from_row, action_link_from_row};
-use write::{action_row_matches, update_action_evidence, write_action_row, write_agent_identity};
+pub(super) use hydration::ActionReadHydrator;
+pub(super) use rows::{action_from_row, action_link_from_row, read_action_by_id_shared};
+use state::ActionStateWriter;
+use write::{write_action_row, write_agent_identity};
 
 pub(super) const ACTION_SELECT_COLUMNS: &str = "ids.action_id AS action_id,
-    action.trace_id, action.kind_code, action.title AS stored_title, action.file_path_id,
+    action.trace_id, action.kind_code, COALESCE(action_state.failure_title, action.title) AS stored_title, action.file_path_id,
     (SELECT path.path_text FROM file_paths path
       WHERE path.trace_id = action.trace_id AND path.path_id = action.file_path_id) AS file_path_text,
-    action.start_time, action.end_time,
-    action.process_id, action.status_code,
-    action.completeness_code, action.evidence_blob,
+    action.start_time, action_state.end_time,
+    action.process_id, action_state.status_code,
+    action_state.completeness_code,
+    action_state.finalization_reason, action_state.failure_body_format,
+    action_state.failure_http_status, action_state.failure_http_reason,
+    action_state.command_invocation_kind, action_state.command_tool_name, action_state.tool_result_binding,
     action_attrs.encoding_code AS attributes_encoding_code,
     action_attrs.uncompressed_bytes AS attributes_uncompressed_bytes,
     action_attrs.payload AS attributes_payload";
-
-pub(super) fn action_select_columns_lite() -> &'static str {
-    static COLUMNS: OnceLock<String> = OnceLock::new();
-    COLUMNS
-        .get_or_init(|| {
-            ACTION_SELECT_COLUMNS.replace("action.evidence_blob", "X'0100' AS evidence_blob")
-        })
-        .as_str()
-}
 
 pub(super) const LINK_SELECT_COLUMNS: &str = "link.trace_id,
     parent_ids.action_id AS parent_action_id, child_ids.action_id AS child_action_id,
@@ -56,68 +50,42 @@ pub(super) const LINK_SELECT_COLUMNS: &str = "link.trace_id,
     link_attrs.payload AS attributes_payload";
 
 pub(super) fn action_cold_field_join() -> &'static str {
-    static JOIN: OnceLock<String> = OnceLock::new();
-    JOIN.get_or_init(|| {
-        format!(
-            "LEFT JOIN semantic_action_cold_fields action_attrs
-               ON action_attrs.owner_key = action.action_key
-              AND action_attrs.field_code = {}",
-            current().cold_fields.action_attributes
-        )
-    })
-    .as_str()
+    "JOIN semantic_action_state action_state ON action_state.action_key = action.action_key
+     LEFT JOIN semantic_action_cold_fields action_attrs
+       ON action_attrs.owner_key = action.action_key"
 }
 
 pub(super) fn link_cold_field_join() -> &'static str {
-    static JOIN: OnceLock<String> = OnceLock::new();
-    JOIN.get_or_init(|| {
-        format!(
-            "LEFT JOIN semantic_action_link_cold_fields link_attrs
-               ON link_attrs.trace_id = link.trace_id
-              AND link_attrs.parent_action_key = link.parent_action_key
-              AND link_attrs.child_action_key = link.child_action_key
-              AND link_attrs.role_code = link.role_code
-              AND link_attrs.field_code = {}",
-            current().cold_fields.link_attributes
-        )
-    })
-    .as_str()
+    "LEFT JOIN semantic_action_link_cold_fields link_attrs
+       ON link_attrs.trace_id = link.trace_id
+      AND link_attrs.parent_action_key = link.parent_action_key
+      AND link_attrs.child_action_key = link.child_action_key
+      AND link_attrs.role_code = link.role_code"
 }
 
 impl SemanticActionWriteStore for SqliteStorage {
-    fn upsert_semantic_action(
+    fn insert_semantic_action(
         &mut self,
         mut action: SemanticAction,
     ) -> Result<(), SemanticActionStoreError> {
         let mut connection = self.connection().borrow_mut();
+        let key = create_action_id(&connection, action.trace_id.get(), &action.action_id)?;
         let path_interner = self.event_path_dictionary().clone();
-        let mut path_interner = path_interner.borrow_mut();
-        let existing = read_action_by_id(&mut connection, &action.action_id)?;
-        if let Some(existing) = existing.as_ref() {
-            action = merge_action(existing.clone(), action)?;
-        }
-        let row_changed = existing
-            .as_ref()
-            .is_none_or(|existing| !action_row_matches(existing, &action));
-        let evidence_changed = existing
-            .as_ref()
-            .is_none_or(|existing| existing.evidence != action.evidence);
-        if !row_changed && !evidence_changed {
-            return Ok(());
-        }
-        let mut action_key = None;
-        if row_changed {
-            let key = intern_action_id(&mut connection, action.trace_id.get(), &action.action_id)?;
-            let stored_path =
-                StoredActionPath::prepare(&mut connection, &mut path_interner, &mut action)?;
-            write_action_row(
-                &mut connection,
-                key,
-                &action,
-                stored_path.path_id,
-                stored_path.title.as_deref(),
-                self.cold_field_compression,
-            )?;
+        let mut paths = path_interner.borrow_mut();
+        let stored_path = StoredActionPath::prepare(&connection, &mut paths, &mut action)?;
+        let binding = ActionStateWriter::take_initial_binding(&mut action)?;
+        ActionReadHydrator::remove_relationship_attributes(&mut action);
+        let inserted = write_action_row(
+            &mut connection,
+            key,
+            &action,
+            stored_path.path_id,
+            stored_path.store_title.then_some(action.title.as_str()),
+            &self.cold_field_encoder,
+        )?;
+        let writer = ActionStateWriter::new(&connection);
+        if inserted {
+            writer.insert(key, &action, binding)?;
             if action.kind == SemanticActionKind::AgentIdentity {
                 write_agent_identity(
                     &mut connection,
@@ -126,16 +94,19 @@ impl SemanticActionWriteStore for SqliteStorage {
                     key,
                 )?;
             }
-            action_key = Some(key);
         }
-        if evidence_changed && !row_changed {
-            let key = match action_key {
-                Some(key) => key,
-                None => require_action_key(&connection, &action.action_id)?,
-            };
-            update_action_evidence(&mut connection, key, &action)?;
+        let writer = ActionStateWriter::new(&connection);
+        if writer.append_evidence(key, &action.evidence)? && !inserted {
+            writer.revise(action.trace_id)?;
         }
         Ok(())
+    }
+
+    fn update_semantic_action(
+        &mut self,
+        update: SemanticActionUpdate,
+    ) -> Result<(), SemanticActionStoreError> {
+        ActionStateWriter::new(&self.connection().borrow()).update(update)
     }
 
     fn upsert_semantic_action_link(
@@ -179,7 +150,7 @@ impl SemanticActionWriteStore for SqliteStorage {
             child_action_key,
             role_code,
             &link.attributes,
-            self.cold_field_compression,
+            &self.cold_field_encoder,
         )
         .map_err(|error| {
             SemanticActionStoreError::new(
@@ -407,6 +378,7 @@ impl SemanticActionReadStore for SqliteStorage {
             })?;
             actions.push(action);
         }
+        ActionReadHydrator::hydrate(&connection, actions.iter_mut(), true)?;
         Ok(actions)
     }
 
@@ -460,6 +432,7 @@ impl SemanticActionReadStore for SqliteStorage {
         })?;
         let has_more = actions.len() > limit;
         actions.truncate(limit);
+        ActionReadHydrator::hydrate(&connection, actions.iter_mut(), true)?;
         let next_offset = if has_more {
             Some(offset.checked_add(limit).ok_or_else(|| {
                 SemanticActionStoreError::new("semantic_actions_page", "offset overflow")
@@ -626,51 +599,9 @@ impl SemanticActionReadStore for SqliteStorage {
     }
 }
 
-pub(super) fn read_action_by_id(
-    connection: &mut rusqlite::Connection,
-    action_id: &str,
-) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
-    connection
-        .prepare_cached(read_action_by_id_sql())
-        .and_then(|mut statement| statement.query_row(params![action_id], action_from_row))
-        .optional()
-        .map_err(|error| {
-            SemanticActionStoreError::new("read_existing_semantic_action", error.to_string())
-        })
-}
-
-/// Shared-borrow variant for query/export paths that already hold `&Connection`.
-pub(super) fn read_action_by_id_shared(
-    connection: &rusqlite::Connection,
-    action_id: &str,
-) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
-    connection
-        .query_row(read_action_by_id_sql(), params![action_id], action_from_row)
-        .optional()
-        .map_err(|error| {
-            SemanticActionStoreError::new("read_existing_semantic_action", error.to_string())
-        })
-}
-
-fn read_action_by_id_sql() -> &'static str {
-    static SQL: OnceLock<String> = OnceLock::new();
-    SQL.get_or_init(|| {
-        format!(
-            "SELECT {ACTION_SELECT_COLUMNS}
-             FROM semantic_actions action
-             JOIN semantic_action_ids ids
-               ON ids.action_key = action.action_key
-             {}
-             WHERE ids.action_id = ?1",
-            action_cold_field_join()
-        )
-    })
-    .as_str()
-}
-
 struct StoredActionPath {
     path_id: Option<u64>,
-    title: Option<String>,
+    store_title: bool,
 }
 
 impl StoredActionPath {
@@ -687,20 +618,19 @@ impl StoredActionPath {
         ) {
             return Ok(Self {
                 path_id: None,
-                title: Some(action.title.clone()),
+                store_title: true,
             });
         }
         let Some(path) = action.attributes.remove(attrs::file::PATH) else {
             return Ok(Self {
                 path_id: None,
-                title: Some(action.title.clone()),
+                store_title: true,
             });
         };
         let path_id = intern_path(connection, paths, action.trace_id.get(), &path)?;
-        let title = (action.title != path).then(|| action.title.clone());
         Ok(Self {
             path_id: Some(path_id),
-            title,
+            store_title: action.title != path,
         })
     }
 }

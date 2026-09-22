@@ -3,6 +3,18 @@
 use super::*;
 
 impl EbpfCollector {
+    pub fn file_io_poll_timeout(&self) -> Option<std::time::Duration> {
+        if !self.file_io_summaries.backlog.is_empty() {
+            return Some(std::time::Duration::ZERO);
+        }
+        if self.active_binding_trace_count() == 0 {
+            return None;
+        }
+        self.runtime
+            .as_ref()
+            .and_then(EbpfRuntime::file_io_poll_timeout)
+    }
+
     pub fn probe_result(&self) -> &EbpfProbeResult {
         &self.probe_result
     }
@@ -36,11 +48,8 @@ impl EbpfCollector {
             ));
         }
         if let Some(unsupported_required) = requests.iter().find(|request| {
-            !supported_required_capability(
-                &request.capability,
-                self.loader.config(),
-                self.loader.payload_config(),
-            ) && request.mode == RequestMode::Required
+            !supported_required_capability(&request.capability, self.loader.payload_config())
+                && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "ebpf_preflight",
@@ -55,9 +64,13 @@ impl EbpfCollector {
             &requests,
             self.loader.config(),
             self.loader.payload_config(),
+            self.semantic_projection_enabled,
+            self.loader.file_collection(),
+            self.loader.file_directory_observation(),
+            self.loader.file_tty_observation(),
         );
         self.runtime = None;
-        let mut runtime = self
+        let runtime = self
             .loader
             .load_runtime_with_plan(&attach_plan)
             .map_err(loader_error)?;
@@ -75,7 +88,12 @@ impl EbpfCollector {
                 ),
             ));
         }
-        runtime.park_for_first_binding().map_err(loader_error)?;
+        self.file_tracker = FileTracker::new(
+            self.loader.config().ipc_lineage,
+            runtime.attach_plan.mcp_stdio_enabled(),
+        )
+        .with_file_capture(runtime.attach_plan.file_capture_enabled())
+        .with_file_collection(*self.loader.file_collection());
         self.runtime = Some(runtime);
         Ok(())
     }
@@ -158,6 +176,10 @@ impl EbpfCollector {
         std::mem::take(&mut self.tls_direct_captures)
     }
 
+    pub fn take_tls_mapping_events(&mut self) -> Vec<crate::loader::KernelTlsMappingEvent> {
+        std::mem::take(&mut self.tls_mapping_events)
+    }
+
     pub fn take_tls_diagnostic_events(&mut self) -> Vec<TlsDiagnosticEvent> {
         std::mem::take(&mut self.tls_diagnostic_events)
     }
@@ -177,14 +199,22 @@ impl EbpfCollector {
         runtime.tls_payload_diagnostics().map_err(loader_error)
     }
 
-    pub fn take_event_transport_loss_summaries(&mut self) -> Vec<String> {
-        let mut summaries = self
-            .runtime
-            .as_mut()
-            .map(EbpfRuntime::take_event_transport_loss_summaries)
-            .unwrap_or_default();
-        summaries.extend(self.stdio_payloads.take_loss_summaries());
-        summaries
+    pub fn event_transport_loss_poll_timeout(&self) -> Option<std::time::Duration> {
+        self.runtime
+            .as_ref()
+            .and_then(EbpfRuntime::event_transport_loss_poll_timeout)
+    }
+
+    /// The bool reports newly observed loss immediately; the optional summary
+    /// is emitted only at the configured interval (or during final shutdown).
+    pub fn take_event_transport_loss_summary(&mut self, force: bool) -> (bool, Option<String>) {
+        let Some(runtime) = self.runtime.as_mut() else {
+            return (false, None);
+        };
+        for (category, count) in self.stdio_payloads.take_loss_counts() {
+            runtime.record_event_transport_loss_count(category, count);
+        }
+        runtime.take_event_transport_loss_summary(force)
     }
 
     pub fn flush_transport(&mut self) -> Result<(), CollectorError> {
@@ -223,8 +253,15 @@ impl EbpfCollector {
         &mut self,
         requests: &[CapabilityRequest],
     ) -> Result<(), CollectorError> {
-        let attach_plan =
-            AttachPlan::from_requests(requests, self.loader.config(), self.loader.payload_config());
+        let attach_plan = AttachPlan::from_requests(
+            requests,
+            self.loader.config(),
+            self.loader.payload_config(),
+            self.semantic_projection_enabled,
+            self.loader.file_collection(),
+            self.loader.file_directory_observation(),
+            self.loader.file_tty_observation(),
+        );
         if self.idle_runtime_needs_replan(&attach_plan) {
             self.runtime = None;
         }
@@ -233,20 +270,25 @@ impl EbpfCollector {
                 .loader
                 .load_runtime_with_plan(&attach_plan)
                 .map_err(loader_error)?;
+            self.file_tracker = FileTracker::new(
+                self.loader.config().ipc_lineage,
+                runtime.attach_plan.mcp_stdio_enabled(),
+            )
+            .with_file_capture(runtime.attach_plan.file_capture_enabled())
+            .with_file_collection(*self.loader.file_collection());
             self.runtime = Some(runtime);
         }
-        self.runtime_mut()?
-            .activate_static_programs()
-            .map_err(loader_error)?;
         self.ensure_required_capabilities_attached(requests)
     }
 
     fn idle_runtime_needs_replan(&self, attach_plan: &AttachPlan) -> bool {
         self.active_binding_trace_count() == 0
-            && self
-                .runtime
-                .as_ref()
-                .is_some_and(|runtime| !attach_plan.is_satisfied_by(runtime.planned_capabilities()))
+            && self.runtime.as_ref().is_some_and(|runtime| {
+                !attach_plan.is_satisfied_by(runtime.attached_capabilities())
+                    || attach_plan.mcp_stdio_enabled() != runtime.attach_plan.mcp_stdio_enabled()
+                    || attach_plan.file_capture_enabled()
+                        != runtime.attach_plan.file_capture_enabled()
+            })
     }
 
     pub(super) fn active_binding_trace_count(&self) -> usize {

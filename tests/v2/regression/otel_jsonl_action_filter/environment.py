@@ -186,7 +186,11 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
             )
         self._operator_config_patch.write_text(
             "[plugins.discovery]\n"
-            f"directory = {json.dumps(str(plugin_root))}\n",
+            f"directory = {json.dumps(str(plugin_root))}\n"
+            "\n[file_observation.collection.read]\n"
+            "observed = true\n"
+            "\n[file_observation.bulk_read]\n"
+            "enabled = false\n",
             encoding="utf-8",
         )
 

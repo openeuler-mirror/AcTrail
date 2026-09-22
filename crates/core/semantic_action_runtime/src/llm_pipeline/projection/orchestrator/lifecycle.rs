@@ -23,16 +23,11 @@ impl ProjectionCoordinator {
         &self,
         identity: &PayloadStreamIdentity,
     ) -> Vec<SemanticAction> {
-        let stream_key = identity.stream_key.to_string();
         self.correlation
-            .open_requests
-            .iter()
-            .filter(|(key, _)| {
-                key.trace_id == identity.trace_id
-                    && key.process == identity.process
-                    && key.stream_key == stream_key
-            })
-            .flat_map(|(_, requests)| requests.iter().map(|request| request.action.clone()))
+            .unconfirmed_streams_for_identity(identity)
+            .into_iter()
+            .filter_map(|key| self.correlation.open_requests.get(&key))
+            .flat_map(|requests| requests.iter().map(|request| request.action.clone()))
             .collect()
     }
 
