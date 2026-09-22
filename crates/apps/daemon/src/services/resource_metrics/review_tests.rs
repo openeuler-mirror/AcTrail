@@ -2,6 +2,23 @@ use super::*;
 use linux_platform::cgroup_v2::TraceScopePaths;
 use std::fs;
 
+fn host_boot_time_ns(ticks: u64, units: SystemUnits) -> u64 {
+    // /proc start ticks already include this observer's namespace offset.
+    // Undo it to construct the host-clock timestamp carried by eBPF events.
+    let offsets = fs::read_to_string("/proc/self/timens_offsets").unwrap();
+    let mut fields = offsets
+        .lines()
+        .find(|line| line.starts_with("boottime"))
+        .unwrap()
+        .split_whitespace()
+        .skip(1);
+    let seconds = fields.next().unwrap().parse::<i128>().unwrap();
+    let nanos = fields.next().unwrap().parse::<i128>().unwrap();
+    let observer_ns =
+        (u128::from(ticks) * NANOS_PER_SECOND).div_ceil(u128::from(units.clock_ticks_per_second));
+    u64::try_from(observer_ns as i128 - seconds * 1_000_000_000 - nanos).unwrap()
+}
+
 #[test]
 fn stale_identity_emits_failure_while_allowing_fallback_for_live_and_recovered_traces() {
     let temp = tempfile::tempdir().unwrap();
@@ -33,18 +50,27 @@ fn procfs_fallback_rejects_reused_or_unverified_process_identity() {
     let pid = std::process::id();
     let ticks = read_proc_stat(pid).unwrap().unwrap().start_time_ticks;
     let process = ProcessIdentity::new(1);
+    let units = sampler.units().unwrap();
+    let tick_ns = 1_000_000_000 / units.clock_ticks_per_second;
+    let boot_ns = host_boot_time_ns(ticks, units) + tick_ns / 2;
     for recovered in [false, true] {
-        for (start, should_sample) in [(ticks, true), (ticks + 1, false), (0, false)] {
+        for (start, boot, should_sample) in [
+            (ticks, None, true),
+            (ticks + 1, None, false),
+            (0, None, false),
+            (0, Some(0), false),
+            (0, Some(boot_ns), true),
+            (0, Some(boot_ns + tick_ns), false),
+            (ticks + 1, Some(boot_ns), false),
+        ] {
+            let mut host = HostProcessCoordinates::new(pid, start);
+            host.start_boottime_ns = boot;
             let registry = ProcessIdentityManager::with_reserved_block(
                 2,
                 3,
-                [ProcessRecord::new(
-                    process,
-                    ProcessObservation::host(HostProcessCoordinates::new(pid, start)),
-                )],
+                [ProcessRecord::new(process, ProcessObservation::host(host))],
             )
             .unwrap();
-            let units = sampler.units().unwrap();
             let sample = sampler
                 .collect_procfs_sample(
                     TraceId::new(1),
@@ -58,8 +84,126 @@ fn procfs_fallback_rejects_reused_or_unverified_process_identity() {
                     Some("stale".into()),
                 )
                 .unwrap();
-            assert_eq!(sample.is_some(), should_sample);
+            assert_eq!(
+                sample.is_some(),
+                should_sample,
+                "ticks={start}, boot={boot:?}, recovered={recovered}"
+            );
         }
+    }
+}
+
+#[test]
+fn procfs_sample_includes_child_with_only_boottime_identity() {
+    use model_core::process::ProcessObservation;
+
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let child = Child(
+        std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap(),
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let (mut sampler, _) = fixture(temp.path());
+    sampler.cgroup = None;
+    let units = sampler.units().unwrap();
+    let root_pid = std::process::id();
+    let root_ticks = read_proc_stat(root_pid).unwrap().unwrap().start_time_ticks;
+    let child_ticks = read_proc_stat(child.0.id())
+        .unwrap()
+        .unwrap()
+        .start_time_ticks;
+    let child_boot_ns = host_boot_time_ns(child_ticks, units);
+    let mut registry = ProcessIdentityManager::new(1);
+    let root = registry
+        .resolve_or_create(ProcessObservation::host(HostProcessCoordinates::new(
+            root_pid, root_ticks,
+        )))
+        .unwrap()
+        .identity;
+    let child_identity = registry
+        .resolve_or_create(ProcessObservation::host(
+            HostProcessCoordinates::new(child.0.id(), 0).with_start_boottime_ns(child_boot_ns),
+        ))
+        .unwrap()
+        .identity;
+
+    for recovered in [false, true] {
+        let sample = sampler
+            .collect_procfs_sample(
+                TraceId::new(1),
+                root,
+                vec![root, child_identity],
+                &registry,
+                Instant::now(),
+                SystemTime::now(),
+                units,
+                recovered,
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(sample.payload.metadata["sampled_processes"], "2");
+        assert_eq!(sample.payload.metadata["children"], "1");
+        assert!(sample.payload.process_rss_sum_kb.unwrap() > 0);
+        assert!(sample.payload.virtual_memory_kb.unwrap() > 0);
+        assert!(sampler.previous_cpu.contains_key(&child_identity));
+    }
+}
+
+#[test]
+#[ignore = "requires permission to create Linux time namespaces and set clock offsets"]
+fn procfs_samples_in_time_namespaces() {
+    use std::os::unix::process::CommandExt;
+
+    for offset in [60, -60] {
+        let offsets = format!("boottime {offset} 0\n");
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "services::resource_metrics::review_tests::procfs",
+            "--nocapture",
+        ]);
+        // Set the child namespace's offset before exec enters and freezes it.
+        // Only async-signal-safe syscalls run after fork; the text is prebuilt.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::unshare(libc::CLONE_NEWTIME) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let fd = libc::open(
+                    c"/proc/self/timens_offsets".as_ptr(),
+                    libc::O_WRONLY | libc::O_CLOEXEC,
+                );
+                if fd < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let written = libc::write(fd, offsets.as_ptr().cast(), offsets.len());
+                let error = std::io::Error::last_os_error();
+                libc::close(fd);
+                if written < 0 {
+                    return Err(error);
+                }
+                if written as usize != offsets.len() {
+                    return Err(std::io::ErrorKind::WriteZero.into());
+                }
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "boottime offset {offset}s:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use config_core::daemon::{ExistingContainerCgroups, ResourceMetricsConfig, ResourceMetricsMode};
 use control_contract::reply::ControlError;
+use ebpf_collector::procfs::ProcfsIdentityReader;
 use model_core::capability::Capability;
 use model_core::event::{
     MemoryEventCounters, ResourceAccountingCoverage, ResourceAccountingMethod, ResourcePayload,
@@ -1169,13 +1170,15 @@ impl ResourceMetricsSampler {
             else {
                 continue;
             };
+            let Some(expected_start_time_ticks) =
+                ProcfsIdentityReader.expected_start_time_ticks(host)
+            else {
+                continue;
+            };
             let Some(stat) = read_proc_stat(host.pid)? else {
                 continue;
             };
-            if host.start_time_ticks == 0
-                || stat.exited
-                || stat.start_time_ticks != host.start_time_ticks
-            {
+            if stat.exited || stat.start_time_ticks != expected_start_time_ticks {
                 continue;
             }
             let Some(memory) = read_proc_memory(host.pid, units.page_size_kb)? else {
@@ -1186,7 +1189,7 @@ impl ResourceMetricsSampler {
             let Some(after) = read_proc_stat(host.pid)? else {
                 continue;
             };
-            if after.exited || after.start_time_ticks != host.start_time_ticks {
+            if after.exited || after.start_time_ticks != expected_start_time_ticks {
                 continue;
             }
             total_cpu_percent_millis = total_cpu_percent_millis.saturating_add(
