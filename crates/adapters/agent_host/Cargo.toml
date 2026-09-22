@@ -9,3 +9,5 @@ agent_lifecycle_contract = { path = "../../contracts/agent_lifecycle" }
 model_core = { path = "../../core/model" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+serde_json = "1"
+url = "2"

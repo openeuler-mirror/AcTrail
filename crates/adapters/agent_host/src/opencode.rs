@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use model_core::ids::TraceId;
@@ -54,7 +54,15 @@ impl OpenCodeLaunch {
         trace_id: TraceId,
         control_socket: &Path,
         envs: &mut Vec<(OsString, OsString)>,
-    ) {
+    ) -> Result<(), String> {
+        let existing = envs
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "OPENCODE_CONFIG_CONTENT")
+            .map(|(_, value)| value.clone())
+            .or_else(|| std::env::var_os("OPENCODE_CONFIG_CONTENT"));
+        let content = self.config_content(existing.as_deref())?;
+        envs.retain(|(key, _)| key != "OPENCODE_CONFIG_CONTENT");
         envs.extend([
             ("ACTRAIL_AGENT_LIFECYCLE_ENABLED".into(), "true".into()),
             ("ACTRAIL_TRACE_ID".into(), trace_id.get().to_string().into()),
@@ -62,10 +70,46 @@ impl OpenCodeLaunch {
                 "ACTRAIL_CONTROL_SOCKET".into(),
                 control_socket.as_os_str().to_os_string(),
             ),
-            (
-                "OPENCODE_CONFIG_DIR".into(),
-                self.plugin_dir.as_os_str().to_os_string(),
-            ),
+            ("OPENCODE_CONFIG_CONTENT".into(), content.into()),
         ]);
+        Ok(())
+    }
+
+    fn config_content(&self, existing: Option<&OsStr>) -> Result<String, String> {
+        let mut config: serde_json::Value = match existing {
+            None => serde_json::json!({}),
+            Some(value) if value.is_empty() => serde_json::json!({}),
+            Some(value) => {
+                let text = value
+                    .to_str()
+                    .ok_or("OPENCODE_CONFIG_CONTENT must be UTF-8")?;
+                serde_json::from_str(text)
+                    .map_err(|error| format!("parse OPENCODE_CONFIG_CONTENT: {error}"))?
+            }
+        };
+        let object = config
+            .as_object_mut()
+            .ok_or("OPENCODE_CONFIG_CONTENT must be a JSON object")?;
+        let plugins = object
+            .entry("plugin")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or("OPENCODE_CONFIG_CONTENT.plugin must be an array")?;
+        let entry = self.plugin_dir.join(REQUIRED_FILES[0]);
+        let url = url::Url::from_file_path(&entry).map_err(|_| {
+            format!(
+                "convert OpenCode plugin path to file URL: {}",
+                entry.display()
+            )
+        })?;
+        // Preserve tuple specs (including their options) as well as string specs.
+        if !plugins.iter().any(|spec| {
+            spec.as_str().or_else(|| spec.as_array()?.first()?.as_str()) == Some(url.as_str())
+        }) {
+            plugins.push(serde_json::Value::String(url.into()));
+        }
+        serde_json::to_string(&config)
+            .map_err(|error| format!("serialize OPENCODE_CONFIG_CONTENT: {error}"))
     }
 }
+
