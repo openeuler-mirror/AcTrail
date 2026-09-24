@@ -1,70 +1,102 @@
 import './contract.css';
+import './light/tokens.css';
 
-const themeModules = import.meta.glob('./*/manifest.js', { eager: true });
-const tokenModules = import.meta.glob('./*/tokens.css', { query: '?raw', import: 'default' });
-const componentModules = import.meta.glob('./*/components/*.css', {
-  query: '?raw',
-  import: 'default',
-});
-const themeLabelCollator = new Intl.Collator('en-US', { sensitivity: 'base' });
+const paletteModules = import.meta.glob('./*/tokens.css', { query: '?raw', import: 'default' });
+const SYSTEM_DARK_QUERY = '(prefers-color-scheme: dark)';
+const PALETTE_ATTRIBUTE = 'palette';
+const MODE_ATTRIBUTE = 'themeMode';
 
-export const THEMES = Object.freeze(
-  Object.values(themeModules)
-    .map((module) => module.default)
-    .filter((theme) => theme?.id && theme?.label)
-    .sort(
-      (left, right) =>
-        themeLabelCollator.compare(left.label, right.label) || left.id.localeCompare(right.id),
-    ),
-);
+/**
+ * Theme modes offered to the operator. `system` follows the platform colour
+ * scheme and resolves to the pure white or dark palette, matching the
+ * management console's behaviour. The remaining modes pin a palette.
+ */
+export const THEME_MODES = Object.freeze([
+  { id: 'system', palette: null },
+  { id: 'light', palette: 'light' },
+  { id: 'white', palette: 'white' },
+  { id: 'dark', palette: 'dark' },
+]);
 
-export const DEFAULT_THEME_ID = THEMES[0]?.id ?? 'granola';
+export const DEFAULT_THEME_MODE = 'system';
 
-const loadedThemes = new Set();
-const loadingThemes = new Map();
+const BUNDLED_PALETTES = new Set(['light']);
+const loadedPalettes = new Set(BUNDLED_PALETTES);
+const paletteLoads = new Map();
+const systemQuery = window.matchMedia(SYSTEM_DARK_QUERY);
+let activeMode = DEFAULT_THEME_MODE;
+let systemListenerBound = false;
 
-export async function loadTheme(themeId) {
-  const normalizedThemeId = normalizeThemeId(themeId);
-  if (loadedThemes.has(normalizedThemeId)) {
+export function isThemeMode(mode) {
+  return THEME_MODES.some((candidate) => candidate.id === mode);
+}
+
+export async function applyThemeMode(mode) {
+  const normalizedMode = isThemeMode(mode) ? mode : DEFAULT_THEME_MODE;
+  const palette = resolvePalette(normalizedMode);
+  await ensurePalette(palette);
+  activeMode = normalizedMode;
+  const root = document.documentElement;
+  root.dataset[PALETTE_ATTRIBUTE] = palette;
+  root.dataset[MODE_ATTRIBUTE] = normalizedMode;
+  bindSystemListener();
+}
+
+export function resolvePalette(mode) {
+  const entry = THEME_MODES.find((candidate) => candidate.id === mode);
+  if (entry?.palette) {
+    return entry.palette;
+  }
+  return systemQuery.matches ? 'dark' : 'white';
+}
+
+async function ensurePalette(palette) {
+  if (loadedPalettes.has(palette)) {
     return;
   }
-  const pending = loadingThemes.get(normalizedThemeId);
+  const pending = paletteLoads.get(palette);
   if (pending) {
     await pending;
     return;
   }
-
-  const tokenLoader = tokenModules[`./${normalizedThemeId}/tokens.css`];
-  if (!tokenLoader) {
-    throw new Error(`missing theme tokens for ${normalizedThemeId}`);
-  }
-  const componentLoaders = Object.entries(componentModules)
-    .filter(([path]) => path.startsWith(`./${normalizedThemeId}/components/`))
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([, loader]) => loader);
-
-  const load = Promise.all([tokenLoader(), ...componentLoaders.map((loader) => loader())])
-    .then((cssParts) => {
-      installThemeStyle(normalizedThemeId, cssParts.join('\n'));
-      loadedThemes.add(normalizedThemeId);
+  const load = loadPalette(palette)
+    .then((cssText) => {
+      installPaletteStyle(palette, cssText);
+      loadedPalettes.add(palette);
     })
     .finally(() => {
-      loadingThemes.delete(normalizedThemeId);
+      paletteLoads.delete(palette);
     });
-  loadingThemes.set(normalizedThemeId, load);
+  paletteLoads.set(palette, load);
   await load;
 }
 
-function normalizeThemeId(themeId) {
-  const id = String(themeId ?? DEFAULT_THEME_ID);
-  if (THEMES.some((theme) => theme.id === id)) {
-    return id;
+async function loadPalette(palette) {
+  const loader = paletteModules[`./${palette}/tokens.css`];
+  if (!loader) {
+    throw new Error(`missing theme tokens for ${palette}`);
   }
-  throw new Error(`unknown theme ${id}`);
+  return await loader();
 }
 
-function installThemeStyle(themeId, cssText) {
-  const elementId = `actrail-theme-${themeId}`;
+function bindSystemListener() {
+  if (systemListenerBound) {
+    return;
+  }
+  systemListenerBound = true;
+  systemQuery.addEventListener('change', () => {
+    if (activeMode !== 'system') {
+      return;
+    }
+    const palette = resolvePalette(activeMode);
+    void ensurePalette(palette).then(() => {
+      document.documentElement.dataset[PALETTE_ATTRIBUTE] = palette;
+    });
+  });
+}
+
+function installPaletteStyle(palette, cssText) {
+  const elementId = `actrail-palette-${palette}`;
   const existing = document.getElementById(elementId);
   if (existing) {
     existing.textContent = cssText;
@@ -72,7 +104,7 @@ function installThemeStyle(themeId, cssText) {
   }
   const style = document.createElement('style');
   style.id = elementId;
-  style.dataset.actrailTheme = themeId;
+  style.dataset.actrailPalette = palette;
   style.textContent = cssText;
   document.head.appendChild(style);
 }

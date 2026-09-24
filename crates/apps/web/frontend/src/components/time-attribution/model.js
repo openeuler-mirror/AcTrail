@@ -1,7 +1,7 @@
 export const ATTRIBUTION_COLORS = Object.freeze({
-  agent_side: 'var(--stats-chart-cache-hit, #48b89f)',
-  model_side: 'var(--stats-chart-output, #7b8cff)',
-  unattributed: 'var(--stats-chart-reasoning, #9aa0aa)',
+  agent_side: 'var(--ui-chart-cache-hit, #48b89f)',
+  model_side: 'var(--ui-chart-output, #7b8cff)',
+  unattributed: 'var(--ui-chart-reasoning, #9aa0aa)',
 });
 
 export function formatAttributionDuration(value) {

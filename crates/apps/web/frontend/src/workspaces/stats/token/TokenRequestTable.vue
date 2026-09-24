@@ -110,16 +110,16 @@ function showMore() {
 
 .request-table {
   width: 100%;
-  min-width: var(--stats-request-table-min-width);
+  min-width: var(--ui-request-table-min-width);
   border-collapse: separate;
   border-spacing: 0;
-  font-size: var(--stats-font-md);
+  font-size: var(--ui-font-md);
 }
 
 .request-table th,
 .request-table td {
-  padding: var(--stats-table-cell-padding);
-  border-bottom: 1px solid var(--stats-border);
+  padding: var(--ui-table-cell-padding);
+  border-bottom: 1px solid var(--ui-border);
   text-align: left;
   vertical-align: top;
 }
@@ -128,12 +128,12 @@ function showMore() {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
-  backdrop-filter: var(--stats-control-filter);
+  backdrop-filter: var(--ui-control-filter);
 }
 
 .request-table tbody tr {
@@ -142,7 +142,7 @@ function showMore() {
 
 .request-table tbody tr:hover td,
 .request-table tbody tr:focus td {
-  background: var(--stats-accent-faint);
+  background: var(--ui-accent-faint);
 }
 
 .request-table tbody tr:focus {
@@ -151,13 +151,13 @@ function showMore() {
 
 .request-table code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: var(--stats-font-sm);
+  font-size: var(--ui-font-sm);
   overflow-wrap: anywhere;
 }
 
 .cell-primary {
   display: block;
-  max-width: var(--stats-request-name-max-width);
+  max-width: var(--ui-request-name-max-width);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -165,8 +165,8 @@ function showMore() {
 
 .request-table small {
   display: block;
-  margin-top: var(--stats-space-2xs);
-  color: var(--stats-muted);
+  margin-top: var(--ui-space-2xs);
+  color: var(--ui-muted);
 }
 
 .numeric {
@@ -176,39 +176,39 @@ function showMore() {
 }
 
 .request-table-footer {
-  min-width: var(--stats-request-table-min-width);
+  min-width: var(--ui-request-table-min-width);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-lg) var(--stats-space-xl);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-lg) var(--ui-space-xl);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .request-table-footer button {
-  height: var(--stats-control-height-sm);
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  height: var(--ui-control-height-sm);
+  padding: 0 var(--ui-space-lg);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   cursor: pointer;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .request-table-footer button:hover {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
 }
 
 .request-table-empty {
-  min-height: var(--stats-empty-min-height);
+  min-height: var(--ui-empty-min-height);
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-regular);
+  color: var(--ui-muted);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-regular);
 }
 </style>

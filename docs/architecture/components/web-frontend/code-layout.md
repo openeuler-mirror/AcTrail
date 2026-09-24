@@ -15,13 +15,22 @@ crates/apps/web/
         ├── main.js                  # Vue 挂载入口
         ├── App.vue                  # 应用壳、根状态和跨 Workspace 编排
         ├── api.js                   # 浏览器 HTTP 请求边界
-        ├── styles.css               # 全局布局与核心断点
+        ├── styles.css               # 应用壳几何、壳层组件样式与核心断点
         ├── workspaces/              # Statistics、Config、Plugins、Traces
         ├── tabs/                    # Trace leaf views、registry 与共享表格投影
         ├── components/              # 表格、详情和 insight 控件
         ├── locale/                  # 界面语言资源
-        └── theme/                   # 主题 manifest、token 与 contract
+        └── theme/                   # 主题 manifest、角色 token 与共享契约
 ```
+
+## 主题组织
+
+- `theme/contract.css` 声明主题无关的几何、排版、动效 token，并派生 `--trace-*` 组件 token。
+- `theme/index.js` 暴露 `system`、`light`、`white`、`dark` 四个模式。`system` 跟随平台配色并在其变化时重新解析为 `white` 或 `dark`，其余三个模式固定色板；解析结果写入根元素的 `data-palette`，模式写入 `data-theme-mode`。
+- `theme/light/`、`theme/white/` 与 `theme/dark/` 各提供一份角色色板。暖纸色板随应用 bundle 加载，另外两份由加载器按需注入，因此首屏不会因为等待样式而闪烁。
+- 角色色板定义在 `:root` 与 `:root[data-palette='white'|'dark']`，body 与浮层同样继承当前色板。
+- 玻璃与动效令牌由契约提供，并在窄视口、`prefers-reduced-motion` 或 `prefers-reduced-transparency` 下降级为实色与零时长。
+- 角色 token 命名统一为 `--ui-*`；色板只覆盖颜色角色，几何与派生 token 由契约提供。
 
 ## 依赖方向
 

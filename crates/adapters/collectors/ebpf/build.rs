@@ -109,8 +109,12 @@ fn main() {
     };
 
     println!("cargo:rerun-if-changed=bpf");
-    println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
+    // /proc/sys/kernel/osrelease reports a synthetic mtime, so watching it made
+    // every build re-run this script. The kernel release is still read at build
+    // time; ACTRAIL_BPF_KERNEL_RELEASE is the explicit override for rebuilds
+    // after a live kernel change.
+    println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_KERNEL_RELEASE");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");
     println!("cargo:rerun-if-env-changed=ACTRAIL_EBPF_EVENT_TRANSPORT");
     println!("cargo:rerun-if-env-changed=ACTRAIL_LAUNCH_BINDING_BACKEND");
@@ -208,8 +212,7 @@ fn supports_bpf_loop() -> bool {
     {
         return true;
     }
-    let Ok(release) = fs::read_to_string("/proc/sys/kernel/osrelease").or_else(|_| uname_release())
-    else {
+    let Some(release) = kernel_release() else {
         return false;
     };
     parse_kernel_major_minor(&release)
@@ -260,8 +263,7 @@ fn auto_launch_binding_backend() -> LaunchBindingChoice {
         };
     }
 
-    let release = fs::read_to_string("/proc/sys/kernel/osrelease")
-        .or_else(|_| uname_release())
+    let release = kernel_release()
         .expect("cannot determine the local kernel release for launch binding selection");
     let (major, minor) = parse_kernel_major_minor(&release)
         .expect("cannot parse the local kernel release for launch binding selection");
@@ -307,8 +309,7 @@ fn auto_bpf_once_backend() -> OnceChoice {
         );
     }
 
-    let release = fs::read_to_string("/proc/sys/kernel/osrelease")
-        .or_else(|_| uname_release())
+    let release = kernel_release()
         .expect("cannot determine the local kernel release for BPF once-only backend selection");
     let (major, minor) = parse_kernel_major_minor(&release)
         .expect("cannot parse the local kernel release for BPF once-only backend selection");
@@ -552,9 +553,7 @@ fn probe_ringbuf_with_vmlinux_btf() -> Option<RingbufProbe> {
 }
 
 fn probe_ringbuf_with_kernel_release() -> Option<RingbufProbe> {
-    let release = fs::read_to_string("/proc/sys/kernel/osrelease")
-        .or_else(|_| uname_release())
-        .ok()?;
+    let release = kernel_release()?;
     let (major, minor) = parse_kernel_major_minor(&release)?;
     let supported = major > 5 || (major == 5 && minor >= 8);
     Some(RingbufProbe {
@@ -578,6 +577,21 @@ fn uname_release() -> std::io::Result<String> {
     } else {
         Err(std::io::Error::other("uname -r failed"))
     }
+}
+
+/// Kernel release used for feature selection. `ACTRAIL_BPF_KERNEL_RELEASE`
+/// overrides the probe so a rebuild can be forced after a live kernel change
+/// without watching /proc, whose mtime is synthetic.
+fn kernel_release() -> Option<String> {
+    if let Ok(value) = env::var("ACTRAIL_BPF_KERNEL_RELEASE") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .or_else(|_| uname_release())
+        .ok()
 }
 
 fn parse_kernel_major_minor(release: &str) -> Option<(u32, u32)> {

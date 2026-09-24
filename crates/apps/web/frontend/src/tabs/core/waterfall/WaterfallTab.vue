@@ -16,14 +16,16 @@
       aria-labelledby="waterfall-section-title"
     >
       <header class="time-waterfall-heading">
-        <span>Trace chronology</span>
-        <h2 id="waterfall-section-title">Waterfall</h2>
+        <span>{{ t('kicker') }}</span>
+        <h2 id="waterfall-section-title">{{ t('title') }}</h2>
       </header>
   <section class="tab-detail-layout waterfall-detail-layout" :class="{ 'detail-open': selectedDetail }">
     <section class="waterfall-panel tab-detail-main">
     <div class="waterfall-toolbar">
       <span class="wf-count">
-        {{ waterfall.partial ? `${totalActions} of ${waterfall.totalActions}` : totalActions }} actions
+        {{ waterfall.partial
+          ? t('countActionsPartial', { visible: totalActions, total: waterfall.totalActions })
+          : t('countActions', { count: totalActions }) }}
         <template v-if="windowText"> · {{ windowText }}</template>
       </span>
       <div class="wf-actions">
@@ -31,10 +33,10 @@
           v-if="waterfall.partial"
           type="button"
           class="tree-action"
-          title="Load file, HTTP, SSE, and other high-volume action groups"
+          :title="t('loadAllTitle')"
           @click="$emit('load-full-waterfall')"
         >
-          Load all actions
+          {{ t('loadAllActions') }}
         </button>
         <button
           type="button"
@@ -43,7 +45,7 @@
           @click="expandAll"
         >
           <ChevronsUpDown :size="15" aria-hidden="true" />
-          Expand all
+          {{ t('expandAll') }}
         </button>
         <button
           type="button"
@@ -52,7 +54,7 @@
           @click="collapseAll"
         >
           <ChevronsDownUp :size="15" aria-hidden="true" />
-          Collapse all
+          {{ t('collapseAll') }}
         </button>
       </div>
     </div>
@@ -82,7 +84,7 @@
       >
         <button
           type="button"
-          title="Previous occurrence"
+          :title="t('previousOccurrence')"
           :disabled="focusOccurrenceIndex <= 0"
           @click="navigateOccurrence(-1)"
         >
@@ -93,7 +95,7 @@
         </small>
         <button
           type="button"
-          title="Next occurrence"
+          :title="t('nextOccurrence')"
           :disabled="focusOccurrenceIndex < 0 || focusOccurrenceIndex + 1 >= focusOccurrences.length"
           @click="navigateOccurrence(1)"
         >
@@ -106,10 +108,10 @@
         class="wf-zoom-reset"
         @click="showAttribution"
       >
-        Back to attribution
+        {{ t('backToAttribution') }}
       </button>
       <button type="button" class="wf-zoom-reset" @click="resetView">
-        {{ focusWindow && !zoomLabel ? 'Show full Trace' : 'Reset view' }}
+        {{ focusWindow && !zoomLabel ? t('showFullTrace') : t('resetView') }}
       </button>
     </div>
 
@@ -129,18 +131,18 @@
       <span
         v-if="idleRows.length"
         class="wf-chip wf-chip-idle"
-        :title="`${idleRows.length} between-turn or waiting-for-user interval(s)`"
+        :title="t('idleIntervals', { count: idleRows.length })"
       >
         <span class="wf-chip-dot"></span>
-        User idle
+        {{ t('userIdle') }}
         <small>{{ idleRows.length }}</small>
       </span>
       <div v-if="isGroupActive('llm')" class="wf-phase-legend" aria-hidden="true">
-        <span class="wf-phase-key wf-bar-request">req</span>
-        <span class="wf-phase-key wf-bar-ttft">ttft</span>
-        <span class="wf-phase-key wf-bar-response">res</span>
+        <span class="wf-phase-key wf-bar-request">{{ t('phaseRequest') }}</span>
+        <span class="wf-phase-key wf-bar-ttft">{{ t('phaseTtft') }}</span>
+        <span class="wf-phase-key wf-bar-response">{{ t('phaseResponse') }}</span>
       </div>
-      <small class="wf-navigation-hint">W/S zoom · A/D pan · 0 reset · wheel/drag supported</small>
+      <small class="wf-navigation-hint">{{ t('navigationHint') }}</small>
     </div>
 
     <section v-if="bottleneckGroups.length" class="waterfall-bottlenecks">
@@ -148,7 +150,7 @@
         <div class="wf-bottleneck-heading">
           <Gauge :size="16" aria-hidden="true" />
           <span>
-            <strong>Duration bottlenecks</strong>
+            <strong>{{ t('bottlenecks') }}</strong>
             <small>Top {{ attribution?.bottlenecks?.default_display_limit ?? 5 }} per type by default; concurrent intervals may overlap.</small>
           </span>
         </div>
@@ -186,7 +188,7 @@
               type="button"
               class="wf-bottleneck-item"
               :class="{ active: isFocusedBottleneck(item) }"
-              :title="`Locate ${item.label} in Waterfall`"
+              :title="t('locateInWaterfall', { label: item.label })"
               @click="focusBottleneck(group, item, index)"
             >
               <span class="wf-bottleneck-rank">{{ index + 1 }}</span>
@@ -227,12 +229,12 @@
       ref="waterfallScroll"
       class="waterfall-scroll"
       :class="{ 'is-panning': timelinePanning }"
-      aria-label="Waterfall timeline. Scroll vertically to explore rows. Hold Control while scrolling or use W and S to zoom, A and D to move, and drag to pan."
+      :aria-label="t('timelineAria')"
       @wheel="handleTimelineWheel"
       @pointerdown="startTimelinePan"
     >
       <div class="waterfall-axis">
-        <div class="wf-gutter">Action</div>
+        <div class="wf-gutter">{{ t('gutterAction') }}</div>
         <div ref="axisTrack" class="wf-axis-track wf-time-track">
           <span
             v-if="focusBandStyle"
@@ -292,16 +294,16 @@
         </div>
       </div>
 
-      <div class="waterfall-rows">
+      <div class="waterfall-rows" :class="{ 'is-focusing': focusActive }">
         <div
           v-for="row in rows"
           :key="row.id"
           v-memo="[row.id, row.expanded, row.barTitle, selectedDetailId, axisWindowKey, focusActionKey]"
           class="wf-row"
-          :class="{
+          :class="[row.kindClass, {
             selected: row.id === selectedDetailId,
             'attribution-match': isFocusAction(row.id),
-          }"
+          }]"
           :data-action-id="row.id"
           @click="select(row)"
           @dblclick="zoomTo(row)"
@@ -317,14 +319,15 @@
               <ChevronRight v-else :size="14" aria-hidden="true" />
             </button>
             <span v-else class="wf-toggle-spacer"></span>
+            <span class="wf-kind" aria-hidden="true"></span>
             <div class="wf-label-main">
               <div class="wf-label-line">
                 <span class="wf-label-text" :title="row.label">{{ row.label }}</span>
                 <span v-if="row.llmScope" class="wf-llm-scope" :title="row.llmScope">{{ row.llmScope }}</span>
                 <span v-if="row.target" class="wf-label-target" :title="row.target">{{ row.target }}</span>
               </div>
-              <div v-if="row.agentContext" class="wf-agent-context" :title="row.agentContext">
-                under {{ row.agentContext }}
+              <div v-if="contextChip(row)" class="wf-agent-context" :title="row.agentContext">
+                <span aria-hidden="true">↳</span>{{ contextChip(row) }}
               </div>
               <div class="wf-label-meta">
                 <span class="wf-meta-start" :title="`start +${formatOffset(row.startOffsetMs)}`">
@@ -341,7 +344,7 @@
                   class="wf-llm-message wf-llm-message-request"
                   :title="row.llmMessages?.requestFull || row.llmRequestPreview"
                 >
-                  <span class="wf-llm-message-label">user</span>
+                  <span class="wf-llm-message-label">{{ t('roleUser') }}</span>
                   <span class="wf-llm-message-text">{{ row.llmRequestPreview }}</span>
                 </div>
                 <div
@@ -349,7 +352,7 @@
                   class="wf-llm-message wf-llm-message-response"
                   :title="row.llmMessages?.responseFull || row.llmResponsePreview"
                 >
-                  <span class="wf-llm-message-label">assistant</span>
+                  <span class="wf-llm-message-label">{{ t('roleAssistant') }}</span>
                   <span class="wf-llm-message-text">{{ row.llmResponsePreview }}</span>
                 </div>
               </div>
@@ -358,7 +361,7 @@
               v-if="row.hasChildren"
               type="button"
               class="wf-zoom"
-              title="Zoom to this subtree"
+              :title="t('zoomToSubtree')"
               @click.stop="zoomTo(row)"
             >
               <ZoomIn :size="13" aria-hidden="true" />
@@ -405,13 +408,13 @@
           <button type="button" class="wf-load-more" @click="loadMore">
             Load {{ nextBatchSize }} more ({{ remainingRows }} hidden)
           </button>
-          <button type="button" class="wf-load-all" @click="loadAll">Load all</button>
+          <button type="button" class="wf-load-all" @click="loadAll">{{ t('loadAll') }}</button>
         </div>
       </div>
     </div>
 
-    <div v-else-if="modelBuilding && hasWaterfallData" class="waterfall-empty">Building chart…</div>
-    <div v-else class="waterfall-empty">No actions to chart</div>
+    <div v-else-if="modelBuilding && hasWaterfallData" class="waterfall-empty">{{ t('building') }}</div>
+    <div v-else class="waterfall-empty">{{ t('noActions') }}</div>
     </section>
     <DetailPanel
       :detail="selectedDetail"
@@ -441,7 +444,12 @@ import {
 import DetailPanel from '../../../components/DetailPanel.vue';
 import DurationBadge from '../../../components/DurationBadge.vue';
 import { formatAttributionDuration } from '../../../components/time-attribution/model';
+import { useModuleLocale } from '../../../locale';
 import TimeAttributionTab from '../time-attribution/TimeAttributionTab.vue';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
 import { useTimelineNavigation } from '../time-navigation/useTimelineNavigation.js';
@@ -645,16 +653,16 @@ const focusWindow = computed(() => {
   }
 });
 const focusTitle = computed(() => {
-  const source = props.focusInterval?.source ?? 'Time Attribution';
+  const source = props.focusInterval?.source ?? t('source.attribution');
   const dimension = {
-    category: 'Category',
-    round: 'Round',
-    model: 'Model',
-    model_request: 'Model request',
-    tool: 'Agent Tool',
-    command: 'Command',
-    command_occurrence: 'Command occurrence',
-    unattributed_gap: 'Unattributed gap',
+    category: t('dimensions.category'),
+    round: t('dimensions.round'),
+    model: t('dimensions.model'),
+    model_request: t('dimensions.modelRequest'),
+    tool: t('dimensions.tool'),
+    command: t('dimensions.command'),
+    command_occurrence: t('dimensions.commandOccurrence'),
+    unattributed_gap: t('dimensions.unattributedGap'),
   }[props.focusInterval?.dimension];
   const context = [dimension, props.focusInterval?.label].filter(Boolean).join(' · ');
   return context ? `${source} · ${context}` : `${source} interval`;
@@ -673,14 +681,16 @@ const focusDescription = computed(() => {
 });
 const focusMatchLabel = computed(() => {
   if (!focusActionIds.value.length) {
-    return 'Time range';
+    return t('timeRange');
   }
   if (!focusMatchCount.value) {
-    return 'Linked action unavailable';
+    return t('linkedUnavailable');
   }
-  return `${focusMatchCount.value}/${focusActionIds.value.length} linked ${
-    focusActionIds.value.length === 1 ? 'action' : 'actions'
-  }`;
+  return t('linkedActions', {
+    matched: focusMatchCount.value,
+    total: focusActionIds.value.length,
+    noun: focusActionIds.value.length === 1 ? t('linkedAction') : t('linkedActionPlural'),
+  });
 });
 const focusOccurrences = computed(() =>
   attributionOccurrences(
@@ -754,7 +764,7 @@ const attributionLanes = computed(() => {
   return [
     {
       id: 'categories',
-      label: 'Agent / Model',
+      label: t('lanes.agentModel'),
       segments: projectAttributionLane(
         props.attribution.segments,
         'category',
@@ -764,7 +774,7 @@ const attributionLanes = computed(() => {
     },
     {
       id: 'commands',
-      label: 'Commands',
+      label: t('lanes.commands'),
       segments: projectAttributionLane(
         props.attribution.command_segments,
         'command',
@@ -783,27 +793,27 @@ const bottleneckGroups = computed(() => {
   const definitions = [
     {
       id: 'models',
-      label: 'Model requests',
-      countNoun: 'requests',
+      label: t('bottleneckGroup.models'),
+      countNoun: t('countNoun.requests'),
       dimension: 'model_request',
       collection: bottlenecks.model_requests,
-      emptyLabel: 'No observable model requests',
+      emptyLabel: t('empty.models'),
     },
     {
       id: 'commands',
-      label: 'Commands',
-      countNoun: 'occurrences',
+      label: t('bottleneckGroup.commands'),
+      countNoun: t('countNoun.occurrences'),
       dimension: 'command_occurrence',
       collection: bottlenecks.commands,
-      emptyLabel: 'No actual command intervals',
+      emptyLabel: t('empty.commands'),
     },
     {
       id: 'unattributed',
-      label: 'Unattributed gaps',
-      countNoun: 'gaps',
+      label: t('bottleneckGroup.unattributed'),
+      countNoun: t('countNoun.gaps'),
       dimension: 'unattributed_gap',
       collection: bottlenecks.unattributed_gaps,
-      emptyLabel: 'No unattributed gaps',
+      emptyLabel: t('empty.unattributed'),
     },
   ];
   return definitions.map((definition) => {
@@ -822,8 +832,8 @@ const bottleneckGroups = computed(() => {
       isExpanded,
       canExpand: allItems.length > displayLimit,
       countLabel: observedCount
-        ? `Showing ${items.length} of ${observedCount} ${definition.countNoun}`
-        : `0 ${definition.countNoun}`,
+        ? t('showing', { shown: items.length, total: observedCount, noun: definition.countNoun })
+        : t('zeroCount', { noun: definition.countNoun }),
       items,
     };
   });
@@ -872,7 +882,7 @@ const agentIdleLanes = computed(() => {
     const id = JSON.stringify([segment.sessionId, segment.kind]);
     if (!lanes.has(id)) {
       lanes.set(id, { id, sessionId: segment.sessionId,
-        label: 'Agent stalled',
+        label: t('agentStalled'),
         segments: [] });
     }
     lanes.get(id).segments.push(segment);
@@ -949,6 +959,20 @@ function isFocusAction(actionId) {
   return focusEnabled.value && focusActionIdSet.value.has(String(actionId));
 }
 
+const focusActive = computed(() => focusEnabled.value && focusActionIdSet.value.size > 0);
+
+/**
+ * Nested rows repeat the enclosing command line on every row, which reads as
+ * noise. Only surface the context when it differs from the row's own target.
+ */
+function contextChip(row) {
+  const context = String(row.agentContext ?? '').trim();
+  if (!context || context === String(row.target ?? '').trim()) {
+    return '';
+  }
+  return context.length > 32 ? `${context.slice(0, 31)}…` : context;
+}
+
 function idleSegmentStyle(interval) {
   const axis = axisWindow.value;
   // Open intervals end at the server-provided axis end. The surrounding
@@ -965,14 +989,16 @@ function idleSegmentStyle(interval) {
 }
 
 function idleTitle(interval) {
-  const lines = ['Agent stalled'];
-  lines.push(`Session: ${interval.sessionId}`);
+  const lines = [t('agentStalled')];
+  lines.push(t('idle.session', { id: interval.sessionId }));
   if (interval.taskId) {
-    lines.push(`Task: ${interval.taskId}`);
+    lines.push(t('idle.task', { id: interval.taskId }));
   }
-  lines.push(`Start: ${nanosClock(interval.startNanos)}`);
-  lines.push(`End: ${interval.live ? 'running…' : nanosClock(interval.endNanos)}`);
-  lines.push(`Duration: ${interval.live ? 'running…' : formatOffset(interval.durMs)}`);
+  lines.push(t('idle.start', { clock: nanosClock(interval.startNanos) }));
+  lines.push(t('idle.end', { clock: interval.live ? t('idle.running') : nanosClock(interval.endNanos) }));
+  lines.push(t('idle.duration', {
+    value: interval.live ? t('idle.running') : formatOffset(interval.durMs),
+  }));
   return lines.join('\n');
 }
 
@@ -1045,7 +1071,7 @@ function focusBottleneck(group, item, index) {
     startNanos: item.start_unix_nanos,
     endNanos: item.end_unix_nanos,
     actionIds: Array.isArray(item.action_ids) ? item.action_ids : [],
-    source: 'Duration bottlenecks',
+    source: t('source.bottlenecks'),
     dimension: group.dimension,
     key: item.key,
     label: item.label,
@@ -1280,7 +1306,7 @@ function projectAttributionLane(rows, laneKind, targetWindow, windowStartNanos) 
           startNanos: row.start_unix_nanos,
           endNanos: row.end_unix_nanos,
           actionIds: Array.isArray(row.action_ids) ? row.action_ids : [],
-          source: 'Waterfall attribution lane',
+          source: t('source.lane'),
           ...context,
         },
       };

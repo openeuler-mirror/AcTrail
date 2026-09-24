@@ -3,7 +3,7 @@
     ref="canvas"
     class="flame-track-canvas"
     role="img"
-    :aria-label="`${track.label}: ${track.activities.length} timeline activities`"
+    :aria-label="t('canvasSummary', { kind: track.label, count: track.activities.length })"
     @pointerdown="handlePointerDown"
     @pointermove="handlePointerMove"
     @pointerleave="handlePointerLeave"
@@ -14,6 +14,11 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+
+import { useModuleLocale } from '../../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 import {
   buildFlameTrackFrame,
@@ -89,9 +94,9 @@ onMounted(() => {
     hatchPatterns = null;
     scheduleDraw();
   });
-  themeObserver.observe(canvas.value.closest('.stats-theme') ?? document.documentElement, {
+  themeObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['class', 'data-theme'],
+    attributeFilter: ['class', 'data-palette'],
   });
   scheduleDraw();
 });
@@ -234,7 +239,7 @@ function handlePointerMove(event) {
   hoveredActivity = activity;
   const surface = canvas.value;
   if (surface) {
-    surface.title = activity ? flameActivityTitle(activity) : '';
+    surface.title = activity ? flameActivityTitle(activity, t) : '';
     surface.style.cursor = activity && !activity.synthetic ? 'pointer' : '';
   }
   scheduleDraw();
@@ -299,7 +304,7 @@ function readPalette(surface) {
     process: pair('--trace-flame-process-bar', '--trace-flame-process-bar-text', '#a855f7', '#ffffff'),
     protocol: pair('--trace-flame-protocol-bar', '--trace-flame-protocol-bar-text', '#64748b', '#ffffff'),
     error: cssColor(styles, '--trace-flame-error-hatch', '#ff4d6d'),
-    highlight: cssColor(styles, '--text', '#111827'),
+    highlight: cssColor(styles, '--ui-text', '#111827'),
     syntheticEnd: {
       agent: cssColor(styles, '--trace-flame-agent-accent', '#3271e8'),
       harness: cssColor(styles, '--trace-flame-harness-accent', '#dc8500'),

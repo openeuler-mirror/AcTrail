@@ -543,9 +543,12 @@ fn ebpf_seccomp_policy(
 ) -> DeploymentPermissionPolicy {
     DeploymentPermissionPolicy {
         host_ebpf: host_ebpf.map(Into::into).unwrap_or(PermissionMode::Auto),
+        // Default to auto so an agent launch can use seccomp user-notify when the
+        // platform provides it; the socket payload fallback backend needs it to
+        // read a whole write operation instead of a 4095 byte prefix.
         seccomp_notify: seccomp_notify
             .map(Into::into)
-            .unwrap_or(PermissionMode::Disabled),
+            .unwrap_or(PermissionMode::Auto),
     }
 }
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="data-table-shell">
+  <div ref="scroller" class="data-table-shell" @scroll.passive="onScroll">
     <table v-if="rows.length" class="data-table">
       <thead>
         <tr>
@@ -14,11 +14,15 @@
         </tr>
       </thead>
       <tbody>
+        <tr v-if="topSpacer" class="data-spacer" aria-hidden="true">
+          <td :colspan="columns.length" :style="{ height: `${topSpacer}px` }" />
+        </tr>
         <tr
-          v-for="row in rows"
+          v-for="row in renderedRows"
           :key="row.id"
           class="data-row"
           :class="{ 'is-selected': selectedId === row.id }"
+          :data-kind="rowKind(row)"
           tabindex="0"
           @click="select(row)"
           @keydown.enter.prevent="select(row)"
@@ -60,27 +64,39 @@
                 class="cell-empty"
                 >—</span
               >
-              <template v-else>{{ cellText(row.cells[column.key]) }}</template>
+              <template v-else>
+                <span class="cell-value" :title="cellTitle(row.cells[column.key])">
+                  {{ cellText(row.cells[column.key]) }}
+                </span>
+              </template>
             </span>
           </td>
+        </tr>
+        <tr v-if="bottomSpacer" class="data-spacer" aria-hidden="true">
+          <td :colspan="columns.length" :style="{ height: `${bottomSpacer}px` }" />
         </tr>
       </tbody>
     </table>
     <div v-if="hasMoreRows" class="table-more">
       <button class="load-more" type="button" @click="$emit('load-more')">
-        Load {{ nextBatchSize }} more ({{ remainingRows }} hidden)
+        {{ t('dataTable.loadMore', { count: nextBatchSize, hidden: remainingRows }) }}
       </button>
       <button v-if="canLoadAll" class="load-all" type="button" @click="$emit('load-all')">
-        Load all
+        {{ t('dataTable.loadAll') }}
       </button>
     </div>
-    <div v-if="!rows.length" class="empty-table">{{ emptyLabel }}</div>
+    <div v-if="!rows.length" class="empty-table">{{ emptyLabel || t('dataTable.empty') }}</div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight } from '@lucide/vue';
+
+import { useModuleLocale } from '../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   columns: {
@@ -93,7 +109,7 @@ const props = defineProps({
   },
   emptyLabel: {
     type: String,
-    default: 'No rows',
+    default: '',
   },
   totalRows: {
     type: Number,
@@ -185,6 +201,104 @@ function badgeClass(column, cell) {
     .replace(/^-+|-+$/g, '');
   return [`badge-${column.badge}`, slug ? `badge-${column.badge}-${slug}` : ''];
 }
+
+/**
+ * Row kind drives the coloured rail. Models already carry it on the detail or
+ * the kind cell, so the table does not need a per-view mapping.
+ */
+function rowKind(row) {
+  const raw = row?.detail?.kind ?? row?.detail?.domain ?? row?.cells?.kind ?? '';
+  return String(raw).trim().toLowerCase().replace(/\s+/g, '-');
+}
+
+/** Full text on hover once the visible cell had to be truncated. */
+function cellTitle(cell) {
+  const text = cellText(cell);
+  return text.length > 48 ? text : '';
+}
+
+/*
+ * Row windowing. Small ledgers render in full; once a ledger grows past the
+ * threshold only the visible slice is mounted and spacer rows keep the
+ * scrollbar honest. The row height is measured from the rendered table so the
+ * window stays aligned with the real rhythm.
+ */
+const WINDOW_THRESHOLD = 400;
+const OVERSCAN_ROWS = 12;
+const FALLBACK_ROW_HEIGHT = 30;
+
+const scroller = ref(null);
+const scrollTop = ref(0);
+const viewportHeight = ref(0);
+const rowHeight = ref(FALLBACK_ROW_HEIGHT);
+let measureFrame = null;
+
+const windowingEnabled = computed(() => props.rows.length > WINDOW_THRESHOLD);
+const windowRange = computed(() => {
+  if (!windowingEnabled.value) {
+    return { start: 0, end: props.rows.length };
+  }
+  const size = rowHeight.value || FALLBACK_ROW_HEIGHT;
+  const height = viewportHeight.value || 600;
+  return {
+    start: Math.max(0, Math.floor(scrollTop.value / size) - OVERSCAN_ROWS),
+    end: Math.min(props.rows.length, Math.ceil((scrollTop.value + height) / size) + OVERSCAN_ROWS),
+  };
+});
+const renderedRows = computed(() =>
+  (windowingEnabled.value ? props.rows.slice(windowRange.value.start, windowRange.value.end) : props.rows),
+);
+const topSpacer = computed(() => (windowingEnabled.value ? windowRange.value.start * rowHeight.value : 0));
+const bottomSpacer = computed(() =>
+  (windowingEnabled.value ? (props.rows.length - windowRange.value.end) * rowHeight.value : 0),
+);
+
+watch(() => props.rows, () => {
+  scrollTop.value = scroller.value?.scrollTop ?? 0;
+  scheduleMeasure();
+}, { flush: 'post' });
+
+onMounted(() => {
+  measureViewport();
+  window.addEventListener('resize', measureViewport);
+  scheduleMeasure();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', measureViewport);
+  if (measureFrame !== null) {
+    window.cancelAnimationFrame(measureFrame);
+  }
+});
+
+function onScroll(event) {
+  if (!windowingEnabled.value) {
+    return;
+  }
+  scrollTop.value = event.target.scrollTop;
+}
+
+function measureViewport() {
+  viewportHeight.value = scroller.value?.clientHeight ?? 0;
+}
+
+function scheduleMeasure() {
+  if (!windowingEnabled.value) {
+    return;
+  }
+  if (measureFrame !== null) {
+    window.cancelAnimationFrame(measureFrame);
+  }
+  measureFrame = window.requestAnimationFrame(async () => {
+    measureFrame = null;
+    await nextTick();
+    measureViewport();
+    const firstRow = scroller.value?.querySelector('.data-row');
+    if (firstRow?.getBoundingClientRect().height) {
+      rowHeight.value = firstRow.getBoundingClientRect().height;
+    }
+  });
+}
 </script>
 
 <style scoped>
@@ -192,10 +306,10 @@ function badgeClass(column, cell) {
   min-width: 0;
   height: 100%;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 12px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow);
 }
 
 .data-table {
@@ -208,28 +322,33 @@ function badgeClass(column, cell) {
 
 .data-table th,
 .data-table td {
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--ui-border);
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
+  line-height: 1.5;
 }
 
 .data-table tbody tr:last-child td {
   border-bottom: 0;
 }
 
+.data-spacer td {
+  padding: 0;
+  border: 0;
+}
+
 .data-table th {
   position: sticky;
+  height: 30px;
   top: 0;
   z-index: 1;
   background: var(--trace-table-header-bg);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--ui-muted);
+  font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
-  box-shadow: inset 0 -1px 0 var(--border);
+  box-shadow: inset 0 -1px 0 var(--ui-border);
   border-bottom: 0;
 }
 
@@ -258,7 +377,50 @@ function badgeClass(column, cell) {
 
 .data-row.is-selected td {
   background: var(--trace-table-row-selected-bg);
-  box-shadow: inset 2px 0 0 var(--teal);
+  box-shadow: inset 2px 0 0 var(--ui-accent);
+}
+
+/*
+ * Kind rail: the first cell carries a 2px stripe so a dense ledger reads by
+ * category instead of by text alone.
+ */
+.data-row[data-kind] td:first-child {
+  box-shadow: inset 2px 0 0 var(--row-kind-color, var(--ui-border-strong));
+}
+
+.data-row[data-kind='process'] {
+  --row-kind-color: var(--wf-color-process, var(--ui-chart-4));
+}
+
+.data-row[data-kind='file'],
+.data-row[data-kind='fs'],
+.data-row[data-kind='filesystem'] {
+  --row-kind-color: var(--wf-color-file, var(--ui-chart-8));
+}
+
+.data-row[data-kind='net'],
+.data-row[data-kind='network'],
+.data-row[data-kind='http'],
+.data-row[data-kind='sse'] {
+  --row-kind-color: var(--wf-color-http, var(--ui-chart-2));
+}
+
+.data-row[data-kind='llm'],
+.data-row[data-kind='model'],
+.data-row[data-kind='llm.call'] {
+  --row-kind-color: var(--wf-color-llm, var(--ui-chart-3));
+}
+
+.data-row[data-kind='command'],
+.data-row[data-kind='tool'],
+.data-row[data-kind='payload'] {
+  --row-kind-color: var(--wf-color-command, var(--ui-chart-4));
+}
+
+.data-row[data-kind='error'],
+.data-row[data-kind='enforcement'],
+.data-row[data-kind='critical'] {
+  --row-kind-color: var(--wf-color-enforcement, var(--ui-chart-5));
 }
 
 .data-row:focus {
@@ -269,6 +431,14 @@ function badgeClass(column, cell) {
   display: inline-block;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.cell-value {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tree-indent-unit {
@@ -293,7 +463,7 @@ function badgeClass(column, cell) {
 }
 
 .tree-toggle:hover {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
   background: var(--trace-table-toggle-hover-bg);
 }
 
@@ -332,9 +502,9 @@ function badgeClass(column, cell) {
 }
 
 .badge-status {
-  border-color: var(--border);
-  background: var(--surface-muted);
-  color: var(--muted);
+  border-color: var(--ui-border);
+  background: var(--ui-surface-soft);
+  color: var(--ui-muted);
   text-transform: capitalize;
 }
 
@@ -359,9 +529,9 @@ function badgeClass(column, cell) {
 }
 
 .badge-status-unknown {
-  border-color: var(--border);
-  background: var(--surface-muted);
-  color: var(--muted);
+  border-color: var(--ui-border);
+  background: var(--ui-surface-soft);
+  color: var(--ui-muted);
 }
 
 .badge-duration {
@@ -373,7 +543,7 @@ function badgeClass(column, cell) {
 
 .empty-table {
   padding: 40px 18px;
-  color: var(--muted);
+  color: var(--ui-muted);
   text-align: center;
   font-weight: 600;
 }
@@ -384,8 +554,8 @@ function badgeClass(column, cell) {
   flex-wrap: wrap;
   gap: 10px;
   padding: 14px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  border-top: 1px solid var(--ui-border);
+  background: var(--ui-surface);
 }
 
 .load-more,
@@ -407,7 +577,7 @@ function badgeClass(column, cell) {
 
 .load-more:hover,
 .load-all:hover {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
   background: var(--trace-interactive-hover-bg);
 }
 </style>

@@ -16,7 +16,7 @@
         >
           <Pencil v-if="document.editable" :size="13" aria-hidden="true" />
           <LockKeyhole v-else :size="13" aria-hidden="true" />
-          {{ document.editable ? 'Editable' : 'Read only' }}
+          {{ document.editable ? t('configPanel.editable') : t('configPanel.readOnly') }}
         </span>
         <ChevronDown :size="17" :class="{ rotated: opened }" aria-hidden="true" />
       </span>
@@ -25,27 +25,24 @@
     <div v-if="opened" class="plugin-config-body">
       <div class="plugin-config-heading">
         <div>
-          <span>Instance</span>
+          <span>{{ t('configPanel.instance') }}</span>
           <code>{{ instanceId }}</code>
         </div>
         <p v-if="document?.editable">
-          Locked fields are marked explicitly and enforced by the plugin schema.
+          {{ t('configPanel.lockedNote') }}
         </p>
-        <p v-else-if="document">This plugin exposes configuration for inspection only.</p>
+        <p v-else-if="document">{{ t('configPanel.inspectionOnly') }}</p>
       </div>
 
-      <p v-if="loading" class="plugin-config-note">Loading configuration…</p>
+      <p v-if="loading" class="plugin-config-note">{{ t('configPanel.loading') }}</p>
       <p v-else-if="error" class="plugin-config-error">{{ error }}</p>
       <template v-else-if="document">
         <section v-if="pendingDocument" class="plugin-config-conflict" role="alert">
           <div>
-            <strong>Runtime configuration changed</strong>
-            <span>
-              A plugin command changed the runtime configuration. Your unsaved edits are preserved but cannot be
-              submitted until you reload the current plugin configuration.
-            </span>
+            <strong>{{ t('configPanel.conflictTitle') }}</strong>
+            <span>{{ t('configPanel.conflictBody') }}</span>
           </div>
-          <button type="button" @click="reloadPendingDocument">Reload runtime configuration</button>
+          <button type="button" @click="reloadPendingDocument">{{ t('configPanel.reload') }}</button>
         </section>
         <PluginConfigItem
           name="configuration"
@@ -65,7 +62,7 @@
             :disabled="!document.editable || testing || updating"
             @click="testConfiguration"
           >
-            {{ testing ? 'Testing…' : 'Test configuration' }}
+            {{ testing ? t('configPanel.testing') : t('configPanel.test') }}
           </button>
           <button
             class="primary"
@@ -73,7 +70,7 @@
             :disabled="!canUpdate || updating"
             @click="updateConfiguration"
           >
-            {{ updating ? 'Updating…' : 'Update configuration' }}
+            {{ updating ? t('configPanel.updating') : t('configPanel.update') }}
           </button>
         </div>
 
@@ -81,7 +78,7 @@
           <li v-for="message in validation.errors" :key="message">{{ message }}</li>
         </ul>
         <p v-if="updated" class="plugin-config-valid">
-          Configuration updated and applied to the running plugin.
+          {{ t('configPanel.updated') }}
         </p>
       </template>
     </div>
@@ -98,6 +95,10 @@ import {
   validateRuntimePluginConfig,
 } from '../../api';
 import PluginConfigItem from './PluginConfigItem.vue';
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   instanceId: { type: String, required: true },
@@ -121,10 +122,10 @@ const updated = ref(false);
 let activeConfigLoad = null;
 
 const isLlmTurnAnomaly = computed(() => props.pluginId === 'actrail.llm-turn-anomaly');
-const panelTitle = computed(() => isLlmTurnAnomaly.value ? 'LLM alert parameters' : 'Configuration');
+const panelTitle = computed(() => t(isLlmTurnAnomaly.value ? 'configPanel.titleLlmAlert' : 'configPanel.titleDefault'));
 const panelSubtitle = computed(() => isLlmTurnAnomaly.value
-  ? 'Enable rules and tune thresholds; saved values take effect immediately'
-  : 'Schema-driven runtime settings');
+  ? t('configPanel.subtitleLlmAlert')
+  : t('configPanel.subtitleDefault'));
 
 const draftSnapshot = computed(() => JSON.stringify(draft.value));
 const canUpdate = computed(() => Boolean(
@@ -137,20 +138,20 @@ const canUpdate = computed(() => Boolean(
 const dirty = computed(() => originalSnapshot.value !== draftSnapshot.value);
 const validationState = computed(() => {
   if (!document.value?.editable) {
-    return { label: 'Read-only configuration', className: 'readonly', valid: false };
+    return { label: t('configPanel.stateReadOnly'), className: 'readonly', valid: false };
   }
   if (validation.value && !validation.value.valid) {
-    return { label: 'Configuration has errors', className: 'invalid', valid: false };
+    return { label: t('configPanel.stateHasErrors'), className: 'invalid', valid: false };
   }
   if (validation.value?.valid && validatedSnapshot.value === draftSnapshot.value) {
     return {
-      label: dirty.value ? 'Test passed — ready to update' : 'Current configuration is valid',
+      label: dirty.value ? t('configPanel.stateTestPassed') : t('configPanel.stateCurrentValid'),
       className: 'valid',
       valid: true,
     };
   }
   return {
-    label: dirty.value ? 'Changes must be tested before update' : 'No uncommitted changes',
+    label: dirty.value ? t('configPanel.stateMustTest') : t('configPanel.stateNoChanges'),
     className: dirty.value ? 'pending' : 'idle',
     valid: false,
   };
@@ -268,40 +269,40 @@ function cloneJson(value) {
 <style scoped>
 .plugin-config-panel {
   display: grid;
-  margin: 0 var(--stats-space-2xl) var(--stats-space-lg) calc(var(--stats-space-2xl) + var(--stats-space-lg));
+  margin: 0 var(--ui-space-2xl) var(--ui-space-lg) calc(var(--ui-space-2xl) + var(--ui-space-lg));
   overflow: visible;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface-soft);
-  color: var(--stats-text);
-  font-size: var(--stats-font-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-soft);
+  color: var(--ui-text);
+  font-size: var(--ui-font-md);
 }
 
 .plugin-config-toggle {
   width: 100%;
-  min-height: calc(var(--stats-control-height-lg) + var(--stats-space-md));
+  min-height: calc(var(--ui-control-height-lg) + var(--ui-space-md));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-md) var(--stats-space-lg);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-md) var(--ui-space-lg);
   border: 0;
   background: transparent;
-  color: var(--stats-text);
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
   text-align: left;
 }
 
 .plugin-config-toggle:hover {
-  background: var(--stats-surface-bar);
+  background: var(--ui-surface-bar);
 }
 
 .plugin-config-toggle:focus-visible,
 .plugin-config-conflict button:focus-visible,
 .plugin-config-actions button:focus-visible {
-  outline: 2px solid var(--stats-accent);
-  outline-offset: calc(-1 * var(--stats-space-xs));
+  outline: 2px solid var(--ui-accent);
+  outline-offset: calc(-1 * var(--ui-space-xs));
 }
 
 .plugin-config-toggle-title,
@@ -312,31 +313,31 @@ function cloneJson(value) {
 }
 
 .plugin-config-toggle-title {
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .plugin-config-toggle-title > span {
   align-items: flex-start;
   flex-direction: column;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .plugin-config-toggle-title strong {
-  font-size: var(--stats-font-ui);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-ui);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-config-toggle-title small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 
 .plugin-config-toggle-state {
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .plugin-config-toggle-state > svg {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   transition: transform 120ms ease;
 }
 
@@ -345,38 +346,38 @@ function cloneJson(value) {
 }
 
 .plugin-config-access {
-  min-height: var(--stats-control-height-sm);
+  min-height: var(--ui-control-height-sm);
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
-  padding: 0 var(--stats-space-sm);
-  border: 1px solid var(--stats-border-strong);
+  gap: var(--ui-space-xs);
+  padding: 0 var(--ui-space-sm);
+  border: 1px solid var(--ui-border-strong);
   border-radius: 100vmax;
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-config-access.editable {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
-  color: var(--stats-accent);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
+  color: var(--ui-accent);
 }
 
 .plugin-config-access.readonly {
-  background: var(--stats-surface-soft);
-  color: var(--stats-muted);
+  background: var(--ui-surface-soft);
+  color: var(--ui-muted);
 }
 
 .plugin-config-body {
   container: plugin-config / inline-size;
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-2xl);
-  padding: var(--stats-space-2xl);
+  gap: var(--ui-space-2xl);
+  padding: var(--ui-space-2xl);
   border: 0;
-  border-top: 1px solid var(--stats-border);
+  border-top: 1px solid var(--ui-border);
   border-radius: 0;
-  background: var(--stats-surface);
+  background: var(--ui-surface);
   box-shadow: none;
 }
 
@@ -385,19 +386,19 @@ function cloneJson(value) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   align-items: center;
-  gap: var(--stats-space-xl);
-  padding-bottom: var(--stats-space-lg);
-  border-bottom: 1px solid var(--stats-border);
+  gap: var(--ui-space-xl);
+  padding-bottom: var(--ui-space-lg);
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .plugin-config-heading > div {
   display: grid;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .plugin-config-heading span {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
   text-transform: uppercase;
 }
 
@@ -405,13 +406,13 @@ function cloneJson(value) {
   min-width: 0;
   overflow-wrap: anywhere;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: var(--stats-font-sm);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-config-heading p {
   margin: 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
   text-align: right;
 }
 
@@ -419,28 +420,28 @@ function cloneJson(value) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
   justify-content: space-between;
-  padding-top: var(--stats-space-lg);
-  border-top: 1px solid var(--stats-border);
+  padding-top: var(--ui-space-lg);
+  border-top: 1px solid var(--ui-border);
 }
 
 .plugin-config-actions button {
-  min-height: var(--stats-control-height-md);
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
-  color: var(--stats-text);
+  min-height: var(--ui-control-height-md);
+  padding: 0 var(--ui-space-lg);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-config-actions button.primary {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
-  color: var(--stats-accent);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
+  color: var(--ui-accent);
 }
 
 .plugin-config-toggle:disabled,
@@ -455,75 +456,62 @@ function cloneJson(value) {
   margin: 0;
 }
 
-:global(.stats-theme-arc-glass) .plugin-config-panel {
-  border-color: rgb(15 15 20 / 10%);
-  background: rgb(255 255 255 / 55%);
-  box-shadow:
-    0 0.8rem 2.2rem rgb(15 15 20 / 9%),
-    inset 0 1px 0 rgb(255 255 255 / 76%);
-}
-
-:global(.stats-theme-arc-glass) .plugin-config-body {
-  border-top-color: rgb(15 15 20 / 10%);
-  background: rgb(255 255 255 / 66%);
-}
-
 .plugin-config-conflict {
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-xl);
-  padding: var(--stats-space-lg);
-  border: 1px solid color-mix(in srgb, var(--stats-danger) 38%, var(--stats-border));
-  border-radius: var(--stats-radius-md);
-  background: color-mix(in srgb, var(--stats-danger) 8%, var(--stats-surface));
+  gap: var(--ui-space-xl);
+  padding: var(--ui-space-lg);
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 38%, var(--ui-border));
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-surface));
 }
 
 .plugin-config-conflict > div {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
 }
 
 .plugin-config-conflict strong {
-  color: var(--stats-danger);
-  font-size: var(--stats-font-ui);
+  color: var(--ui-danger);
+  font-size: var(--ui-font-ui);
 }
 
 .plugin-config-conflict span {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-config-conflict button {
-  min-height: var(--stats-control-height-md);
+  min-height: var(--ui-control-height-md);
   flex: 0 0 auto;
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  padding: 0 var(--ui-space-lg);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-config-validation-state {
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
   margin-right: auto;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-config-validation-state.valid {
-  color: var(--stats-accent);
+  color: var(--ui-accent);
 }
 
 .plugin-config-validation-state.invalid {
-  color: var(--stats-danger);
+  color: var(--ui-danger);
 }
 
 @container plugin-config (max-width: 42rem) {
@@ -543,23 +531,23 @@ function cloneJson(value) {
 
 @media (max-width: 47.5rem) {
   .plugin-config-panel {
-    margin-right: var(--stats-space-xl);
-    margin-left: var(--stats-space-xl);
+    margin-right: var(--ui-space-xl);
+    margin-left: var(--ui-space-xl);
   }
 }
 
 .plugin-config-error,
 .plugin-config-errors {
-  color: var(--stats-danger);
+  color: var(--ui-danger);
 }
 
 .plugin-config-errors {
   margin: 0;
-  padding-left: var(--stats-space-xl);
+  padding-left: var(--ui-space-xl);
 }
 
 .plugin-config-valid {
-  color: var(--stats-accent);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-accent);
+  font-size: var(--ui-font-sm);
 }
 </style>

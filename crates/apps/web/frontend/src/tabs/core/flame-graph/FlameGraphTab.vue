@@ -3,9 +3,9 @@
     <section class="flame-panel tab-detail-main">
       <header class="flame-toolbar">
         <div class="flame-heading">
-          <span class="flame-kicker">Execution profile</span>
+          <span class="flame-kicker">{{ t('kicker') }}</span>
           <div>
-            <h2>Flame Graph</h2>
+            <h2>{{ t('title') }}</h2>
             <small>
               {{ model.totalActivities }} activities · {{ formatOffset(model.window.spanMs) }} observed
             </small>
@@ -18,35 +18,35 @@
             :aria-pressed="showModelMessages"
             @click="showModelMessages = !showModelMessages"
           >
-            {{ showModelMessages ? 'Hide model messages' : 'Show model messages' }}
+            {{ showModelMessages ? t('hideModelMessages') : t('showModelMessages') }}
           </button>
           <button
             v-if="waterfall.partial"
             type="button"
             class="tree-action"
-            title="Load file, protocol, and runtime actions"
+            :title="t('loadTitle')"
             @click="$emit('load-full-waterfall')"
           >
-            Load full trace
+            {{ t('loadFullTrace') }}
           </button>
-          <div class="flame-zoom-controls" aria-label="Timeline zoom controls">
-            <button type="button" title="Zoom out" @click="zoomBy(1 / 1.4)">
+          <div class="flame-zoom-controls" :aria-label="t('zoomControls')">
+            <button type="button" :title="t('zoomOut')" @click="zoomBy(1 / 1.4)">
               <Minus :size="15" aria-hidden="true" />
             </button>
-            <button type="button" title="Reset timeline" @click="resetViewport">
+            <button type="button" :title="t('resetTimeline')" @click="resetViewport">
               <RotateCcw :size="14" aria-hidden="true" />
             </button>
-            <button type="button" title="Zoom in" @click="zoomBy(1.4)">
+            <button type="button" :title="t('zoomIn')" @click="zoomBy(1.4)">
               <Plus :size="15" aria-hidden="true" />
             </button>
           </div>
         </div>
       </header>
 
-      <div class="flame-legend" aria-label="Layer legend">
-        <span><i class="agent"></i> Agent: main loop + associated subagent loops</span>
-        <span><i class="harness"></i> Harness: background-tagged + unclaimed framework work</span>
-        <small>Ctrl + wheel or W/S zoom · A/D pan · drag to move · 0 reset</small>
+      <div class="flame-legend" :aria-label="t('legend')">
+        <span><i class="agent"></i> {{ t('legendAgent') }}</span>
+        <span><i class="harness"></i> {{ t('legendHarness') }}</span>
+        <small>{{ t('navigationHint') }}</small>
       </div>
 
       <div v-if="unavailableRequestCount" class="flame-layer-empty">
@@ -58,7 +58,7 @@
         ref="navigationSurface"
         class="flame-navigation"
         :class="{ 'is-panning': panning }"
-        aria-label="Flame Graph timeline. Scroll vertically to explore rows. Hold Control while scrolling or use W and S to zoom, A and D to move, and 0 to reset."
+        :aria-label="t('timelineAria')"
       >
         <TimelineOverview
           :bounds="bounds"
@@ -148,7 +148,7 @@
                   <span class="flame-agent-scope-summary">
                     <span class="flame-agent-scope-copy">
                       <strong>{{ scope.label }}</strong>
-                      <small v-if="scope.role === 'main'">Primary conversation owner</small>
+                      <small v-if="scope.role === 'main'">{{ t('primaryOwner') }}</small>
                       <small v-else>
                         Spawned by {{ scope.parentLabel }} · {{ scope.spawnLabel }}
                       </small>
@@ -222,14 +222,14 @@
 
       <div v-else-if="modelBuilding" class="flame-empty">
         <Layers3 :size="24" aria-hidden="true" />
-        <strong>Building execution profile…</strong>
-        <span>Projecting the trace without blocking timeline controls.</span>
+        <strong>{{ t('building') }}</strong>
+        <span>{{ t('buildingHint') }}</span>
       </div>
 
       <div v-else class="flame-empty">
         <Layers3 :size="24" aria-hidden="true" />
-        <strong>No semantic activities to chart</strong>
-        <span>Run an observed agent request, then refresh this trace.</span>
+        <strong>{{ t('emptyTitle') }}</strong>
+        <span>{{ t('emptyHint') }}</span>
       </div>
     </section>
 
@@ -264,6 +264,7 @@ import {
 } from '@lucide/vue';
 
 import { readActionDetail, readActionLlmRequestContent } from '../../../api.js';
+import { useModuleLocale } from '../../../locale';
 import { createRequestContextLoader } from './request-context.js';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import TimelineOverview from '../../../components/timeline/TimelineOverview.vue';
@@ -271,6 +272,9 @@ import { constrainTimeViewport } from '../time-navigation/model.js';
 import { useTimelineNavigation } from '../time-navigation/useTimelineNavigation.js';
 import { formatOffset } from '../waterfall/model';
 import FlameTrackCanvas from './FlameTrackCanvas.vue';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 import {
   flameAnimationDriver,
   scheduleFlameRedraw,
@@ -300,7 +304,7 @@ const props = defineProps({
 
 defineEmits(['load-full-waterfall']);
 
-const model = shallowRef(emptyFlameGraphModel());
+const model = shallowRef(emptyFlameGraphModel(t));
 const modelBuilding = ref(false);
 const unavailableRequestCount = ref(0);
 const showModelMessages = ref(false);
@@ -327,7 +331,7 @@ const overviewLanes = computed(() => flameOverviewLanes({ layers: filteredLayers
 const viewportLabel = computed(() => {
   const current = activeViewport.value;
   return current.spanMs >= bounds.value.spanMs - 0.001
-    ? 'full trace'
+    ? t('fullTrace')
     : compactTimeRange(current.startMs, current.startMs + current.spanMs);
 });
 const detailPanelVisible = computed(() => Boolean(selectedDetail.value || detailError.value));
@@ -388,7 +392,7 @@ function scheduleModelBuild(actions, links, associations, traceId) {
   modelBuildToken += 1;
   const token = modelBuildToken;
   unavailableRequestCount.value = 0;
-  model.value = emptyFlameGraphModel();
+  model.value = emptyFlameGraphModel(t);
   if (modelIdleHandle !== null) {
     if (typeof cancelIdleCallback === 'function') {
       cancelIdleCallback(modelIdleHandle);
@@ -398,7 +402,7 @@ function scheduleModelBuild(actions, links, associations, traceId) {
     modelIdleHandle = null;
   }
   if (!actions?.length && !links?.length) {
-    model.value = emptyFlameGraphModel();
+    model.value = emptyFlameGraphModel(t);
     resetTimeViewport();
     modelBuilding.value = false;
     return;
@@ -412,7 +416,7 @@ function scheduleModelBuild(actions, links, associations, traceId) {
     if (!isCurrent()) return;
     unavailableRequestCount.value = unavailable;
     // Flame-graph ownership must not depend on backend user-turn accounting.
-    model.value = buildFlameGraph(actions, links, null, associations, contexts);
+    model.value = buildFlameGraph(actions, links, null, associations, contexts, t);
     resetTimeViewport();
     modelBuilding.value = false;
   };
@@ -460,14 +464,14 @@ async function selectActivity(activity) {
   activeDetailLoad = token;
   detailError.value = '';
   selectedId.value = activity.id;
-  selectedDetail.value = flameActivityDetail(activity);
+  selectedDetail.value = flameActivityDetail(activity, t);
   if (activity.density) {
     return;
   }
   try {
     const action = await readActionDetail(props.traceKey, activity.id);
     if (activeDetailLoad === token && selectedId.value === activity.id) {
-      selectedDetail.value = flameActivityDetail({ ...activity, action });
+      selectedDetail.value = flameActivityDetail({ ...activity, action }, t);
     }
   } catch (error) {
     if (activeDetailLoad === token && selectedId.value === activity.id) {

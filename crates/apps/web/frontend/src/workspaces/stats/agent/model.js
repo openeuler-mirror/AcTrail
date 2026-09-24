@@ -27,46 +27,65 @@ export class AgentStatsModel {
   }
 
   get toolWorkloads() {
-    return (this.attribution?.tool_workloads ?? []).map((tool, index) => {
-      const callCount = Number(tool.call_count ?? 0);
-      const measuredIntervalCount = Number(tool.measured_interval_count ?? 0);
-      const measuredDuration = tool.measured_duration_nanos == null
-        ? null
-        : Number(tool.measured_duration_nanos);
-      return {
-        key: tool.key,
-        label: tool.label,
-        callCount,
-        measuredIntervalCount,
-        measuredDuration,
-        averageDuration: measuredDuration != null && measuredIntervalCount > 0
-          ? measuredDuration / measuredIntervalCount
-          : null,
-        color: `var(--stats-chart-${(index % 8) + 1})`,
+    const merged = new Map();
+    for (const tool of this.attribution?.tool_workloads ?? []) {
+      const key = normalizeToolName(tool.key ?? tool.label);
+      if (!key) {
+        continue;
+      }
+      const entry = merged.get(key) ?? {
+        key,
+        callCount: 0,
+        measuredIntervalCount: 0,
+        measuredDuration: null,
       };
-    });
+      entry.callCount += Number(tool.call_count ?? 0);
+      entry.measuredIntervalCount += Number(tool.measured_interval_count ?? 0);
+      if (tool.measured_duration_nanos != null) {
+        entry.measuredDuration = (entry.measuredDuration ?? 0) + Number(tool.measured_duration_nanos);
+      }
+      merged.set(key, entry);
+    }
+    const rows = [...merged.values()].sort(
+      (left, right) => right.callCount - left.callCount || left.key.localeCompare(right.key),
+    );
+    const totalCalls = rows.reduce((sum, row) => sum + row.callCount, 0) || 1;
+    return rows.map((row, index) => ({
+      ...row,
+      label: row.key,
+      share: row.callCount / totalCalls,
+      totalCalls,
+      averageDuration: row.measuredDuration != null && row.measuredIntervalCount > 0
+        ? row.measuredDuration / row.measuredIntervalCount
+        : null,
+      color: `var(--ui-chart-${(index % 8) + 1})`,
+    }));
   }
 
+  /**
+   * The ring sits next to the trace timeline and summarises the same three
+   * categories, so it reuses the lane colours the timeline draws.
+   */
   get timeSeries() {
     const colors = {
-      model_side: 'var(--stats-chart-1)',
-      agent_side: 'var(--stats-chart-2)',
-      unattributed: 'var(--stats-chart-7)',
+      model_side: 'var(--ui-chart-3)',
+      agent_side: 'var(--ui-chart-4)',
+      unattributed: 'var(--ui-chart-7)',
     };
     return (this.attribution?.categories ?? []).map((row) => ({
       key: row.key,
       label: row.label,
       total: Number(row.duration_nanos ?? 0),
-      color: colors[row.key] ?? 'var(--stats-chart-4)',
+      color: colors[row.key] ?? 'var(--ui-chart-5)',
     }));
   }
 
   get tokenSeries() {
     const colors = {
-      cache_hit: 'var(--stats-chart-cache-hit)',
-      cache_miss: 'var(--stats-chart-cache-miss)',
-      output: 'var(--stats-chart-output)',
-      reasoning: 'var(--stats-chart-reasoning)',
+      cache_hit: 'var(--ui-chart-cache-hit)',
+      cache_miss: 'var(--ui-chart-cache-miss)',
+      output: 'var(--ui-chart-output)',
+      reasoning: 'var(--ui-chart-reasoning)',
     };
     return (this.llm?.overview?.token_categories ?? [])
       .filter((row) => Object.hasOwn(colors, row.key))
@@ -115,4 +134,33 @@ export function formatDurationNanos(value) {
   if (nanos < 1e6) return `${(nanos / 1e3).toFixed(0)} µs`;
   if (nanos < 1e9) return `${(nanos / 1e6).toFixed(1)} ms`;
   return `${(nanos / 1e9).toFixed(nanos < 1e10 ? 2 : 1)} s`;
+}
+
+/**
+ * Tool names arrive from more than one harness, so the same tool can be
+ * recorded as `bash`, `Bash` or `shell`. Normalise the spelling before the
+ * workload rows are merged, otherwise one tool renders as several rows.
+ */
+const TOOL_NAME_ALIASES = Object.freeze({
+  shell: 'bash',
+  terminal: 'bash',
+  exec: 'bash',
+  file_write: 'write',
+  write_file: 'write',
+  file_edit: 'edit',
+  edit_file: 'edit',
+  str_replace_editor: 'edit',
+  todo_write: 'todo',
+  todowrite: 'todo',
+  run_code: 'code',
+  local_shell: 'bash',
+});
+
+export function normalizeToolName(name) {
+  const raw = String(name ?? '').trim();
+  if (!raw) {
+    return '';
+  }
+  const collapsed = raw.replace(/\s+/g, '_').toLowerCase();
+  return TOOL_NAME_ALIASES[collapsed] ?? collapsed;
 }

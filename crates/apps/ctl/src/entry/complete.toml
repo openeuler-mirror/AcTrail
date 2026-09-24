@@ -1,0 +1,6 @@
+# Complete capture: read whole socket operations through the seccomp-notify path.
+[payload.socket]
+capture_backend = "bpf-copy-seccomp-fallback"
+
+[seccomp_notify]
+enabled = true

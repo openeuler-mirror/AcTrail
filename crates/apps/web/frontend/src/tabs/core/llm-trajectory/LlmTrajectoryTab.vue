@@ -1,8 +1,8 @@
 <template>
   <section class="trajectory-layout">
     <aside class="trajectory-summary">
-      <h2>LLM Trajectory</h2>
-      <p class="summary-note">Request histories and inferred agent delegation within this trace.</p>
+      <h2>{{ t('title') }}</h2>
+      <p class="summary-note">{{ t('summaryNote') }}</p>
       <dl>
         <template v-for="[label, value] in summaryRows" :key="label">
           <dt>{{ label }}</dt>
@@ -23,27 +23,27 @@
         </div>
       </div>
       <div class="trajectory-legend">
-        <span><i class="legend-line solid"></i>Strict prefix</span>
-        <span><i class="legend-line dashed"></i>Inferred delegation</span>
+        <span><i class="legend-line solid"></i>{{ t('legendStrictPrefix') }}</span>
+        <span><i class="legend-line dashed"></i>{{ t('legendInferredDelegation') }}</span>
       </div>
       <p v-if="graph?.partial" class="capability-warning">
-        This graph is partial because some trajectory data was unavailable.
+        {{ t('partialGraph') }}
       </p>
       <p v-if="correlationLoading" class="summary-note" role="status">
-        Checking recorded content for agent delegation…
+        {{ t('checking') }}
       </p>
       <p v-if="correlationError || offline.unavailable" class="capability-warning" role="status">
-        Some recorded content is unavailable. Delegation links may be incomplete.
+        {{ t('contentUnavailable') }}
       </p>
     </aside>
 
     <FullscreenSurface
       class="trajectory-viewport"
-      label="LLM trajectory graph"
+      :label="t('graphAria')"
       :aside-open="Boolean(selectedDetail || detailError)"
     >
       <div v-if="!layout.nodes.length" class="trajectory-empty">
-        No LLM trajectory data for this trace.
+        {{ t('empty') }}
       </div>
       <svg
         v-else
@@ -52,7 +52,7 @@
         :height="layout.height"
         :viewBox="`0 0 ${layout.width} ${layout.height}`"
         role="img"
-        aria-label="LLM trajectory graph"
+        :aria-label="t('graphAria')"
       >
         <defs>
           <marker id="trajectory-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
@@ -144,8 +144,12 @@ import { computed, ref, watch } from 'vue';
 import { readActionDetail, readActionLlmRequestContent, readWaterfall } from '../../../api';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import FullscreenSurface from '../../../components/FullscreenSurface.vue';
+import { useModuleLocale } from '../../../locale';
 import { buildTrajectoryLayout } from './model';
 import { OfflineAgentCorrelation } from './offline-correlation.js';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   traceKey: {
@@ -180,12 +184,12 @@ const summaryRows = computed(() => {
   return [
     ['Requests', stats.node_count ?? 0],
     ['Trajectories', stats.trajectory_count ?? 0],
-    ['Append edges', stats.append_count ?? 0],
-    ['Fork edges', stats.fork_count ?? 0],
-    ['Inferred delegations', offline.value.edges.length],
-    ['Duplicate roots', stats.duplicate_count ?? 0],
-    ['Strongly linked', formatRatio(stats.strongly_linked_node_ratio)],
-    ['Duplicate ratio', formatRatio(stats.duplicate_node_ratio)],
+    [t('stats.appendEdges'), stats.append_count ?? 0],
+    [t('stats.forkEdges'), stats.fork_count ?? 0],
+    [t('stats.inferredDelegations'), offline.value.edges.length],
+    [t('stats.duplicateRoots'), stats.duplicate_count ?? 0],
+    [t('stats.stronglyLinked'), formatRatio(stats.strongly_linked_node_ratio)],
+    [t('stats.duplicateRatio'), formatRatio(stats.duplicate_node_ratio)],
   ];
 });
 
@@ -238,7 +242,7 @@ async function selectNode(node) {
         Trajectory: node.trajectory_id,
         Position: node.trajectory_position,
         Transition: node.transition,
-        'Start reason': node.start_reason,
+        [t('stats.startReason')]: node.start_reason,
       },
       trajectoryContext: {
         label: node.trajectory_label,
@@ -285,7 +289,7 @@ function emptyGraph() {
   grid-template-columns: 230px minmax(0, 1fr);
   min-height: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--ui-bg-base);
 }
 
 .trajectory-layout :deep(.detail-panel) {
@@ -298,8 +302,8 @@ function emptyGraph() {
 }
 .trajectory-summary {
   padding: 20px 16px;
-  border-right: 1px solid var(--border);
-  background: var(--surface);
+  border-right: 1px solid var(--ui-border);
+  background: var(--ui-surface);
   overflow-y: auto;
 }
 
@@ -310,13 +314,13 @@ function emptyGraph() {
 
 .summary-note,
 .capability-warning {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
 .capability-warning {
-  color: var(--warning, #b7791f);
+  color: var(--ui-warning, #b7791f);
 }
 
 .trajectory-summary dl {
@@ -328,7 +332,7 @@ function emptyGraph() {
 }
 
 .trajectory-summary dt {
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 .trajectory-summary dd {
@@ -341,7 +345,7 @@ function emptyGraph() {
   display: grid;
   gap: 10px;
   padding: 14px 0;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--ui-border);
   font-size: 12px;
 }
 
@@ -353,7 +357,7 @@ function emptyGraph() {
 
 .trajectory-key h3 {
   margin: 0 0 2px;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -381,7 +385,7 @@ function emptyGraph() {
 
 .trajectory-key-row span {
   overflow: hidden;
-  color: var(--muted);
+  color: var(--ui-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -407,7 +411,7 @@ function emptyGraph() {
   min-width: 0;
   overflow: hidden;
   background:
-    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--muted) 18%, transparent) 1px, transparent 0)
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ui-muted) 18%, transparent) 1px, transparent 0)
     0 0 / 24px 24px;
 }
 
@@ -431,7 +435,7 @@ function emptyGraph() {
 }
 
 .lane-reuse-marker {
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 .lane-reuse-marker path {
@@ -445,7 +449,7 @@ function emptyGraph() {
   font-size: 10px;
   font-weight: 600;
   paint-order: stroke;
-  stroke: var(--bg);
+  stroke: var(--ui-bg-base);
   stroke-width: 3px;
 }
 
@@ -455,7 +459,7 @@ function emptyGraph() {
 }
 
 .node-dot {
-  stroke: var(--bg);
+  stroke: var(--ui-bg-base);
   stroke-width: 3;
   transition: r 120ms ease, stroke-width 120ms ease;
 }
@@ -464,28 +468,28 @@ function emptyGraph() {
 .trajectory-node.selected .node-dot,
 .trajectory-node:focus-visible .node-dot {
   r: 14px;
-  stroke: var(--text);
+  stroke: var(--ui-text);
   stroke-width: 2;
 }
 
 .node-label {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--ui-mono, ui-monospace, monospace);
   font-size: 13px;
   font-weight: 600;
   paint-order: stroke;
-  stroke: var(--bg);
+  stroke: var(--ui-bg-base);
   stroke-width: 4px;
   stroke-linejoin: round;
 }
 
 .node-label-metadata {
-  fill: var(--muted);
+  fill: var(--ui-muted);
   font-size: 11px;
   font-weight: 500;
 }
 
 .time-label {
-  fill: var(--muted);
+  fill: var(--ui-muted);
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -501,7 +505,7 @@ function emptyGraph() {
   display: grid;
   place-items: center;
   min-height: 320px;
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 @media (max-width: 1000px) {

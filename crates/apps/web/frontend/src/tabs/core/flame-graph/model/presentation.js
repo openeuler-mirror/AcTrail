@@ -2,22 +2,22 @@ import { semanticActionLabel, semanticActionTarget } from '../../../actionLabels
 import { ToolCallDisplay } from '../../../shared/toolCallDisplay.js';
 import { actionDetail, formatOffset } from '../../waterfall/model.js';
 import { deriveAgentScopes, orderAgentScopes } from '../agent-scopes.js';
-import { BACKGROUND_LABELS, AGENT_GROUP_ORDER, HARNESS_GROUP_ORDER, GROUP_LABELS, GROUP_DESCRIPTIONS, flameSummaryMarkerKind, packActivityDepths, coveredDuration, activityEnvelope, compareActivities, parseNanos, nanosDiffMs, humanize, basename } from './utils.js';
+import { BACKGROUND_LABEL_KEYS, AGENT_GROUP_ORDER, HARNESS_GROUP_ORDER, GROUP_LABEL_KEYS, GROUP_DESCRIPTION_KEYS, flameSummaryMarkerKind, packActivityDepths, coveredDuration, activityEnvelope, compareActivities, parseNanos, nanosDiffMs, humanize, basename } from './utils.js';
 
-export function flameActivityDetail(activity) {
+export function flameActivityDetail(activity, t) {
   if (activity.density) {
     return {
       selectionId: activity.id,
       title: activity.label,
-      kind: 'Viewport density summary',
+      kind: t('detailRows.densityKind'),
       rows: {
-        layer: activity.layer === 'agent' ? 'Agent' : 'Harness',
+        layer: activity.layer === 'agent' ? t('layer.agentShort') : t('layer.harnessShort'),
         lane: activity.toolEffect
-          ? `${activity.toolEffect.toolLabel} effects`
-          : GROUP_LABELS[activity.group] ?? activity.group,
+          ? t('detailRows.toolEffects', { tool: activity.toolEffect.toolLabel })
+          : t(GROUP_LABEL_KEYS[activity.group] ?? '') || activity.group,
         activities: activity.densityCount,
         interval: `+${formatOffset(activity.startOffsetMs)} · ${formatOffset(activity.durMs ?? 0)}`,
-        detail: 'Zoom in to inspect the individual activities represented by this bar',
+        detail: t('detailRows.densityHint'),
       },
       attributes: {},
       evidence: [],
@@ -27,13 +27,13 @@ export function flameActivityDetail(activity) {
   const detail = actionDetail(activity.action, null, activity.target);
   detail.title = activity.label;
   detail.rows = {
-    layer: activity.layer === 'agent' ? 'Agent' : 'Harness',
+    layer: activity.layer === 'agent' ? t('layer.agentShort') : t('layer.harnessShort'),
     lane: activity.toolEffect
-      ? `${activity.toolEffect.toolLabel} effects`
-      : GROUP_LABELS[activity.group] ?? activity.group,
+      ? t('detailRows.toolEffects', { tool: activity.toolEffect.toolLabel })
+      : t(GROUP_LABEL_KEYS[activity.group] ?? '') || activity.group,
     classification: activity.layer === 'agent'
-      ? 'Linked to the primary LLM/tool lineage'
-      : 'Background-tagged or outside the primary lineage',
+      ? t('detailRows.lineageLinked')
+      : t('detailRows.lineageBackground'),
     start_offset: `+${formatOffset(activity.startOffsetMs)}`,
     ...detail.rows,
   };
@@ -56,19 +56,19 @@ export function flameActivityDetail(activity) {
     detail.rows.classification_source = activity.classificationSource;
   }
   if (activity.aggregate) {
-    detail.rows.aggregate = `${activity.aggregateCount} activities from first to last observation`;
+    detail.rows.aggregate = t('detailRows.aggregate', { count: activity.aggregateCount });
   }
   if (activity.summaryMarker) {
-    detail.rows.display_interval = 'Observation summary rendered at its first event; raw timing remains available below';
+    detail.rows.display_interval = t('detailRows.observationSummary');
   }
   if (activity.timingSource === 'derived_tool_execution') {
-    detail.rows.display_interval = 'Derived execution window: assistant response end to matching tool-result request start';
+    detail.rows.display_interval = t('detailRows.derivedWindow');
   }
   if (activity.toolEffect) {
     detail.rows.classification = activity.toolEffect.preparation === 'shell_snapshot'
-      ? `Observed shell preparation for Agent Tool ${activity.toolEffect.toolLabel}`
-      : `Observed effect of Agent Tool ${activity.toolEffect.toolLabel}`;
-    detail.rows.classification_source = 'Tool association + observed command process tree';
+      ? t('detailRows.shellPreparation', { tool: activity.toolEffect.toolLabel })
+      : t('detailRows.toolEffect', { tool: activity.toolEffect.toolLabel });
+    detail.rows.classification_source = t('detailRows.toolAssociation');
     detail.rows.agent_tool = activity.toolEffect.toolLabel;
     if (activity.toolEffect.preparation) {
       detail.rows.tool_phase = activity.toolEffect.preparation;
@@ -79,7 +79,7 @@ export function flameActivityDetail(activity) {
     }
     if (activity.timingSource === 'observed_command_tree') {
       detail.rows.display_duration = formatOffset(activity.durMs ?? 0);
-      detail.rows.display_interval = 'Observed command process tree envelope';
+      detail.rows.display_interval = t('detailRows.commandTreeEnvelope');
       detail.rows.raw_duration = detail.rows.duration;
       delete detail.rows.duration;
     }
@@ -93,6 +93,7 @@ export function buildAgentLayer(
   links,
   childrenByParent,
   window,
+  t,
 ) {
   const linkedInvocationIds = new Set(
     (links ?? [])
@@ -108,10 +109,11 @@ export function buildAgentLayer(
   if (!invocations.length) {
     return buildLayer(
       'agent',
-      'Agent layer',
-      'Primary LLM turns and their linked tool chain',
+      t('layer.agent'),
+      t('layer.agentDescription'),
       activities,
       window,
+      t,
     );
   }
 
@@ -120,6 +122,7 @@ export function buildAgentLayer(
     actions,
     links,
     childrenByParent,
+    t,
   );
   const scopeById = new Map(scopeModel.map((scope) => [scope.id, scope]));
   const activityOwner = new Map();
@@ -139,8 +142,8 @@ export function buildAgentLayer(
   const mainDefinition = {
     id: 'agent-main',
     role: 'main',
-    label: 'Main agent',
-    agentType: 'Primary',
+    label: t('scope.mainAgent'),
+    agentType: t('scope.primary'),
     searchText: 'main agent primary',
     parentId: null,
     parentLabel: null,
@@ -198,11 +201,12 @@ export function buildAgentLayer(
     window,
     index,
     activityById.get(definition.parentToolCallId) ?? null,
+    t,
   ));
   return {
     id: 'agent',
-    label: 'Agent layer',
-    description: `${1 + scopeModel.length} agent loops · primary and invoked subagents`,
+    label: t('layer.agent'),
+    description: t('scope.loops', { count: 1 + scopeModel.length }),
     tracks: agentScopes.flatMap((scope) => scope.tracks),
     agentScopes,
     activityCount: activities.length,
@@ -210,7 +214,7 @@ export function buildAgentLayer(
   };
 }
 
-function buildAgentScope(definition, activities, window, index, spawnActivity) {
+function buildAgentScope(definition, activities, window, index, spawnActivity, t) {
   const { actionIds: _actionIds, ...scopeDefinition } = definition;
   const scopeId = definition.id;
   const trackActivities = activities.filter(
@@ -224,12 +228,12 @@ function buildAgentScope(definition, activities, window, index, spawnActivity) {
     tracks.push(syntheticTrack('agent', envelopeActivities, window, {
       id: `${scopeId}-scope`,
       trackLabel: definition.role === 'main'
-        ? 'Agent loop'
-        : 'Subagent loop',
+        ? t('scope.agentLoop')
+        : t('scope.subagentLoop'),
       activityLabel: definition.role === 'main'
-        ? 'Main agent activity envelope'
-        : `${definition.label} activity envelope`,
-    }));
+        ? t('scope.mainEnvelope')
+        : t('scope.envelope', { label: definition.label }),
+    }, t));
   }
   for (const group of AGENT_GROUP_ORDER) {
     const grouped = trackActivities.filter((activity) => activity.group === group);
@@ -237,13 +241,13 @@ function buildAgentScope(definition, activities, window, index, spawnActivity) {
       continue;
     }
     if (group === 'detail') {
-      tracks.push(...toolEffectTracks(grouped, scopeId));
+      tracks.push(...toolEffectTracks(grouped, scopeId, t));
       continue;
     }
     tracks.push({
       id: `${scopeId}-${group}`,
-      label: GROUP_LABELS[group],
-      description: GROUP_DESCRIPTIONS[group],
+      label: t(GROUP_LABEL_KEYS[group]),
+      description: t(GROUP_DESCRIPTION_KEYS[group]),
       group,
       synthetic: false,
       ...packActivityDepths(grouped),
@@ -262,23 +266,23 @@ function buildAgentScope(definition, activities, window, index, spawnActivity) {
   };
 }
 
-export function buildLayer(id, label, description, activities, window) {
+export function buildLayer(id, label, description, activities, window, t) {
   const groups = id === 'agent' ? AGENT_GROUP_ORDER : HARNESS_GROUP_ORDER;
   const tracks = [];
   if (activities.length) {
-    tracks.push(syntheticTrack(id, activities, window));
+    tracks.push(syntheticTrack(id, activities, window, {}, t));
   }
   for (const group of groups) {
     const grouped = activities.filter((activity) => activity.group === group);
     if (grouped.length) {
       if (id === 'agent' && group === 'detail') {
-        tracks.push(...toolEffectTracks(grouped));
+        tracks.push(...toolEffectTracks(grouped, 'agent', t));
         continue;
       }
       tracks.push({
         id: `${id}-${group}`,
-        label: GROUP_LABELS[group],
-        description: GROUP_DESCRIPTIONS[group],
+        label: t(GROUP_LABEL_KEYS[group]),
+        description: t(GROUP_DESCRIPTION_KEYS[group]),
         group,
         synthetic: false,
         ...packActivityDepths(grouped),
@@ -299,12 +303,12 @@ export function emptyLayer(id, label, description) {
   return { id, label, description, tracks: [], activityCount: 0, durationMs: 0 };
 }
 
-function syntheticTrack(layer, activities, window, options = {}) {
+function syntheticTrack(layer, activities, window, options = {}, t) {
   const { startOffsetMs, endOffsetMs } = activityEnvelope(activities);
   const action = activities[0].action;
   return {
     id: options.id ?? `${layer}-scope`,
-    label: options.trackLabel ?? (layer === 'agent' ? 'Agent loop' : 'Harness envelope'),
+    label: options.trackLabel ?? (layer === 'agent' ? t('scope.agentLoop') : t('scope.harnessEnvelope')),
     group: 'scope',
     synthetic: true,
     depthCount: 1,
@@ -314,7 +318,7 @@ function syntheticTrack(layer, activities, window, options = {}) {
       group: 'scope',
       kind: `${layer}.scope`,
       label: options.activityLabel
-        ?? (layer === 'agent' ? 'Agent activity envelope' : 'Harness activity envelope'),
+        ?? (layer === 'agent' ? t('scope.agentEnvelope') : t('scope.harnessEnvelope')),
       target: '',
       status: 'success',
       startOffsetMs,
@@ -340,6 +344,7 @@ export function activityFromAction(
   displayInterval,
   toolEffect,
   toolDisplay,
+  t,
 ) {
   const startNanos = displayInterval?.startNanos ?? parseNanos(action.start_time_unix_nanos);
   const endNanos = displayInterval?.endNanos
@@ -351,7 +356,7 @@ export function activityFromAction(
   const target = toolDisplay.target(action);
   const label = action.kind === 'llm.tool_call'
     ? toolDisplay.label(action)
-    : activityLabel(action, callRequest, backgroundKind, callOrdinal, toolEffect);
+    : activityLabel(action, callRequest, backgroundKind, callOrdinal, toolEffect, t);
   const group = activityGroup(action.kind, layer, Boolean(toolEffect));
   const aggregateCount = actionAggregateCount(action);
   if (!group) {
@@ -396,28 +401,30 @@ export function activityFromAction(
   };
 }
 
-function activityLabel(action, callRequest, backgroundKind, callOrdinal, toolEffect) {
+function activityLabel(action, callRequest, backgroundKind, callOrdinal, toolEffect, t) {
   if (backgroundKind) {
-    const label = BACKGROUND_LABELS[backgroundKind] ?? humanize(backgroundKind);
+    const label = BACKGROUND_LABEL_KEYS[backgroundKind]
+      ? t(BACKGROUND_LABEL_KEYS[backgroundKind])
+      : humanize(backgroundKind);
     if (action.kind === 'llm.request') {
-      return `${label} request`;
+      return t('detailRows.backgroundRequest', { label });
     }
     if (action.kind === 'llm.response') {
-      return `${label} response`;
+      return t('detailRows.backgroundResponse', { label });
     }
     return label;
   }
   if (action.kind === 'llm.call') {
     const model = semanticActionTarget(action)
       || callRequest?.attributes?.['llm.request.model'];
-    const sequence = callOrdinal ? `LLM call ${callOrdinal}` : 'LLM call';
+    const sequence = t('activity.llmCall', { ordinal: callOrdinal ?? '' }).trim();
     return model ? `${sequence} · ${model}` : sequence;
   }
   if (action.kind === 'llm.request') {
-    return 'User / context request';
+    return t('detailRows.userContextRequest');
   }
   if (action.kind === 'llm.response') {
-    return 'Assistant response';
+    return t('activity.assistantResponse');
   }
   if (action.kind === 'llm.tool_call') {
     const name = action.attributes?.['llm.tool_call.name'];
@@ -429,23 +436,23 @@ function activityLabel(action, callRequest, backgroundKind, callOrdinal, toolEff
       : 'tool.result';
   }
   if (action.kind === 'command.invocation' && !toolEffect?.root) {
-    return semanticActionTarget(action) || 'Command';
+    return semanticActionTarget(action) || t('activity.command');
   }
   if (toolEffect?.root && action.kind === 'command.invocation') {
     const executable = semanticActionTarget(action)
       || action.attributes?.['process.executable'];
     if (toolEffect.preparation === 'shell_snapshot') {
       return executable
-        ? `${toolEffect.toolLabel} environment setup · ${executable}`
-        : `${toolEffect.toolLabel} environment setup`;
+        ? `${t('activity.environmentSetup', { tool: toolEffect.toolLabel })} · ${executable}`
+        : t('activity.environmentSetup', { tool: toolEffect.toolLabel });
     }
     return executable
-      ? `${toolEffect.toolLabel} execution · ${executable}`
-      : `${toolEffect.toolLabel} execution`;
+      ? `${t('activity.execution', { tool: toolEffect.toolLabel })} · ${executable}`
+      : t('activity.execution', { tool: toolEffect.toolLabel });
   }
   if (action.kind === 'process.fork_attempt') {
     const syscall = action.attributes?.syscall;
-    return syscall ? `${syscall}()` : 'fork attempt';
+    return syscall ? `${syscall}()` : t('activity.forkAttempt');
   }
   if (action.kind === 'process.exec') {
     const syscall = action.attributes?.syscall ?? 'exec';
@@ -454,7 +461,8 @@ function activityLabel(action, callRequest, backgroundKind, callOrdinal, toolEff
   }
   if (action.kind === 'process.exit') {
     const exitCode = action.attributes?.['process.exit_code'];
-    return exitCode == null ? 'process exit' : `process exit · ${exitCode}`;
+    const exitLabel = t('activity.processExit');
+    return exitCode == null ? exitLabel : `${exitLabel} · ${exitCode}`;
   }
   const aggregateCount = actionAggregateCount(action);
   if (aggregateActionKind(action.kind)) {
@@ -535,7 +543,7 @@ function activityGroup(kind, layer, toolEffect = false) {
   return null;
 }
 
-function toolEffectTracks(activities, idPrefix = 'agent') {
+function toolEffectTracks(activities, idPrefix = 'agent', t) {
   const groupedByToolCall = new Map();
   for (const activity of activities) {
     const key = activity.toolEffect?.toolCallId
@@ -553,10 +561,10 @@ function toolEffectTracks(activities, idPrefix = 'agent') {
       const toolLabel = effect?.toolLabel ?? 'Tool';
       return {
         id: `${idPrefix}-detail-${index + 1}-${toolCallId}`,
-        label: effect ? `${toolLabel} effects` : GROUP_LABELS.detail,
+        label: effect ? t('detailRows.toolEffects', { tool: toolLabel }) : t(GROUP_LABEL_KEYS.detail),
         description: effect
-          ? `Observed command, process, and file activity under the ${toolLabel} tool execution trees`
-          : GROUP_DESCRIPTIONS.detail,
+          ? t('detailRows.toolEffectsDescription', { tool: toolLabel })
+          : t(GROUP_DESCRIPTION_KEYS.detail),
         group: 'detail',
         synthetic: false,
         ...packActivityDepths(rows),

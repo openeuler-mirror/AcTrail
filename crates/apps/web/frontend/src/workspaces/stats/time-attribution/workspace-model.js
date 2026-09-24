@@ -18,23 +18,25 @@ export function matchesAttributionQuery(values, query) {
     .includes(query);
 }
 
-export function commandCountLabel(row) {
+export function commandCountLabel(row, t) {
   if (row.kind === 'tool_overhead') {
-    return `${row.segment_count} intervals · Agent Tool self-time`;
+    return t('commands.toolOverheadLabel', { intervals: row.segment_count });
   }
-  return `${row.action_count} command processes · ${row.segment_count} intervals`;
+  return t('commands.countLabel', { processes: row.action_count, intervals: row.segment_count });
 }
 
-export function openTraceEvent(row, filter) {
+export function openTraceEvent(row, filter, t) {
   return {
     traceId: row.trace.id,
     tabId: 'waterfall',
     focus: normalizeAttributionTarget(row.target, {
-      source: 'Stats Time Attribution',
+      source: t('source'),
       dimension: filter?.dimension,
       key: filter?.key,
       label: filter?.label,
-      description: `Longest contiguous interval in this Trace · ${formatAttributionDuration(row.contribution_duration_nanos)} total contribution`,
+      description: t('traces.contribution', {
+        duration: formatAttributionDuration(row.contribution_duration_nanos),
+      }),
     }),
   };
 }

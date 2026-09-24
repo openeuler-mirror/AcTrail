@@ -1,0 +1,43 @@
+/** Copy owned by the LLM trajectory tab. */
+export default {
+  'en-US': {
+    title: 'LLM Trajectory',
+    summaryNote: 'Request histories and inferred agent delegation within this trace.',
+    legendStrictPrefix: 'Strict prefix',
+    legendInferredDelegation: 'Inferred delegation',
+    partialGraph: 'This graph is partial because some trajectory data was unavailable.',
+    checking: 'Checking recorded content for agent delegation…',
+    contentUnavailable: 'Some recorded content is unavailable. Delegation links may be incomplete.',
+    empty: 'No LLM trajectory data for this trace.',
+    graphAria: 'LLM trajectory graph',
+    stats: {
+      appendEdges: 'Append edges',
+      forkEdges: 'Fork edges',
+      inferredDelegations: 'Inferred delegations',
+      duplicateRoots: 'Duplicate roots',
+      stronglyLinked: 'Strongly linked',
+      duplicateRatio: 'Duplicate ratio',
+      startReason: 'Start reason',
+    },
+  },
+  'zh-CN': {
+    title: 'LLM轨迹',
+    summaryNote: '该Trace内的请求历史与推断出的agent委派关系。',
+    legendStrictPrefix: '严格前缀',
+    legendInferredDelegation: '推断的委派',
+    partialGraph: '部分轨迹数据不可用，因此该图为部分结果。',
+    checking: '正在检查已记录内容中的agent委派…',
+    contentUnavailable: '部分已记录内容不可用，委派关联可能不完整。',
+    empty: '该Trace没有LLM轨迹数据。',
+    graphAria: 'LLM轨迹图',
+    stats: {
+      appendEdges: '追加边',
+      forkEdges: '分叉边',
+      inferredDelegations: '推断的委派数',
+      duplicateRoots: '重复根节点',
+      stronglyLinked: '强关联比例',
+      duplicateRatio: '重复节点比例',
+      startReason: '起始原因',
+    },
+  },
+};

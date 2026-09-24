@@ -1,17 +1,18 @@
 <template>
   <main class="stats-workspace">
-    <aside class="stats-rail" :aria-label="t('stats.rail.aria')">
+    <nav class="stats-tabs" :aria-label="t('stats.rail.aria')">
       <button
         v-for="tab in tabs"
         :key="tab.id"
-        class="stats-rail-button"
+        class="stats-tab"
         :class="{ active: activeTab === tab.id }"
         type="button"
+        :aria-current="activeTab === tab.id ? 'page' : undefined"
         @click="selectTab(tab.id)"
       >
         {{ tab.label }}
       </button>
-    </aside>
+    </nav>
     <section class="stats-content">
       <AgentStatsWorkspace
         v-if="activeTab === STATS_TAB_IDS.agentOverview"
@@ -148,45 +149,58 @@ function handleAlertsLoaded({ latestAlertId, newCount }) {
   position: relative;
   min-width: 0;
   min-height: 0;
-  height: calc(100vh - var(--topbar-height) - var(--global-tabs-height));
+  height: 100%;
+  padding-top: var(--ui-header-offset);
   overflow: hidden;
   display: grid;
-  grid-template-columns: var(--stats-sidebar-width) minmax(0, 1fr);
-  background: var(--stats-bg-gradient), var(--stats-bg-base);
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--ui-bg-base);
 }
 
-.stats-rail {
+.stats-tabs {
   min-width: 0;
-  padding: var(--stats-space-2xl) var(--stats-space-lg);
-  border-right: 1px solid var(--stats-border);
-  background: var(--stats-surface-bar);
-  backdrop-filter: var(--stats-glass-filter);
+  display: flex;
+  gap: 20px;
+  padding: 0 var(--ui-shell-gutter);
+  border-bottom: 1px solid var(--ui-border);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.stats-rail-button {
-  width: 100%;
-  height: var(--stats-control-height-lg);
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid transparent;
-  border-radius: var(--stats-radius-md);
+.stats-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.stats-tab {
+  flex: 0 0 auto;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   cursor: pointer;
-  font-size: var(--stats-font-ui);
-  font-weight: var(--stats-weight-medium);
-  text-align: left;
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-semibold);
+  transition:
+    border-color var(--ui-duration-fast) var(--ui-ease-out),
+    color var(--ui-duration-fast) var(--ui-ease-out);
 }
 
-.stats-rail-button:hover,
-.stats-rail-button.active {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
-  color: var(--stats-text);
+.stats-tab:hover {
+  border-bottom-color: color-mix(in srgb, var(--ui-text) 24%, transparent);
+  color: var(--ui-text);
 }
 
-.stats-rail-button:focus-visible {
-  outline: 2px solid var(--stats-accent);
-  outline-offset: var(--stats-space-xs);
+.stats-tab.active {
+  border-bottom-color: var(--ui-text);
+  color: var(--ui-text);
+}
+
+.stats-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 40%, transparent);
+  outline-offset: 2px;
 }
 
 .stats-content {
@@ -202,18 +216,9 @@ function handleAlertsLoaded({ latestAlertId, newCount }) {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .stats-rail {
-    display: flex;
-    gap: var(--stats-space-xs);
-    overflow-x: auto;
-    padding: var(--stats-space-md) var(--stats-space-lg);
-    border-right: 0;
-    border-bottom: 1px solid var(--stats-border);
-  }
-
-  .stats-rail-button {
-    width: auto;
-    flex: 0 0 auto;
+  .stats-tabs {
+    gap: 16px;
+    padding: 0 16px;
   }
 }
 </style>

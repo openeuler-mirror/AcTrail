@@ -159,43 +159,43 @@ const legendItems = computed(() =>
 
 .distribution-svg {
   width: 100%;
-  min-height: var(--stats-distribution-min-height);
+  min-height: var(--ui-distribution-min-height);
 }
 
 .pie-slice {
-  stroke: var(--stats-surface-strong);
-  stroke-width: var(--stats-chart-pie-stroke-width);
+  stroke: var(--ui-surface-strong);
+  stroke-width: var(--ui-chart-pie-stroke-width);
 }
 
 .donut-arc {
   fill: none;
-  stroke-width: var(--stats-chart-donut-width);
+  stroke-width: var(--ui-chart-donut-width);
   stroke-linecap: butt;
 }
 
 .donut-hole {
-  fill: var(--stats-surface-strong);
-  stroke: var(--stats-border);
+  fill: var(--ui-surface-strong);
+  stroke: var(--ui-border);
 }
 
 .donut-total {
-  fill: var(--stats-text);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-md);
-  font-weight: var(--stats-weight-medium);
+  fill: var(--ui-text);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-md);
+  font-weight: var(--ui-weight-medium);
 }
 
 .donut-label,
 .legend text,
 .bar-label,
 .bar-value {
-  fill: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-regular);
+  fill: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-regular);
 }
 
 .bar-track {
-  fill: var(--stats-border);
+  fill: var(--ui-border);
 }
 
 .bar-fill {

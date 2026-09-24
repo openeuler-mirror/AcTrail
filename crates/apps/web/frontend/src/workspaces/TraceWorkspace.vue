@@ -1,35 +1,65 @@
 <template>
   <div class="workbench">
     <aside class="trace-rail">
-      <div class="rail-title">Traces</div>
-      <button
-        v-for="trace in traces"
-        :key="trace.id"
-        class="trace-row"
-        :class="{ active: traceIdMatches(selectedTraceId, trace.id) }"
-        type="button"
-        @click="selectTrace(trace.id)"
-      >
-        <span>{{ trace.name }}</span>
-        <small>{{ trace.display_id }}</small>
-      </button>
+      <div class="rail-title">{{ t('trace.railTitle') }}</div>
+      <div class="trace-list">
+        <button
+          v-for="trace in orderedTraces"
+          :key="trace.id"
+          class="trace-row"
+          :class="{ active: traceIdMatches(selectedTraceId, trace.id) }"
+          type="button"
+          @click="selectTrace(trace.id)"
+        >
+          <span class="trace-row-name">{{ trace.name }}</span>
+          <small class="trace-row-meta">
+            <span>{{ trace.display_id }}</span>
+            <span class="trace-state" :class="`trace-state-${String(trace.state ?? '').toLowerCase()}`">
+              {{ trace.state }}
+            </span>
+          </small>
+        </button>
+        <p v-if="!traces.length" class="rail-empty">{{ t('trace.railEmpty') }}</p>
+      </div>
+
+      <div v-if="selectedTrace" class="rail-summary">
+        <div class="rail-summary-meta">
+          <span class="trace-state" :class="`trace-state-${String(selectedTrace.state ?? '').toLowerCase()}`">
+            {{ selectedTrace.state }}
+          </span>
+          <span v-if="traceDetail?.trace?.health" class="trace-health">{{ traceDetail.trace.health }}</span>
+          <span v-if="traceDetail?.trace?.profile" class="trace-profile" :title="traceDetail.trace.profile">
+            {{ traceDetail.trace.profile }}
+          </span>
+        </div>
+        <dl class="rail-summary-facts">
+          <div><dt>{{ t('trace.rootPid') }}</dt><dd>{{ traceDetail?.trace?.root_pid ?? '—' }}</dd></div>
+          <div><dt>{{ t('trace.started') }}</dt><dd>{{ formatClock(traceDetail?.trace?.started_at) }}</dd></div>
+        </dl>
+      </div>
     </aside>
 
     <main class="workspace">
-      <section class="metrics-strip">
+      <section v-if="selectedTrace" class="metrics-strip">
         <div v-for="metric in metrics" :key="metric.key" class="metric" :class="`metric-${metric.key}`">
           <span class="metric-icon" aria-hidden="true">
             <component :is="metric.icon" :size="17" />
           </span>
           <span class="metric-label">{{ metric.label }}</span>
-          <strong>{{ metric.value }}</strong>
+          <strong><AnimatedNumber :value="metric.value" /></strong>
         </div>
       </section>
 
+      <section v-if="!selectedTrace" class="trace-empty">
+        <strong>{{ t('trace.selectTitle') }}</strong>
+        <p>{{ t('trace.selectHint') }}</p>
+      </section>
+
       <NavigationStrip
+        v-if="selectedTrace"
         :model-value="activeGroupDefinition.id"
         :items="primaryNavigationItems"
-        aria-label="Trace view groups"
+        :aria-label="t('trace.groupsAria')"
         controls-id="trace-group-panel"
         id-prefix="trace-group"
         variant="primary"
@@ -37,6 +67,7 @@
       />
 
       <section
+        v-if="selectedTrace"
         id="trace-group-panel"
         class="trace-group-panel"
         :class="{ 'trace-group-panel-single': secondaryNavigationItems.length === 1 }"
@@ -47,7 +78,7 @@
           v-if="secondaryNavigationItems.length > 1"
           :model-value="activeTab"
           :items="secondaryNavigationItems"
-          :aria-label="`${activeGroupDefinition.label} views`"
+          :aria-label="t('trace.viewsAria', { group: groupLabel(activeGroupDefinition) })"
           controls-id="trace-view-panel"
           id-prefix="trace-view"
           variant="secondary"
@@ -62,8 +93,8 @@
         >
           <div v-if="showLoadingPanel" class="loading-panel">
             <span class="loading-spinner" aria-hidden="true"></span>
-            <p>Loading and analyzing captured data...</p>
-            <small>This may take a moment for larger traces.</small>
+            <p>{{ t('trace.loading') }}</p>
+            <small>{{ t('trace.loadingHint') }}</small>
           </div>
           <component
             v-else
@@ -83,6 +114,7 @@
 <script setup>
 import { computed, markRaw, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { Activity, Boxes, Cpu, GitBranch } from '@lucide/vue';
+import AnimatedNumber from '../components/AnimatedNumber.vue';
 
 import {
   readActionTree,
@@ -100,7 +132,9 @@ import {
   readWaterfall,
 } from '../api';
 import NavigationStrip from '../components/navigation/NavigationStrip.vue';
+import { useModuleLocale } from '../locale';
 import { TAB_DEFINITIONS, TAB_GROUP_DEFINITIONS, TAB_IDS } from '../tabs/registry';
+import strings from './locale';
 
 const props = defineProps({
   traces: {
@@ -143,14 +177,20 @@ if (tabGroupsByTabId.size !== tabs.length) {
   throw new Error('Every Trace view must belong to exactly one navigation group');
 }
 
-const primaryNavigationItems = tabGroups.map(({ id, label }) => ({ id, label }));
+const { t } = useModuleLocale(strings);
+
+function groupLabel(group) {
+  return t(group?.labelKey ?? '');
+}
+
+const primaryNavigationItems = tabGroups.map(({ id, labelKey }) => ({ id, label: t(labelKey) }));
 const METRIC_ICONS = Object.freeze({
   events: markRaw(Activity),
   payloads: markRaw(Boxes),
   actions: markRaw(GitBranch),
   processes: markRaw(Cpu),
 });
-const activeTab = ref(TAB_IDS.overview);
+const activeTab = ref(tabGroups[0]?.defaultTabId ?? TAB_IDS.actionTree);
 const lastTabByGroup = ref(
   Object.fromEntries(tabGroups.map((group) => [group.id, group.defaultTabId])),
 );
@@ -174,14 +214,19 @@ let activeTracePartLoad = null;
 const selectedTrace = computed(() =>
   props.traces.find((trace) => traceIdMatches(trace.id, selectedTraceId.value)),
 );
+// Newest traces sit at the top of the rail and are the default selection.
+const orderedTraces = computed(() => [...props.traces].sort(compareTraceRecency));
 const activeTraceName = computed(
-  () => traceDetail.value?.trace?.name ?? selectedTrace.value?.name ?? 'No trace selected',
+  () => traceDetail.value?.trace?.name ?? selectedTrace.value?.name ?? t('app.titles.noTraceSelected'),
 );
 
 const activeTabDefinition = computed(() => tabDefinitionsById.get(activeTab.value));
 const activeGroupDefinition = computed(() => tabGroupsByTabId.get(activeTab.value));
 const secondaryNavigationItems = computed(() =>
-  activeGroupDefinition.value.tabIds.map((tabId) => tabDefinitionsById.get(tabId)),
+  activeGroupDefinition.value.tabIds.map((tabId) => {
+    const definition = tabDefinitionsById.get(tabId);
+    return { ...definition, label: t(definition.labelKey) };
+  }),
 );
 const activeViewLabelId = computed(() => {
   if (secondaryNavigationItems.value.length === 1) {
@@ -216,27 +261,38 @@ const metrics = computed(() => {
   const counts = traceDetail.value?.counts ?? {};
   const semantic = actionTree.value?.summary ?? {};
   return [
-    { key: 'events', label: 'Events', value: counts.events ?? 0, icon: METRIC_ICONS.events },
+    { key: 'events', label: t('trace.metricEvents'), value: counts.events ?? 0, icon: METRIC_ICONS.events },
     {
       key: 'payloads',
-      label: 'Payloads',
+      label: t('trace.metricPayloads'),
       value: counts.payloads ?? traceDetail.value?.payloads?.length ?? 0,
       icon: METRIC_ICONS.payloads,
     },
     {
       key: 'actions',
-      label: 'Actions',
+      label: t('trace.metricActions'),
       value: semantic.actions ?? actionTree.value?.actions?.length ?? 0,
       icon: METRIC_ICONS.actions,
     },
     {
       key: 'processes',
-      label: 'Processes',
+      label: t('trace.metricProcesses'),
       value: traceDetail.value?.processes?.length ?? counts.process ?? 0,
       icon: METRIC_ICONS.processes,
     },
   ];
 });
+
+const clockFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+function formatClock(value) {
+  const millis = Number(value ?? 0);
+  return Number.isFinite(millis) && millis > 0 ? clockFormatter.format(new Date(millis)) : '—';
+}
 
 const showLoadingPanel = computed(() => {
   if (!loading.value) {
@@ -349,7 +405,7 @@ function reconcileSelectedTrace() {
     return;
   }
   if (!selectedTrace.value) {
-    selectedTraceId.value = props.traces[0].id;
+    selectedTraceId.value = orderedTraces.value[0].id;
   }
 }
 
@@ -360,7 +416,7 @@ function selectTrace(traceId) {
 function selectTabGroup(groupId) {
   const group = tabGroupsById.get(groupId);
   if (!group) {
-    error.value = `Unknown Trace view group: ${groupId}`;
+    error.value = t('trace.unknownViewGroup', { group: groupId });
     return;
   }
   const rememberedTabId = lastTabByGroup.value[groupId];
@@ -371,7 +427,10 @@ function selectTabGroup(groupId) {
 
 function selectLeafTab(tabId) {
   if (!activeGroupDefinition.value.tabIds.includes(tabId)) {
-    error.value = `Trace view ${tabId} does not belong to ${activeGroupDefinition.value.label}`;
+    error.value = t('trace.viewOutsideGroup', {
+      view: tabId,
+      group: groupLabel(activeGroupDefinition.value),
+    });
     return;
   }
   activeTab.value = tabId;
@@ -728,6 +787,19 @@ function eventBackedTab(tab) {
 
 function traceIdMatches(left, right) {
   return String(left ?? '') === String(right ?? '');
+}
+
+function compareTraceRecency(left, right) {
+  const delta = traceCreatedNanos(right) - traceCreatedNanos(left);
+  return delta === 0n ? 0 : delta > 0n ? 1 : -1;
+}
+
+function traceCreatedNanos(trace) {
+  try {
+    return BigInt(trace?.created_at_unix_nanos ?? 0);
+  } catch {
+    return 0n;
+  }
 }
 </script>
 

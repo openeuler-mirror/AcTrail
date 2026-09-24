@@ -1,0 +1,33 @@
+/** Copy owned by the action tree tab. */
+export default {
+  'en-US': {
+    emptyRoot: 'No action tree root',
+    navigationAria: 'Action tree LLM navigation',
+    jumpFirst: 'Jump to first LLM call',
+    jumpNext: 'Jump to next LLM call',
+    firstLlm: 'First LLM',
+    nextLlm: 'Next LLM',
+    noLlmCall: 'No LLM call',
+    noNextLlmCall: 'No next LLM call',
+    navigationNodeMissing: 'LLM navigation path node not found',
+    navigationParentMissing: 'LLM navigation parent {id} not found',
+    navigationActionMissing: 'LLM navigation action {id} not found under {parent}',
+    navigationEmptyPath: 'LLM navigation returned an empty path',
+    paginationStalled: 'Action tree children pagination made no progress',
+  },
+  'zh-CN': {
+    emptyRoot: '没有动作树根节点',
+    navigationAria: '动作树LLM导航',
+    jumpFirst: '跳到第一个LLM调用',
+    jumpNext: '跳到下一个LLM调用',
+    firstLlm: '首个LLM',
+    nextLlm: '下一个LLM',
+    noLlmCall: '没有LLM调用',
+    noNextLlmCall: '没有下一个LLM调用',
+    navigationNodeMissing: 'LLM导航路径节点未找到',
+    navigationParentMissing: '未找到LLM导航父节点{id}',
+    navigationActionMissing: '在{parent}下未找到LLM导航动作{id}',
+    navigationEmptyPath: 'LLM导航返回了空路径',
+    paginationStalled: '动作树子节点分页没有进展',
+  },
+};

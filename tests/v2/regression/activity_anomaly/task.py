@@ -176,7 +176,7 @@ class ActivityAnomalyTask:
             None,
         )
         if complete_probe is None:
-            raise AssertionError("bpf-copy trace omitted the complete provider probe")
+            raise AssertionError("complete capture omitted the provider probe")
         probe_attributes = complete_probe["attributes"]
         if (
             complete_probe.get("status") != "success"
@@ -193,39 +193,45 @@ class ActivityAnomalyTask:
             )
         ):
             raise AssertionError(
-                "fully captured bpf-copy provider probe was not retained as Complete"
+                "fully captured provider probe was not retained as Complete"
             )
-        limited_posts = [
+        provider_posts = [
             action
             for action in http_messages
             if isinstance(action.get("attributes"), dict)
             and action["attributes"].get("method") == "POST"
             and action["attributes"].get("target") == "/v1/chat/completions"
         ]
-        if len(limited_posts) < 3:
+        if len(provider_posts) < 3:
             raise AssertionError(
-                f"expected three capture-limited provider requests, found {len(limited_posts)}"
+                "expected three provider requests, found "
+                f"{len(provider_posts)}"
             )
-        for request in limited_posts:
+        for request in provider_posts:
             attributes = request["attributes"]
             try:
-                original_size = int(str(attributes["payload.operation_original_size"]))
-                captured_size = int(str(attributes["payload.operation_captured_size"]))
+                content_length = int(str(attributes["content_length"]))
             except (KeyError, TypeError, ValueError) as error:
                 raise AssertionError(
-                    "capture-limited HTTP request has no valid operation lengths"
+                    "provider request has no declared content length"
                 ) from error
             if (
                 request.get("status") != "success"
-                or request.get("completeness") != "capture_limited"
+                or request.get("completeness") != "complete"
                 or attributes.get("source_boundary") != "Syscall"
-                or attributes.get("payload.capture_incomplete") != "true"
-                or attributes.get("payload.operation_completion_state") != "success"
-                or attributes.get("payload.truncation") != "policy_limited"
-                or original_size <= captured_size
+                or content_length <= 0
+                or any(
+                    key in attributes
+                    for key in (
+                        "payload.capture_incomplete",
+                        "payload.operation_original_size",
+                        "payload.operation_captured_size",
+                        "payload.truncation",
+                    )
+                )
             ):
                 raise AssertionError(
-                    "truncated bpf-copy request did not retain CaptureLimited semantics"
+                    "provider request was not assembled in full from retained bytes"
                 )
         requests = [action for action in actions if action.get("kind") == "llm.request"]
         responses = [action for action in actions if action.get("kind") == "llm.response"]
@@ -235,35 +241,38 @@ class ActivityAnomalyTask:
         for request in requests:
             if (
                 request.get("status") != "success"
-                or request.get("completeness") != "capture_limited"
+                or request.get("completeness") != "complete"
             ):
                 raise AssertionError(
-                    "bpf-copy request did not retain success/capture_limited semantics"
+                    "LLM request did not retain success/complete semantics"
                 )
             attributes = request.get("attributes")
             if not isinstance(attributes, dict):
-                raise AssertionError("capture-limited LLM request has no attributes")
+                raise AssertionError("LLM request has no attributes")
             try:
                 payload_bytes = int(str(attributes["llm.request.payload_bytes"]))
                 raw_payload_bytes = int(
                     str(attributes["llm.request.raw_payload_bytes"])
                 )
+                block_count = int(str(attributes["llm.request.block_count"]))
+                content_format_version = int(
+                    str(attributes["llm.request.content_format_version"])
+                )
             except (KeyError, TypeError, ValueError) as error:
                 raise AssertionError(
-                    "capture-limited LLM request has no valid payload lengths"
+                    "LLM request has no valid content evidence"
                 ) from error
-            if payload_bytes <= raw_payload_bytes or raw_payload_bytes <= 0:
+            if payload_bytes <= 0 or raw_payload_bytes < payload_bytes:
                 raise AssertionError(
-                    "capture-limited LLM request did not retain declared and captured lengths"
+                    "LLM request did not retain declared and raw payload lengths"
                 )
             if (
-                attributes.get("llm.request.content_state") != "unavailable"
-                or "llm.request.canonical_body_json" in attributes
-                or "llm.request.content_format_version" in attributes
-                or "llm.request.block_count" in attributes
+                attributes.get("llm.request.content_state") != "canonical_blocks"
+                or block_count < 0
+                or content_format_version <= 0
             ):
                 raise AssertionError(
-                    "capture-limited LLM request invented unavailable body content"
+                    "LLM request did not retain canonical block content"
                 )
         if any(
             call.get("status") != "unknown"
@@ -278,7 +287,7 @@ class ActivityAnomalyTask:
             for response in responses
         ):
             raise AssertionError(
-                "fully captured bpf-copy response was not retained as Complete"
+                "fully captured response was not retained as Complete"
             )
 
     def _wait_for_stable_alerts(

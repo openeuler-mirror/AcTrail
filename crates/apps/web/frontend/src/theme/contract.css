@@ -1,359 +1,389 @@
-.stats-theme {
-  --stats-bg-base: #faf8f2;
-  --stats-bg-gradient:
-    radial-gradient(at 30% 0%, #fff4e0 0%, transparent 50%),
-    radial-gradient(at 80% 20%, #f4e4d4 0%, transparent 60%);
-  --stats-surface: rgba(255, 251, 244, 0.7);
-  --stats-surface-strong: rgba(255, 251, 244, 0.92);
-  --stats-surface-soft: rgba(255, 251, 244, 0.42);
-  --stats-surface-bar: rgba(255, 251, 244, 0.64);
-  --stats-text: #1a1814;
-  --stats-muted: #6a5f52;
-  --stats-border: rgba(26, 24, 20, 0.08);
-  --stats-border-strong: rgba(26, 24, 20, 0.14);
-  --stats-accent: #b45837;
-  --stats-accent-soft: #e4b894;
-  --stats-accent-muted: rgba(228, 184, 148, 0.28);
-  --stats-accent-faint: rgba(228, 184, 148, 0.2);
-  --stats-on-accent: #fffaf1;
-  --stats-danger: #a33f2f;
-  --stats-warning: #8a5a00;
-  --stats-critical: #7a1b2c;
-  --stats-on-danger: #fffaf1;
-  --stats-chart-1: #b45837;
-  --stats-chart-2: #0f766e;
-  --stats-chart-3: #7c3aed;
-  --stats-chart-4: #d97706;
-  --stats-chart-5: #be123c;
-  --stats-chart-6: #2563eb;
-  --stats-chart-7: #64748b;
-  --stats-chart-8: #16a34a;
-  --stats-chart-total: var(--stats-chart-1);
-  --stats-chart-input: #2563eb;
-  --stats-chart-output: #0f766e;
-  --stats-chart-reasoning: #7c3aed;
-  --stats-chart-cache-hit: #16a34a;
-  --stats-chart-cache-miss: #d97706;
-  --stats-shadow:
-    0 14px 42px rgba(180, 88, 55, 0.13),
-    0 2px 10px rgba(26, 24, 20, 0.04);
-  --stats-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  --stats-glass-filter: blur(16px) saturate(150%);
-  --stats-control-filter: blur(12px);
-  --stats-serif: "Tiempos Headline", Georgia, serif;
-  --stats-body-font: inherit;
-  --stats-heading-font: var(--stats-serif);
-  --stats-value-font: var(--stats-serif);
-  --stats-space-2xs: 3px;
-  --stats-space-xs: 6px;
-  --stats-space-sm: 8px;
-  --stats-space-md: 10px;
-  --stats-space-lg: 12px;
-  --stats-space-xl: 14px;
-  --stats-space-2xl: 18px;
-  --stats-space-3xl: 22px;
-  --stats-section-gap: 42px;
-  --stats-section-gap-mobile: 30px;
-  --stats-panel-padding: 20px;
-  --stats-viewport-padding: 36px 30px 56px;
-  --stats-viewport-padding-mobile: 24px 16px 40px;
-  --stats-radius-sm: 8px;
-  --stats-radius-md: 10px;
-  --stats-radius-lg: 14px;
-  --stats-control-height-sm: 28px;
-  --stats-control-height-md: 34px;
-  --stats-control-height-lg: 40px;
-  --stats-font-xs: 11px;
-  --stats-font-sm: 12px;
-  --stats-font-md: 13px;
-  --stats-font-ui: 14px;
-  --stats-font-title: 17px;
-  --stats-font-display-sm: 20px;
-  --stats-font-display-md: 24px;
-  --stats-font-display-lg: 26px;
-  --stats-line-height-tight: 1.05;
-  --stats-weight-regular: 400;
-  --stats-weight-medium: 500;
-  --stats-chip-padding: 7px 9px;
-  --stats-segment-padding-x: 9px;
-  --stats-action-padding-x: 18px;
-  --stats-heading-kicker-gap: 4px;
-  --stats-table-cell-padding: 10px 14px;
-  --stats-table-subtext-gap: 3px;
-  --stats-table-child-indent: 18px;
-  --stats-table-child-marker-left: 4px;
-  --stats-bucket-table-min-width: 820px;
-  --stats-model-table-min-width: 860px;
-  --stats-category-table-min-width: 720px;
-  --stats-request-table-min-width: 1100px;
-  --stats-request-name-max-width: 240px;
-  --stats-date-input-width: 180px;
-  --stats-filter-date-min: 240px;
-  --stats-filter-model-min: 260px;
-  --stats-filter-category-min: 220px;
-  --stats-filter-valid-min: 130px;
-  --stats-filter-check-size: 16px;
-  --stats-filter-option-min-width: 116px;
-  --stats-filter-count-padding: 1px 6px;
-  --stats-filter-grid:
-    minmax(var(--stats-filter-date-min), 0.9fr)
-    minmax(var(--stats-filter-model-min), 1.1fr)
-    minmax(var(--stats-filter-category-min), 0.9fr)
-    minmax(var(--stats-filter-valid-min), auto)
+/*
+ * Theme contract for the actrailweb shell.
+ *
+ * Role tokens (--ui-bg-*, --ui-surface-*, --ui-text, --ui-muted, --ui-border*,
+ * --ui-accent*, --ui-danger, --ui-warning, --ui-critical, --ui-success,
+ * --ui-shadow, --ui-highlight, --ui-glass-filter, --ui-control-filter and the
+ * --ui-chart-* series) are supplied by each theme in theme/<id>/tokens.css.
+ * This file owns the geometry, typography and derived component tokens that
+ * every theme shares.
+ */
+:root {
+  --ui-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --ui-body-font:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ui-heading-font: var(--ui-body-font);
+  --ui-value-font: var(--ui-mono);
+  --ui-space-2xs: 3px;
+  --ui-space-xs: 6px;
+  --ui-space-sm: 8px;
+  --ui-space-md: 10px;
+  --ui-space-lg: 12px;
+  --ui-space-xl: 14px;
+  --ui-space-2xl: 18px;
+  --ui-space-3xl: 22px;
+  --ui-section-gap: 38px;
+  --ui-section-gap-mobile: 28px;
+  --ui-panel-padding: 20px;
+  --ui-viewport-padding: 70px var(--ui-content-gutter) 40px;
+  --ui-viewport-padding-mobile: calc(var(--ui-header-offset) + 4px) 16px 40px;
+  --ui-radius-sm: 8px;
+  --ui-radius-md: 10px;
+  --ui-radius-lg: 14px;
+  --ui-radius-xl: 18px;
+  --ui-radius-pill: 999px;
+  --ui-control-height: 34px;
+  --ui-control-height-sm: 28px;
+  --ui-control-height-md: 34px;
+  --ui-control-height-lg: 40px;
+  --ui-font-xs: 11px;
+  --ui-font-sm: 12px;
+  --ui-font-md: 13px;
+  --ui-font-ui: 14px;
+  --ui-font-lg: 15px;
+  --ui-font-title: 17px;
+  --ui-font-display-sm: 20px;
+  --ui-font-display-md: 24px;
+  --ui-font-display-lg: 26px;
+  --ui-line-height-tight: 1.05;
+  --ui-weight-regular: 400;
+  --ui-weight-medium: 500;
+  --ui-weight-semibold: 600;
+  --ui-chip-padding: 6px 10px;
+  --ui-segment-padding-x: 9px;
+  --ui-action-padding-x: 18px;
+  --ui-heading-kicker-gap: 4px;
+  --ui-duration-fast: 0.15s;
+  --ui-duration-base: 0.2s;
+  --ui-duration-shell: 0.3s;
+  --ui-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-dur-press: 160ms;
+  --ui-dur-hover: 200ms;
+  --ui-ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-focus-ring-width: 2px;
+  --ui-focus-ring-offset: 2px;
+  --ui-focus-ring-color: color-mix(in srgb, var(--ui-accent) 60%, transparent);
+  --ui-glass-blur: 12px;
+  --ui-glass-filter: blur(var(--ui-glass-blur));
+  --ui-glass-bg: color-mix(in srgb, var(--ui-bg-shell) 82%, transparent);
+  --ui-glass-bg-secondary: color-mix(in srgb, var(--ui-bg-base) 82%, transparent);
+  --ui-glass-border: color-mix(in srgb, var(--ui-border) 60%, transparent);
+  --ui-viz-success: var(--ui-success);
+  --ui-viz-failure: var(--ui-danger);
+  --wf-color-llm: var(--ui-chart-3);
+  --wf-color-command: var(--ui-chart-4);
+  --wf-color-process: color-mix(in srgb, var(--ui-chart-4) 74%, var(--ui-text));
+  --wf-color-file: var(--ui-chart-8);
+  --wf-color-sse: var(--ui-chart-6);
+  --wf-color-http: var(--ui-chart-2);
+  --wf-color-enforcement: var(--ui-chart-5);
+  --wf-color-other: var(--ui-chart-7);
+  --ui-table-cell-padding: 10px 14px;
+  --ui-table-subtext-gap: 3px;
+  --ui-table-child-indent: 18px;
+  --ui-table-child-marker-left: 4px;
+  --ui-bucket-table-min-width: 820px;
+  --ui-model-table-min-width: 860px;
+  --ui-category-table-min-width: 720px;
+  --ui-request-table-min-width: 1100px;
+  --ui-request-name-max-width: 240px;
+  --ui-date-input-width: 180px;
+  --ui-filter-date-min: 240px;
+  --ui-filter-model-min: 260px;
+  --ui-filter-category-min: 220px;
+  --ui-filter-valid-min: 130px;
+  --ui-filter-check-size: 16px;
+  --ui-filter-option-min-width: 116px;
+  --ui-filter-count-padding: 1px 6px;
+  --ui-filter-grid:
+    minmax(var(--ui-filter-date-min), 0.9fr)
+    minmax(var(--ui-filter-model-min), 1.1fr)
+    minmax(var(--ui-filter-category-min), 0.9fr)
+    minmax(var(--ui-filter-valid-min), auto)
     auto;
-  --stats-chart-min-height: 420px;
-  --stats-distribution-min-height: 300px;
-  --stats-chart-grid-width: 1;
-  --stats-chart-line-width: 2.8;
-  --stats-chart-point-stroke-width: 1.4;
-  --stats-chart-pie-stroke-width: 2;
-  --stats-chart-donut-width: 32;
-  --stats-chart-bar-radius: 3px;
-  --stats-empty-min-height: 260px;
-  --stats-model-list-max-height: 112px;
-  --stats-visualization-min-height: 560px;
-  --stats-request-panel-min-height: 380px;
-  --stats-shell-max-width: 1120px;
+  --ui-chart-min-height: 400px;
+  --ui-distribution-min-height: 300px;
+  --ui-chart-grid-width: 1;
+  --ui-chart-line-width: 2.6;
+  --ui-chart-point-stroke-width: 1.4;
+  --ui-chart-pie-stroke-width: 2;
+  --ui-chart-donut-width: 32;
+  --ui-chart-bar-radius: 3px;
+  --ui-empty-min-height: 240px;
+  --ui-model-list-max-height: 112px;
+  --ui-visualization-min-height: 540px;
+  --ui-request-panel-min-height: 380px;
+  --ui-shell-max-width: 1180px;
   --plugins-shell-max-width: 1480px;
-  --stats-sidebar-width: 176px;
-  --trace-action-tree-bg: var(--bg);
-  --trace-action-tree-grid: rgba(15, 118, 110, 0.06);
-  --trace-action-tree-header-bg: linear-gradient(180deg, rgba(244, 247, 247, 0.98), rgba(244, 247, 247, 0.76));
-  --trace-action-tree-arc: rgba(13, 148, 136, 0.5);
-  --trace-action-edge: #9bbebb;
-  --trace-action-card-bg: var(--surface);
-  --trace-action-card-text: var(--text);
-  --trace-action-card-border: var(--border);
-  --trace-action-card-left-border: var(--teal);
+  --trace-action-tree-bg: var(--ui-bg-base);
+  --trace-action-tree-grid: color-mix(in srgb, var(--ui-accent) 7%, transparent);
+  --trace-action-tree-header-bg:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ui-surface-strong) 96%, transparent),
+      color-mix(in srgb, var(--ui-surface-strong) 74%, transparent)
+    );
+  --trace-action-tree-arc: color-mix(in srgb, var(--ui-accent) 52%, transparent);
+  --trace-action-edge: color-mix(in srgb, var(--ui-muted) 46%, transparent);
+  --trace-action-card-bg: var(--ui-surface-strong);
+  --trace-action-card-text: var(--ui-text);
+  --trace-action-card-border: var(--ui-border);
+  --trace-action-card-left-border: var(--ui-accent);
   --trace-action-card-hover-shadow:
-    0 10px 24px rgba(15, 118, 110, 0.11),
-    var(--shadow);
+    0 10px 24px color-mix(in srgb, var(--ui-accent) 14%, transparent),
+    var(--ui-shadow);
   --trace-action-card-active-shadow:
-    0 3px 9px rgba(15, 23, 42, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    0 3px 9px color-mix(in srgb, var(--ui-text) 16%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--ui-surface-strong) 70%, transparent);
   --trace-action-card-focus-shadow:
-    0 0 0 3px rgba(15, 118, 110, 0.22),
-    var(--shadow);
+    0 0 0 3px color-mix(in srgb, var(--ui-accent) 22%, transparent),
+    var(--ui-shadow);
   --trace-action-card-selected-bg:
-    linear-gradient(180deg, rgba(240, 253, 250, 0.98), rgba(232, 247, 244, 0.98)),
-    var(--surface);
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ui-accent) 9%, var(--ui-surface-strong)),
+      color-mix(in srgb, var(--ui-accent) 15%, var(--ui-surface-strong))
+    );
   --trace-action-card-selected-shadow:
-    0 0 0 2px rgba(15, 118, 110, 0.24),
-    0 14px 32px rgba(15, 118, 110, 0.18),
-    0 4px 10px rgba(15, 23, 42, 0.12);
-  --trace-action-card-selected-inset: inset 0 0 0 1px rgba(13, 148, 136, 0.12);
-  --trace-action-card-match-bg: #fffbeb;
-  --trace-action-agent-bg: #f1fbf8;
-  --trace-action-agent-border: #8fc5be;
-  --trace-action-agent-left-border: var(--teal-deep);
-  --trace-action-llm-left-border: var(--amber);
-  --trace-action-call-bg: #f3f6fc;
-  --trace-action-call-border: #b8c7e8;
-  --trace-action-call-left-border: #3158a3;
+    0 0 0 2px color-mix(in srgb, var(--ui-accent) 22%, transparent),
+    0 14px 32px color-mix(in srgb, var(--ui-accent) 16%, transparent),
+    0 4px 10px color-mix(in srgb, var(--ui-text) 12%, transparent);
+  --trace-action-card-selected-inset: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent) 14%, transparent);
+  --trace-action-card-match-bg: color-mix(in srgb, var(--ui-warning) 14%, var(--ui-surface-strong));
+  --trace-action-agent-bg: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-surface-strong));
+  --trace-action-agent-border: color-mix(in srgb, var(--ui-accent) 32%, transparent);
+  --trace-action-agent-left-border: var(--ui-accent-strong);
+  --trace-action-llm-left-border: var(--ui-warning);
+  --trace-action-call-bg: color-mix(in srgb, var(--ui-chart-6) 7%, var(--ui-surface-strong));
+  --trace-action-call-border: color-mix(in srgb, var(--ui-chart-6) 28%, transparent);
+  --trace-action-call-left-border: var(--ui-chart-6);
   --trace-action-call-selected-bg:
-    linear-gradient(180deg, rgba(243, 246, 252, 0.98), rgba(232, 239, 250, 0.98)),
-    #f3f6fc;
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ui-chart-6) 12%, var(--ui-surface-strong)),
+      color-mix(in srgb, var(--ui-chart-6) 18%, var(--ui-surface-strong))
+    );
   --trace-action-call-selected-shadow:
-    0 0 0 2px rgba(49, 88, 163, 0.24),
-    0 14px 32px rgba(49, 88, 163, 0.17),
-    0 4px 10px rgba(15, 23, 42, 0.12);
-  --trace-action-group-bg: #f7f9f9;
-  --trace-action-group-border: #c8d7d5;
-  --trace-action-group-left-border: #475569;
+    0 0 0 2px color-mix(in srgb, var(--ui-chart-6) 22%, transparent),
+    0 14px 32px color-mix(in srgb, var(--ui-chart-6) 16%, transparent),
+    0 4px 10px color-mix(in srgb, var(--ui-text) 12%, transparent);
+  --trace-action-group-bg: color-mix(in srgb, var(--ui-muted) 6%, var(--ui-surface-strong));
+  --trace-action-group-border: color-mix(in srgb, var(--ui-muted) 26%, transparent);
+  --trace-action-group-left-border: color-mix(in srgb, var(--ui-muted) 70%, var(--ui-text));
   --trace-action-group-selected-bg:
-    linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(238, 242, 247, 0.98)),
-    #f7f9f9;
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ui-muted) 10%, var(--ui-surface-strong)),
+      color-mix(in srgb, var(--ui-muted) 16%, var(--ui-surface-strong))
+    );
   --trace-action-group-selected-shadow:
-    0 0 0 2px rgba(71, 85, 105, 0.2),
-    0 14px 30px rgba(71, 85, 105, 0.14),
-    0 4px 10px rgba(15, 23, 42, 0.12);
-  --trace-action-error-bg:
-    linear-gradient(180deg, rgba(255, 247, 247, 0.98), rgba(254, 242, 242, 0.98)),
-    var(--surface);
-  --trace-action-error-border: #fca5a5;
-  --trace-action-error-left-border: #dc2626;
+    0 0 0 2px color-mix(in srgb, var(--ui-muted) 20%, transparent),
+    0 14px 30px color-mix(in srgb, var(--ui-muted) 14%, transparent),
+    0 4px 10px color-mix(in srgb, var(--ui-text) 12%, transparent);
+  --trace-action-error-bg: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-surface-strong));
+  --trace-action-error-border: color-mix(in srgb, var(--ui-danger) 34%, transparent);
+  --trace-action-error-left-border: var(--ui-danger);
   --trace-action-error-shadow:
-    0 0 0 1px rgba(220, 38, 38, 0.12),
-    var(--shadow);
+    0 0 0 1px color-mix(in srgb, var(--ui-danger) 12%, transparent),
+    var(--ui-shadow);
   --trace-action-error-hover-shadow:
-    0 10px 24px rgba(220, 38, 38, 0.14),
-    var(--shadow);
+    0 10px 24px color-mix(in srgb, var(--ui-danger) 14%, transparent),
+    var(--ui-shadow);
   --trace-action-error-selected-bg:
-    linear-gradient(180deg, rgba(255, 241, 242, 0.99), rgba(254, 226, 226, 0.99)),
-    var(--surface);
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ui-danger) 13%, var(--ui-surface-strong)),
+      color-mix(in srgb, var(--ui-danger) 19%, var(--ui-surface-strong))
+    );
   --trace-action-error-selected-shadow:
-    0 0 0 2px rgba(220, 38, 38, 0.24),
-    0 14px 32px rgba(220, 38, 38, 0.17),
-    0 4px 10px rgba(15, 23, 42, 0.12);
-  --trace-action-jump-bg: #fff8e7;
-  --trace-action-jump-hover-bg: #ffefd0;
-  --trace-action-jump-border: #f4c56d;
-  --trace-action-jump-text: #92400e;
-  --trace-action-jump-shadow: 0 4px 10px rgba(146, 64, 14, 0.12);
+    0 0 0 2px color-mix(in srgb, var(--ui-danger) 24%, transparent),
+    0 14px 32px color-mix(in srgb, var(--ui-danger) 17%, transparent),
+    0 4px 10px color-mix(in srgb, var(--ui-text) 12%, transparent);
+  --trace-action-jump-bg: color-mix(in srgb, var(--ui-warning) 14%, var(--ui-surface-strong));
+  --trace-action-jump-hover-bg: color-mix(in srgb, var(--ui-warning) 22%, var(--ui-surface-strong));
+  --trace-action-jump-border: color-mix(in srgb, var(--ui-warning) 40%, transparent);
+  --trace-action-jump-text: var(--ui-warning);
+  --trace-action-jump-shadow: 0 4px 10px color-mix(in srgb, var(--ui-warning) 12%, transparent);
   --trace-action-jump-hover-shadow:
-    0 0 0 3px rgba(245, 158, 11, 0.16),
-    0 8px 18px rgba(146, 64, 14, 0.18);
+    0 0 0 3px color-mix(in srgb, var(--ui-warning) 16%, transparent),
+    0 8px 18px color-mix(in srgb, var(--ui-warning) 18%, transparent);
   --trace-action-jump-active-shadow:
-    0 0 0 2px rgba(245, 158, 11, 0.14),
-    inset 0 1px 2px rgba(146, 64, 14, 0.2);
+    0 0 0 2px color-mix(in srgb, var(--ui-warning) 14%, transparent),
+    inset 0 1px 2px color-mix(in srgb, var(--ui-warning) 20%, transparent);
   --trace-action-jump-focus-shadow:
-    0 0 0 3px rgba(245, 158, 11, 0.22),
-    0 8px 18px rgba(146, 64, 14, 0.18);
-  --trace-action-toggle-bg: #f8fbfa;
-  --trace-action-toggle-hover-bg: #e8f7f4;
-  --trace-action-toggle-border: #c8d7d5;
-  --trace-action-toggle-color: var(--teal-deep);
-  --trace-action-toggle-hover-shadow: 0 4px 10px rgba(15, 118, 110, 0.14);
-  --trace-action-toggle-active-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.16);
-  --trace-action-toggle-focus-shadow: 0 0 0 3px rgba(15, 118, 110, 0.22);
-  --trace-action-empty-bg: #fbfcfc;
-  --trace-action-empty-border: #bdd7d2;
-  --trace-action-node-error-bg: #fff1f2;
-  --trace-action-node-error-border: #fecdd3;
-  --trace-action-node-error-text: var(--rose);
-  --trace-action-selected-strip-bg: rgba(255, 255, 255, 0.88);
-  --trace-action-selected-strip-border: #bdd7d2;
-  --trace-action-status-success-bg: #ecfdf3;
-  --trace-action-status-success-text: #047857;
-  --trace-action-status-success-border: #86efac;
-  --trace-action-status-error-bg: #fff1f2;
-  --trace-action-status-error-text: #be123c;
-  --trace-action-status-error-border: #fb7185;
-  --trace-action-status-progress-bg: #fffbeb;
-  --trace-action-status-progress-text: #b45309;
-  --trace-action-status-progress-border: #facc15;
-  --trace-action-status-unknown-bg: #f8fafc;
-  --trace-action-status-unknown-text: #475569;
-  --trace-action-status-unknown-border: #cbd5e1;
-  --trace-action-status-inset: inset 0 1px 0 rgba(255, 255, 255, 0.72);
-  --trace-interactive-border: #bdd7d2;
-  --trace-interactive-bg: #eef7f5;
-  --trace-interactive-hover-bg: #e3f1ee;
-  --trace-interactive-text: var(--teal-deep);
-  --trace-code-bg: #101819;
-  --trace-code-text: #e6f2ef;
-  --trace-code-border: var(--border);
-  --trace-error-bg: #fff1f2;
-  --trace-error-border: #fecdd3;
-  --trace-error-text: #9f1239;
-  --trace-table-header-bg: linear-gradient(180deg, #f4f9f8, #eef4f3);
-  --trace-table-row-alt-bg: rgba(15, 118, 110, 0.025);
-  --trace-table-row-hover-bg: #eef7f5;
-  --trace-table-row-selected-bg: #e3f1ee;
-  --trace-table-toggle-border: #cfdedb;
-  --trace-table-toggle-bg: #f1f8f6;
-  --trace-table-toggle-hover-bg: #e3f1ee;
-  --trace-table-empty-text: #aab6b6;
-  --trace-badge-kind-border: #cfe0dd;
-  --trace-badge-kind-bg: #f1f8f6;
-  --trace-badge-kind-text: var(--teal-deep);
-  --trace-badge-success-border: #b7e0cd;
-  --trace-badge-success-bg: #e7f6ee;
-  --trace-badge-success-text: #0f7a4f;
-  --trace-badge-error-border: #f3c2cb;
-  --trace-badge-error-bg: #fdecef;
-  --trace-badge-error-text: var(--rose);
-  --trace-badge-progress-border: #f3dbb0;
-  --trace-badge-progress-bg: #fdf4e3;
-  --trace-badge-progress-text: #b06f04;
-  --trace-badge-duration-border: #d8dfdf;
-  --trace-badge-duration-bg: #edf2f1;
-  --trace-badge-duration-text: var(--teal-deep);
-  --trace-json-row-bg: #fbfcfc;
-  --trace-json-row-hover-border: #8fc5be;
-  --trace-json-row-hover-bg: #f1fbf8;
-  --trace-insight-chip-border: #bdd7d2;
-  --trace-insight-chip-bg: #f6fbfa;
-  --trace-insight-block-border: #c8d7d5;
-  --trace-insight-block-bg: #fbfcfc;
-  --trace-insight-block-shadow: 0 7px 18px rgba(15, 23, 42, 0.06);
-  --trace-insight-tools-border: var(--amber);
-  --trace-insight-reasoning-border: #3158a3;
-  --trace-insight-response-border: #16a34a;
-  --trace-insight-context-border: #64748b;
-  --trace-insight-http-border: #0f766e;
-  --trace-insight-status-border: #b45309;
-  --trace-insight-tools-bg: #fffaf0;
-  --trace-insight-reasoning-bg: #f5f7fc;
-  --trace-insight-response-bg: #f4fbf6;
-  --trace-insight-context-bg: #f8fafc;
-  --trace-insight-http-bg: #f3fbf9;
-  --trace-insight-status-bg: #fff8ed;
-  --trace-insight-chevron-border: rgba(180, 83, 9, 0.28);
-  --trace-insight-chevron-hover-border: rgba(180, 83, 9, 0.55);
+    0 0 0 3px color-mix(in srgb, var(--ui-warning) 22%, transparent),
+    0 8px 18px color-mix(in srgb, var(--ui-warning) 18%, transparent);
+  --trace-action-toggle-bg: var(--ui-surface);
+  --trace-action-toggle-hover-bg: var(--ui-accent-faint);
+  --trace-action-toggle-border: var(--ui-border);
+  --trace-action-toggle-color: var(--ui-accent-strong);
+  --trace-action-toggle-hover-shadow: 0 4px 10px color-mix(in srgb, var(--ui-accent) 14%, transparent);
+  --trace-action-toggle-active-shadow: inset 0 1px 2px color-mix(in srgb, var(--ui-text) 16%, transparent);
+  --trace-action-toggle-focus-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 22%, transparent);
+  --trace-action-empty-bg: var(--ui-surface);
+  --trace-action-empty-border: var(--ui-border);
+  --trace-action-node-error-bg: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-surface-strong));
+  --trace-action-node-error-border: color-mix(in srgb, var(--ui-danger) 30%, transparent);
+  --trace-action-node-error-text: var(--ui-danger);
+  --trace-action-selected-strip-bg: color-mix(in srgb, var(--ui-surface-strong) 88%, transparent);
+  --trace-action-selected-strip-border: var(--ui-border-strong);
+  --trace-action-status-success-bg: color-mix(in srgb, var(--ui-success) 12%, var(--ui-surface-strong));
+  --trace-action-status-success-text: var(--ui-success);
+  --trace-action-status-success-border: color-mix(in srgb, var(--ui-success) 34%, transparent);
+  --trace-action-status-error-bg: color-mix(in srgb, var(--ui-danger) 12%, var(--ui-surface-strong));
+  --trace-action-status-error-text: var(--ui-danger);
+  --trace-action-status-error-border: color-mix(in srgb, var(--ui-danger) 34%, transparent);
+  --trace-action-status-progress-bg: color-mix(in srgb, var(--ui-warning) 14%, var(--ui-surface-strong));
+  --trace-action-status-progress-text: var(--ui-warning);
+  --trace-action-status-progress-border: color-mix(in srgb, var(--ui-warning) 36%, transparent);
+  --trace-action-status-unknown-bg: color-mix(in srgb, var(--ui-muted) 10%, var(--ui-surface-strong));
+  --trace-action-status-unknown-text: var(--ui-muted);
+  --trace-action-status-unknown-border: color-mix(in srgb, var(--ui-muted) 28%, transparent);
+  --trace-action-status-inset: inset 0 1px 0 color-mix(in srgb, var(--ui-surface-strong) 78%, transparent);
+  --trace-interactive-border: color-mix(in srgb, var(--ui-accent) 28%, transparent);
+  --trace-interactive-bg: var(--ui-accent-faint);
+  --trace-interactive-hover-bg: var(--ui-accent-muted);
+  --trace-interactive-text: var(--ui-accent-strong);
+  --trace-code-bg: color-mix(in srgb, var(--ui-text) 88%, var(--ui-bg-base));
+  --trace-code-text: color-mix(in srgb, var(--ui-bg-base) 12%, #f6f4f1);
+  --trace-code-border: var(--ui-border);
+  --trace-error-bg: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-surface-strong));
+  --trace-error-border: color-mix(in srgb, var(--ui-danger) 32%, transparent);
+  --trace-error-text: var(--ui-danger);
+  --trace-table-header-bg: var(--ui-surface-muted);
+  --trace-table-row-alt-bg: transparent;
+  --trace-table-row-hover-bg: color-mix(in srgb, var(--ui-surface-soft) 50%, transparent);
+  --trace-table-row-selected-bg: var(--ui-accent-faint);
+  --trace-table-toggle-border: var(--ui-border);
+  --trace-table-toggle-bg: var(--ui-surface);
+  --trace-table-toggle-hover-bg: var(--ui-accent-faint);
+  --trace-table-empty-text: color-mix(in srgb, var(--ui-muted) 70%, transparent);
+  --trace-badge-kind-border: var(--ui-border);
+  --trace-badge-kind-bg: var(--ui-surface);
+  --trace-badge-kind-text: var(--ui-accent-strong);
+  --trace-badge-success-border: color-mix(in srgb, var(--ui-success) 34%, transparent);
+  --trace-badge-success-bg: color-mix(in srgb, var(--ui-success) 12%, var(--ui-surface-strong));
+  --trace-badge-success-text: var(--ui-success);
+  --trace-badge-error-border: color-mix(in srgb, var(--ui-danger) 32%, transparent);
+  --trace-badge-error-bg: color-mix(in srgb, var(--ui-danger) 12%, var(--ui-surface-strong));
+  --trace-badge-error-text: var(--ui-danger);
+  --trace-badge-progress-border: color-mix(in srgb, var(--ui-warning) 34%, transparent);
+  --trace-badge-progress-bg: color-mix(in srgb, var(--ui-warning) 14%, var(--ui-surface-strong));
+  --trace-badge-progress-text: var(--ui-warning);
+  --trace-badge-duration-border: var(--ui-border);
+  --trace-badge-duration-bg: var(--ui-surface);
+  --trace-badge-duration-text: var(--ui-muted);
+  --trace-json-row-bg: var(--ui-surface);
+  --trace-json-row-hover-border: var(--ui-accent-soft);
+  --trace-json-row-hover-bg: var(--ui-accent-faint);
+  --trace-insight-chip-border: var(--ui-border);
+  --trace-insight-chip-bg: var(--ui-surface);
+  --trace-insight-block-border: var(--ui-border);
+  --trace-insight-block-bg: var(--ui-surface);
+  --trace-insight-block-shadow: var(--ui-shadow);
+  --trace-insight-tools-border: var(--ui-warning);
+  --trace-insight-reasoning-border: var(--ui-chart-3);
+  --trace-insight-response-border: var(--ui-success);
+  --trace-insight-context-border: var(--ui-chart-7);
+  --trace-insight-http-border: var(--ui-chart-2);
+  --trace-insight-status-border: var(--ui-warning);
+  --trace-insight-tools-bg: color-mix(in srgb, var(--ui-warning) 10%, var(--ui-surface-strong));
+  --trace-insight-reasoning-bg: color-mix(in srgb, var(--ui-chart-3) 9%, var(--ui-surface-strong));
+  --trace-insight-response-bg: color-mix(in srgb, var(--ui-success) 10%, var(--ui-surface-strong));
+  --trace-insight-context-bg: color-mix(in srgb, var(--ui-chart-7) 9%, var(--ui-surface-strong));
+  --trace-insight-http-bg: color-mix(in srgb, var(--ui-chart-2) 10%, var(--ui-surface-strong));
+  --trace-insight-status-bg: color-mix(in srgb, var(--ui-warning) 12%, var(--ui-surface-strong));
+  --trace-insight-chevron-border: color-mix(in srgb, var(--ui-warning) 30%, transparent);
+  --trace-insight-chevron-hover-border: color-mix(in srgb, var(--ui-warning) 55%, transparent);
   --trace-insight-chevron-bg: transparent;
-  --trace-insight-chevron-hover-bg: rgba(251, 191, 36, 0.22);
-  --trace-insight-chevron-text: #92400e;
-  --trace-insight-focus-outline: rgba(15, 118, 110, 0.35);
-  --trace-insight-input-border: #c8d7d5;
-  --trace-insight-input-bg: #ffffff;
-  --trace-insight-item-bg: rgba(255, 255, 255, 0.7);
-  --trace-insight-item-border: rgba(15, 23, 42, 0.08);
-  --trace-waterfall-row-hover-bg: #f3faf8;
-  --trace-waterfall-row-selected-bg: #e7f5f1;
-  --trace-waterfall-scope-bg: #ede9fe;
-  --trace-waterfall-scope-border: #c4b5fd;
-  --trace-waterfall-scope-text: #5b21b6;
-  --trace-waterfall-agent-text: #64748b;
-  --trace-waterfall-message-request-bg: #f3f6f8;
-  --trace-waterfall-message-request-border: #dde4e8;
-  --trace-waterfall-message-request-text: #334155;
-  --trace-waterfall-message-response-bg: #eef7f5;
-  --trace-waterfall-message-response-border: #cfe0dd;
-  --trace-waterfall-message-response-text: var(--teal-deep);
-  --trace-waterfall-request-bar: #818cf8;
-  --trace-waterfall-response-bar: #4338ca;
-  --trace-waterfall-ttft-bar: #c7d2fe;
-  --trace-waterfall-ttft-stripe-a: #eef2ff;
-  --trace-waterfall-ttft-stripe-b: #c7d2fe;
-  --trace-flame-toolbar-bg: #ffffff;
-  --trace-flame-axis-bg: #fbfcfc;
-  --trace-flame-grid: rgba(100, 116, 139, 0.12);
-  --trace-flame-agent-accent: #2563eb;
-  --trace-flame-harness-accent: #d97706;
-  --trace-flame-agent-layer-bg: #f7faff;
-  --trace-flame-harness-layer-bg: #fffbf2;
-  --trace-flame-agent-bar: #2563eb;
+  --trace-insight-chevron-hover-bg: color-mix(in srgb, var(--ui-warning) 18%, transparent);
+  --trace-insight-chevron-text: var(--ui-warning);
+  --trace-insight-focus-outline: color-mix(in srgb, var(--ui-accent) 35%, transparent);
+  --trace-insight-input-border: var(--ui-border);
+  --trace-insight-input-bg: var(--ui-surface-strong);
+  --trace-insight-item-bg: color-mix(in srgb, var(--ui-surface-strong) 72%, transparent);
+  --trace-insight-item-border: var(--ui-border);
+  --trace-waterfall-row-hover-bg: var(--ui-accent-faint);
+  --trace-waterfall-row-selected-bg: var(--ui-accent-muted);
+  --trace-waterfall-scope-bg: color-mix(in srgb, var(--ui-chart-3) 12%, var(--ui-surface-strong));
+  --trace-waterfall-scope-border: color-mix(in srgb, var(--ui-chart-3) 34%, transparent);
+  --trace-waterfall-scope-text: var(--ui-chart-3);
+  --trace-waterfall-agent-text: var(--ui-muted);
+  --trace-waterfall-message-request-bg: color-mix(in srgb, var(--ui-chart-7) 10%, var(--ui-surface-strong));
+  --trace-waterfall-message-request-border: color-mix(in srgb, var(--ui-chart-7) 24%, transparent);
+  --trace-waterfall-message-request-text: var(--ui-text);
+  --trace-waterfall-message-response-bg: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-surface-strong));
+  --trace-waterfall-message-response-border: color-mix(in srgb, var(--ui-accent) 26%, transparent);
+  --trace-waterfall-message-response-text: var(--ui-accent-strong);
+  --trace-waterfall-request-bar: var(--ui-chart-6);
+  --trace-waterfall-response-bar: var(--ui-chart-3);
+  --trace-waterfall-ttft-bar: color-mix(in srgb, var(--ui-chart-6) 40%, var(--ui-surface-strong));
+  --trace-waterfall-ttft-stripe-a: color-mix(in srgb, var(--ui-chart-6) 12%, var(--ui-surface-strong));
+  --trace-waterfall-ttft-stripe-b: color-mix(in srgb, var(--ui-chart-6) 38%, var(--ui-surface-strong));
+  --trace-flame-toolbar-bg: var(--ui-surface);
+  --trace-flame-axis-bg: var(--ui-surface);
+  --trace-flame-grid: color-mix(in srgb, var(--ui-muted) 14%, transparent);
+  --trace-flame-agent-accent: var(--ui-chart-6);
+  --trace-flame-harness-accent: var(--ui-chart-4);
+  --trace-flame-agent-layer-bg: color-mix(in srgb, var(--ui-chart-6) 6%, var(--ui-surface-strong));
+  --trace-flame-harness-layer-bg: color-mix(in srgb, var(--ui-chart-4) 8%, var(--ui-surface-strong));
+  --trace-flame-agent-bar: var(--ui-chart-6);
   --trace-flame-agent-bar-text: #ffffff;
-  --trace-flame-harness-bar: #f59e0b;
-  --trace-flame-harness-bar-text: #4b2b00;
-  --trace-flame-tool-bar: #0f9f8f;
+  --trace-flame-harness-bar: var(--ui-chart-4);
+  --trace-flame-harness-bar-text: #3d2703;
+  --trace-flame-tool-bar: var(--ui-chart-2);
   --trace-flame-tool-bar-text: #ffffff;
-  --trace-flame-file-bar: #38a3a5;
+  --trace-flame-file-bar: color-mix(in srgb, var(--ui-chart-2) 72%, var(--ui-surface-strong));
   --trace-flame-file-bar-text: #ffffff;
-  --trace-flame-llm-call-bar: #2563eb;
+  --trace-flame-llm-call-bar: var(--ui-chart-6);
   --trace-flame-llm-call-bar-text: #ffffff;
-  --trace-flame-llm-request-bar: #4f46e5;
+  --trace-flame-llm-request-bar: var(--ui-chart-3);
   --trace-flame-llm-request-bar-text: #ffffff;
-  --trace-flame-llm-response-bar: #60a5fa;
+  --trace-flame-llm-response-bar: color-mix(in srgb, var(--ui-chart-6) 45%, var(--ui-surface-strong));
   --trace-flame-llm-response-bar-text: #102a56;
-  --trace-flame-tool-call-bar: #0f9f8f;
+  --trace-flame-tool-call-bar: var(--ui-chart-2);
   --trace-flame-tool-call-bar-text: #ffffff;
-  --trace-flame-tool-result-bar: #5eead4;
-  --trace-flame-tool-result-bar-text: #134e4a;
-  --trace-flame-process-bar: #a855f7;
+  --trace-flame-tool-result-bar: color-mix(in srgb, var(--ui-chart-2) 34%, var(--ui-surface-strong));
+  --trace-flame-tool-result-bar-text: #103d38;
+  --trace-flame-process-bar: var(--ui-chart-5);
   --trace-flame-process-bar-text: #ffffff;
-  --trace-flame-protocol-bar: #64748b;
+  --trace-flame-protocol-bar: var(--ui-chart-7);
   --trace-flame-protocol-bar-text: #ffffff;
-  --trace-flame-error-hatch: #ff4d6d;
-  --trace-flame-layer-shadow: 0 8px 24px rgba(15, 23, 42, 0.035);
-}
-
-.stats-theme {
-  background: var(--stats-bg-gradient), var(--stats-bg-base);
-  color: var(--stats-text);
+  --trace-flame-error-hatch: var(--ui-danger);
+  --trace-flame-layer-shadow: 0 8px 24px color-mix(in srgb, var(--ui-text) 6%, transparent);
 }
 
 @media (max-width: 760px) {
-  .stats-theme {
-    --stats-shadow: 0 8px 24px rgba(180, 88, 55, 0.1);
-    --stats-glass-filter: blur(8px) saturate(130%);
-    --stats-control-filter: blur(8px);
-    --stats-section-gap: var(--stats-section-gap-mobile);
-    --stats-chart-min-height: 360px;
-    --stats-visualization-min-height: 500px;
-    --stats-filter-grid: minmax(0, 1fr);
-    --stats-date-input-width: 100%;
-    --stats-request-table-min-width: 960px;
+  :root {
+    --ui-section-gap: var(--ui-section-gap-mobile);
+    --ui-viewport-padding: var(--ui-viewport-padding-mobile);
+    --ui-chart-min-height: 360px;
+    --ui-visualization-min-height: 500px;
+    --ui-filter-grid: minmax(0, 1fr);
+    --ui-date-input-width: 100%;
+    --ui-request-table-min-width: 960px;
+  }
+}
+
+/*
+ * Material downgrade: glass is decorative, so it is dropped whenever the
+ * viewport is narrow or the operator asks for less motion or transparency.
+ */
+@media (max-width: 768px), (prefers-reduced-motion: reduce), (prefers-reduced-transparency: reduce) {
+  :root {
+    --ui-glass-filter: none;
+    --ui-glass-bg: var(--ui-bg-shell);
+    --ui-glass-bg-secondary: var(--ui-bg-base);
+    --ui-glass-border: var(--ui-border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ui-duration-fast: 0.01s;
+    --ui-duration-base: 0.01s;
+    --ui-duration-shell: 0.01s;
+    --ui-dur-press: 0ms;
+    --ui-dur-hover: 0ms;
   }
 }

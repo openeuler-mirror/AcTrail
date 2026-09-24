@@ -83,6 +83,8 @@ TLS sync IPC 使用二进制长度帧：`AT` 魔数、版本 `1`、消息类型�
 - `bpf-copy`（默认，性能/证据模式）：仅依赖 eBPF，不要求 seccomp notify 或 `actrailctl launch`。每次 operation 最多抓取前导的一个 `max_segment_bytes` segment（默认 4095 字节；`writev`/`sendmsg` 取第一个非空 iovec 的头部）。超出部分标记为 payload `PolicyLimited`；可信 HTTP 路由仍可生成不伪造正文的 `llm.request`，其 status 为 `success`、completeness 为 `capture_limited`，并可与完整 response 关联用于性能剖析。这是该模式的预期结果，不产生截断错误 diagnostic。
 - `bpf-copy-seccomp-fallback`（完整采集，需显式启用）：要求 `[seccomp_notify] enabled = true`，workload 必须通过能安装 seccomp listener 的路径启动（例如 `actrailctl launch` 或容器 seccomp profile）。该模式下 BPF 只产生 operation 完成元数据（completion/sequence）；需要内容字节的 operation 由 daemon 在 seccomp notify 上读取并切分，完整上限为 `max_operation_bytes`，适合需要完整 HTTP/LLM 消息的观测。读取失败、缺口或不完整 operation 标记为 payload `Truncated` 和 semantic `partial`，属于异常并产生 diagnostic。未启用 seccomp notify 时配置校验会直接失败，不会静默降级。
 
+`actrailctl init --mode complete`（默认模式）显式选择 `bpf-copy-seccomp-fallback` 与 `[seccomp_notify] enabled = true`；`--mode profile` 显式选择 `bpf-copy` 与 `[seccomp_notify] enabled = false`。两种模式之外的配置文件沿用字段默认值（`bpf-copy`、关闭 seccomp notify）。
+
 三类 payload 的 ring buffer、pending state、每 trace retention 与 redaction 均独立。调高其中一层不会自动扩大其他层。
 
 `retention_max_bytes_per_trace` 由持久化后端执行。SQLite 按 TLS、socket、stdio

@@ -40,16 +40,19 @@ impl OperatorConfigInitializer {
 
     fn configuration(mode: InitMode) -> Result<OperatorConfig, String> {
         let mut config = OperatorConfig::init()?;
-        if mode == InitMode::Profile {
-            config.capture_profile.capabilities.retain(|request| {
-                !matches!(
-                    request.capability,
-                    Capability::EnforcementFilePermissionFanotify
-                        | Capability::EnforcementCommandExecutionSeccomp
-                        | Capability::EnforcementNetworkConnectSeccomp
-                )
-            });
-            config = config.patch(include_str!("profile.toml"))?;
+        match mode {
+            InitMode::Complete => config = config.patch(include_str!("complete.toml"))?,
+            InitMode::Profile => {
+                config.capture_profile.capabilities.retain(|request| {
+                    !matches!(
+                        request.capability,
+                        Capability::EnforcementFilePermissionFanotify
+                            | Capability::EnforcementCommandExecutionSeccomp
+                            | Capability::EnforcementNetworkConnectSeccomp
+                    )
+                });
+                config = config.patch(include_str!("profile.toml"))?;
+            }
         }
         Ok(config)
     }

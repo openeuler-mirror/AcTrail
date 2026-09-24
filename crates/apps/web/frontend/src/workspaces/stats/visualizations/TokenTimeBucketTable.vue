@@ -90,32 +90,32 @@ const bucketLabel = computed(() => {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-lg) var(--stats-space-xl);
-  border-bottom: 1px solid var(--stats-border);
-  background: var(--stats-surface-bar);
-  backdrop-filter: var(--stats-control-filter);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-lg) var(--ui-space-xl);
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface-bar);
+  backdrop-filter: var(--ui-control-filter);
 }
 
 .bucket-table-toolbar span {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .token-table {
   width: 100%;
-  min-width: var(--stats-bucket-table-min-width);
+  min-width: var(--ui-bucket-table-min-width);
   border-collapse: separate;
   border-spacing: 0;
-  font-size: var(--stats-font-md);
+  font-size: var(--ui-font-md);
 }
 
 .token-table th,
 .token-table td {
-  padding: var(--stats-table-cell-padding);
-  border-bottom: 1px solid var(--stats-border);
+  padding: var(--ui-table-cell-padding);
+  border-bottom: 1px solid var(--ui-border);
   text-align: left;
   vertical-align: top;
 }
@@ -124,24 +124,24 @@ const bucketLabel = computed(() => {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
-  backdrop-filter: var(--stats-control-filter);
+  backdrop-filter: var(--ui-control-filter);
 }
 
 .bucket-main {
   display: block;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .bucket-detail {
   display: block;
-  margin-top: var(--stats-table-subtext-gap);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  margin-top: var(--ui-table-subtext-gap);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .numeric {
@@ -151,12 +151,12 @@ const bucketLabel = computed(() => {
 }
 
 .token-table-empty {
-  min-height: var(--stats-empty-min-height);
+  min-height: var(--ui-empty-min-height);
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-regular);
+  color: var(--ui-muted);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-regular);
 }
 </style>

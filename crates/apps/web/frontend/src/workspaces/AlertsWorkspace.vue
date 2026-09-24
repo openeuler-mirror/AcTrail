@@ -341,16 +341,32 @@ function alertSummary(alert) {
     return `${command} · ${formatCompactDuration(finding.duration_ms)} > ${formatCompactDuration(payload.maximum_duration_ms)}`;
   }
   if (alert.kind === 'llm.turn.high_frequency') {
-    return `${finding.model ?? '—'} · ${finding.exchange_count} req in ${formatCompactDuration(payload.window_size_ms)}`;
+    return t('alerts.finding.highFrequency', {
+      model: finding.model ?? '—',
+      exchanges: finding.exchange_count,
+      window: formatCompactDuration(payload.window_size_ms),
+    });
   }
   if (alert.kind === 'llm.turn.consecutive_retry') {
-    return `${finding.model ?? '—'} · ${finding.retry_length}× consecutive failures`;
+    return t('alerts.finding.consecutiveRetry', {
+      model: finding.model ?? '—',
+      retries: finding.retry_length,
+    });
   }
   if (alert.kind === 'llm.turn.repeated_similar') {
-    return `${finding.model ?? '—'} · ${finding.repeat_count}× similar (${formatCompactBytes(finding.representative_request_bytes)})`;
+    return t('alerts.finding.repeatedSimilar', {
+      model: finding.model ?? '—',
+      repeats: finding.repeat_count,
+      bytes: formatCompactBytes(finding.representative_request_bytes),
+    });
   }
   if (alert.kind === 'llm.turn.error_ratio') {
-    return `${finding.model ?? '—'} · ${finding.error_count}/${finding.total_exchanges} errors (${formatCompactRatio(finding.actual_ratio_per_mille)})`;
+    return t('alerts.finding.errorRatio', {
+      model: finding.model ?? '—',
+      errors: finding.error_count,
+      total: finding.total_exchanges,
+      ratio: formatCompactRatio(finding.actual_ratio_per_mille),
+    });
   }
   if (alert.kind === 'llm.turn.context_growth') {
     return `${finding.model ?? '—'} · ${formatCompactBytes(finding.observed_bytes)} / ${formatCompactBytes(finding.baseline_median_bytes)} (${formatCompactRatio(finding.observed_ratio_per_mille)})`;

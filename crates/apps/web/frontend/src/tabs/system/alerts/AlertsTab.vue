@@ -58,16 +58,16 @@ function formatTime(timestamp) {
 <style scoped>
 .trace-alerts {
   display: grid;
-  gap: var(--stats-space-md, 12px);
-  padding: var(--stats-space-lg, 16px);
+  gap: var(--ui-space-md, 12px);
+  padding: var(--ui-space-lg, 16px);
   overflow-y: auto;
 }
 
 .trace-alert-card {
   padding: 16px;
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-md, 10px);
-  background: var(--stats-surface-panel, var(--surface));
+  border: 1px solid var(--ui-border, var(--ui-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface-panel, var(--ui-surface));
 }
 
 .trace-alert-card header {
@@ -84,13 +84,13 @@ function formatTime(timestamp) {
 .trace-alert-card time,
 .trace-alert-card p,
 .trace-alert-empty {
-  color: var(--stats-muted, var(--muted));
+  color: var(--ui-muted, var(--ui-muted));
 }
 
 .trace-alert-severity {
   padding: 2px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--stats-muted, #777) 18%, transparent);
+  background: color-mix(in srgb, var(--ui-muted, #777) 18%, transparent);
   font-size: 0.75rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -99,7 +99,7 @@ function formatTime(timestamp) {
 .severity-medium,
 .severity-high,
 .severity-critical {
-  color: var(--danger, #d04b4b);
+  color: var(--ui-danger, #d04b4b);
 }
 
 .trace-alert-paths {

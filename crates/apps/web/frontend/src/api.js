@@ -26,6 +26,16 @@ export function listAlerts(limit = null) {
   return fetchJson(`/api/alerts${query}`);
 }
 
+/** Collector-daemon liveness as probed through the operator control socket. */
+export function readDaemonStatus() {
+  return fetchJson('/api/daemon/status');
+}
+
+/** Whether the console backend that served this page is still answering. */
+export function readConsoleHealth() {
+  return fetch('/health').then((response) => response.ok);
+}
+
 export function readAlert(alertId) {
   return fetchJson(`/api/alerts/${encodeURIComponent(alertId)}`);
 }

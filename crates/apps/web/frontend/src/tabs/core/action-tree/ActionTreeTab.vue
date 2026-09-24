@@ -39,30 +39,30 @@
           @load-more="loadMoreChildren"
           @jump="jumpToNode"
         />
-        <div v-else class="action-tree-empty">No action tree root</div>
+        <div v-else class="action-tree-empty">{{ t('emptyRoot') }}</div>
       </div>
-      <div class="action-tree-nav-panel" aria-label="Action tree LLM navigation">
+      <div class="action-tree-nav-panel" :aria-label="t('navigationAria')">
         <span class="action-tree-nav-label">LLM</span>
         <button
           class="action-tree-nav-button"
           type="button"
           :disabled="llmNavigationBusy || !treeModel.root"
-          title="Jump to first LLM call"
+          :title="t('jumpFirst')"
           @click="jumpToFirstLlm"
         >
           <SkipForward v-if="!llmNavigationBusy" :size="15" aria-hidden="true" />
           <Loader2 v-else class="spin-icon" :size="15" aria-hidden="true" />
-          <span>First LLM</span>
+          <span>{{ t('firstLlm') }}</span>
         </button>
         <button
           class="action-tree-nav-button"
           type="button"
           :disabled="llmNavigationBusy || !treeModel.root"
-          title="Jump to next LLM call"
+          :title="t('jumpNext')"
           @click="jumpToNextLlm"
         >
           <StepForward :size="15" aria-hidden="true" />
-          <span>Next LLM</span>
+          <span>{{ t('nextLlm') }}</span>
         </button>
         <span v-if="llmNavigationError" class="action-tree-nav-error">{{ llmNavigationError }}</span>
       </div>
@@ -94,6 +94,10 @@ import {
 } from './model';
 import { buildHttpExchangeArcOverlay } from './httpExchangeArcs';
 import { TREE_NODE_TYPES, UI_LIMITS } from './config';
+import { useModuleLocale } from '../../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   traceKey: {
@@ -207,14 +211,14 @@ async function jumpToFirstLlm() {
     if (path === undefined) {
       const fallback = await findFirstLlmPath(rootNode.value);
       if (!fallback) {
-        llmNavigationError.value = 'No LLM call';
+        llmNavigationError.value = t('noLlmCall');
         return;
       }
       await activateLlmPath(fallback);
       return;
     }
     if (!path) {
-      llmNavigationError.value = 'No LLM call';
+      llmNavigationError.value = t('noLlmCall');
       return;
     }
     await activateServerLlmPath(path);
@@ -230,14 +234,14 @@ async function jumpToNextLlm() {
         ? await findNextLlmPath(rootNode.value, afterId)
         : await findFirstLlmPath(rootNode.value);
       if (!fallback) {
-        llmNavigationError.value = 'No next LLM call';
+        llmNavigationError.value = t('noNextLlmCall');
         return;
       }
       await activateLlmPath(fallback);
       return;
     }
     if (!path) {
-      llmNavigationError.value = 'No next LLM call';
+      llmNavigationError.value = t('noNextLlmCall');
       return;
     }
     await activateServerLlmPath(path);
@@ -272,12 +276,12 @@ async function activateServerLlmPath(entries) {
   }
   for (const entry of entries) {
     if (!parentNode) {
-      throw new Error('LLM navigation path node not found');
+      throw new Error(t('navigationNodeMissing'));
     }
     if (parentNode.id !== entry.parent_action_id) {
       const found = findNode(rootNode.value, entry.parent_action_id);
       if (!found) {
-        throw new Error(`LLM navigation parent ${entry.parent_action_id} not found`);
+        throw new Error(t('navigationParentMissing', { id: entry.parent_action_id }));
       }
       parentNode = found;
     }
@@ -318,7 +322,7 @@ async function activateServerLlmPath(entries) {
     }
     const located = locateActionNode(children, entry.action_id);
     if (!located) {
-      throw new Error(`LLM navigation action ${entry.action_id} not found under ${parentNode.id}`);
+      throw new Error(t('navigationActionMissing', { id: entry.action_id, parent: parentNode.id }));
     }
     for (const container of located.containers) {
       if (container.id && container !== parentNode) {
@@ -329,7 +333,7 @@ async function activateServerLlmPath(entries) {
     parentNode = located.node;
   }
   if (!targetNode) {
-    throw new Error('LLM navigation returned an empty path');
+    throw new Error(t('navigationEmptyPath'));
   }
   expandedNodeIds.value = nextExpanded;
   await nextTick();
@@ -371,7 +375,7 @@ async function runLlmNavigation(callback) {
 async function activateLlmPath(path) {
   const target = path[path.length - 1];
   if (!target) {
-    throw new Error('LLM navigation returned an empty path');
+    throw new Error(t('navigationEmptyPath'));
   }
   expandAncestorPath(path.slice(0, -1));
   await nextTick();
@@ -485,7 +489,7 @@ async function loadMoreNodeChildren(node) {
     node.nextChildOffset === previousOffset &&
     node.children.length === previousCount
   ) {
-    throw new Error('Action tree children pagination made no progress');
+    throw new Error(t('paginationStalled'));
   }
 }
 

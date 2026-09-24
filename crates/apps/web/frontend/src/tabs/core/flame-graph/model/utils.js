@@ -1,9 +1,9 @@
 
-export const BACKGROUND_LABELS = Object.freeze({
-  title_generation: 'Title generation',
-  conversation_summary: 'Conversation summary',
-  context_compaction: 'Context compaction',
-  auxiliary_inferred: 'Background LLM (inferred)',
+export const BACKGROUND_LABEL_KEYS = Object.freeze({
+  title_generation: 'background.titleGeneration',
+  conversation_summary: 'background.conversationSummary',
+  context_compaction: 'background.contextCompaction',
+  auxiliary_inferred: 'background.auxiliaryInferred',
 });
 
 const AGENT_GRAPH_ROLES = new Set([
@@ -62,28 +62,28 @@ export const HARNESS_GROUP_ORDER = Object.freeze([
   'protocol',
 ]);
 
-export const GROUP_LABELS = Object.freeze({
-  model: 'LLM calls',
-  dialogue: 'Messages',
-  tools: 'Tool calls',
-  detail: 'Tool effects',
-  commands: 'Harness command',
-  filesystem: 'Background file I/O',
-  process: 'Process lifecycle',
-  runtime: 'Runtime',
-  protocol: 'Network / protocol',
+export const GROUP_LABEL_KEYS = Object.freeze({
+  model: 'groups.model',
+  dialogue: 'groups.dialogue',
+  tools: 'groups.tools',
+  detail: 'groups.detail',
+  commands: 'groups.commands',
+  filesystem: 'groups.filesystem',
+  process: 'groups.process',
+  runtime: 'groups.runtime',
+  protocol: 'groups.protocol',
 });
 
-export const GROUP_DESCRIPTIONS = Object.freeze({
-  model: 'Model request lifecycle',
-  dialogue: 'Request and assistant response',
-  tools: 'Declared tools, results, and child agents',
-  detail: 'File effects linked to Agent work',
-  commands: 'Top-level harness execution',
-  filesystem: 'Framework file activity without an Agent tool link',
-  process: 'fork, vfork, clone, exec, and exit observations',
-  runtime: 'Enforcement and uncategorized runtime activity',
-  protocol: 'HTTP, SSE, and MCP transport details',
+export const GROUP_DESCRIPTION_KEYS = Object.freeze({
+  model: 'groupDescriptions.model',
+  dialogue: 'groupDescriptions.dialogue',
+  tools: 'groupDescriptions.tools',
+  detail: 'groupDescriptions.detail',
+  commands: 'groupDescriptions.commands',
+  filesystem: 'groupDescriptions.filesystem',
+  process: 'groupDescriptions.process',
+  runtime: 'groupDescriptions.runtime',
+  protocol: 'groupDescriptions.protocol',
 });
 
 export function flameSummaryMarkerKind(kind) {
