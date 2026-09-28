@@ -318,65 +318,65 @@ function emptyLatencyDistribution() {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--stats-section-gap);
+  gap: var(--ui-section-gap);
   width: 100%;
   max-width: none;
   margin: 0;
-  padding: var(--stats-viewport-padding);
-  font-family: var(--stats-body-font);
+  padding: var(--ui-viewport-padding);
+  font-family: var(--ui-body-font);
 }
 
 .llm-requests-workspace :deep(h2),
 .llm-requests-workspace :deep(h3) {
-  font-family: var(--stats-heading-font);
+  font-family: var(--ui-heading-font);
 }
 
 .llm-requests-workspace :deep(.metric-card strong),
 .llm-requests-workspace :deep(.donut-total) {
-  font-family: var(--stats-value-font);
+  font-family: var(--ui-value-font);
 }
 
 .llm-tabs {
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
-  gap: var(--stats-space-2xs);
-  padding: var(--stats-space-2xs);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
+  gap: var(--ui-space-2xs);
+  padding: var(--ui-space-2xs);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
 }
 
 .llm-tabs button {
-  min-height: var(--stats-control-height-md);
-  padding: 0 var(--stats-segment-padding-x);
+  min-height: var(--ui-control-height-md);
+  padding: 0 var(--ui-segment-padding-x);
   border: 0;
-  border-radius: var(--stats-radius-sm);
+  border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   cursor: pointer;
-  font-size: var(--stats-font-sm);
+  font-size: var(--ui-font-sm);
 }
 
 .llm-tabs button:hover,
 .llm-tabs button.active {
-  background: var(--stats-accent);
-  color: var(--stats-on-accent);
+  background: var(--ui-accent);
+  color: var(--ui-on-accent);
 }
 
 .error {
-  padding: var(--stats-space-sm) var(--stats-space-md);
+  padding: var(--ui-space-sm) var(--ui-space-md);
   border: 1px solid rgba(190, 18, 60, 0.22);
-  border-radius: var(--stats-radius-sm);
+  border-radius: var(--ui-radius-sm);
   background: rgba(190, 18, 60, 0.1);
-  color: var(--stats-danger);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-danger);
+  font-size: var(--ui-font-sm);
 }
 
 @media (max-width: 760px) {
   .llm-requests-workspace {
-    gap: var(--stats-section-gap-mobile);
-    padding: var(--stats-viewport-padding-mobile);
+    gap: var(--ui-section-gap-mobile);
+    padding: var(--ui-viewport-padding-mobile);
   }
 }
 </style>

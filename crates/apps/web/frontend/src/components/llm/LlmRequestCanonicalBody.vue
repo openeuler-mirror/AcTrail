@@ -1,6 +1,6 @@
 <template>
   <section v-if="available" class="detail-section canonical-request-body">
-    <h3>Canonical request body</h3>
+    <h3>{{ t('canonicalBody.title') }}</h3>
     <p class="canonical-request-meta">
       {{ metadata.state }} · request payload: {{ formatBytes(metadata.payloadBytes) }}
       <template v-if="metadata.blocks"> · {{ metadata.blocks }} blocks</template>
@@ -17,7 +17,11 @@
 import { computed } from 'vue';
 
 import { readActionLlmRequestContentNode } from '../../api';
+import { useModuleLocale } from '../../locale';
 import LazyJsonTreeNode from '../json/LazyJsonTreeNode.vue';
+import strings from '../locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   traceId: {
@@ -38,7 +42,7 @@ const available = computed(
   () => Boolean(props.traceId && props.actionId && props.metadata?.state === 'canonical_blocks'),
 );
 const rootDescriptor = computed(() => ({
-  token: 'Load content',
+  token: t('canonicalBody.loadContent'),
   pointer: '',
   type: 'object',
   expandable: true,
@@ -57,7 +61,7 @@ async function loadNode(query) {
 function formatBytes(value) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) {
-    return 'unknown size';
+    return t('canonicalBody.unknownSize');
   }
   if (bytes < 1024) {
     return `${bytes} B`;
@@ -72,7 +76,7 @@ function formatBytes(value) {
 <style scoped>
 .canonical-request-meta {
   margin: -2px 0 8px;
-  color: var(--text-muted, #7b8494);
+  color: var(--ui-muted, #7b8494);
   font-size: 0.8rem;
 }
 </style>

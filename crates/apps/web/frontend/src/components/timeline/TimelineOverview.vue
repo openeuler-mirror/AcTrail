@@ -1,13 +1,13 @@
 <template>
   <div class="timeline-overview">
     <div class="timeline-overview-gutter">
-      <strong>{{ label }}</strong>
-      <small>{{ hint }}</small>
+      <strong>{{ label || t('timelineOverview.label') }}</strong>
+      <small>{{ hint || t('timelineOverview.hint') }}</small>
     </div>
     <div
       ref="track"
       class="timeline-overview-track"
-      title="Drag the window to pan; drag either edge to resize; scroll to zoom"
+      :title="t('timelineOverview.dragHint')"
       @pointerdown="startDrag"
       @wheel.prevent="handleWheel"
     >
@@ -31,6 +31,10 @@ import {
   constrainTimeViewport,
   wheelZoomFactor,
 } from '../../tabs/core/time-navigation/model.js';
+import { useModuleLocale } from '../../locale';
+import strings from '../locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   bounds: {
@@ -47,11 +51,11 @@ const props = defineProps({
   },
   label: {
     type: String,
-    default: 'Trace overview',
+    default: '',
   },
   hint: {
     type: String,
-    default: 'W/S zoom · A/D pan',
+    default: '',
   },
   startLabel: {
     type: String,
@@ -93,9 +97,9 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(draw);
   resizeObserver.observe(track.value);
   themeObserver = new MutationObserver(draw);
-  themeObserver.observe(track.value.closest('.stats-theme') ?? document.documentElement, {
+  themeObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['class', 'data-theme'],
+    attributeFilter: ['class', 'data-palette'],
   });
   nextTick(draw);
 });
@@ -281,8 +285,8 @@ function cssColor(styles, name, fallback) {
   display: grid;
   grid-template-columns: var(--timeline-overview-gutter, 156px) minmax(620px, 1fr);
   min-height: 72px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-soft, var(--surface)) 66%, var(--surface));
+  border-bottom: 1px solid var(--ui-border);
+  background: color-mix(in srgb, var(--ui-surface-soft, var(--ui-surface)) 66%, var(--ui-surface));
 }
 
 .timeline-overview-gutter {
@@ -292,18 +296,18 @@ function cssColor(styles, name, fallback) {
   justify-content: center;
   gap: 3px;
   padding: 0 12px 0 18px;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--ui-border);
 }
 
 .timeline-overview-gutter strong {
-  color: var(--text);
+  color: var(--ui-text);
   font-size: 11px;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
 .timeline-overview-gutter small {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
 }
 
@@ -327,7 +331,7 @@ function cssColor(styles, name, fallback) {
   z-index: 1;
   top: 0;
   bottom: 16px;
-  background: color-mix(in srgb, var(--surface) 66%, transparent);
+  background: color-mix(in srgb, var(--ui-surface) 66%, transparent);
   pointer-events: none;
 }
 
@@ -380,7 +384,7 @@ function cssColor(styles, name, fallback) {
   position: absolute;
   z-index: 4;
   bottom: 2px;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;

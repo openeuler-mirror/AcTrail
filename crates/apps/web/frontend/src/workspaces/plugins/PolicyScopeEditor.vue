@@ -5,13 +5,13 @@
         <span>{{ title }}</span>
         <small>{{ description }}</small>
       </div>
-      <strong>Required</strong>
+      <strong>{{ t('policy.required') }}</strong>
     </div>
 
     <div class="policy-scope-list">
       <div v-for="(scope, index) in modelValue" :key="scope.key" class="policy-scope-row">
         <label>
-          <span>{{ pathLabel }}</span>
+          <span>{{ pathLabel || t('policy.path') }}</span>
           <input
             :value="scope.path_scope"
             type="text"
@@ -24,7 +24,7 @@
           <small>{{ pathHint }}</small>
         </label>
         <fieldset>
-          <legend>Rule types</legend>
+          <legend>{{ t('policy.ruleTypes') }}</legend>
           <label v-for="decision in decisionOptions" :key="decision.value">
             <input
               type="checkbox"
@@ -44,13 +44,13 @@
           @click="removeScope(index)"
         >
           <Trash2 :size="15" aria-hidden="true" />
-          Remove scope
+          {{ t('policy.removeScope') }}
         </button>
       </div>
     </div>
     <button class="policy-scope-add" type="button" :disabled="busy" @click="addScope">
       <Plus :size="15" aria-hidden="true" />
-      {{ addLabel }}
+      {{ addLabel || t('policy.addAnotherPath') }}
     </button>
   </section>
 </template>
@@ -58,22 +58,27 @@
 <script setup>
 import { Plus, Trash2 } from '@lucide/vue';
 
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 const props = defineProps({
   modelValue: { type: Array, required: true },
   title: { type: String, required: true },
   description: { type: String, required: true },
-  pathLabel: { type: String, default: 'Path' },
+  pathLabel: { type: String, default: '' },
   placeholder: { type: String, required: true },
   pathHint: { type: String, required: true },
   busy: { type: Boolean, default: false },
-  addLabel: { type: String, default: 'Add another path' },
+  addLabel: { type: String, default: '' },
 });
 
 const emit = defineEmits(['update:modelValue', 'blur']);
 const decisionOptions = [
-  { value: 'allow', label: 'Allow' },
-  { value: 'deny', label: 'Deny' },
-  { value: 'gray', label: 'Ask plugin' },
+  { value: 'allow', label: t('policy.allow') },
+  { value: 'deny', label: t('policy.deny') },
+  { value: 'gray', label: t('policy.askPlugin') },
 ];
 let nextKey = 0;
 
@@ -118,72 +123,72 @@ function removeScope(index) {
 .policy-scope-editor {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-lg);
-  border: 1px solid var(--stats-accent-soft);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-accent-faint);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-lg);
+  border: 1px solid var(--ui-accent-soft);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-accent-faint);
 }
 
 .policy-scope-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .policy-scope-heading > div,
 .policy-scope-row > label {
   display: grid;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
 }
 
 .policy-scope-heading span,
 .policy-scope-row > label > span,
 .policy-scope-row legend {
-  color: var(--stats-text);
-  font-size: var(--stats-font-md);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-text);
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-medium);
 }
 
 .policy-scope-heading small,
 .policy-scope-row small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .policy-scope-heading strong {
-  padding: var(--stats-space-xs) var(--stats-space-sm);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-accent);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  padding: var(--ui-space-xs) var(--ui-space-sm);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-accent);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .policy-scope-list {
   display: grid;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .policy-scope-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
 }
 
 .policy-scope-row input[type="text"] {
   width: 100%;
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
 }
 
@@ -192,7 +197,7 @@ function removeScope(index) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
   margin: 0;
   padding: 0;
   border: 0;
@@ -203,42 +208,42 @@ function removeScope(index) {
 .policy-scope-remove {
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
 }
 
 .policy-scope-row fieldset label {
-  min-height: var(--stats-control-height-sm);
-  padding: 0 var(--stats-space-sm);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
-  color: var(--stats-text);
-  font-size: var(--stats-font-sm);
+  min-height: var(--ui-control-height-sm);
+  padding: 0 var(--ui-space-sm);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
+  color: var(--ui-text);
+  font-size: var(--ui-font-sm);
 }
 
 .policy-scope-row legend {
-  margin-bottom: var(--stats-space-xs);
+  margin-bottom: var(--ui-space-xs);
 }
 
 .policy-scope-add,
 .policy-scope-remove {
-  min-height: var(--stats-control-height-md);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
+  min-height: var(--ui-control-height-md);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
   background: transparent;
 }
 
 .policy-scope-remove {
   grid-column: 1 / -1;
   justify-self: end;
-  min-height: var(--stats-control-height-sm);
-  padding: 0 var(--stats-space-md);
-  color: var(--stats-danger);
+  min-height: var(--ui-control-height-sm);
+  padding: 0 var(--ui-space-md);
+  color: var(--ui-danger);
 }
 
 .policy-scope-add {
   justify-self: start;
-  padding: 0 var(--stats-space-md);
+  padding: 0 var(--ui-space-md);
 }
 
 button:disabled {

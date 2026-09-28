@@ -37,39 +37,39 @@ const { t } = useLocale();
 
 .settings-panel {
   max-width: 520px;
-  padding: var(--stats-panel-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
+  padding: var(--ui-panel-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
 }
 
 h3 {
-  margin: 0 0 var(--stats-space-sm);
-  font-size: var(--stats-font-title);
+  margin: 0 0 var(--ui-space-sm);
+  font-size: var(--ui-font-title);
 }
 
 p {
-  margin: 0 0 var(--stats-space-lg);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  margin: 0 0 var(--ui-space-lg);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 dl {
   display: grid;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
   margin: 0;
 }
 
 dl div {
   display: flex;
   justify-content: space-between;
-  gap: var(--stats-space-md);
-  padding-top: var(--stats-space-sm);
-  border-top: 1px solid var(--stats-border);
+  gap: var(--ui-space-md);
+  padding-top: var(--ui-space-sm);
+  border-top: 1px solid var(--ui-border);
 }
 
 dt {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
 }
 
 dd {

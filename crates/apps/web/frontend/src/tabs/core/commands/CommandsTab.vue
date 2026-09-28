@@ -2,7 +2,7 @@
   <section class="tab-detail-layout">
     <section class="commands-panel tab-detail-main">
       <div class="commands-toolbar">
-        <span class="commands-count">{{ commandCount }} commands</span>
+        <span class="commands-count">{{ t('count', { count: commandCount }) }}</span>
         <div class="commands-actions">
           <button
             type="button"
@@ -11,7 +11,7 @@
             @click="expandAll"
           >
             <ChevronsUpDown :size="15" aria-hidden="true" />
-            Expand all
+            {{ t('expandAll') }}
           </button>
           <button
             type="button"
@@ -20,7 +20,7 @@
             @click="collapseAll"
           >
             <ChevronsDownUp :size="15" aria-hidden="true" />
-            Collapse all
+            {{ t('collapseAll') }}
           </button>
         </div>
       </div>
@@ -28,7 +28,7 @@
         <DataTable
           :columns="columns"
           :rows="rows"
-          empty-label="No commands"
+          :empty-label="t('empty')"
           :total-rows="totalRows"
           :can-load-more="hasMoreRows"
           :can-load-all="hasMoreRows"
@@ -52,6 +52,8 @@ import DataTable from '../../../components/DataTable.vue';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import { TABLE_RENDER_LIMITS } from '../../tableConfig';
 import { normalizeTableQuery } from '../../tableModel';
+import { useModuleLocale } from '../../../locale';
+import strings from './locale';
 import {
   COMMAND_COLUMNS,
   buildCommandTree,
@@ -60,6 +62,8 @@ import {
   flattenMatchingCommands,
   flattenVisibleCommands,
 } from './model';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   traceKey: {
@@ -84,7 +88,7 @@ const props = defineProps({
   },
 });
 
-const columns = COMMAND_COLUMNS;
+const columns = COMMAND_COLUMNS.map((column) => ({ ...column, label: t(column.labelKey) }));
 const expandedIds = ref(new Set());
 const visibleLimit = ref(TABLE_RENDER_LIMITS.initialRows);
 const selectedDetail = ref(null);
@@ -178,7 +182,7 @@ function loadAll() {
 }
 
 .commands-count {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -196,10 +200,10 @@ function loadAll() {
   gap: 6px;
   height: 32px;
   padding: 0 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
-  background: var(--surface);
-  color: var(--teal-deep);
+  background: var(--ui-surface);
+  color: var(--ui-accent-strong);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -207,12 +211,12 @@ function loadAll() {
 }
 
 .tree-action:hover:not(:disabled) {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
   background: var(--trace-interactive-bg);
 }
 
 .tree-action:disabled {
-  color: var(--muted);
+  color: var(--ui-muted);
   cursor: not-allowed;
   opacity: 0.6;
 }

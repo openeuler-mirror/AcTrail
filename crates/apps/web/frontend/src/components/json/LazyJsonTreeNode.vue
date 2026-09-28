@@ -185,12 +185,12 @@ function branchSummary(type, childCount) {
 
 .lazy-json-key {
   overflow-wrap: anywhere;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--ui-mono, monospace);
 }
 
 .lazy-json-summary,
 .lazy-json-empty {
-  color: var(--text-muted, #7b8494);
+  color: var(--ui-muted, #7b8494);
   font-size: 0.78rem;
 }
 
@@ -216,7 +216,7 @@ function branchSummary(type, childCount) {
 
 .lazy-json-error {
   margin: 4px 8px;
-  color: var(--danger, #c84a4a);
+  color: var(--ui-danger, #c84a4a);
   font-size: 0.8rem;
 }
 

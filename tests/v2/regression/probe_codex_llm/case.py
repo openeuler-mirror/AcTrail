@@ -67,14 +67,34 @@ class ProbeCodexLLMCase(TestCase):
                 TestStatus.PASSED,
                 "actrailctl launch and Codex exited successfully",
             )
-            if "seccomp_notify:disabled" not in launch.output:
-                raise AssertionError(
-                    "Codex launch did not preserve the default disabled "
-                    "seccomp-notify policy"
+            if (
+                self._permission_value(
+                    launch.output,
+                    "deployment_permissions_requested=",
                 )
-            results["seccomp_default"] = TestResult(
+                != "host_ebpf:auto,seccomp_notify:auto"
+            ):
+                raise AssertionError(
+                    "Codex launch did not report the complete preset's auto "
+                    "deployment permission request"
+                )
+            selected = self._permission_value(
+                launch.output,
+                "deployment_permissions_selected=",
+            )
+            degraded = self._permission_value(
+                launch.output,
+                "deployment_permissions_degraded=",
+            )
+            if "seccomp_notify:enabled" not in selected or degraded != "false":
+                raise AssertionError(
+                    "complete capture requires the seccomp-notify path; launch "
+                    f"selected={selected or '<missing>'} "
+                    f"degraded={degraded or '<missing>'}"
+                )
+            results["seccomp_notify"] = TestResult(
                 TestStatus.PASSED,
-                "Codex capture used the disabled seccomp-notify default",
+                "Codex launch selected the complete preset's seccomp-notify path",
             )
 
             test_context.report_progress(
@@ -143,3 +163,11 @@ class ProbeCodexLLMCase(TestCase):
                         TestStatus.FAILED,
                         f"actraild stop exited with {stopped.returncode}",
                     )
+
+    @staticmethod
+    def _permission_value(output: str, prefix: str) -> str:
+        value = ""
+        for line in output.splitlines():
+            if line.startswith(prefix):
+                value = line[len(prefix):].strip()
+        return value

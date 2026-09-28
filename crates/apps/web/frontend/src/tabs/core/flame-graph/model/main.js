@@ -4,10 +4,10 @@ import { FLAME_GRAPH_ASSOCIATION_ROLES, STRUCTURAL_KINDS, BACKGROUND_LLM_KINDS, 
 import { buildAgentLayer, buildLayer, emptyLayer, activityFromAction } from './presentation.js';
 import { attributedToolEffects, attributedDisplayInterval, derivedDisplayIntervals } from './tool-effects.js';
 
-export function buildFlameGraph(actions, links, attribution = null, associations = [], requestContexts = new Map()) {
+export function buildFlameGraph(actions, links, attribution = null, associations = [], requestContexts = new Map(), t) {
   const validActions = (actions ?? []).filter(validTimedAction);
   if (!validActions.length) {
-    return emptyFlameGraphModel();
+    return emptyFlameGraphModel(t);
   }
 
   const graphLinks = flameGraphLinks(links, associations);
@@ -93,6 +93,7 @@ export function buildFlameGraph(actions, links, attribution = null, associations
       ),
       toolEffectByAction.get(action.id) ?? null,
       toolDisplay,
+      t,
     );
     if (!activity) {
       continue;
@@ -109,8 +110,9 @@ export function buildFlameGraph(actions, links, attribution = null, associations
       graphLinks,
       childrenByParent,
       window,
+      t,
     ),
-    buildLayer('harness', 'Harness layer', 'Title/summary work and unclaimed framework activity', harnessActivities, window),
+    buildLayer('harness', t('layer.harness'), t('layer.harnessDescription'), harnessActivities, window, t),
   ];
 
   return {
@@ -140,7 +142,7 @@ function linkIdentity(link) {
   return `${link.parent}\u0000${link.child}\u0000${link.role}`;
 }
 
-export function emptyFlameGraphModel() {
+export function emptyFlameGraphModel(t) {
   return {
     window: {
       startNanos: 0n,
@@ -150,8 +152,8 @@ export function emptyFlameGraphModel() {
       endIso: null,
     },
     layers: [
-      emptyLayer('agent', 'Agent layer', 'Primary LLM turns and their linked tool chain'),
-      emptyLayer('harness', 'Harness layer', 'Title/summary work and unclaimed framework activity'),
+      emptyLayer('agent', t('layer.agent'), t('layer.agentDescription')),
+      emptyLayer('harness', t('layer.harness'), t('layer.harnessDescription')),
     ],
     totalActivities: 0,
   };

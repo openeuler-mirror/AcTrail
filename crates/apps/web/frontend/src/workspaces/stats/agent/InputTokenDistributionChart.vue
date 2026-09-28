@@ -42,10 +42,10 @@ const option = computed(() => {
       min: bins.length ? bins[0].start : 0,
       max: bins.length ? bins.at(-1).end : undefined,
       minInterval: 1,
-      axisLabel: { formatter: formatTokens, color: 'var(--stats-muted)' },
-      axisLine: { lineStyle: { color: 'var(--stats-border-strong)' } },
-      splitLine: { lineStyle: { color: 'var(--stats-border)' } },
-      nameTextStyle: { color: 'var(--stats-muted)' },
+      axisLabel: { formatter: formatTokens, color: 'var(--ui-muted)' },
+      axisLine: { lineStyle: { color: 'var(--ui-border-strong)' } },
+      splitLine: { lineStyle: { color: 'var(--ui-border)' } },
+      nameTextStyle: { color: 'var(--ui-muted)' },
     },
     yAxis: {
       type: 'value',
@@ -54,10 +54,10 @@ const option = computed(() => {
       nameGap: 46,
       min: 0,
       minInterval: 1,
-      axisLabel: { formatter: formatTokens, color: 'var(--stats-muted)' },
-      axisLine: { lineStyle: { color: 'var(--stats-border-strong)' } },
-      splitLine: { lineStyle: { color: 'var(--stats-border)' } },
-      nameTextStyle: { color: 'var(--stats-muted)' },
+      axisLabel: { formatter: formatTokens, color: 'var(--ui-muted)' },
+      axisLine: { lineStyle: { color: 'var(--ui-border-strong)' } },
+      splitLine: { lineStyle: { color: 'var(--ui-border)' } },
+      nameTextStyle: { color: 'var(--ui-muted)' },
     },
     dataZoom: [
       {
@@ -75,7 +75,7 @@ const option = computed(() => {
       type: 'bar',
       barMaxWidth: 52,
       itemStyle: {
-        color: 'var(--stats-chart-input)',
+        color: 'var(--ui-chart-input)',
         borderRadius: [3, 3, 0, 0],
       },
       data: bins.map((bin) => ({

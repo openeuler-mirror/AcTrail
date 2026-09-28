@@ -10,7 +10,7 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  background: var(--surface);
+  background: var(--ui-surface);
 }
 
 .flame-toolbar,
@@ -26,8 +26,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
   padding: 18px 22px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--trace-flame-toolbar-bg, var(--surface));
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--trace-flame-toolbar-bg, var(--ui-surface));
 }
 
 .flame-heading {
@@ -55,7 +55,7 @@
 
 .flame-heading h2 {
   margin: 0;
-  color: var(--text);
+  color: var(--ui-text);
   font-size: 18px;
   line-height: 1.2;
 }
@@ -65,7 +65,7 @@
 .flame-layer-stats small,
 .fg-gutter small,
 .flame-legend small {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
 }
 
@@ -86,9 +86,9 @@
 
 .flame-zoom-controls {
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
-  background: var(--surface-raised, var(--surface));
+  background: var(--ui-surface-raised, var(--ui-surface));
 }
 
 .flame-zoom-controls button {
@@ -97,9 +97,9 @@
   height: 30px;
   place-items: center;
   border: 0;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--ui-border);
   background: transparent;
-  color: var(--muted);
+  color: var(--ui-muted);
   cursor: pointer;
 }
 
@@ -116,8 +116,8 @@
   gap: 18px;
   min-height: 34px;
   padding: 0 22px;
-  border-bottom: 1px solid var(--border);
-  color: var(--muted);
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-muted);
   font-size: 11px;
 }
 
@@ -180,8 +180,8 @@
   z-index: 5;
   top: 0;
   min-height: 38px;
-  border-bottom: 1px solid var(--border);
-  background: var(--trace-flame-axis-bg, var(--surface));
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--trace-flame-axis-bg, var(--ui-surface));
 }
 
 .fg-gutter {
@@ -191,8 +191,8 @@
   min-width: 0;
   height: 100%;
   padding: 0 12px 0 18px;
-  border-right: 1px solid var(--border);
-  color: var(--muted);
+  border-right: 1px solid var(--ui-border);
+  color: var(--ui-muted);
   font-size: 11px;
   font-weight: 650;
 }
@@ -219,9 +219,9 @@
   min-width: 28px;
   margin-left: 8px;
   padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ui-border) 82%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-soft, var(--surface)) 82%, transparent);
+  background: color-mix(in srgb, var(--ui-surface-soft, var(--ui-surface)) 82%, transparent);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -243,7 +243,7 @@
   position: absolute;
   top: 10px;
   translate: -50% 0;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
@@ -259,9 +259,9 @@
 .flame-layer {
   margin: 10px 12px 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--ui-surface);
   box-shadow: var(--trace-flame-layer-shadow, none);
 }
 
@@ -272,9 +272,9 @@
   gap: 9px;
   padding: 7px 14px;
   border: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--ui-border);
   background: var(--trace-flame-agent-layer-bg);
-  color: var(--text);
+  color: var(--ui-text);
   text-align: left;
   cursor: pointer;
 }
@@ -288,7 +288,7 @@
 }
 
 .flame-layer-chevron {
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 .layer-agent .flame-layer-dot {
@@ -315,19 +315,19 @@
 
 .flame-layer-stats {
   align-items: flex-end;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
 }
 
 .flame-layer-stats strong {
-  color: var(--text);
+  color: var(--ui-text);
   font-variant-numeric: tabular-nums;
 }
 
 .flame-agent-scope {
   position: relative;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface);
 }
 
 .flame-agent-scope:last-child {
@@ -350,13 +350,13 @@
   grid-template-columns: 156px minmax(620px, 1fr);
   padding: 0;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 76%, transparent);
   background: color-mix(
     in srgb,
     var(--trace-flame-agent-layer-bg) 58%,
-    var(--surface)
+    var(--ui-surface)
   );
-  color: var(--text);
+  color: var(--ui-text);
   text-align: left;
   cursor: pointer;
 }
@@ -364,9 +364,9 @@
 .scope-subagent .flame-agent-scope-header {
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--trace-flame-agent-accent) 8%, var(--surface)) 0,
-    color-mix(in srgb, var(--trace-flame-agent-layer-bg) 44%, var(--surface)) 45%,
-    var(--surface) 100%
+    color-mix(in srgb, var(--trace-flame-agent-accent) 8%, var(--ui-surface)) 0,
+    color-mix(in srgb, var(--trace-flame-agent-layer-bg) 44%, var(--ui-surface)) 45%,
+    var(--ui-surface) 100%
   );
 }
 
@@ -391,13 +391,13 @@
   height: 100%;
   gap: 6px;
   padding: 0 12px 0 calc(14px + var(--scope-indent, 0px));
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--ui-border);
   color: var(--trace-flame-agent-accent);
 }
 
 .flame-agent-scope-gutter strong {
   overflow: hidden;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 9px;
   font-weight: 750;
   letter-spacing: 0.08em;
@@ -440,7 +440,7 @@
 .flame-agent-scope-copy small {
   max-width: 100%;
   overflow: hidden;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -449,21 +449,21 @@
 .flame-agent-scope-metrics {
   flex: 0 0 auto;
   gap: 6px;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 9px;
   font-variant-numeric: tabular-nums;
 }
 
 .flame-agent-scope-metrics span {
   padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  background: color-mix(in srgb, var(--ui-surface) 82%, transparent);
 }
 
 .flame-agent-scope-metrics strong {
   min-width: 42px;
-  color: var(--text);
+  color: var(--ui-text);
   font-size: 10px;
   text-align: right;
 }
@@ -479,7 +479,7 @@
 
 .flame-track-row {
   min-height: var(--track-height, 38px);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent);
 }
 
 .flame-track-row:last-child {
@@ -507,12 +507,12 @@
 }
 
 .flame-track.synthetic {
-  background-color: color-mix(in srgb, var(--surface-soft, var(--surface)) 55%, transparent);
+  background-color: color-mix(in srgb, var(--ui-surface-soft, var(--ui-surface)) 55%, transparent);
 }
 
 .flame-layer-empty,
 .flame-empty {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 12px;
 }
 
@@ -530,7 +530,7 @@
 }
 
 .flame-empty strong {
-  color: var(--text);
+  color: var(--ui-text);
 }
 
 @media (max-width: 960px) {

@@ -14,6 +14,8 @@ mod alerts;
 pub(crate) mod cluster;
 #[path = "view/commands.rs"]
 mod commands;
+#[path = "view/daemon_status.rs"]
+mod daemon_status;
 #[path = "view/events.rs"]
 mod events;
 #[path = "view/llm_trajectory.rs"]
@@ -33,7 +35,9 @@ mod topology;
 #[path = "view/traces.rs"]
 mod traces;
 
-use model_core::ids::TraceId;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use model_core::ids::{RequestId, TraceId};
 use model_core::payload::PayloadSegmentId;
 use storage_core::{
     PayloadSegmentQuery, SemanticActionChildPageQuery, SnapshotView, StorageBackend,
@@ -107,6 +111,23 @@ pub fn runtime_plugin_status_json(
     operator_config: Option<&config_core::daemon::OperatorConfig>,
 ) -> Result<String, String> {
     runtime_config::runtime_plugin_status_json(config_path, operator_config)
+}
+
+/// Control-plane liveness as the console sees it: the collector daemon answers
+/// the operator control socket, or it does not.
+pub fn daemon_status_json(
+    operator_config: Option<&config_core::daemon::OperatorConfig>,
+) -> Result<String, String> {
+    daemon_status::daemon_status_json(operator_config)
+}
+
+pub(super) fn web_request_id() -> Result<RequestId, String> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock is before unix epoch; cannot build control request id")?;
+    let millis = u64::try_from(duration.as_millis())
+        .map_err(|_| "system clock millis overflowed request id")?;
+    Ok(RequestId::new(millis))
 }
 
 pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {

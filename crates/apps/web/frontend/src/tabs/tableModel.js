@@ -53,6 +53,19 @@ export function row(id, cells, detail) {
   return { id, cells, detail };
 }
 
+/**
+ * Ledger rows carry a preview, not the payload. Collapse whitespace and cut
+ * the text so one record cannot stretch the column; the inspector keeps the
+ * full value and the cell title exposes it on hover.
+ */
+export function previewText(value, limit = 160) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return '';
+  }
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
 export function eventDetail(event) {
   return {
     title: event.summary || event.operation || event.display_id,

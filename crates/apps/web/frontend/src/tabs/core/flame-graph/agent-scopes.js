@@ -54,7 +54,7 @@ export function inferAgentRequestLinks(actions, links, actionById, displayInterv
     }));
 }
 
-export function deriveAgentScopes(invocations, actions, links, childrenByParent) {
+export function deriveAgentScopes(invocations, actions, links, childrenByParent, t) {
   const validLinks = (links ?? []).filter((link) => link.valid !== false);
   const childRequestsByInvocation = new Map();
   const parentToolCallByInvocation = new Map();
@@ -105,10 +105,12 @@ export function deriveAgentScopes(invocations, actions, links, childrenByParent)
       invocation,
       parentToolCallId,
       relationSource: validLinks.some((link) => link.parent === invocation.id
-        && link.role === 'agent.invocation.child_llm_request' && link.inferred) ? 'inferred from request text' : 'stored relationship',
+        && link.role === 'agent.invocation.child_llm_request' && link.inferred)
+        ? t('scope.inferredSource')
+        : t('scope.storedSource'),
       actionIds,
       parentId: 'agent-main',
-      parentLabel: 'Main agent',
+      parentLabel: t('scope.mainAgent'),
       depth: 1,
       childCount: 0,
       spawnLabel: toolName ? `tool.call:${toolName}` : 'Agent invocation',

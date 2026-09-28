@@ -7,8 +7,8 @@
 ![actrailweb 前端组件包含关系](assets/web-frontend-components.png)
 
 - `App`
-  - `Topbar`：品牌、主题、语言、全局搜索和刷新。
-  - `GlobalTabs`：顶层 Workspace 选择。
+  - `Sidebar`：品牌、分组 Workspace 导航、仓库入口和收起/展开拨片。
+  - `Header`：右对齐的悬浮操作簇，承载全局搜索、主题、语言和刷新。
   - Active Workspace：Statistics、Config、Plugins 或 Traces。
   - Notification stack 与 Error bar：跨 Workspace 反馈。
 - `TraceWorkspace`
@@ -30,7 +30,7 @@
 
 ![actrailweb 前端工作区导航](assets/web-frontend-navigation.png)
 
-当前 `GlobalTabs` 提供 Statistics、Config、Plugins 和 Traces 四个顶层 Workspace。导航状态不写入 URL：顶层选择保存在 `App`，Statistics 与 Traces 的子选择由所属 Workspace 持有。
+当前 `Sidebar` 提供 Statistics、Config、Plugins 和 Traces 四个顶层 Workspace，按 Observe（Statistics、Traces）和 Control（Config、Plugins）两组展示。Statistics 的子页面使用内容区顶部的下划线标签。导航状态不写入 URL：顶层选择保存在 `App`，Statistics 与 Traces 的子选择由所属 Workspace 持有。
 
 Trace 使用四组两级导航。一级为 Overview、Execution、Activity 和 Health，每组最多包含 6 个 leaf view。两级导航不改变既有 leaf view ID、数据端点或详情组件；完整状态归属和分组见 [Navigator 与 Workspace](controls/navigation-workspace.md)。
 
@@ -40,7 +40,9 @@ Trace 使用四组两级导航。一级为 Overview、Execution、Activity 和 H
 
 ### 应用壳
 
-应用壳纵向排列 Topbar、顶层导航和 Active Workspace。通知栈与错误条覆盖当前页面，不占用 Workspace 网格。
+应用壳为两列网格：左侧 `Sidebar` 承载品牌、分组导航和仓库入口，右侧主列铺满视口。`Header` 绝对定位在主列顶部且背景透明，只渲染右对齐的悬浮操作簇。内容列顶部另有一层渐变模糊带，让滚动内容在悬浮控件下方渐隐，而不是撞上一条硬边。通知栈与错误条覆盖当前页面，不占用 Workspace 网格。
+
+`Sidebar` 在 `216px` 与 `60px` 之间收起展开：拨片贴在侧栏右缘，宽度过渡完成切换，收起后只保留图标并隐藏分组标题与文字，状态记录在浏览器本地。主题、语言与刷新位于悬浮操作簇内。
 
 ### Trace Workspace
 
@@ -62,7 +64,7 @@ Alerts 使用主从布局。列表负责严重级别筛选与告警选择，详�
 
 ![actrailweb 核心响应式折叠](assets/web-frontend-responsive.png)
 
-- `1100px` 及以下：Trace rail 收窄至 `220px`；表格—详情布局由左右两栏变成上下排列，详情最大高度为 `360px`。
-- `760px` 及以下：Topbar 改为纵向排列；Trace 页面改为单列，Trace rail 移到内容上方，四项指标改为两列；Statistics 侧栏改为可横向滚动的顶部导航。
+- `1100px` 及以下：`Sidebar` 固定为图标宽度，隐藏导航文字、品牌副标题和收起拨片；Trace rail 收窄至 `220px`；表格—详情布局由左右两栏变成上下排列，详情最大高度为 `360px`。
+- `760px` 及以下：`Sidebar` 变为内容上方的横向条，只保留品牌标记和导航图标；悬浮操作簇改为整行宽度；Trace 页面改为单列，Trace rail 移到内容上方，四项指标改为两列；Trace 组导航折叠为下拉选择。
 
 Stats、Plugins、Alerts 与图表组件可以设置局部断点，但局部断点只能改变所属组件，不能改变顶层 Workspace 结构。稳定尺寸必须通过 CSS 变量或主题 token 管理，文档只记录布局语义和核心断点。

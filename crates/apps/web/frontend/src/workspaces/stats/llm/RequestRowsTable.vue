@@ -109,7 +109,7 @@ const emptyLabel = computed(() =>
 .rows-table {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 header,
@@ -117,26 +117,26 @@ footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 h3 {
   margin: 0;
-  font-size: var(--stats-font-title);
+  font-size: var(--ui-font-title);
 }
 
 header span {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .table-shell {
   min-width: 0;
   max-height: min(640px, 72vh);
   overflow: auto;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
 }
 
 table {
@@ -144,13 +144,13 @@ table {
   min-width: 980px;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: var(--stats-font-sm);
+  font-size: var(--ui-font-sm);
 }
 
 th,
 td {
-  padding: var(--stats-table-cell-padding);
-  border-bottom: 1px solid var(--stats-border);
+  padding: var(--ui-table-cell-padding);
+  border-bottom: 1px solid var(--ui-border);
   text-align: left;
   vertical-align: top;
 }
@@ -159,22 +159,22 @@ th {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
-  font-weight: var(--stats-weight-medium);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
+  font-weight: var(--ui-weight-medium);
 }
 
 td small {
   display: block;
-  margin-top: var(--stats-table-subtext-gap);
-  color: var(--stats-muted);
+  margin-top: var(--ui-table-subtext-gap);
+  color: var(--ui-muted);
 }
 
 td button {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--stats-accent);
+  color: var(--ui-accent);
   cursor: pointer;
   font: inherit;
 }
@@ -188,31 +188,31 @@ td button {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
-  padding: 0 var(--stats-space-sm);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-accent-muted);
-  color: var(--stats-text);
+  padding: 0 var(--ui-space-sm);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-muted);
+  color: var(--ui-text);
 }
 
 .status.missing {
   background: rgba(190, 18, 60, 0.12);
-  color: var(--stats-danger);
+  color: var(--ui-danger);
 }
 
 .empty {
   min-height: 150px;
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
 }
 
 footer button {
-  min-height: var(--stats-control-height-md);
-  padding: 0 var(--stats-action-padding-x);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  min-height: var(--ui-control-height-md);
+  padding: 0 var(--ui-action-padding-x);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   cursor: pointer;
 }
 </style>

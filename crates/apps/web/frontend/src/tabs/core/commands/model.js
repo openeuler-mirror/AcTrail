@@ -3,11 +3,11 @@ import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from 
 import { CommandLaunchDisplay } from '../../../command/launchDisplay.js';
 
 export const COMMAND_COLUMNS = Object.freeze([
-  { key: 'title', label: 'Command', tree: true },
-  { key: 'time', label: 'Start time', align: 'numeric' },
-  { key: 'pid', label: 'Host PID', align: 'numeric' },
-  { key: 'kind', label: 'Kind', badge: 'kind' },
-  { key: 'status', label: 'Start result', badge: 'status' },
+  { key: 'title', labelKey: 'columns.command', tree: true },
+  { key: 'time', labelKey: 'columns.startTime', align: 'numeric' },
+  { key: 'pid', labelKey: 'columns.hostPid', align: 'numeric' },
+  { key: 'kind', labelKey: 'columns.kind', badge: 'kind' },
+  { key: 'status', labelKey: 'columns.startResult', badge: 'status' },
 ]);
 
 export function buildCommandTree(actions = [], links = [], processes = []) {

@@ -3,42 +3,42 @@
     <div class="runtime-content">
       <section class="runtime-hero">
         <div>
-          <span>Runtime Config</span>
-          <h2>Current configuration</h2>
+          <span>{{ t('config.kicker') }}</span>
+          <h2>{{ t('app.titles.config') }}</h2>
         </div>
         <div class="runtime-source">{{ sourceLabel }}</div>
       </section>
 
-      <section class="runtime-metrics">
+      <section v-reveal class="runtime-metrics">
         <div v-for="metric in metrics" :key="metric.label" class="runtime-metric">
           <span>{{ metric.label }}</span>
           <strong>{{ metric.value }}</strong>
         </div>
       </section>
 
-      <div v-if="loading && !config" class="runtime-panel loading-panel">
-        <span class="loading-spinner" aria-hidden="true"></span>
-        <p>Loading configuration...</p>
+      <div v-if="loading && !config" v-reveal class="runtime-panel config-skeleton">
+        <SkeletonBlock width="38%" height="14px" />
+        <SkeletonBlock width="72%" height="10px" />
+        <SkeletonBlock width="100%" height="180px" radius="var(--ui-radius-md)" />
       </div>
 
-      <section v-else-if="!config?.available" class="runtime-panel runtime-empty">
-        <h2>Configuration unavailable</h2>
-        <p>{{ config?.reason ?? error }}</p>
+      <section v-else-if="!config?.available" v-reveal class="runtime-panel">
+        <EmptyState :title="t('config.unavailable')" :description="config?.reason ?? error" />
       </section>
 
       <section v-else class="config-layout">
-        <aside class="runtime-panel runtime-side">
-          <div class="runtime-side-heading">Source</div>
+        <aside v-reveal class="runtime-panel runtime-side">
+          <div class="runtime-side-heading">{{ t('config.source') }}</div>
           <dl class="runtime-rows">
-            <dt>Mode</dt>
-            <dd>{{ config.source?.mode ?? 'unknown' }}</dd>
-            <dt>Path</dt>
-            <dd>{{ config.source?.path ?? 'n/a' }}</dd>
-            <dt>Format</dt>
+            <dt>{{ t('config.mode') }}</dt>
+            <dd>{{ config.source?.mode ?? t('config.unknown') }}</dd>
+            <dt>{{ t('config.path') }}</dt>
+            <dd>{{ config.source?.path ?? t('config.notAvailable') }}</dd>
+            <dt>{{ t('config.format') }}</dt>
             <dd>{{ config.format }}</dd>
           </dl>
 
-          <div class="runtime-side-heading">Summary</div>
+          <div class="runtime-side-heading">{{ t('config.summary') }}</div>
           <dl class="runtime-rows">
             <template v-for="row in summaryRows" :key="row.label">
               <dt>{{ row.label }}</dt>
@@ -47,11 +47,11 @@
           </dl>
         </aside>
 
-        <section class="runtime-panel config-document-panel">
+        <section v-reveal="1" class="runtime-panel config-document-panel">
           <header class="runtime-panel-header">
             <div>
-              <span>Rendered TOML</span>
-              <strong>{{ configLineCount }} lines</strong>
+              <span>{{ t('config.toml') }}</span>
+              <strong>{{ t('config.lineCount', { count: configLineCount }) }}</strong>
             </div>
           </header>
           <div class="config-document">
@@ -69,6 +69,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { readCurrentConfig } from '../api';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import { useModuleLocale } from '../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   query: {
@@ -91,20 +97,20 @@ let activeLoad = null;
 const metrics = computed(() => {
   const summary = config.value?.summary ?? {};
   return [
-    { label: 'Storage', value: basename(summary.storage_path) },
-    { label: 'Listen', value: summary.listen_addr ?? 'n/a' },
-    { label: 'Plugins', value: `${summary.plugin_enabled_count ?? 0}/${summary.plugin_count ?? 0}` },
-    { label: 'Startup Plugins', value: summary.startup_plugins_enabled ? 'Enabled' : 'Disabled' },
+    { label: t('config.storage'), value: basename(summary.storage_path) },
+    { label: t('config.listen'), value: summary.listen_addr ?? t('config.notAvailable') },
+    { label: t('config.plugins'), value: `${summary.plugin_enabled_count ?? 0}/${summary.plugin_count ?? 0}` },
+    { label: t('config.startupPlugins'), value: summary.startup_plugins_enabled ? t('config.enabled') : t('config.disabled') },
   ];
 });
 
 const summaryRows = computed(() => {
   const summary = config.value?.summary ?? {};
   return [
-    { label: 'Socket', value: summary.socket_path ?? 'n/a' },
-    { label: 'Storage', value: summary.storage_path ?? 'n/a' },
-    { label: 'Listen', value: summary.listen_addr ?? 'n/a' },
-    { label: 'Plugins enabled', value: `${summary.plugin_enabled_count ?? 0}/${summary.plugin_count ?? 0}` },
+    { label: t('config.socket'), value: summary.socket_path ?? t('config.notAvailable') },
+    { label: t('config.storage'), value: summary.storage_path ?? t('config.notAvailable') },
+    { label: t('config.listen'), value: summary.listen_addr ?? t('config.notAvailable') },
+    { label: t('config.pluginsEnabled'), value: `${summary.plugin_enabled_count ?? 0}/${summary.plugin_count ?? 0}` },
   ];
 });
 

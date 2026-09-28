@@ -35,6 +35,11 @@
           :request-content-available="llmRequestContentAvailable"
           @load-request-content="loadLlmRequestContent"
         />
+        <LlmRequestCanonicalBody
+          :trace-id="traceId"
+          :action-id="llmRequestActionId(detail)"
+          :metadata="llmRequestContentMetadata"
+        />
         <HttpInsightPanel :detail="detail" />
         <CommandInsightPanel :detail="detail" />
         <McpInsightPanel
@@ -46,12 +51,6 @@
       </template>
 
       <template #secondary>
-        <LlmRequestCanonicalBody
-          :trace-id="traceId"
-          :action-id="llmRequestActionId(detail)"
-          :metadata="llmRequestContentMetadata"
-        />
-
         <section v-if="Object.keys(detailAttributes).length" class="detail-section">
           <h3>Attributes</h3>
           <JsonTree
@@ -67,7 +66,7 @@
         </section>
 
         <section v-if="hasFilePathSet" class="detail-section">
-          <h3>Path Set</h3>
+          <h3>{{ t('detail.pathSet') }}</h3>
           <dl v-if="filePathSetRows.length" class="detail-rows path-set-rows">
             <template v-for="[key, value] in filePathSetRows" :key="key">
               <dt>{{ key }}</dt>
@@ -122,8 +121,12 @@ import LlmInsightPanel from './LlmInsightPanel.vue';
 import McpInsightPanel from './McpInsightPanel.vue';
 import ProgressiveDisclosure from './ProgressiveDisclosure.vue';
 import LlmRequestCanonicalBody from './llm/LlmRequestCanonicalBody.vue';
+import { useModuleLocale } from '../locale';
+import strings from './locale';
 import { deriveMcpJsonRpcView, mcpJsonRpcContentSource } from '../mcp/jsonRpcContent';
 import { mcpPayloadEvidenceIds } from '../mcp/payloadEvidence';
+
+const { t } = useModuleLocale(strings);
 
 const LLM_REQUEST_DETAIL_MAX_BYTES = 128 * 1024;
 const EMPTY_JSON_EXPANDED_PATHS = new Set();
@@ -177,7 +180,7 @@ let activePayloadLoad = null;
 let activeFilePathSetLoad = null;
 let activeLlmRequestLoad = null;
 
-const detailTitle = computed(() => props.detail?.title ?? 'No selection');
+const detailTitle = computed(() => props.detail?.title ?? t('detail.noSelection'));
 const detailKind = computed(() => props.detail?.kind ?? 'detail');
 const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}));
 const detailAttributes = computed(() => props.detail?.attributes ?? {});
@@ -251,7 +254,7 @@ watch(
     } else if (payloadIds.length && traceId) {
       loadPayloads(traceId, payloadIds, activePayloadLoad);
     } else if (isMcpPayloadDetail.value && traceId && payloadSourceValid) {
-      payloadError.value = 'MCP payload has no canonical content link or retained raw evidence';
+      payloadError.value = t('detail.mcpPayloadMissing');
     }
     if (nextDetail?.filePathSetActionId && traceId) {
       loadFilePathSetPage({
@@ -358,7 +361,9 @@ async function loadLlmRequestContent() {
     });
     if (activeLlmRequestLoad === token) {
       if (response.content?.truncated) {
-        llmRequestError.value = `Request insights exceed the ${LLM_REQUEST_DETAIL_MAX_BYTES / 1024} KiB view limit. Open Canonical request body to browse the content.`;
+        llmRequestError.value = t('detail.requestInsightsTooLarge', {
+          kib: LLM_REQUEST_DETAIL_MAX_BYTES / 1024,
+        });
         llmRequestContent.value = null;
       } else {
         llmRequestContent.value = response.content ?? null;

@@ -182,17 +182,17 @@ export function resolvePartitionedVisibleSeries({ series, hiddenKeys }) {
 export function tokenCategoryColor(key) {
   switch (key) {
     case 'input':
-      return 'var(--stats-chart-input)';
+      return 'var(--ui-chart-input)';
     case 'output':
-      return 'var(--stats-chart-output)';
+      return 'var(--ui-chart-output)';
     case 'reasoning':
-      return 'var(--stats-chart-reasoning)';
+      return 'var(--ui-chart-reasoning)';
     case 'cache_hit':
-      return 'var(--stats-chart-cache-hit)';
+      return 'var(--ui-chart-cache-hit)';
     case 'cache_miss':
-      return 'var(--stats-chart-cache-miss)';
+      return 'var(--ui-chart-cache-miss)';
     default:
-      return 'var(--stats-chart-total)';
+      return 'var(--ui-chart-total)';
   }
 }
 

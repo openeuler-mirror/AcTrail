@@ -169,7 +169,13 @@ fn serve_stream(mut stream: TcpStream, context: &WebContext) -> Result<(), Strin
     stream
         .set_read_timeout(context.request_read_timeout)
         .map_err(|error| format!("set request read timeout failed: {error}"))?;
-    let request = read_request(&mut stream)?;
+    let request = match read_request(&mut stream) {
+        Ok(request) => request,
+        // A client that connects and then stalls or hangs up is an ordinary
+        // end to the connection, not a server fault worth logging.
+        Err(RequestReadError::ClientGone) => return Ok(()),
+        Err(RequestReadError::Invalid(message)) => return Err(message),
+    };
     let response = match route(&request, context) {
         Ok(response) => response,
         Err(error) => Response::text(STATUS_INTERNAL_ERROR, error),
@@ -191,6 +197,28 @@ fn client_disconnected(error: &std::io::Error) -> bool {
     )
 }
 
+/// Outcome of reading a request head from a freshly accepted socket.
+enum RequestReadError {
+    /// The peer went away or stayed silent past the read timeout.
+    ClientGone,
+    /// The request arrived but is unusable.
+    Invalid(String),
+}
+
+impl RequestReadError {
+    fn from_io(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted => RequestReadError::ClientGone,
+            _ => RequestReadError::Invalid(error.to_string()),
+        }
+    }
+}
+
 fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
     let mut headers = format!(
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -206,26 +234,35 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Resul
     stream.write_all(&response.body)
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
+fn read_request(stream: &mut TcpStream) -> Result<Request, RequestReadError> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
-    reader
+    let read = reader
         .read_line(&mut request_line)
-        .map_err(|error| error.to_string())?;
+        .map_err(RequestReadError::from_io)?;
+    if read == 0 {
+        // The peer opened a socket and closed it without sending anything.
+        return Err(RequestReadError::ClientGone);
+    }
     if request_line.trim().is_empty() {
-        return Err("empty HTTP request".to_string());
+        return Err(RequestReadError::Invalid("empty HTTP request".to_string()));
     }
     let parts = request_line.split_whitespace().collect::<Vec<_>>();
     if parts.len() != 3 {
-        return Err(format!("invalid HTTP request line {request_line:?}"));
+        return Err(RequestReadError::Invalid(format!(
+            "invalid HTTP request line {request_line:?}"
+        )));
     }
     let mut accepts_gzip = false;
     let mut content_length = 0usize;
     loop {
         let mut header = String::new();
-        reader
+        let read = reader
             .read_line(&mut header)
-            .map_err(|error| error.to_string())?;
+            .map_err(RequestReadError::from_io)?;
+        if read == 0 {
+            return Err(RequestReadError::ClientGone);
+        }
         if header == "\r\n" || header == "\n" || header.is_empty() {
             break;
         }
@@ -234,20 +271,19 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             accepts_gzip = true;
         }
         if lower.starts_with("content-length:") {
-            let (_, raw) = header
-                .split_once(':')
-                .ok_or_else(|| format!("invalid Content-Length header {header:?}"))?;
-            content_length = raw
-                .trim()
-                .parse::<usize>()
-                .map_err(|error| format!("invalid Content-Length header: {error}"))?;
+            let (_, raw) = header.split_once(':').ok_or_else(|| {
+                RequestReadError::Invalid(format!("invalid Content-Length header {header:?}"))
+            })?;
+            content_length = raw.trim().parse::<usize>().map_err(|error| {
+                RequestReadError::Invalid(format!("invalid Content-Length header: {error}"))
+            })?;
         }
     }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
-        reader.read_exact(&mut body).map_err(|error| {
-            format!("read HTTP request body failed for {content_length} bytes: {error}")
-        })?;
+        reader
+            .read_exact(&mut body)
+            .map_err(RequestReadError::from_io)?;
     }
     Ok(Request {
         method: parts[0].to_string(),
@@ -326,6 +362,9 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
             context.operator_config.as_ref(),
         )
         .map(Response::json),
+        "/api/daemon/status" => {
+            view::daemon_status_json(context.operator_config.as_ref()).map(Response::json)
+        }
         "/api/stats/token-usage" => match parse_token_usage_stats_query(query) {
             Ok(query) => view::token_usage_stats_json(&context.storage, query).map(Response::json),
             Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),

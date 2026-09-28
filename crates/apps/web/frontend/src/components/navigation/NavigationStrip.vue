@@ -120,53 +120,93 @@ function moveFocus(event) {
 <style scoped>
 .navigation-control {
   min-width: 0;
-  border-bottom: 1px solid var(--stats-border, var(--border));
-  background: var(--stats-surface-bar, var(--surface));
-  backdrop-filter: var(--stats-glass-filter, none);
+  background: transparent;
 }
 
 .navigation-strip {
   min-width: 0;
   display: flex;
-  gap: var(--stats-space-xs, 4px);
+  gap: 6px;
   overflow-x: auto;
-  padding: var(--stats-space-sm, 10px) var(--stats-space-lg, 12px);
+  scrollbar-width: none;
+}
+
+.navigation-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.navigation-control-primary {
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.navigation-control-primary .navigation-strip {
+  gap: 20px;
+  padding: 0 var(--ui-shell-gutter);
 }
 
 .navigation-control-secondary .navigation-strip {
-  padding-top: var(--stats-space-xs, 6px);
-  padding-bottom: var(--stats-space-xs, 6px);
-  background: var(--surface-muted);
+  gap: 6px;
+  padding: 8px var(--ui-shell-gutter);
 }
 
 .navigation-item {
   flex: 0 0 auto;
-  height: var(--stats-control-height-md, 34px);
-  padding: 0 var(--stats-segment-padding-x, 12px);
+  height: 28px;
+  padding: 0 10px;
   border: 1px solid transparent;
-  border-radius: var(--stats-radius-sm, 8px);
+  border-radius: 999px;
   background: transparent;
-  color: var(--stats-muted, var(--muted));
+  color: var(--ui-muted);
   cursor: pointer;
-  font-size: var(--stats-font-sm, inherit);
-  font-weight: var(--stats-weight-medium, inherit);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
+  transition:
+    background var(--ui-duration-fast) var(--ui-ease-out),
+    border-color var(--ui-duration-fast) var(--ui-ease-out),
+    color var(--ui-duration-fast) var(--ui-ease-out);
 }
 
-.navigation-control-primary .navigation-item {
-  font-weight: var(--stats-weight-semibold, 700);
+.navigation-control-secondary .navigation-item {
+  border-color: var(--ui-border);
 }
 
 .navigation-item:hover,
-.navigation-item.active {
-  border-color: var(--trace-interactive-border);
-  background: var(--trace-interactive-bg);
-  color: var(--trace-interactive-text);
+.navigation-control-secondary .navigation-item:hover {
+  border-color: color-mix(in srgb, var(--ui-border-hover) 80%, transparent);
+  background: color-mix(in srgb, var(--ui-text) 7%, transparent);
+  color: var(--ui-text);
+}
+
+.navigation-control-secondary .navigation-item.active {
+  border-color: color-mix(in srgb, var(--ui-text) 24%, transparent);
+  background: color-mix(in srgb, var(--ui-text) 10%, transparent);
+  color: var(--ui-text);
+}
+
+.navigation-control-primary .navigation-item {
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--ui-muted);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.navigation-control-primary .navigation-item:hover {
+  border-bottom-color: color-mix(in srgb, var(--ui-text) 24%, transparent);
+  color: var(--ui-text);
+}
+
+.navigation-control-primary .navigation-item.active {
+  border-bottom-color: var(--ui-text);
+  color: var(--ui-text);
 }
 
 .navigation-item:focus-visible,
 .navigation-select:focus-visible {
-  outline: 2px solid var(--stats-accent, var(--trace-interactive-text));
-  outline-offset: var(--stats-space-xs, 4px);
+  outline: 2px solid var(--ui-accent, var(--trace-interactive-text));
+  outline-offset: var(--ui-space-xs, 4px);
 }
 
 .navigation-select {
@@ -180,14 +220,14 @@ function moveFocus(event) {
 
   .navigation-select {
     width: calc(100% - 24px);
-    height: var(--stats-control-height-md, 38px);
+    height: var(--ui-control-height-md, 38px);
     display: block;
     margin: 8px 12px;
     padding: 0 10px;
-    border: 1px solid var(--stats-border, var(--border));
-    border-radius: var(--stats-radius-sm, 8px);
-    background: var(--stats-surface, var(--surface));
-    color: var(--stats-text, var(--text));
+    border: 1px solid var(--ui-border, var(--ui-border));
+    border-radius: var(--ui-radius-sm, 8px);
+    background: var(--ui-surface, var(--ui-surface));
+    color: var(--ui-text, var(--ui-text));
   }
 }
 </style>

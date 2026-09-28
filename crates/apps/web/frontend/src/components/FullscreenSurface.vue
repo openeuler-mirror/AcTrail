@@ -33,6 +33,11 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Maximize2, Minimize2 } from '@lucide/vue';
 
+import { useModuleLocale } from '../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 const props = defineProps({
   label: {
     type: String,
@@ -51,7 +56,9 @@ let previousBodyOverflow = '';
 
 const isFullscreen = computed(() => nativeActive.value || fallbackActive.value);
 const buttonLabel = computed(() => (
-  isFullscreen.value ? `Exit fullscreen: ${props.label}` : `View fullscreen: ${props.label}`
+  isFullscreen.value
+    ? t('fullscreen.exit', { label: props.label })
+    : t('fullscreen.enter', { label: props.label })
 ));
 
 onMounted(() => {
@@ -167,7 +174,7 @@ function exitFallbackOnEscape(event) {
   right: 14px;
   width: 36px;
   height: 36px;
-  background: var(--surface);
+  background: var(--ui-surface);
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.14);
 }
 
@@ -175,7 +182,7 @@ function exitFallbackOnEscape(event) {
 .fullscreen-surface-fallback {
   width: 100vw;
   height: 100vh;
-  background: var(--bg);
+  background: var(--ui-bg-base);
 }
 
 .fullscreen-surface-fallback {

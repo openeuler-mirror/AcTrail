@@ -1,7 +1,7 @@
 <template>
   <InsightPanel
     :insight="insight"
-    :loading-message="payloadLoading ? 'Loading MCP payload' : ''"
+    :loading-message="payloadLoading ? t('mcpInsight.loading') : ''"
     :error="payloadError"
   />
 </template>
@@ -10,7 +10,11 @@
 import { computed } from 'vue';
 
 import { buildMcpDetailInsight } from '../mcp/insight';
+import { useModuleLocale } from '../locale';
 import InsightPanel from './InsightPanel.vue';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   detail: {

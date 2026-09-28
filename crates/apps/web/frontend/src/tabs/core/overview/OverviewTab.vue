@@ -47,14 +47,14 @@ const sections = computed(() => buildOverviewSections(props.traceDetail, props.a
 .summary-card {
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
-  background: var(--surface);
+  background: var(--ui-surface);
 }
 
 .summary-card h2 {
   margin: 0 0 12px;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
@@ -69,7 +69,7 @@ const sections = computed(() => buildOverviewSections(props.traceDetail, props.a
 }
 
 .summary-card dt {
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 .summary-card dd {

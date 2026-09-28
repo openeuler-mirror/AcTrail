@@ -27,19 +27,19 @@
 }
 
 .donut-hole {
-  fill: var(--stats-surface-strong);
-  stroke: var(--stats-border);
+  fill: var(--ui-surface-strong);
+  stroke: var(--ui-border);
 }
 
 .donut-total {
-  fill: var(--stats-text);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-medium);
+  fill: var(--ui-text);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-medium);
 }
 
 .donut-label {
-  fill: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  fill: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .donut-tooltip {
@@ -49,13 +49,13 @@
   display: grid;
   gap: 2px;
   max-width: 220px;
-  padding: var(--stats-space-xs) var(--stats-space-sm);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
-  box-shadow: var(--stats-shadow);
-  font-size: var(--stats-font-xs);
+  padding: var(--ui-space-xs) var(--ui-space-sm);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: var(--ui-shadow);
+  font-size: var(--ui-font-xs);
 }
 
 .donut-tooltip strong,
@@ -67,10 +67,10 @@
 }
 
 .donut-tooltip strong {
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .donut-tooltip span {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   font-variant-numeric: tabular-nums;
 }

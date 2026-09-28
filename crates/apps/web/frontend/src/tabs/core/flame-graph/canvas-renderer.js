@@ -161,25 +161,27 @@ export function hitTestFlameTrack(entries, x, y) {
   return null;
 }
 
-export function flameActivityTitle(activity) {
+export function flameActivityTitle(activity, t) {
   if (activity.density) {
     return [
       activity.label,
-      `start +${formatOffset(activity.startOffsetMs)}`,
-      `${activity.densityCount} activities share this viewport pixel`,
-      'Zoom in to inspect them individually',
+      t('canvasTitle.startAt', { offset: formatOffset(activity.startOffsetMs) }),
+      t('canvasTitle.density', { count: activity.densityCount }),
+      t('canvasTitle.zoomIn'),
     ].join('\n');
   }
   return [
     activity.label,
     activity.target,
     activity.kind === 'llm.tool_call' || activity.kind === 'llm.tool_result' ? activity.statusLabel : '',
-    `start +${formatOffset(activity.startOffsetMs)}`,
-    activity.live ? 'running' : `duration ${formatOffset(activity.durMs ?? 0)}`,
-    activity.backgroundKind ? `background ${activity.backgroundKind}` : '',
-    activity.summaryMarker ? 'summary marker; raw interval is not continuous activity' : '',
+    t('canvasTitle.startAt', { offset: formatOffset(activity.startOffsetMs) }),
+    activity.live
+      ? t('canvasTitle.running')
+      : t('canvasTitle.duration', { duration: formatOffset(activity.durMs ?? 0) }),
+    activity.backgroundKind ? t('canvasTitle.background', { kind: activity.backgroundKind }) : '',
+    activity.summaryMarker ? t('canvasTitle.summaryMarker') : '',
     activity.aggregate
-      ? `aggregate of ${activity.aggregateCount} activities; interval is first-to-last, not continuous`
+      ? t('canvasTitle.aggregate', { count: activity.aggregateCount })
       : '',
   ].filter(Boolean).join('\n');
 }

@@ -1,7 +1,9 @@
 <template>
   <Teleport to=".app-shell">
+    <Transition name="dialog">
     <div v-if="open" class="plugin-load-backdrop" @mousedown.self="close">
       <section
+        ref="dialogRef"
         class="plugin-load-dialog"
         role="dialog"
         aria-modal="true"
@@ -12,36 +14,36 @@
             <span>{{ loadSubtitle }}</span>
             <h2 :id="titleId">{{ plugin.plugin_id }}</h2>
           </div>
-          <button type="button" aria-label="Close load dialog" :disabled="busy" @click="close">
+          <button type="button" :aria-label="t('load.close')" :disabled="busy" @click="close">
             <X :size="18" aria-hidden="true" />
           </button>
         </header>
 
         <form class="plugin-load-form" @submit.prevent="submit">
           <label class="plugin-load-field">
-            <span>Runtime instance name</span>
+            <span>{{ t('load.instanceName') }}</span>
             <input v-model="instanceId" type="text" autocomplete="off" :disabled="busy" />
-            <small>This name identifies the loaded plugin in commands and status views.</small>
+            <small>{{ t('load.instanceNameHint') }}</small>
           </label>
 
           <details class="plugin-load-permissions">
             <summary>
-              <span>Built-in access</span>
-              <small>{{ plugin.automatic_host_grants?.length ?? 0 }} read-only permissions</small>
+              <span>{{ t('load.builtInAccess') }}</span>
+              <small>{{ t('load.automaticPermissions', { count: plugin.automatic_host_grants?.length ?? 0 }) }}</small>
             </summary>
             <div class="plugin-load-chips">
               <code v-for="grant in plugin.automatic_host_grants" :key="grant">{{ grant }}</code>
-              <span v-if="!plugin.automatic_host_grants?.length">None</span>
+              <span v-if="!plugin.automatic_host_grants?.length">{{ t('load.none') }}</span>
             </div>
           </details>
 
           <PolicyScopeEditor
             v-if="needsFilePolicy"
             v-model="filePolicyScopes"
-            title="Files this plugin can manage"
-            description="The plugin can create only the selected rule types inside these paths."
-            placeholder="/workspace/project/**"
-            path-hint="Use an absolute file path or a directory ending in /**."
+            :title="t('load.fileTitle')"
+            :description="t('load.fileDescription')"
+            :placeholder="t('load.filePlaceholder')"
+            :path-hint="t('load.fileHint')"
             :busy="busy"
             @blur="showValidation = true"
           />
@@ -49,11 +51,11 @@
           <PolicyScopeEditor
             v-if="needsCommandPolicy"
             v-model="commandPolicyScopes"
-            title="Executables this plugin can manage"
-            description="The plugin can publish only the selected decisions for these executable scopes."
-            path-label="Executable scope"
-            placeholder="/usr/bin/**"
-            path-hint="Use an exact absolute executable path or a directory ending in /**."
+            :title="t('load.commandTitle')"
+            :description="t('load.commandDescription')"
+            :path-label="t('load.commandPathLabel')"
+            :placeholder="t('load.commandPlaceholder')"
+            :path-hint="t('load.commandHint')"
             :busy="busy"
             @blur="showValidation = true"
           />
@@ -61,12 +63,12 @@
           <PolicyScopeEditor
             v-if="needsNetworkPolicy"
             v-model="networkPolicyScopes"
-            title="Remote endpoints this plugin can manage"
-            description="The plugin can publish only the selected decisions for these numeric endpoint scopes."
-            path-label="Remote endpoint scope"
-            placeholder="203.0.113.10:443, 203.0.113.10:* or *"
-            path-hint="Use *, an exact numeric endpoint, or IP:* for every port on one IP; bracket IPv6 addresses."
-            add-label="Add another endpoint"
+            :title="t('load.networkTitle')"
+            :description="t('load.networkDescription')"
+            :path-label="t('load.networkPathLabel')"
+            :placeholder="t('load.networkPlaceholder')"
+            :path-hint="t('load.networkHint')"
+            :add-label="t('load.addEndpoint')"
             :busy="busy"
             @blur="showValidation = true"
           />
@@ -74,41 +76,47 @@
           <section v-if="needsEnvRead" class="plugin-load-section editable">
             <div class="plugin-load-section-heading">
               <div>
-                <span>Readable environment variables</span>
-                <small>Only the listed variable names are exposed to the plugin.</small>
+                <span>{{ t('load.envTitle') }}</span>
+                <small>{{ t('load.envHint') }}</small>
               </div>
-              <strong>Required</strong>
+              <strong>{{ t('load.required') }}</strong>
             </div>
             <label class="plugin-load-field">
-              <span>Variable names</span>
+              <span>{{ t('load.variableNames') }}</span>
               <textarea
                 v-model="envReadText"
                 rows="3"
-                placeholder="API_TOKEN&#10;REGION"
+                :placeholder="t('load.variablePlaceholder')"
                 :disabled="busy"
               ></textarea>
-              <small>Enter one variable name per line.</small>
+              <small>{{ t('load.variableHint') }}</small>
             </label>
           </section>
 
           <p v-if="showValidation && validationError" class="plugin-load-error">{{ validationError }}</p>
 
           <footer class="plugin-load-actions">
-            <button type="button" :disabled="busy" @click="close">Cancel</button>
+            <button type="button" :disabled="busy" @click="close">{{ t('load.cancel') }}</button>
             <button class="primary" type="submit" :disabled="busy || !valid">
-              {{ busy ? 'Loading…' : 'Load plugin' }}
+              {{ busy ? t('load.loading') : t('load.submit') }}
             </button>
           </footer>
         </form>
       </section>
     </div>
+    </Transition>
   </Teleport>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { X } from '@lucide/vue';
+import { useDialogBehavior } from '../../composables/dialog';
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
 import PolicyScopeEditor from './PolicyScopeEditor.vue';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   open: { type: Boolean, required: true },
@@ -134,11 +142,11 @@ const needsNetworkPolicy = computed(() => props.plugin.parameterized_host_grants
 const needsEnvRead = computed(() => props.plugin.parameterized_host_grants?.includes('env-read'));
 const loadSubtitle = computed(() => {
   if ([needsFilePolicy.value, needsCommandPolicy.value, needsNetworkPolicy.value]
-    .filter(Boolean).length > 1) return 'Configure policy access';
-  if (needsNetworkPolicy.value) return 'Configure network connections';
-  if (needsCommandPolicy.value) return 'Configure command execution';
-  if (needsFilePolicy.value) return 'Configure file access';
-  return 'Load plugin';
+    .filter(Boolean).length > 1) return t('load.subtitlePolicy');
+  if (needsNetworkPolicy.value) return t('load.subtitleNetwork');
+  if (needsCommandPolicy.value) return t('load.subtitleCommand');
+  if (needsFilePolicy.value) return t('load.subtitleFile');
+  return t('load.submit');
 });
 const envRead = computed(() => envReadText.value
   .split('\n')
@@ -146,14 +154,14 @@ const envRead = computed(() => envReadText.value
   .filter(Boolean));
 const validationError = computed(() => {
   if (!instanceId.value || instanceId.value.trim() !== instanceId.value) {
-    return 'Instance ID is required and cannot have surrounding whitespace.';
+    return t('load.invalidInstanceId');
   }
   const fileScopeError = needsFilePolicy.value
-    ? validateScopes(filePolicyScopes.value, 'file-policy')
+    ? validateScopes(filePolicyScopes.value, t('load.filePathLabel'))
     : '';
   if (fileScopeError) return fileScopeError;
   const commandScopeError = needsCommandPolicy.value
-    ? validateScopes(commandPolicyScopes.value, 'command-policy')
+    ? validateScopes(commandPolicyScopes.value, t('load.commandPathLabel'))
     : '';
   if (commandScopeError) return commandScopeError;
   const networkScopeError = needsNetworkPolicy.value
@@ -162,10 +170,10 @@ const validationError = computed(() => {
   if (networkScopeError) return networkScopeError;
   if (needsEnvRead.value) {
     if (envRead.value.length === 0) {
-      return 'Enter at least one environment variable name.';
+      return t('load.envRequired');
     }
     if (envRead.value.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) {
-      return 'Environment variable names may contain letters, digits, and underscores.';
+      return t('load.envInvalid');
     }
   }
   return '';
@@ -180,8 +188,13 @@ watch(
   { immediate: true },
 );
 
-onMounted(() => window.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+const dialogRef = ref(null);
+
+useDialogBehavior({
+  isOpen: () => props.open,
+  getContainer: () => dialogRef.value,
+  onClose: close,
+});
 
 function reset() {
   instanceId.value = props.plugin.plugin_id ?? '';
@@ -203,10 +216,10 @@ function newScope(kind) {
 function validateScopes(scopes, label) {
   for (const scope of scopes) {
     if (!scope.path_scope.startsWith('/')) {
-      return `Every ${label} scope must be an absolute path.`;
+      return t('load.absolutePath', { label });
     }
     if (scope.decisions.length === 0) {
-      return `Select at least one rule decision for every ${label} scope.`;
+      return t('load.decisionsRequired', { label });
     }
   }
   return '';
@@ -215,10 +228,10 @@ function validateScopes(scopes, label) {
 function validateNetworkScopes(scopes) {
   for (const scope of scopes) {
     if (!scope.path_scope || (scope.path_scope !== '*' && !looksLikeNumericRemoteScope(scope.path_scope))) {
-      return 'Every network-policy scope must be *, a numeric IP endpoint, or an IP:* any-port selector.';
+      return t('load.endpointInvalid');
     }
     if (scope.decisions.length === 0) {
-      return 'Select at least one rule decision for every network-policy scope.';
+      return t('load.endpointDecisionsRequired');
     }
   }
   return '';
@@ -242,9 +255,6 @@ function close() {
   if (!props.busy) emit('close');
 }
 
-function onKeydown(event) {
-  if (event.key === 'Escape' && props.open) close();
-}
 
 function submit() {
   if (!valid.value || props.busy) return;
@@ -276,13 +286,53 @@ function submit() {
 </script>
 
 <style scoped>
+.dialog-enter-active {
+  transition: opacity 160ms var(--ui-ease-out);
+}
+
+.dialog-leave-active {
+  transition: opacity 120ms var(--ui-ease-out);
+}
+
+.dialog-enter-from,
+.dialog-leave-to {
+  opacity: 0;
+}
+
+.dialog-enter-active .plugin-load-dialog {
+  animation: dialog-pop 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.dialog-leave-active .plugin-load-dialog {
+  animation: dialog-fold 200ms cubic-bezier(0.32, 0, 0.67, 0) forwards;
+}
+
+@keyframes dialog-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes dialog-fold {
+  to {
+    opacity: 0;
+    transform: scale(0.95) translateY(6px);
+  }
+}
+
 .plugin-load-backdrop {
   position: fixed;
   inset: 0;
   z-index: 1000;
   display: grid;
   place-items: center;
-  padding: var(--stats-space-xl);
+  padding: var(--ui-space-xl);
   background: rgb(4 9 18 / 72%);
   backdrop-filter: blur(0.25rem);
 }
@@ -290,12 +340,12 @@ function submit() {
 .plugin-load-dialog {
   min-width: 0;
   width: min(45rem, 100%);
-  max-height: min(52.5rem, calc(100vh - 2 * var(--stats-space-xl)));
+  max-height: min(52.5rem, calc(100vh - 2 * var(--ui-space-xl)));
   overflow: auto;
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-lg);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 42%);
 }
 
@@ -305,45 +355,45 @@ function submit() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .plugin-load-header {
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: var(--stats-space-xl) var(--stats-space-2xl);
-  border-bottom: 1px solid var(--stats-border);
-  background: var(--stats-surface-strong);
+  padding: var(--ui-space-xl) var(--ui-space-2xl);
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface-strong);
 }
 
 .plugin-load-header span,
 .plugin-load-section-heading small,
 .plugin-load-field small,
 .plugin-load-permissions small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-load-header h2 {
-  margin: var(--stats-space-2xs) 0 0;
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-medium);
+  margin: var(--ui-space-2xs) 0 0;
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-load-header button,
 .plugin-load-actions button {
-  min-height: var(--stats-control-height-md);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
-  color: var(--stats-text);
+  min-height: var(--ui-control-height-md);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
 }
 
 .plugin-load-header button {
-  width: var(--stats-control-height-md);
+  width: var(--ui-control-height-md);
   display: grid;
   place-items: center;
   padding: 0;
@@ -352,129 +402,129 @@ function submit() {
 .plugin-load-form {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-2xl);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-2xl);
 }
 
 .plugin-load-field,
 .plugin-load-section-heading > div {
   display: grid;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
 }
 
 .plugin-load-field > span,
 .plugin-load-section-heading span {
-  color: var(--stats-text);
-  font-size: var(--stats-font-md);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-text);
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-load-field input,
 .plugin-load-field textarea {
   width: 100%;
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
 }
 
 .plugin-load-section {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-lg);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-lg);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
 }
 
 .plugin-load-section.readonly {
-  background: var(--stats-surface-soft);
+  background: var(--ui-surface-soft);
 }
 
 .plugin-load-section.editable {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-faint);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-faint);
 }
 
 .plugin-load-permissions {
   min-width: 0;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface-soft);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-soft);
 }
 
 .plugin-load-permissions summary {
-  min-height: var(--stats-control-height-lg);
+  min-height: var(--ui-control-height-lg);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
-  padding: 0 var(--stats-space-lg);
-  color: var(--stats-text);
+  gap: var(--ui-space-lg);
+  padding: 0 var(--ui-space-lg);
+  color: var(--ui-text);
   cursor: pointer;
-  font-size: var(--stats-font-md);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-load-permissions summary::marker {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
 }
 
 .plugin-load-permissions .plugin-load-chips {
-  padding: 0 var(--stats-space-lg) var(--stats-space-lg);
+  padding: 0 var(--ui-space-lg) var(--ui-space-lg);
 }
 
 .plugin-load-section-heading strong {
-  padding: var(--stats-space-xs) var(--stats-space-sm);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  padding: var(--ui-space-xs) var(--ui-space-sm);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .plugin-load-section.editable .plugin-load-section-heading strong {
-  color: var(--stats-accent);
+  color: var(--ui-accent);
 }
 
 .plugin-load-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 .plugin-load-chips code {
-  padding: var(--stats-space-xs) var(--stats-space-sm);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  padding: var(--ui-space-xs) var(--ui-space-sm);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 
 .plugin-load-error {
   margin: 0;
-  color: var(--stats-danger);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-danger);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-load-actions {
-  padding-top: var(--stats-space-lg);
-  border-top: 1px solid var(--stats-border);
+  padding-top: var(--ui-space-lg);
+  border-top: 1px solid var(--ui-border);
   justify-content: flex-end;
 }
 
 .plugin-load-actions button {
-  padding: 0 var(--stats-space-lg);
+  padding: 0 var(--ui-space-lg);
 }
 
 .plugin-load-actions button.primary {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
-  color: var(--stats-accent);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
+  color: var(--ui-accent);
 }
 
 button:disabled {

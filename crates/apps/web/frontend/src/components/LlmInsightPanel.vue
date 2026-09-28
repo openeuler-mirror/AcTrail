@@ -2,7 +2,7 @@
   <div v-if="insight" class="llm-insight-panel">
     <InsightPanel
       :insight="insight"
-      :loading-message="requestLoading ? 'Loading request insights' : ''"
+      :loading-message="requestLoading ? t('llmInsight.loading') : ''"
       :error="requestError"
     />
     <button
@@ -22,7 +22,11 @@
 import { computed, ref, watch } from 'vue';
 
 import { buildLlmDetailInsight } from '../llm/insight';
+import { useModuleLocale } from '../locale';
 import InsightPanel from './InsightPanel.vue';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   detail: {
@@ -56,12 +60,12 @@ const effectiveRequestContent = computed(() => (
 const insight = computed(() => buildLlmDetailInsight(props.detail, effectiveRequestContent.value));
 const requestInsightButtonLabel = computed(() => {
   if (props.requestLoading) {
-    return 'Loading request insights';
+    return t('llmInsight.loading');
   }
   if (!props.requestContent) {
-    return 'Load request insights';
+    return t('llmInsight.load');
   }
-  return requestInsightsHidden.value ? 'Show request insights' : 'Hide request insights';
+  return requestInsightsHidden.value ? t('llmInsight.show') : t('llmInsight.hide');
 });
 
 watch(

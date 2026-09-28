@@ -59,19 +59,19 @@ const chartModes = Object.freeze([
 const defaultChartModeIds = Object.freeze(['line', 'bar']);
 
 const facetDefinitions = Object.freeze([
-  { key: 'total', label: 'Total', field: 'total_tokens', color: 'var(--stats-chart-total)' },
-  { key: 'input', label: 'Input / Prompt', field: 'prompt_tokens', color: 'var(--stats-chart-input)' },
+  { key: 'total', label: 'Total', field: 'total_tokens', color: 'var(--ui-chart-total)' },
+  { key: 'input', label: 'Input / Prompt', field: 'prompt_tokens', color: 'var(--ui-chart-input)' },
   {
     key: 'output',
     label: 'Output / Completion',
     field: 'completion_tokens',
-    color: 'var(--stats-chart-output)',
+    color: 'var(--ui-chart-output)',
   },
   {
     key: 'reasoning',
     label: 'Reasoning',
     field: 'reasoning_tokens',
-    color: 'var(--stats-chart-reasoning)',
+    color: 'var(--ui-chart-reasoning)',
   },
 ]);
 
@@ -119,11 +119,11 @@ function chartLabel(row) {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  padding: var(--stats-space-3xl) var(--stats-space-3xl) var(--stats-space-2xl);
-  background: var(--stats-bg-gradient), var(--stats-surface-soft);
+  padding: var(--ui-space-3xl) var(--ui-space-3xl) var(--ui-space-2xl);
+  background: var(--ui-surface-soft);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--stats-space-2xl);
+  gap: var(--ui-space-2xl);
 }
 
 .trend-toolbar {
@@ -131,20 +131,20 @@ function chartLabel(row) {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .toolbar-group {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .toolbar-group span {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 </style>

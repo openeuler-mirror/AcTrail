@@ -144,21 +144,21 @@ function localizedRollup(option) {
 .trends-page {
   min-width: 0;
   display: grid;
-  gap: var(--stats-section-gap);
+  gap: var(--ui-section-gap);
 }
 
 .trend-controls {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .charts {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 @media (max-width: 940px) {

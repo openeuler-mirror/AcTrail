@@ -2,9 +2,9 @@
   <section class="attribution-stats-workspace">
     <header class="stats-header">
       <div>
-        <span class="stats-kicker">Wall-clock attribution and tool workloads</span>
-        <h2>Agent / model time attribution</h2>
-        <p>Trace intervals that overlap the selected range are clipped before aggregation.</p>
+        <span class="stats-kicker">{{ t('header.kicker') }}</span>
+        <h2>{{ t('header.title') }}</h2>
+        <p>{{ t('header.note') }}</p>
       </div>
       <div class="range-controls">
         <div class="quick-ranges">
@@ -13,16 +13,16 @@
           <button type="button" @click="setQuickRange(30)">30d</button>
         </div>
         <label>
-          <span>From</span>
+          <span>{{ t('header.from') }}</span>
           <input v-model="range.fromDate" type="date" />
         </label>
         <label>
-          <span>To</span>
+          <span>{{ t('header.to') }}</span>
           <input v-model="range.toDate" type="date" />
         </label>
         <button class="refresh-button" type="button" :disabled="loading" @click="reload">
           <RefreshCw :size="16" aria-hidden="true" />
-          Refresh
+          {{ t('header.refresh') }}
         </button>
       </div>
     </header>
@@ -33,7 +33,7 @@
       <section class="summary-panel">
         <div class="summary-heading">
           <span>
-            <small>Total attributed scope</small>
+            <small>{{ t('summary.totalScope') }}</small>
             <strong>{{ formatAttributionDuration(activity.total_duration_nanos) }}</strong>
           </span>
           <span class="status-badge" :class="`status-${activity.status}`">
@@ -55,20 +55,14 @@
             <small>{{ formatAttributionPercent(category.percentage_bps) }}</small>
           </button>
         </div>
-        <div class="coverage-line">
-          {{ activity.coverage.trace_count }} traces ·
-          {{ activity.coverage.paired_llm_call_count }} paired model calls ·
-          {{ activity.coverage.attributed_llm_call_count }} attributed ·
-          {{ activity.coverage.tool_interval_count }} Agent Tool intervals ·
-          {{ activity.coverage.command_interval_count ?? 0 }} command processes
-        </div>
+        <div class="coverage-line">{{ coverageLine }}</div>
       </section>
 
       <section class="breakdown-grid">
         <article class="breakdown-panel">
           <header>
-            <h3>Models</h3>
-            <span>Observable model-side wall time</span>
+            <h3>{{ t('models.title') }}</h3>
+            <span>{{ t('models.note') }}</span>
           </header>
           <button
             v-for="row in filteredModels"
@@ -79,20 +73,20 @@
           >
             <span>
               <strong>{{ row.label }}</strong>
-              <small>{{ row.action_count }} calls · {{ row.segment_count }} intervals</small>
+              <small>{{ t('models.callsIntervals', { calls: row.action_count, intervals: row.segment_count }) }}</small>
             </span>
             <span class="measure">
               <strong>{{ formatAttributionDuration(row.duration_nanos) }}</strong>
               <small>{{ formatAttributionPercent(row.percentage_bps) }}</small>
             </span>
           </button>
-          <div v-if="!filteredModels.length" class="empty-panel">No model time in range.</div>
+          <div v-if="!filteredModels.length" class="empty-panel">{{ t('models.empty') }}</div>
         </article>
 
         <article class="breakdown-panel">
           <header>
-            <h3>Agent Tools</h3>
-            <span>Each real tool invocation; overlapping tools retain their own wall time</span>
+            <h3>{{ t('tools.title') }}</h3>
+            <span>{{ t('tools.note') }}</span>
           </header>
           <button
             v-for="row in filteredTools"
@@ -103,20 +97,20 @@
           >
             <span>
               <strong>{{ row.label }}</strong>
-              <small>{{ row.action_count }} actions · {{ row.segment_count }} intervals</small>
+              <small>{{ t('tools.actionsIntervals', { actions: row.action_count, intervals: row.segment_count }) }}</small>
             </span>
             <span class="measure">
               <strong>{{ formatAttributionDuration(row.duration_nanos) }}</strong>
               <small>{{ formatAttributionPercent(row.percentage_bps) }}</small>
             </span>
           </button>
-          <div v-if="!filteredTools.length" class="empty-panel">No Agent Tool invocations in range.</div>
+          <div v-if="!filteredTools.length" class="empty-panel">{{ t('tools.empty') }}</div>
         </article>
 
         <article class="breakdown-panel">
           <header>
-            <h3>Commands</h3>
-            <span>Actual command process trees, counted exclusively</span>
+            <h3>{{ t('commands.title') }}</h3>
+            <span>{{ t('commands.note') }}</span>
           </header>
           <button
             v-for="row in filteredCommands"
@@ -127,9 +121,9 @@
           >
             <span>
               <strong>{{ row.label }}</strong>
-              <small>{{ commandCountLabel(row) }}</small>
+              <small>{{ commandCountLabel(row, t) }}</small>
               <small v-if="row.agent_tools?.length">
-                via Agent Tool: {{ row.agent_tools.join(', ') }}
+                {{ t('commands.viaTool', { tools: row.agent_tools.join(', ') }) }}
               </small>
             </span>
             <span class="measure">
@@ -138,7 +132,7 @@
             </span>
           </button>
           <div v-if="!filteredCommands.length" class="empty-panel">
-            No actual commands in range.
+            {{ t('commands.empty') }}
           </div>
         </article>
       </section>
@@ -146,19 +140,19 @@
       <section class="trace-results">
         <header>
           <div>
-            <h3>Matching traces</h3>
+            <h3>{{ t('traces.title') }}</h3>
             <p v-if="selectedFilter">
-              {{ selectedFilter.label }} · {{ rowTotal }} traces
+              {{ t('traces.selected', { label: selectedFilter.label, count: rowTotal }) }}
             </p>
-            <p v-else>Select a category, model, Agent Tool, or command to drill down.</p>
+            <p v-else>{{ t('traces.selectHint') }}</p>
           </div>
         </header>
-        <div v-if="rowLoading" class="empty-panel">Loading trace intervals…</div>
+        <div v-if="rowLoading" class="empty-panel">{{ t('traces.loading') }}</div>
         <div v-else-if="selectedFilter && !filteredRows.length" class="empty-panel">
-          No traces match this item and the global filter.
+          {{ t('traces.noMatch') }}
         </div>
         <div v-else-if="!selectedFilter" class="empty-panel">
-          Aggregates remain query-light until a drill-down item is selected.
+          {{ t('traces.idle') }}
         </div>
         <div v-else class="trace-table">
           <button
@@ -169,27 +163,27 @@
           >
             <span>
               <strong>{{ row.trace.name }}</strong>
-              <small>Trace {{ row.trace.id }} · {{ attributionStatusLabel(row.status) }}</small>
+              <small>{{ t('traces.row', { id: row.trace.id, status: statusLabel(row.status) }) }}</small>
             </span>
             <span class="measure">
               <strong>{{ formatAttributionDuration(row.contribution_duration_nanos) }}</strong>
               <small v-if="selectedFilter?.dimension === 'tool'">
-                {{ formatAttributionPercent(row.percentage_bps) }} overlap-counted workload / clipped Trace
+                {{ t('traces.overlapShare', { percent: formatAttributionPercent(row.percentage_bps) }) }}
               </small>
               <small v-else>
-                {{ formatAttributionPercent(row.percentage_bps) }} of clipped Trace
+                {{ t('traces.clippedShare', { percent: formatAttributionPercent(row.percentage_bps) }) }}
               </small>
             </span>
             <ExternalLink :size="15" aria-hidden="true" />
           </button>
           <button v-if="rows.length < rowTotal" class="load-more" type="button" @click="loadMore">
-            Load more
+            {{ t('traces.loadMore') }}
           </button>
         </div>
       </section>
 
       <section v-if="activity.issues?.length" class="aggregate-issues">
-        <h3>Collection status</h3>
+        <h3>{{ t('issues.title') }}</h3>
         <span v-for="issue in activity.issues" :key="issue.code">
           <strong>{{ issue.code }} × {{ issue.count }}</strong>
           {{ issue.message }}
@@ -210,6 +204,7 @@ import {
   formatAttributionDuration,
   formatAttributionPercent,
 } from '../../../components/time-attribution/model';
+import { useModuleLocale } from '../../../locale';
 import { defaultRange, quickRange, rangeToMillis } from '../llm/model';
 import {
   commandCountLabel,
@@ -217,6 +212,25 @@ import {
   matchesAttributionQuery,
   openTraceEvent,
 } from './workspace-model';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
+const STATUS_VALUES = Object.freeze(['complete', 'provisional', 'partial', 'invalid']);
+const coverageLine = computed(() =>
+  t('summary.coverage', {
+    traces: activity.value.coverage.trace_count,
+    paired: activity.value.coverage.paired_llm_call_count,
+    attributed: activity.value.coverage.attributed_llm_call_count,
+    toolIntervals: activity.value.coverage.tool_interval_count,
+    commands: activity.value.coverage.command_interval_count ?? 0,
+  }),
+);
+
+/** Attribution status words are shared vocabulary, so they live in the base dictionary. */
+function statusLabel(status) {
+  return STATUS_VALUES.includes(status) ? t(`common.status.${status}`) : attributionStatusLabel(status);
+}
 
 const props = defineProps({
   query: {
@@ -387,7 +401,7 @@ async function loadRows(offset) {
 }
 
 function openTrace(row) {
-  emit('open-trace', openTraceEvent(row, selectedFilter.value));
+  emit('open-trace', openTraceEvent(row, selectedFilter.value, t));
 }
 </script>
 
@@ -400,38 +414,38 @@ function openTrace(row) {
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: var(--stats-section-gap);
-  padding: var(--stats-viewport-padding);
-  color: var(--stats-text);
-  font-family: var(--stats-body-font);
+  gap: var(--ui-section-gap);
+  padding: var(--ui-viewport-padding);
+  color: var(--ui-text);
+  font-family: var(--ui-body-font);
 }
 
 .stats-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--stats-space-xl);
+  gap: var(--ui-space-xl);
 }
 
 .stats-kicker {
-  color: var(--stats-accent);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-accent);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .stats-header h2,
 .summary-heading strong {
-  margin: var(--stats-space-xs) 0;
-  font-family: var(--stats-heading-font);
+  margin: var(--ui-space-xs) 0;
+  font-family: var(--ui-heading-font);
 }
 
 .stats-header p,
 .trace-results p {
   margin: 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .range-controls {
@@ -439,53 +453,53 @@ function openTrace(row) {
   align-items: flex-end;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 .quick-ranges {
   display: flex;
-  padding: var(--stats-space-2xs);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
+  padding: var(--ui-space-2xs);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
 }
 
 .quick-ranges button,
 .refresh-button {
-  min-height: var(--stats-control-height-md);
+  min-height: var(--ui-control-height-md);
   border: 0;
-  border-radius: var(--stats-radius-sm);
+  border-radius: var(--ui-radius-sm);
   background: transparent;
-  color: var(--stats-text);
+  color: var(--ui-text);
   cursor: pointer;
 }
 
 .quick-ranges button {
-  padding: 0 var(--stats-segment-padding-x);
+  padding: 0 var(--ui-segment-padding-x);
 }
 
 .range-controls label {
   display: grid;
-  gap: var(--stats-space-2xs);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  gap: var(--ui-space-2xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 
 .range-controls input {
-  height: var(--stats-control-height-md);
-  padding: 0 var(--stats-space-sm);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  height: var(--ui-control-height-md);
+  padding: 0 var(--ui-space-sm);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
 }
 
 .refresh-button {
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
-  padding: 0 var(--stats-space-md);
-  border: 1px solid var(--stats-border);
+  gap: var(--ui-space-xs);
+  padding: 0 var(--ui-space-md);
+  border: 1px solid var(--ui-border);
 }
 
 .summary-panel,
@@ -493,11 +507,11 @@ function openTrace(row) {
 .trace-results,
 .aggregate-issues {
   display: grid;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-xl);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-xl);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
 }
 
 .summary-heading,
@@ -506,12 +520,12 @@ function openTrace(row) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .summary-heading > span:first-child {
   display: grid;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
 }
 
 .summary-heading small,
@@ -519,39 +533,39 @@ function openTrace(row) {
 .breakdown-panel header span,
 .breakdown-panel button small,
 .trace-table button small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 
 .summary-heading strong {
-  font-size: var(--stats-font-display-lg);
+  font-size: var(--ui-font-display-lg);
 }
 
 .status-badge {
-  padding: var(--stats-space-xs) var(--stats-space-md);
-  border: 1px solid var(--stats-border);
+  padding: var(--ui-space-xs) var(--ui-space-md);
+  border: 1px solid var(--ui-border);
   border-radius: 999px;
-  font-size: var(--stats-font-xs);
+  font-size: var(--ui-font-xs);
   text-transform: uppercase;
 }
 
 .status-complete {
-  color: var(--stats-success);
+  color: var(--ui-success);
 }
 
 .status-provisional {
-  color: var(--stats-accent);
+  color: var(--ui-accent);
 }
 
 .status-partial,
 .status-invalid {
-  color: var(--stats-danger);
+  color: var(--ui-danger);
 }
 
 .category-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .category-grid button {
@@ -559,20 +573,20 @@ function openTrace(row) {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--stats-space-sm);
-  padding: var(--stats-space-lg);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  gap: var(--ui-space-sm);
+  padding: var(--ui-space-lg);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   cursor: pointer;
   text-align: left;
 }
 
 .category-grid button.selected,
 .breakdown-panel button.selected {
-  border-color: var(--stats-accent);
-  background: var(--stats-accent-muted);
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-muted);
 }
 
 .category-grid button > strong,
@@ -587,21 +601,21 @@ function openTrace(row) {
 }
 
 .dot-agent_side {
-  background: var(--stats-chart-cache-hit, #48b89f);
+  background: var(--ui-chart-cache-hit, #48b89f);
 }
 
 .dot-model_side {
-  background: var(--stats-chart-output, #7b8cff);
+  background: var(--ui-chart-output, #7b8cff);
 }
 
 .dot-unattributed {
-  background: var(--stats-chart-reasoning, #9aa0aa);
+  background: var(--ui-chart-reasoning, #9aa0aa);
 }
 
 .breakdown-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--stats-section-gap);
+  gap: var(--ui-section-gap);
 }
 
 .breakdown-panel h3,
@@ -617,12 +631,12 @@ function openTrace(row) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   cursor: pointer;
   text-align: left;
 }
@@ -631,7 +645,7 @@ function openTrace(row) {
 .trace-table button > span {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .measure {
@@ -640,7 +654,7 @@ function openTrace(row) {
 
 .trace-table {
   display: grid;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 .trace-table button {
@@ -653,28 +667,28 @@ function openTrace(row) {
 }
 
 .empty-panel {
-  padding: var(--stats-space-xl);
-  color: var(--stats-muted);
+  padding: var(--ui-space-xl);
+  color: var(--ui-muted);
   text-align: center;
 }
 
 .aggregate-issues span {
   display: grid;
   grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
-  gap: var(--stats-space-md);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  gap: var(--ui-space-md);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .aggregate-issues strong {
-  color: var(--stats-text);
+  color: var(--ui-text);
 }
 
 .stats-error {
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-danger);
-  border-radius: var(--stats-radius-sm);
-  color: var(--stats-danger);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-danger);
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-danger);
 }
 
 @media (max-width: 920px) {

@@ -19,29 +19,32 @@ use super::super::links::{LlmHttpRequestLink, LlmHttpResponseLink};
 use super::ProjectionCoordinator;
 
 impl ProjectionCoordinator {
-    pub(in crate::llm_pipeline) fn bind_terminal_http2_response(
+    /// Closes the call whose response stream ended without reusable evidence.
+    ///
+    /// A terminal response that was discarded or damaged cannot become pending
+    /// provider or historical exchange evidence, so it is bound here directly.
+    /// An HTTP/2 stream id identifies one exchange within this trace, process
+    /// and connection; on a connection-scoped stream (HTTP/1.x) the single
+    /// ordered open request identifies it.
+    pub(in crate::llm_pipeline) fn bind_terminal_response(
         &mut self,
         response: &SemanticAction,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
-        if response
-            .attributes
-            .get("network.protocol.version")
-            .is_none_or(|protocol| protocol != "h2")
+        let Some(stream_key) = LlmStreamKey::from_llm_response(response) else {
+            return output;
+        };
+        if stream_key.http_stream_id.is_some()
+            && response
+                .attributes
+                .get("network.protocol.version")
+                .is_none_or(|protocol| protocol != "h2")
         {
             return output;
         }
-        let Some(stream_key) =
-            LlmStreamKey::from_llm_response(response).filter(|key| key.http_stream_id.is_some())
-        else {
-            return output;
-        };
         let Some(requests) = self.correlation.open_requests.get_mut(&stream_key) else {
             return output;
         };
-        // One HTTP/2 stream identifies one exchange within this trace,
-        // process and connection. A failed response can close that exact call
-        // without becoming reusable provider or historical exchange evidence.
         let ordered = requests
             .front()
             .and_then(|request| LlmActionOrder::from_action(&request.action))

@@ -1,7 +1,9 @@
 <template>
   <Teleport to=".app-shell">
+    <Transition name="dialog">
     <div v-if="open" class="plugin-unload-backdrop" @mousedown.self="close">
       <section
+        ref="dialogRef"
         class="plugin-unload-dialog"
         role="alertdialog"
         aria-modal="true"
@@ -13,41 +15,44 @@
             <TriangleAlert :size="20" />
           </span>
           <div>
-            <span>{{ t('pluginUnload.kicker') }}</span>
+            <span>{{ t('unload.kicker') }}</span>
             <h2 :id="titleId">{{ plugin.instance_id }}</h2>
           </div>
         </header>
 
         <div class="plugin-unload-body">
           <p :id="descriptionId">
-            {{ t('pluginUnload.description') }}
+            {{ t('unload.description') }}
           </p>
           <dl>
-            <dt>{{ t('pluginUnload.instanceId') }}</dt>
+            <dt>{{ t('unload.instanceId') }}</dt>
             <dd>{{ plugin.instance_id }}</dd>
-            <dt>{{ t('pluginUnload.pluginId') }}</dt>
+            <dt>{{ t('unload.pluginId') }}</dt>
             <dd>{{ plugin.plugin_id }}</dd>
-            <dt>{{ t('pluginUnload.purpose') }}</dt>
+            <dt>{{ t('unload.purpose') }}</dt>
             <dd>{{ plugin.purpose }}</dd>
           </dl>
         </div>
 
         <footer>
-          <button type="button" :disabled="busy" @click="close">{{ t('pluginUnload.keepLoaded') }}</button>
+          <button type="button" :disabled="busy" @click="close">{{ t('unload.keepLoaded') }}</button>
           <button ref="confirmButton" class="danger" type="button" :disabled="busy" @click="$emit('confirm')">
-            {{ busy ? t('pluginUnload.unloading') : t('pluginUnload.unload') }}
+            {{ busy ? t('unload.unloading') : t('unload.unload') }}
           </button>
         </footer>
       </section>
     </div>
+    </Transition>
   </Teleport>
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ref } from 'vue';
 import { TriangleAlert } from '@lucide/vue';
 
-import { useLocale } from '../../locale';
+import { useDialogBehavior } from '../../composables/dialog';
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
 
 const props = defineProps({
   open: { type: Boolean, required: true },
@@ -56,42 +61,73 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['close', 'confirm']);
-const { t } = useLocale();
+const { t } = useModuleLocale(strings);
 const confirmButton = ref(null);
+const dialogRef = ref(null);
 const titleId = 'plugin-unload-title';
 const descriptionId = 'plugin-unload-description';
 
-watch(
-  () => props.open,
-  async (open) => {
-    if (open) {
-      await nextTick();
-      confirmButton.value?.focus();
-    }
-  },
-  { immediate: true },
-);
-
-onMounted(() => window.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+useDialogBehavior({
+  isOpen: () => props.open,
+  getContainer: () => dialogRef.value,
+  onClose: close,
+  initialFocus: confirmButton,
+});
 
 function close() {
   if (!props.busy) emit('close');
 }
 
-function onKeydown(event) {
-  if (event.key === 'Escape' && props.open) close();
-}
 </script>
 
 <style scoped>
+.dialog-enter-active {
+  transition: opacity 160ms var(--ui-ease-out);
+}
+
+.dialog-leave-active {
+  transition: opacity 120ms var(--ui-ease-out);
+}
+
+.dialog-enter-from,
+.dialog-leave-to {
+  opacity: 0;
+}
+
+.dialog-enter-active .plugin-unload-dialog {
+  animation: dialog-pop 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.dialog-leave-active .plugin-unload-dialog {
+  animation: dialog-fold 200ms cubic-bezier(0.32, 0, 0.67, 0) forwards;
+}
+
+@keyframes dialog-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes dialog-fold {
+  to {
+    opacity: 0;
+    transform: scale(0.94) translateY(8px);
+  }
+}
+
 .plugin-unload-backdrop {
   position: fixed;
   inset: 0;
   z-index: 1000;
   display: grid;
   place-items: center;
-  padding: var(--stats-space-xl);
+  padding: var(--ui-space-xl);
   background: rgb(4 9 18 / 72%);
   backdrop-filter: blur(0.25rem);
 }
@@ -100,10 +136,10 @@ function onKeydown(event) {
   min-width: 0;
   width: min(34rem, 100%);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--stats-danger) 45%, var(--stats-border-strong));
-  border-radius: var(--stats-radius-lg);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 45%, var(--ui-border-strong));
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 42%);
 }
 
@@ -111,49 +147,49 @@ function onKeydown(event) {
 .plugin-unload-dialog footer {
   display: flex;
   align-items: center;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-xl) var(--stats-space-2xl);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-xl) var(--ui-space-2xl);
 }
 
 .plugin-unload-dialog header {
-  border-bottom: 1px solid var(--stats-border);
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .plugin-unload-icon {
-  width: var(--stats-control-height-lg);
-  height: var(--stats-control-height-lg);
+  width: var(--ui-control-height-lg);
+  height: var(--ui-control-height-lg);
   flex: 0 0 auto;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--stats-danger) 12%, transparent);
-  color: var(--stats-danger);
+  background: color-mix(in srgb, var(--ui-danger) 12%, transparent);
+  color: var(--ui-danger);
 }
 
 .plugin-unload-dialog header > div {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .plugin-unload-dialog header span,
 .plugin-unload-body p,
 .plugin-unload-body dt {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-unload-dialog h2 {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-unload-body {
   display: grid;
-  gap: var(--stats-space-xl);
-  padding: var(--stats-space-2xl);
+  gap: var(--ui-space-xl);
+  padding: var(--ui-space-2xl);
 }
 
 .plugin-unload-body p,
@@ -164,7 +200,7 @@ function onKeydown(event) {
 .plugin-unload-body dl {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--stats-space-md) var(--stats-space-xl);
+  gap: var(--ui-space-md) var(--ui-space-xl);
 }
 
 .plugin-unload-body dd {
@@ -175,31 +211,31 @@ function onKeydown(event) {
 
 .plugin-unload-dialog footer {
   justify-content: flex-end;
-  border-top: 1px solid var(--stats-border);
-  background: var(--stats-surface-soft);
+  border-top: 1px solid var(--ui-border);
+  background: var(--ui-surface-soft);
 }
 
 .plugin-unload-dialog footer button {
-  min-height: var(--stats-control-height-md);
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  min-height: var(--ui-control-height-md);
+  padding: 0 var(--ui-space-lg);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-unload-dialog footer button.danger {
-  border-color: color-mix(in srgb, var(--stats-danger) 45%, transparent);
-  background: color-mix(in srgb, var(--stats-danger) 12%, transparent);
-  color: var(--stats-danger);
+  border-color: color-mix(in srgb, var(--ui-danger) 45%, transparent);
+  background: color-mix(in srgb, var(--ui-danger) 12%, transparent);
+  color: var(--ui-danger);
 }
 
 .plugin-unload-dialog footer button:focus-visible {
-  outline: 2px solid var(--stats-accent);
-  outline-offset: var(--stats-space-xs);
+  outline: 2px solid var(--ui-accent);
+  outline-offset: var(--ui-space-xs);
 }
 
 .plugin-unload-dialog footer button:disabled {

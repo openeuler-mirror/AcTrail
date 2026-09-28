@@ -1,18 +1,14 @@
 <template>
   <section class="time-attribution-tab">
     <div v-if="!attribution" class="attribution-empty">
-      Select a trace to calculate time attribution.
+      {{ t('selectTrace') }}
     </div>
     <template v-else>
-      <header class="attribution-header">
+      <header class="attribution-header" :class="{ 'attribution-header-compact': !hasUserTurns }">
         <div>
-          <span class="attribution-kicker">User-turn wall-clock attribution</span>
-          <h2>Agent vs. model time</h2>
-          <p>
-            Only completed user-request windows are measured. Agent startup, waiting for input,
-            detached background requests, and post-response idle stay visible in Waterfall but do
-            not enter the attribution denominator.
-          </p>
+          <span class="attribution-kicker">{{ t('kicker') }}</span>
+          <h2>{{ t('title') }}</h2>
+          <p>{{ t('headerNote') }}</p>
         </div>
         <span class="status-badge" :class="`status-${attribution.status}`">
           {{ attributionStatusLabel(attribution.status) }}
@@ -25,18 +21,14 @@
         @select="openCategory"
       />
 
-      <p class="detail-note coverage-note">
+      <p v-if="hasUserTurns" class="detail-note coverage-note">
         {{ attributionCoverageLabel(attribution.coverage) }}
       </p>
 
-      <div v-if="!hasUserTurns" class="no-user-turn-state">
-        <strong>No attributable user request observed</strong>
-        <span>
-          This Agent has only startup, idle, incomplete, or background activity so far. Ask a
-          question and wait for its observable response to finish; Waterfall continues to show the
-          full Trace.
-        </span>
-      </div>
+      <p v-else class="attribution-compact-note">
+        {{ t('emptyNote') }}
+        <span class="attribution-compact-coverage">{{ attributionCoverageLabel(attribution.coverage) }}</span>
+      </p>
 
       <div v-if="hasUserTurns" class="category-grid">
         <button
@@ -56,9 +48,9 @@
         </button>
       </div>
 
-      <nav v-if="hasUserTurns" class="detail-tabs" aria-label="Attribution dimensions">
+      <nav v-if="hasUserTurns" class="detail-tabs" :aria-label="t('dimensionsAria')">
         <button
-          v-for="tab in detailTabs"
+          v-for="tab in localizedDetailTabs"
           :key="tab.id"
           type="button"
           :class="{ active: activeDetail === tab.id }"
@@ -69,13 +61,11 @@
       </nav>
 
       <p v-if="hasUserTurns && activeDetail === 'commands'" class="detail-note">
-        Actual commands launched by an Agent Tool. A command includes its descendant process tree,
-        so cargo time already includes rustc and linker work without double counting.
+        {{ t('commandsNote') }}
       </p>
 
       <p v-if="hasUserTurns && activeDetail === 'tools'" class="detail-note">
-        Each real tool invocation keeps its full wall time. Overlapping tools are counted
-        independently, so these workload percentages can overlap.
+        {{ t('toolsNote') }}
       </p>
 
       <section v-if="hasUserTurns && activeDetail === 'rounds'" class="detail-list">
@@ -112,7 +102,7 @@
           />
         </article>
         <div v-if="!filteredRounds.length" class="attribution-empty">
-          No user requests match the filter.
+          {{ t('noRequests') }}
         </div>
       </section>
 
@@ -130,7 +120,7 @@
             <strong>{{ row.label }}</strong>
             <small>{{ breakdownCountLabel(row) }}</small>
             <small v-if="activeDetail === 'commands' && row.agent_tools?.length">
-              via Agent Tool: {{ row.agent_tools.join(', ') }}
+              {{ t('viaTool', { tools: row.agent_tools.join(', ') }) }}
             </small>
           </span>
           <span class="breakdown-duration">
@@ -140,12 +130,12 @@
           <ExternalLink v-if="row.target" :size="14" aria-hidden="true" />
         </button>
         <div v-if="!filteredBreakdown.length" class="attribution-empty">
-          No {{ activeDetail }} match the filter.
+          {{ t('noMatch', { kind: activeDetail }) }}
         </div>
       </section>
 
-      <section v-if="attribution.issues?.length" class="issues-panel">
-        <h3>Collection and attribution status</h3>
+      <section v-if="hasUserTurns && attribution.issues?.length" class="issues-panel">
+        <h3>{{ t('collectionStatus') }}</h3>
         <article
           v-for="(issue, index) in groupedIssues"
           :key="`${issue.code}-${issue.action_id ?? index}`"
@@ -154,16 +144,13 @@
           <strong>{{ issue.code }}</strong>
           <span>{{ issue.message }}</span>
           <small v-if="issue.count > 1" class="issue-count">
-            {{ issue.count }} occurrences
+            {{ t('occurrences', { count: issue.count }) }}
           </small>
         </article>
       </section>
 
-      <footer class="attribution-footnote">
-        Agent-side, model-side observable, and unattributed partition only the union of observed
-        user-request windows. Agent lifetime and interaction idle are excluded, and concurrent
-        intervals are unioned for category percentages; Agent Tool workload rows count each
-        invocation independently.
+      <footer v-if="hasUserTurns" class="attribution-footnote">
+        {{ t('standardNote') }}
       </footer>
     </template>
   </section>
@@ -174,6 +161,11 @@ import { computed, ref, watch } from 'vue';
 import { ExternalLink } from '@lucide/vue';
 
 import TimeAttributionBar from '../../../components/time-attribution/TimeAttributionBar.vue';
+import { useModuleLocale } from '../../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 import {
   ATTRIBUTION_COLORS,
   attributionStatusLabel,
@@ -204,11 +196,14 @@ const props = defineProps({
 
 const emit = defineEmits(['open-waterfall']);
 const detailTabs = Object.freeze([
-  { id: 'rounds', label: 'User Requests' },
-  { id: 'models', label: 'Models' },
-  { id: 'tools', label: 'Agent Tools' },
-  { id: 'commands', label: 'Commands' },
+  { id: 'rounds', labelKey: 'userRequests' },
+  { id: 'models', labelKey: 'models' },
+  { id: 'tools', labelKey: 'agentTools' },
+  { id: 'commands', labelKey: 'commands' },
 ]);
+const localizedDetailTabs = computed(() =>
+  detailTabs.map((tab) => ({ ...tab, label: t(tab.labelKey) })),
+);
 const activeDetail = ref('rounds');
 const normalizedQuery = computed(() => props.query.trim().toLowerCase());
 const hasUserTurns = computed(() => {
@@ -287,7 +282,7 @@ function matchesQuery(values) {
 
 function openCategory(row) {
   const target = normalizeAttributionTarget(row?.target, {
-    source: 'Trace Time Attribution',
+    source: t('source'),
     dimension: 'category',
     key: row.key,
     label: row.label,
@@ -300,7 +295,7 @@ function openCategory(row) {
 
 function openRound(round) {
   const target = targetFromInterval(round, {
-    source: 'Trace Time Attribution',
+    source: t('source'),
     dimension: 'round',
     key: round.id,
     label: round.label,
@@ -313,7 +308,7 @@ function openRound(round) {
 
 function openRoundCategory(round, category) {
   const target = normalizeAttributionTarget(category?.target, {
-    source: 'Trace Time Attribution',
+    source: t('source'),
     dimension: 'round',
     key: round.id,
     label: `${round.label} · ${category.label}`,
@@ -328,7 +323,7 @@ function openRoundCategory(round, category) {
 
 function openBreakdown(row) {
   const target = normalizeAttributionTarget(row?.target, {
-    source: 'Trace Time Attribution',
+    source: t('source'),
     dimension: {
       models: 'model',
       tools: 'tool',
@@ -346,9 +341,9 @@ function openBreakdown(row) {
 function roundCallLabel(round) {
   const count = Number(round?.call_count ?? round?.action_ids?.length ?? 0);
   if (!count) {
-    return 'no model calls';
+    return t('noModelCalls');
   }
-  return `${count} model ${count === 1 ? 'call' : 'calls'}`;
+  return t('modelCalls', { count });
 }
 
 function attributionCoverageLabel(coverage) {
@@ -363,15 +358,15 @@ function attributionCoverageLabel(coverage) {
   const userTurns = Number(coverage?.user_turn_count ?? 0);
   const inputBoundaries = Number(coverage?.strong_user_input_count ?? 0);
   return [
-    `${userTurns} user ${userTurns === 1 ? 'request' : 'requests'} attributed`,
-    `${inputBoundaries} observed input ${inputBoundaries === 1 ? 'boundary' : 'boundaries'}`,
-    `${requests} LLM ${requests === 1 ? 'request' : 'requests'} observed`,
-    `${responses} LLM ${responses === 1 ? 'response' : 'responses'} observed`,
-    `${pairedCalls} of ${observedCalls} calls structurally paired`,
-    `${unpairedCalls} request-only ${unpairedCalls === 1 ? 'call' : 'calls'}`,
-    `${orphanResponses} orphan ${orphanResponses === 1 ? 'response' : 'responses'}`,
-    `${attributedCalls} paired ${attributedCalls === 1 ? 'call' : 'calls'} attributed`,
-    `${excludedCalls} paired ${excludedCalls === 1 ? 'call' : 'calls'} excluded from attribution`,
+    t('coverage.userRequests', { count: userTurns }),
+    t('coverage.inputBoundaries', { count: inputBoundaries }),
+    t('coverage.llmRequests', { count: requests }),
+    t('coverage.llmResponses', { count: responses }),
+    t('coverage.structurallyPaired', { observed: observedCalls, paired: pairedCalls }),
+    t('coverage.requestOnly', { count: unpairedCalls }),
+    t('coverage.orphanResponses', { count: orphanResponses }),
+    t('coverage.pairedAttributed', { count: attributedCalls }),
+    t('coverage.pairedExcluded', { count: excludedCalls }),
   ].join(' · ');
 }
 
@@ -380,9 +375,9 @@ function roundCategorySummary(round) {
     .filter((category) => BigInt(category.duration_nanos ?? 0) > 0n)
     .map((category) => {
       const label = {
-        agent_side: 'Agent',
-        model_side: 'Model',
-        unattributed: 'Unattributed',
+        agent_side: t('category.agent'),
+        model_side: t('category.model'),
+        unattributed: t('category.unattributed'),
       }[category.key] ?? category.label;
       return `${label} ${formatAttributionDuration(category.duration_nanos)} (${formatAttributionPercent(category.percentage_bps)})`;
     })
@@ -391,14 +386,14 @@ function roundCategorySummary(round) {
 
 function breakdownCountLabel(row) {
   if (activeDetail.value === 'commands' && row.kind === 'tool_overhead') {
-    return `${row.segment_count} intervals · Agent Tool self-time`;
+    return t('coverage.toolIntervals', { count: row.segment_count });
   }
   const noun = activeDetail.value === 'models'
-    ? 'calls'
+    ? t('noun.calls')
     : activeDetail.value === 'commands'
-      ? 'command processes'
-      : 'actions';
-  return `${row.segment_count} intervals · ${row.action_count} ${noun}`;
+      ? t('noun.commands')
+      : t('noun.actions');
+  return t('breakdownCount', { intervals: row.segment_count, actions: row.action_count, noun });
 }
 
 function dominantIntervalDescription(row) {
@@ -406,7 +401,10 @@ function dominantIntervalDescription(row) {
   if (count <= 1) {
     return '';
   }
-  return `Longest contiguous interval shown · ${formatAttributionDuration(row.duration_nanos)} aggregate across ${count} intervals`;
+  return t('focus.aggregate', {
+    duration: formatAttributionDuration(row.duration_nanos),
+    count,
+  });
 }
 </script>
 
@@ -417,29 +415,64 @@ function dominantIntervalDescription(row) {
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: var(--stats-space-xl, 20px);
-  padding: var(--stats-viewport-padding, 24px);
-  background: var(--stats-bg-gradient, none), var(--stats-bg-base, var(--bg));
+  gap: var(--ui-space-xl, 20px);
+  padding: var(--ui-viewport-padding, 24px);
+  background: var(--ui-bg-base);
 }
 
 .attribution-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--stats-space-xl, 20px);
+  gap: var(--ui-space-xl, 20px);
+}
+
+.attribution-header-compact > div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ui-space-md);
+}
+
+.attribution-header-compact .attribution-kicker {
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+
+.attribution-header-compact h2 {
+  margin: 0;
+  font-size: var(--ui-font-title);
+}
+
+.attribution-header-compact p {
+  display: none;
+}
+
+.attribution-compact-note {
+  max-width: 92ch;
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  line-height: 1.5;
+}
+
+.attribution-compact-coverage {
+  display: block;
+  margin-top: var(--ui-space-2xs);
+  color: var(--ui-text-tertiary);
+  font-size: var(--ui-font-xs);
 }
 
 .attribution-kicker {
-  color: var(--stats-accent, var(--accent));
-  font-size: var(--stats-font-xs, 12px);
+  color: var(--ui-accent, var(--ui-accent));
+  font-size: var(--ui-font-xs, 12px);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .attribution-header h2 {
-  margin: var(--stats-space-xs, 4px) 0;
-  color: var(--stats-text, var(--text));
+  margin: var(--ui-space-xs, 4px) 0;
+  color: var(--ui-text, var(--ui-text));
 }
 
 .attribution-header p,
@@ -447,56 +480,56 @@ function dominantIntervalDescription(row) {
 .detail-note {
   max-width: 760px;
   margin: 0;
-  color: var(--stats-muted, var(--muted));
-  font-size: var(--stats-font-sm, 13px);
+  color: var(--ui-muted, var(--ui-muted));
+  font-size: var(--ui-font-sm, 13px);
   line-height: 1.55;
 }
 
 .coverage-note {
-  margin-top: calc(var(--stats-space-lg, 16px) * -1);
+  margin-top: calc(var(--ui-space-lg, 16px) * -1);
 }
 
 .detail-note {
   max-width: none;
-  padding: var(--stats-space-md, 10px) var(--stats-space-lg, 14px);
-  border-left: 3px solid var(--stats-accent, var(--accent));
-  background: var(--stats-accent-muted, rgb(123 140 255 / 10%));
+  padding: var(--ui-space-md, 10px) var(--ui-space-lg, 14px);
+  border-left: 3px solid var(--ui-accent, var(--ui-accent));
+  background: var(--ui-accent-muted, rgb(123 140 255 / 10%));
 }
 
 .status-badge {
   flex: 0 0 auto;
-  padding: var(--stats-space-xs, 4px) var(--stats-space-md, 10px);
-  border: 1px solid var(--stats-border, var(--border));
+  padding: var(--ui-space-xs, 4px) var(--ui-space-md, 10px);
+  border: 1px solid var(--ui-border, var(--ui-border));
   border-radius: 999px;
-  font-size: var(--stats-font-xs, 12px);
+  font-size: var(--ui-font-xs, 12px);
   text-transform: uppercase;
 }
 
 .status-complete {
-  color: var(--stats-success, #45b783);
+  color: var(--ui-success, #45b783);
 }
 
 .status-provisional {
-  color: var(--stats-accent, #7b8cff);
+  color: var(--ui-accent, #7b8cff);
 }
 
 .status-partial,
 .status-invalid {
-  color: var(--stats-danger, #dc6673);
+  color: var(--ui-danger, #dc6673);
 }
 
 .category-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--stats-space-md, 10px);
+  gap: var(--ui-space-md, 10px);
 }
 
 .category-card,
 .breakdown-row,
 .row-heading {
-  border: 1px solid var(--stats-border, var(--border));
-  background: var(--stats-surface, var(--surface));
-  color: var(--stats-text, var(--text));
+  border: 1px solid var(--ui-border, var(--ui-border));
+  background: var(--ui-surface, var(--ui-surface));
+  color: var(--ui-text, var(--ui-text));
   cursor: pointer;
 }
 
@@ -505,21 +538,21 @@ function dominantIntervalDescription(row) {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--stats-space-sm, 8px);
-  padding: var(--stats-space-lg, 14px);
-  border-radius: var(--stats-radius-md, 10px);
+  gap: var(--ui-space-sm, 8px);
+  padding: var(--ui-space-lg, 14px);
+  border-radius: var(--ui-radius-md, 10px);
   text-align: left;
 }
 
 .category-card > span:nth-of-type(2) {
   grid-column: 2;
-  color: var(--stats-muted, var(--muted));
-  font-size: var(--stats-font-sm, 13px);
+  color: var(--ui-muted, var(--ui-muted));
+  font-size: var(--ui-font-sm, 13px);
 }
 
 .category-card > strong {
   grid-column: 2;
-  font-size: var(--stats-font-display-sm, 20px);
+  font-size: var(--ui-font-display-sm, 20px);
 }
 
 .category-card > svg {
@@ -535,14 +568,14 @@ function dominantIntervalDescription(row) {
 .category-card:not(:disabled):hover,
 .breakdown-row:not(:disabled):hover,
 .row-heading:hover {
-  border-color: var(--stats-accent-soft, var(--accent));
+  border-color: var(--ui-accent-soft, var(--ui-accent));
 }
 
 .category-card.focused,
 .round-row.focused,
 .breakdown-row.focused {
-  border-color: var(--stats-accent, var(--accent));
-  box-shadow: 0 0 0 2px var(--stats-accent-muted, rgb(123 140 255 / 15%));
+  border-color: var(--ui-accent, var(--ui-accent));
+  box-shadow: 0 0 0 2px var(--ui-accent-muted, rgb(123 140 255 / 15%));
 }
 
 .category-dot {
@@ -565,45 +598,45 @@ function dominantIntervalDescription(row) {
 
 .category-label {
   min-width: 0;
-  font-size: var(--stats-font-sm, 13px);
+  font-size: var(--ui-font-sm, 13px);
 }
 
 .detail-tabs {
   display: inline-flex;
   width: fit-content;
-  padding: var(--stats-space-2xs, 2px);
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-sm, 8px);
-  background: var(--stats-surface, var(--surface));
+  padding: var(--ui-space-2xs, 2px);
+  border: 1px solid var(--ui-border, var(--ui-border));
+  border-radius: var(--ui-radius-sm, 8px);
+  background: var(--ui-surface, var(--ui-surface));
 }
 
 .detail-tabs button {
   min-height: 34px;
-  padding: 0 var(--stats-space-lg, 14px);
+  padding: 0 var(--ui-space-lg, 14px);
   border: 0;
-  border-radius: var(--stats-radius-sm, 8px);
+  border-radius: var(--ui-radius-sm, 8px);
   background: transparent;
-  color: var(--stats-muted, var(--muted));
+  color: var(--ui-muted, var(--ui-muted));
   cursor: pointer;
 }
 
 .detail-tabs button.active {
-  background: var(--stats-accent-muted, rgb(123 140 255 / 15%));
-  color: var(--stats-text, var(--text));
+  background: var(--ui-accent-muted, rgb(123 140 255 / 15%));
+  color: var(--ui-text, var(--ui-text));
 }
 
 .detail-list {
   display: grid;
-  gap: var(--stats-space-sm, 8px);
+  gap: var(--ui-space-sm, 8px);
 }
 
 .round-row {
   display: grid;
-  gap: var(--stats-space-md, 10px);
-  padding: var(--stats-space-lg, 14px);
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-md, 10px);
-  background: var(--stats-surface, var(--surface));
+  gap: var(--ui-space-md, 10px);
+  padding: var(--ui-space-lg, 14px);
+  border: 1px solid var(--ui-border, var(--ui-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--ui-surface));
 }
 
 .round-row :deep(.attribution-bar),
@@ -617,7 +650,7 @@ function dominantIntervalDescription(row) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--stats-space-md, 10px);
+  gap: var(--ui-space-md, 10px);
   text-align: left;
 }
 
@@ -630,16 +663,16 @@ function dominantIntervalDescription(row) {
 .breakdown-row span {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-2xs, 2px);
+  gap: var(--ui-space-2xs, 2px);
 }
 
 .row-heading small,
 .breakdown-row small {
-  color: var(--stats-muted, var(--muted));
+  color: var(--ui-muted, var(--ui-muted));
 }
 
 .row-heading .round-boundary {
-  color: var(--stats-text, var(--text));
+  color: var(--ui-text, var(--ui-text));
   font-weight: 500;
 }
 
@@ -649,8 +682,8 @@ function dominantIntervalDescription(row) {
 
 .breakdown-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
-  padding: var(--stats-space-lg, 14px);
-  border-radius: var(--stats-radius-md, 10px);
+  padding: var(--ui-space-lg, 14px);
+  border-radius: var(--ui-radius-md, 10px);
 }
 
 .breakdown-duration {
@@ -659,51 +692,51 @@ function dominantIntervalDescription(row) {
 
 .issues-panel {
   display: grid;
-  gap: var(--stats-space-sm, 8px);
-  padding: var(--stats-space-lg, 14px);
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-md, 10px);
-  background: var(--stats-surface, var(--surface));
+  gap: var(--ui-space-sm, 8px);
+  padding: var(--ui-space-lg, 14px);
+  border: 1px solid var(--ui-border, var(--ui-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--ui-surface));
 }
 
 .issues-panel h3 {
-  margin: 0 0 var(--stats-space-xs, 4px);
+  margin: 0 0 var(--ui-space-xs, 4px);
 }
 
 .issues-panel article {
   display: grid;
   grid-template-columns: minmax(170px, auto) minmax(0, 1fr);
-  gap: var(--stats-space-md, 10px);
-  color: var(--stats-muted, var(--muted));
-  font-size: var(--stats-font-sm, 13px);
+  gap: var(--ui-space-md, 10px);
+  color: var(--ui-muted, var(--ui-muted));
+  font-size: var(--ui-font-sm, 13px);
 }
 
 .issues-panel article strong {
-  color: var(--stats-text, var(--text));
+  color: var(--ui-text, var(--ui-text));
 }
 
 .issue-error strong {
-  color: var(--stats-danger, #dc6673) !important;
+  color: var(--ui-danger, #dc6673) !important;
 }
 
 .no-user-turn-state {
   display: grid;
-  gap: var(--stats-space-sm, 8px);
-  padding: var(--stats-space-xl, 20px);
-  border: 1px dashed var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-lg, 14px);
-  background: var(--stats-surface, var(--surface));
-  color: var(--stats-muted, var(--muted));
+  gap: var(--ui-space-sm, 8px);
+  padding: var(--ui-space-xl, 20px);
+  border: 1px dashed var(--ui-border, var(--ui-border));
+  border-radius: var(--ui-radius-lg, 14px);
+  background: var(--ui-surface, var(--ui-surface));
+  color: var(--ui-muted, var(--ui-muted));
   line-height: 1.55;
 }
 
 .no-user-turn-state strong {
-  color: var(--stats-text, var(--text));
+  color: var(--ui-text, var(--ui-text));
 }
 
 .attribution-empty {
-  padding: var(--stats-space-2xl, 28px);
-  color: var(--stats-muted, var(--muted));
+  padding: var(--ui-space-2xl, 28px);
+  color: var(--ui-muted, var(--ui-muted));
   text-align: center;
 }
 

@@ -10,8 +10,8 @@
       <span class="plugin-command-toggle-title">
         <SquareTerminal :size="17" aria-hidden="true" />
         <span>
-          <strong>Plugin command</strong>
-          <small>{{ commandSupported ? 'Send a supported management command' : 'Not supported by this plugin type' }}</small>
+          <strong>{{ t('command.title') }}</strong>
+          <small>{{ commandSupported ? t('command.subtitleSupported') : t('command.subtitleUnsupported') }}</small>
         </span>
       </span>
       <ChevronDown v-if="commandSupported" :size="17" :class="{ rotated: opened }" aria-hidden="true" />
@@ -19,15 +19,15 @@
     </button>
 
     <p v-if="!commandSupported" class="plugin-command-unsupported">
-      Observation plugins consume trace data and do not expose management commands. Configure this instance through the Configuration panel above.
+      {{ t('command.unsupported') }}
     </p>
 
     <form v-else-if="opened" class="plugin-command" @submit.prevent="sendCommand">
       <div class="plugin-command-heading">
-        <label :for="inputId">Command arguments</label>
+        <label :for="inputId">{{ t('command.arguments') }}</label>
         <code>{{ instanceId }}</code>
       </div>
-      <p>Enter one argument per line. Send <code>help</code> to list supported operations.</p>
+      <p>{{ t('command.argumentsHint') }} <code>help</code> {{ t('command.argumentsHintTail') }}</p>
       <textarea
         :id="inputId"
         v-model="commandText"
@@ -37,12 +37,12 @@
       ></textarea>
       <div class="plugin-command-actions">
         <button type="submit" :disabled="sending || argv.length === 0">
-          {{ sending ? 'Sending…' : 'Send command' }}
+          {{ sending ? t('command.sending') : t('command.send') }}
         </button>
       </div>
       <p v-if="error" class="plugin-command-error">{{ error }}</p>
       <section v-if="result" class="plugin-command-result" aria-live="polite">
-        <strong>Exit code {{ result.exit_code }}</strong>
+        <strong>{{ t('command.exitCode', { code: result.exit_code }) }}</strong>
         <div v-if="result.stdout">
           <span>stdout</span>
           <pre>{{ result.stdout }}</pre>
@@ -51,7 +51,7 @@
           <span>stderr</span>
           <pre>{{ result.stderr }}</pre>
         </div>
-        <p v-if="!result.stdout && !result.stderr">The plugin returned no output.</p>
+        <p v-if="!result.stdout && !result.stderr">{{ t('command.noOutput') }}</p>
       </section>
     </form>
   </section>
@@ -62,6 +62,10 @@ import { computed, ref } from 'vue';
 import { ChevronDown, LockKeyhole, SquareTerminal } from '@lucide/vue';
 
 import { sendRuntimePluginCommand } from '../../api';
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   instanceId: {
@@ -108,40 +112,40 @@ async function sendCommand() {
 <style scoped>
 .plugin-command-panel {
   display: grid;
-  margin: 0 var(--stats-space-2xl) var(--stats-space-2xl) calc(var(--stats-space-2xl) + var(--stats-space-lg));
+  margin: 0 var(--ui-space-2xl) var(--ui-space-2xl) calc(var(--ui-space-2xl) + var(--ui-space-lg));
   overflow: hidden;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface-soft);
-  color: var(--stats-text);
-  font-size: var(--stats-font-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-soft);
+  color: var(--ui-text);
+  font-size: var(--ui-font-md);
 }
 
 .plugin-command-toggle {
   width: 100%;
-  min-height: calc(var(--stats-control-height-lg) + var(--stats-space-md));
+  min-height: calc(var(--ui-control-height-lg) + var(--ui-space-md));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-md) var(--stats-space-lg);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-md) var(--ui-space-lg);
   border: 0;
   background: transparent;
-  color: var(--stats-text);
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
   text-align: left;
 }
 
 .plugin-command-toggle:hover {
-  background: var(--stats-surface-bar);
+  background: var(--ui-surface-bar);
 }
 
 .plugin-command-toggle:focus-visible,
 .plugin-command textarea:focus-visible,
 .plugin-command-actions button:focus-visible {
-  outline: 2px solid var(--stats-accent);
-  outline-offset: calc(-1 * var(--stats-space-xs));
+  outline: 2px solid var(--ui-accent);
+  outline-offset: calc(-1 * var(--ui-space-xs));
 }
 
 .plugin-command-toggle.unsupported {
@@ -155,28 +159,28 @@ async function sendCommand() {
 }
 
 .plugin-command-toggle-title {
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .plugin-command-toggle-title > span {
   align-items: flex-start;
   flex-direction: column;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .plugin-command-toggle strong,
 .plugin-command label,
 .plugin-command-result > strong {
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-command-toggle small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 
 .plugin-command-toggle > svg {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   transition: transform 120ms ease;
 }
 
@@ -186,55 +190,55 @@ async function sendCommand() {
 
 .plugin-command-unsupported {
   margin: 0;
-  padding: 0 var(--stats-space-lg) var(--stats-space-lg) calc(1.0625rem + var(--stats-space-lg) + var(--stats-space-md));
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  padding: 0 var(--ui-space-lg) var(--ui-space-lg) calc(1.0625rem + var(--ui-space-lg) + var(--ui-space-md));
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
   line-height: 1.5;
 }
 
 .plugin-command {
   display: grid;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-2xl);
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-2xl);
   border: 0;
-  border-top: 1px solid var(--stats-border);
+  border-top: 1px solid var(--ui-border);
   border-radius: 0;
-  background: var(--stats-surface);
+  background: var(--ui-surface);
 }
 
 .plugin-command-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .plugin-command-heading code {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: var(--stats-font-xs);
+  font-size: var(--ui-font-xs);
 }
 
 .plugin-command > p,
 .plugin-command-result span {
   margin: 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .plugin-command > p code {
-  color: var(--stats-text);
+  color: var(--ui-text);
   font-size: inherit;
 }
 
 .plugin-command textarea {
   width: 100%;
   resize: vertical;
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
@@ -243,19 +247,19 @@ async function sendCommand() {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .plugin-command-actions button {
-  min-height: var(--stats-control-height-md);
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid var(--stats-accent-soft);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-accent-muted);
-  color: var(--stats-accent);
+  min-height: var(--ui-control-height-md);
+  padding: 0 var(--ui-space-lg);
+  border: 1px solid var(--ui-accent-soft);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-muted);
+  color: var(--ui-accent);
   cursor: pointer;
   font: inherit;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .plugin-command-actions button:disabled {
@@ -264,21 +268,21 @@ async function sendCommand() {
 }
 
 .plugin-command-error {
-  color: var(--stats-danger) !important;
+  color: var(--ui-danger) !important;
 }
 
 .plugin-command-result {
   display: grid;
-  gap: var(--stats-space-sm);
-  padding: var(--stats-space-md);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
+  gap: var(--ui-space-sm);
+  padding: var(--ui-space-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
 }
 
 .plugin-command-result pre {
   max-height: 15rem;
-  margin: var(--stats-space-xs) 0 0;
+  margin: var(--ui-space-xs) 0 0;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -287,8 +291,8 @@ async function sendCommand() {
 
 @media (max-width: 47.5rem) {
   .plugin-command-panel {
-    margin-right: var(--stats-space-xl);
-    margin-left: var(--stats-space-xl);
+    margin-right: var(--ui-space-xl);
+    margin-left: var(--ui-space-xl);
   }
 
   .plugin-command-heading {

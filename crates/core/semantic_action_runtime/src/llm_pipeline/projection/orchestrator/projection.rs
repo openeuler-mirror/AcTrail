@@ -248,7 +248,7 @@ impl ProjectionCoordinator {
                             changed.extend(self.reconcile_confirmed_http_exchanges(&stream_key));
                         }
                     } else {
-                        changed.extend(self.bind_terminal_http2_response(&state_action));
+                        changed.extend(self.bind_terminal_response(&state_action));
                     }
                 }
                 _ => {}

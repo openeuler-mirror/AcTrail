@@ -12,7 +12,7 @@
 
     <div v-if="enabled" class="progressive-disclosure-control">
       <span class="progressive-disclosure-copy">
-        <strong>Detail level</strong>
+        <strong>{{ t('progressiveDisclosure.detailLevel') }}</strong>
         <small>{{ expanded ? allLabel : focusedLabel }}</small>
       </span>
       <label class="progressive-disclosure-switch">
@@ -20,7 +20,7 @@
         <input
           type="checkbox"
           :checked="expanded"
-          :aria-label="`Show ${allLabel.toLowerCase()}`"
+          :aria-label="t('progressiveDisclosure.showAll', { level: allLabel })"
           :aria-controls="secondaryId"
           @change="setExpanded($event.target.checked)"
         />
@@ -38,6 +38,11 @@ let nextDisclosureId = 0;
 <script setup>
 import { computed } from 'vue';
 
+import { useModuleLocale } from '../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 const props = defineProps({
   enabled: {
     type: Boolean,
@@ -49,13 +54,16 @@ const props = defineProps({
   },
   focusedLabel: {
     type: String,
-    default: 'Focused',
+    default: '',
   },
   allLabel: {
     type: String,
-    default: 'All data',
+    default: '',
   },
 });
+
+const focusedLabel = computed(() => props.focusedLabel || t('progressiveDisclosure.focused'));
+const allLabel = computed(() => props.allLabel || t('progressiveDisclosure.allData'));
 
 const emit = defineEmits(['update:expanded']);
 const secondaryId = `progressive-disclosure-${++nextDisclosureId}`;
@@ -74,9 +82,9 @@ function setExpanded(value) {
   gap: 12px;
   margin: 18px 0 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface) 82%, var(--trace-interactive-bg));
+  background: color-mix(in srgb, var(--ui-surface) 82%, var(--trace-interactive-bg));
 }
 
 .progressive-disclosure-copy {
@@ -90,7 +98,7 @@ function setExpanded(value) {
 }
 
 .progressive-disclosure-copy small {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
 }
 
@@ -98,7 +106,7 @@ function setExpanded(value) {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
   white-space: nowrap;
   cursor: pointer;
@@ -116,9 +124,9 @@ function setExpanded(value) {
   position: relative;
   width: 34px;
   height: 20px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 999px;
-  background: var(--surface-muted);
+  background: var(--ui-surface-soft);
   transition: background 120ms ease, border-color 120ms ease;
 }
 
@@ -129,22 +137,22 @@ function setExpanded(value) {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--ui-muted);
   transition: transform 120ms ease, background 120ms ease;
 }
 
 .progressive-disclosure-switch input:checked + i {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
   background: var(--trace-interactive-bg);
 }
 
 .progressive-disclosure-switch input:checked + i b {
-  background: var(--teal-deep);
+  background: var(--ui-accent-strong);
   transform: translateX(14px);
 }
 
 .progressive-disclosure-switch input:focus-visible + i {
-  outline: 2px solid var(--teal);
+  outline: 2px solid var(--ui-accent);
   outline-offset: 2px;
 }
 </style>
