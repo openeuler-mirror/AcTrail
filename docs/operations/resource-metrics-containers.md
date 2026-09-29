@@ -15,9 +15,10 @@ memory_alert_current_bytes = "1073741824"
 
 `disabled` keeps existing container accounting off. `prefer` falls back to procfs
 if admission cannot verify the boundary; `require` rejects that attachment.
-Combining prefer/require with `mode = "procfs"` is invalid. The default remains
-procfs/disabled. `cgroup-v2` mode also requires managed host delegation, even when
-the requested attachment is to a container. `auto` can use read-only container
+Combining prefer/require with `mode = "procfs"` is invalid. The defaults are
+`mode = "auto"` and `existing_container_cgroups = "disabled"`. `cgroup-v2` mode
+also requires managed host delegation, even when the requested attachment is to
+a container. `auto` can use read-only container
 accounting without managed host delegation. Alert settings accept a positive
 integer string or `"disabled"`; zero is not a disable value.
 

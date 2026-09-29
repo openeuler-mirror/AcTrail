@@ -23,7 +23,7 @@ orphan_limit = 1024
 memory_alert_current_bytes = "1073741824"
 ```
 
-`procfs` remains the default mode. `auto` permits fallback when managed cgroup
+`auto` is the default mode and permits fallback when managed cgroup
 setup is unavailable; `cgroup-v2` requires successful preflight. Once moving the
 stopped launch PID commits admission, later errors fail admission rather than
 silently switching accounting. Ordinary host attachment has no managed launch

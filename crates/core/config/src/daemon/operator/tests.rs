@@ -194,17 +194,6 @@ fn resource_metrics_cgroup_settings_parse_and_round_trip() {
 }
 
 #[test]
-fn resource_metrics_default_remains_procfs() {
-    let config = OperatorConfig::init().expect("default operator config initializes");
-    assert_eq!(config.resource_metrics.mode, ResourceMetricsMode::Procfs);
-    assert_eq!(
-        config.resource_metrics.existing_container_cgroups,
-        ExistingContainerCgroups::Disabled
-    );
-    assert_eq!(config.resource_metrics.external_cgroup_failure_threshold, 3);
-}
-
-#[test]
 fn procfs_rejects_existing_container_cgroups() {
     let error = OperatorConfig::init()
         .expect("default operator config initializes")

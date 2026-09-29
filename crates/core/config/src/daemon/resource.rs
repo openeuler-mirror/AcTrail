@@ -5,9 +5,9 @@ use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ResourceMetricsMode {
-    #[default]
     Procfs,
     CgroupV2,
+    #[default]
     Auto,
 }
 
@@ -90,7 +90,7 @@ impl Default for ResourceMetricsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            mode: ResourceMetricsMode::Procfs,
+            mode: ResourceMetricsMode::default(),
             existing_container_cgroups: ExistingContainerCgroups::Disabled,
             external_cgroup_failure_threshold: 3,
             interval_ms: 1_000,
