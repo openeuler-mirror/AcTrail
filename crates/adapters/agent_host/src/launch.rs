@@ -27,9 +27,10 @@ impl AgentLaunchIntegration {
         trace_id: TraceId,
         control_socket: &Path,
         envs: &mut Vec<(OsString, OsString)>,
-    ) {
+    ) -> Result<(), String> {
         if let Some(opencode) = &self.opencode {
-            opencode.append_env(trace_id, control_socket, envs);
+            opencode.append_env(trace_id, control_socket, envs)?;
         }
+        Ok(())
     }
 }

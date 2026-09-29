@@ -484,7 +484,7 @@ fn launch_envs(
         ),
         None => Ok(Vec::new()),
     }?;
-    agent_integration.append_env(trace_id, control_socket_path, &mut envs);
+    agent_integration.append_env(trace_id, control_socket_path, &mut envs)?;
     Ok(envs)
 }
 

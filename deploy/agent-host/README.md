@@ -22,7 +22,7 @@ actrailctl launch --agent-host-config ./agent-host.toml --name opencode -- openc
 
 省略 `--agent-host-config` 时不注入接入插件。显式配置的读取、解析或启用插件检查失败会使 launch 报错。daemon 的 operator 配置不包含 OpenCode 专用字段，也不读取该文件。
 
-接入模块为匹配的 OpenCode 命令注入 `OPENCODE_CONFIG_DIR`、`ACTRAIL_AGENT_LIFECYCLE_ENABLED=true`、`ACTRAIL_TRACE_ID` 和 `ACTRAIL_CONTROL_SOCKET`。OpenCode 配置目录会与项目及全局配置叠加。`opencode run` 和 `opencode serve` 也可通过同一 launch 入口启动。
+接入模块保留用户的 `OPENCODE_CONFIG_DIR` 和 `OPENCODE_CONFIG`，通过 `OPENCODE_CONFIG_CONTENT` 的 `plugin` 数组追加插件入口的绝对 `file://` URL，不修改用户配置文件。已有内联 JSON 配置的其他字段及插件项会保留，相同入口不会重复追加；内联配置必须是合法 JSON 对象，`plugin` 必须是数组，否则 launch 报错。接入模块同时为匹配的 OpenCode 命令注入 `ACTRAIL_AGENT_LIFECYCLE_ENABLED=true`、`ACTRAIL_TRACE_ID` 和 `ACTRAIL_CONTROL_SOCKET`。已核对 OpenCode v1.18.15 的配置加载逻辑：内联插件会与自定义目录、项目及全局配置中的插件合并。`opencode run` 和 `opencode serve` 也可通过同一 launch 入口启动。
 
 ## 生命周期事实
 
