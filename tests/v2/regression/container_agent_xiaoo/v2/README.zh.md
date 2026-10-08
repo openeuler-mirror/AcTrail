@@ -16,6 +16,12 @@ sudo -E python3 tests/v2/regression/container_agent_xiaoo/v2/run_e2e.py
 read/write 的 `observed` 和 `bytes`，关闭 `bulk_read`，以验证独立读写动作及字节数。
 `sudo -E` 保留调用者已经导出的环境，runner、场景进程和 Docker 调用继续继承。
 
+回测用例统一管理本轮 `/tmp/actrail-nested-observer.*` 目录，嵌套 Docker 数据
+和内部 xiaoO 场景的 `scenario/` 目录都位于其中。默认在成功、失败及超时后清理，
+删除失败会使回测报告清理错误。使用 `--no-cleanup` 可保留现场，日志中的
+`nested_observer_runtime=` 给出路径。场景脚本的 `--runtime` 参数用于接收调用者
+管理的目录，其删除职责由调用者承担。
+
 # 步骤摘要
 
 1. 检查 AcTrail release 二进制、Docker daemon 和真实 xiaoO。

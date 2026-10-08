@@ -144,7 +144,7 @@ impl Default for ResourceMetricsDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            mode: ResourceMetricsMode::Procfs.as_str().to_string(),
+            mode: ResourceMetricsMode::default().as_str().to_string(),
             existing_container_cgroups: ExistingContainerCgroups::Disabled.as_str().to_string(),
             external_cgroup_failure_threshold: 3,
             interval_ms: 1000,

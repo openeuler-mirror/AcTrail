@@ -112,7 +112,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-runtime", action="store_true")
     parser.add_argument("--keep-runtime-on-failure", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--runtime", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--runtime", type=Path, help="runtime directory managed by the caller")
     return parser.parse_args()
 
 
@@ -126,7 +126,9 @@ def main() -> int:
 
 
 def run_parent(args: argparse.Namespace) -> int:
-    runtime = Path(tempfile.mkdtemp(prefix="actrail-nested-observer.", dir="/tmp"))
+    runtime = args.runtime or Path(
+        tempfile.mkdtemp(prefix="actrail-nested-observer.", dir="/tmp")
+    )
     succeeded = False
     try:
         archive = runtime / "container-agent-xiaoo-image.tar"
@@ -157,13 +159,17 @@ def run_parent(args: argparse.Namespace) -> int:
         succeeded = completed.returncode == 0
         return completed.returncode
     finally:
-        if args.keep_runtime or (args.keep_runtime_on_failure and not succeeded):
+        if (
+            args.runtime is not None
+            or args.keep_runtime
+            or (args.keep_runtime_on_failure and not succeeded)
+        ):
             print(
                 f"nested_observer_runtime_preserved={runtime} succeeded={succeeded}",
                 file=sys.stderr,
             )
         else:
-            shutil.rmtree(runtime, ignore_errors=True)
+            shutil.rmtree(runtime)
 
 
 def run_child(args: argparse.Namespace, runtime: Path) -> int:
@@ -181,7 +187,8 @@ def run_child(args: argparse.Namespace, runtime: Path) -> int:
             args.image,
             "--xiaoo-bin",
             args.xiaoo_bin,
-            "--keep-runtime-on-failure",
+            "--runtime",
+            str(runtime / "scenario"),
         ]
         if args.rebuild_image:
             command.append("--rebuild-image")

@@ -5,6 +5,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from tests.v2.common.core import TestCase, TestResult, TestStatus
@@ -16,6 +17,7 @@ from .config import ContainerAgentXiaooConfig
 class ContainerAgentXiaooCase(TestCase):
     def __init__(self, config: ContainerAgentXiaooConfig):
         self._config = config
+        self._runtime: Path | None = None
         self._script = (
             config.repo
             / "tests/v2/regression/container_agent_xiaoo/v2/nested_observer_scenario.py"
@@ -39,6 +41,10 @@ class ContainerAgentXiaooCase(TestCase):
             return TestResult(TestStatus.SKIPPED, prerequisite_error)
 
         assert self._config.xiaoo_bin is not None
+        self._runtime = Path(
+            tempfile.mkdtemp(prefix="actrail-nested-observer.", dir="/tmp")
+        )
+        test_context.output.command_output(f"nested_observer_runtime={self._runtime}\n", "")
         command = [
             sys.executable,
             str(self._script),
@@ -48,7 +54,8 @@ class ContainerAgentXiaooCase(TestCase):
             self._config.image,
             "--xiaoo-bin",
             str(self._config.xiaoo_bin.resolve()),
-            "--keep-runtime-on-failure",
+            "--runtime",
+            str(self._runtime),
         ]
         if self._config.rebuild_image:
             command.append("--rebuild-image")
@@ -92,6 +99,11 @@ class ContainerAgentXiaooCase(TestCase):
             TestStatus.PASSED,
             "real xiaoO multi-container acceptance completed",
         )
+
+    def cleanup(self, test_context: TestingContextSingleton) -> None:
+        if self._runtime is not None:
+            shutil.rmtree(self._runtime)
+            self._runtime = None
 
     def _artifact_error(self) -> str | None:
         required = (

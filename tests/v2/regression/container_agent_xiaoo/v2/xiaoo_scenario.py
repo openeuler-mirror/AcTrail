@@ -98,6 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rebuild-image", action="store_true")
     parser.add_argument("--keep-runtime", action="store_true")
     parser.add_argument("--keep-runtime-on-failure", action="store_true")
+    parser.add_argument("--runtime", type=Path, help="runtime directory managed by the caller")
     return parser.parse_args()
 
 
@@ -120,7 +121,9 @@ def main() -> int:
     nonleader_exec_script = require_file(case_dir / "nonleader_exec.py")
     require_command("docker")
 
-    runtime = Path(tempfile.mkdtemp(prefix="actrail-multi-container-xiaoo.", dir="/tmp"))
+    runtime = args.runtime or Path(
+        tempfile.mkdtemp(prefix="actrail-multi-container-xiaoo.", dir="/tmp")
+    )
     if args.container_start_stagger_seconds < 0 or args.active_overlap_seconds < 0:
         raise RuntimeError("container stagger and active overlap must be non-negative")
     run_id = f"{int(time.time())}-{os.getpid()}"
@@ -364,13 +367,17 @@ def main() -> int:
                 print_process_stderr("provider", provider)
         if not succeeded:
             print(f"failure_stage={failure_stage}", file=sys.stderr)
-        if args.keep_runtime or (args.keep_runtime_on_failure and not succeeded):
+        if (
+            args.runtime is not None
+            or args.keep_runtime
+            or (args.keep_runtime_on_failure and not succeeded)
+        ):
             print(
                 f"multi_container_runtime_preserved={runtime} succeeded={succeeded}",
                 file=sys.stderr,
             )
         else:
-            shutil.rmtree(runtime, ignore_errors=True)
+            shutil.rmtree(runtime)
 
 
 def prepare_runtime(
