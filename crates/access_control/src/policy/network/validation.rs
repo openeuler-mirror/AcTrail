@@ -9,7 +9,7 @@ use plugin_system::{
     NetworkPolicyRemoteSelector, NetworkPolicyRuleDraft, NetworkPolicyRulesApplyGrant,
 };
 
-use super::rules::{STATIC_POLICY_OWNER, StoredNetworkRule};
+use super::rule::{STATIC_POLICY_OWNER, StoredNetworkRule};
 
 pub(super) struct NetworkRuleValidator;
 
@@ -166,7 +166,7 @@ impl NetworkRuleValidator {
 #[derive(Default)]
 struct NetworkRemoteOwners<'a> {
     by_endpoint: BTreeMap<SocketAddr, &'a str>,
-    endpoint_by_ip: BTreeMap<IpAddr, (SocketAddr, &'a str)>,
+    endpoint_by_ip: BTreeMap<IpAddr, BTreeMap<&'a str, SocketAddr>>,
     by_ip: BTreeMap<IpAddr, &'a str>,
 }
 
@@ -183,7 +183,9 @@ impl<'a> NetworkRemoteOwners<'a> {
                         "network remote {remote} is already owned by {existing_owner}"
                     ));
                 }
-                if let Some(existing_owner) = self.by_ip.get(&endpoint.ip()) {
+                if let Some(existing_owner) = self.by_ip.get(&endpoint.ip())
+                    && *existing_owner != owner
+                {
                     let any_port = NetworkPolicyRemoteSelector::AnyPort(endpoint.ip());
                     return Err(format!(
                         "network remote {remote} overlaps {any_port} owned by {existing_owner}"
@@ -192,7 +194,9 @@ impl<'a> NetworkRemoteOwners<'a> {
                 self.by_endpoint.insert(endpoint, owner);
                 self.endpoint_by_ip
                     .entry(endpoint.ip())
-                    .or_insert((endpoint, owner));
+                    .or_default()
+                    .entry(owner)
+                    .or_insert(endpoint);
             }
             NetworkPolicyRemoteSelector::AnyPort(ip) => {
                 if let Some(existing_owner) = self.by_ip.get(&ip) {
@@ -200,7 +204,11 @@ impl<'a> NetworkRemoteOwners<'a> {
                         "network remote {remote} is already owned by {existing_owner}"
                     ));
                 }
-                if let Some((endpoint, existing_owner)) = self.endpoint_by_ip.get(&ip) {
+                if let Some((existing_owner, endpoint)) = self
+                    .endpoint_by_ip
+                    .get(&ip)
+                    .and_then(|owners| owners.iter().find(|(existing, _)| **existing != owner))
+                {
                     return Err(format!(
                         "network remote {remote} overlaps {endpoint} owned by {existing_owner}"
                     ));
@@ -224,9 +232,7 @@ impl StaticRuleParser {
                     owner_instance_id: STATIC_POLICY_OWNER.to_string(),
                     rule_id: (*rule_id).to_string(),
                     decision: NetworkPolicyDecision::from_wire(decision)?,
-                    remote: NetworkPolicyRemoteSelector::Endpoint(
-                        NetworkRuleValidator::endpoint(remote)?,
-                    ),
+                    remote: NetworkRuleValidator::selector(remote)?,
                     gray_target: None,
                     timeout_ms: None,
                     concurrency_limit: None,
@@ -253,9 +259,7 @@ impl StaticRuleParser {
                     owner_instance_id: STATIC_POLICY_OWNER.to_string(),
                     rule_id: (*rule_id).to_string(),
                     decision: NetworkPolicyDecision::Gray,
-                    remote: NetworkPolicyRemoteSelector::Endpoint(
-                        NetworkRuleValidator::endpoint(remote)?,
-                    ),
+                    remote: NetworkRuleValidator::selector(remote)?,
                     gray_target: Some((*instance).to_string()),
                     timeout_ms: Some(Self::positive_u64("timeout-ms", timeout_ms)?),
                     concurrency_limit: Some(Self::positive_u32(
@@ -267,7 +271,7 @@ impl StaticRuleParser {
                     updated_sequence: sequence,
                 })
             }
-            _ => Err("expected: <rule-id> <allow|deny> connect <ip:port>, or <rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <ip:port>".to_string()),
+            _ => Err("expected: <rule-id> <allow|deny> connect <ip:port|ip:*>, or <rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <ip:port|ip:*>".to_string()),
         }
     }
 

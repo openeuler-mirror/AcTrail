@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use storage_factory::StorageConfig;
 
+#[path = "daemon/access_control/config.rs"]
+mod access_control;
 #[path = "daemon/agent.rs"]
 mod agent;
 #[path = "daemon/application.rs"]
@@ -38,6 +40,10 @@ pub use crate::retention::{
     DEFAULT_STORAGE_RETENTION_ENABLED, DEFAULT_STORAGE_RETENTION_MAX_TRACE_AGE,
     DEFAULT_STORAGE_RETENTION_MIN_TERMINAL_AGE, DEFAULT_STORAGE_RETENTION_SWEEP_INTERVAL,
     DEFAULT_STORAGE_RETENTION_TRACES_PER_SWEEP, StorageRetentionConfig,
+};
+pub use access_control::{
+    AccessControlBackend, AccessControlConfig, FileControlConfig, FileOpenBackend, LsmConfig,
+    LsmDenySignal,
 };
 pub use agent::{
     AgentInvocationConfig, DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
@@ -81,8 +87,8 @@ pub use command::{
     DEFAULT_COMMAND_REUSABLE_CACHE_MAX_ENTRIES,
 };
 pub use enforcement::{
-    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision,
-    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
+    EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
+    EnforcementScope, EnforcementSeccompSyscall,
 };
 pub use file_observation::{
     DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,

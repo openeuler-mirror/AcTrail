@@ -1,6 +1,8 @@
 //! eBPF-backed collector adapter.
 
 pub mod capability_probe;
+#[path = "collector/access_control/bridge.rs"]
+mod collector_access_control;
 #[path = "collector/dynamic_go_tls.rs"]
 mod collector_dynamic_go_tls;
 #[path = "collector/dynamic_tls.rs"]

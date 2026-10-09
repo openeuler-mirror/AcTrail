@@ -153,12 +153,11 @@ actraild stop
 actrailctl init --force
 ```
 
-默认配置已经启用 fanotify enforcement、seccomp user notification，以及 `mkdir`/`rmdir` 目录操作控制。核对以下默认值，不需要另建专用配置：
+默认配置启用 LSM 文件打开控制；本示例显式选择 fanotify。目录控制需显式启用，并在 `capture.capabilities` 加入 `enforcement-file-mkdir-seccomp` 和 `enforcement-file-rmdir-seccomp`，保留 `proc-lifecycle` 与 `enforcement-file-permission-fanotify`：
 
 ```toml
 [enforcement]
 enabled = true
-backend = "fanotify"
 scope = "trace"
 rules_path = "/etc/actrail/enforcement-rules.conf"
 builtin_rules = []
@@ -166,8 +165,19 @@ default_decision = "allow"
 mark_strategy = "parent-directories"
 audit_enabled = true
 event_buffer_bytes = 65536
-seccomp_syscalls = ["mkdir", "rmdir"]
 seccomp_path_max_bytes = 4096
+
+[access_control.file.open]
+enabled = true
+backend = "fanotify"
+
+[access_control.file.mkdir]
+enabled = true
+backend = "seccomp"
+
+[access_control.file.rmdir]
+enabled = true
+backend = "seccomp"
 ```
 
 不要创建 bootstrap enforcement 规则文件。静态规则文件缺失或为空是合法状态；没有插件规则匹配时，默认 `allow` 应直接放行。
@@ -201,7 +211,7 @@ actrailctl doctor
 - `actraild started pid=...`；
 - status 显示 `actraild running`；
 - doctor 输出中包括 `storage_ready=true`；
-- collectors 中包括 `fanotify-enforcement`。
+- collectors 中包括 `file-enforcement`。
 
 终端 B 输入：
 

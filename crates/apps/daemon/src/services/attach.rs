@@ -69,7 +69,7 @@ use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
-use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::enforcement::FileEnforcementService;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
@@ -93,6 +93,8 @@ pub(crate) struct StorageAttachService {
     pub(super) process_registry: ProcessIdentityManager,
     pub(super) process_id_block_size: u64,
     pub(super) collector: EbpfCollector,
+    pub(super) lsm_access_control: Option<std::sync::Arc<access_control::lsm::LsmController>>,
+    pub(super) lsm_boundary_alerts: crate::services::access_control::LsmBoundaryAlerts,
     pub(super) host_ebpf_preflight:
         BTreeMap<model_core::ids::ProfileName, preflight::EbpfPreflightReport>,
     pub(super) identity_reader: ProcfsIdentityReader,
@@ -127,7 +129,7 @@ pub(crate) struct StorageAttachService {
     pub(super) application_protocol: ApplicationProtocolAnalyzer,
     pub(super) resource_metrics: ResourceMetricsSampler,
     pub(super) storage_retention: StorageRetentionService,
-    pub(super) enforcement: FanotifyEnforcementService,
+    pub(super) enforcement: FileEnforcementService,
     pub(super) control_plugins: ControlPluginRuntime,
     plugin_configs: plugin_config::PluginConfigManager,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
@@ -562,6 +564,12 @@ impl StorageAttachService {
                 ControlError::new("unknown_profile", "capture profile does not exist")
             })?;
         let profile_snapshot = CaptureProfileSnapshot::from_profile(profile, SystemTime::now());
+        if profile.requires_lsm_access_control() && !command.launch_mode {
+            return Err(ControlError::new(
+                "lsm_launch_required",
+                "LSM access control requires actrailctl launch so kernel identity binding is ready before execution",
+            ));
+        }
         if self.seccomp_tls.enabled()
             && !command.launch_mode
             && capability_requested(
@@ -575,14 +583,19 @@ impl StorageAttachService {
             ));
         }
         if !command.launch_mode
-            && capability_requested(
-                &profile_snapshot.capability_requests,
-                &Capability::EnforcementCommandExecutionSeccomp,
-            )
+            && [
+                Capability::EnforcementFileMkdirSeccomp,
+                Capability::EnforcementFileRmdirSeccomp,
+                Capability::EnforcementCommandExecutionSeccomp,
+            ]
+            .iter()
+            .any(|capability| {
+                capability_requested(&profile_snapshot.capability_requests, capability)
+            })
         {
             return Err(ControlError::new(
                 "command_control_backend",
-                "command execution enforcement is only supported by actrailctl launch",
+                "command and directory seccomp enforcement require actrailctl launch",
             ));
         }
         if !command.launch_mode

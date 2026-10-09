@@ -1,95 +1,20 @@
-//! Static exact-endpoint and runtime selector network policy storage.
-
+use super::rule::{STATIC_POLICY_OWNER, StoredNetworkRule};
+use super::validation::{NetworkRuleValidator, StaticRuleParser};
+use plugin_system::{
+    NetworkPolicyApplyError, NetworkPolicyApplyRequest, NetworkPolicyApplyResult,
+    NetworkPolicyApplyStatus, NetworkPolicyDecision, NetworkPolicyListFilter,
+    NetworkPolicyListResult, NetworkPolicyMatchDryRunRequest, NetworkPolicyMatchDryRunResult,
+    NetworkPolicyPatchItem, NetworkPolicyPatchOp, NetworkPolicyRemoteSelector,
+    NetworkPolicyRuleView, NetworkPolicyRulesApplyGrant,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 
-use config_core::daemon::EnforcementDecision;
-use plugin_system::{
-    ControlVerdict, NetworkPolicyApplyError, NetworkPolicyApplyRequest, NetworkPolicyApplyResult,
-    NetworkPolicyApplyStatus, NetworkPolicyDecision, NetworkPolicyListFilter,
-    NetworkPolicyListResult, NetworkPolicyMatchDryRunRequest, NetworkPolicyMatchDryRunResult,
-    NetworkPolicyPatchItem, NetworkPolicyPatchOp, NetworkPolicyRemoteSelector,
-    NetworkPolicyRuleDraft, NetworkPolicyRuleView, NetworkPolicyRulesApplyGrant,
-};
-
-use super::policy::{NetworkRuleValidator, StaticRuleParser};
-
-pub(super) const STATIC_POLICY_OWNER: &str = "actrail.static";
-const GENERATED_RULE_ID_PREFIX: &str = "network-rule";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StoredNetworkRule {
-    pub(super) owner_instance_id: String,
-    pub(super) rule_id: String,
-    pub(super) decision: NetworkPolicyDecision,
-    pub(super) remote: NetworkPolicyRemoteSelector,
-    pub(super) gray_target: Option<String>,
-    pub(super) timeout_ms: Option<u64>,
-    pub(super) concurrency_limit: Option<u32>,
-    pub(super) fallback: Option<EnforcementDecision>,
-    pub(super) rule_revision: u64,
-    pub(super) updated_sequence: u64,
-}
-
-impl StoredNetworkRule {
-    fn from_draft(
-        owner_instance_id: &str,
-        item_rule_id: Option<&str>,
-        draft: &NetworkPolicyRuleDraft,
-        remote: NetworkPolicyRemoteSelector,
-        rule_revision: u64,
-        updated_sequence: u64,
-        generated_rule_id: u64,
-    ) -> Result<Self, String> {
-        let rule_id = item_rule_id
-            .map(str::to_string)
-            .or_else(|| draft.rule_id.clone())
-            .unwrap_or_else(|| format!("{GENERATED_RULE_ID_PREFIX}-{generated_rule_id}"));
-        NetworkRuleValidator::rule_id(&rule_id)?;
-        Ok(Self {
-            owner_instance_id: owner_instance_id.to_string(),
-            rule_id,
-            decision: draft.decision,
-            remote,
-            gray_target: draft.gray_target.clone(),
-            timeout_ms: draft.timeout_ms,
-            concurrency_limit: draft.concurrency_limit,
-            fallback: draft.fallback.map(verdict_decision),
-            rule_revision,
-            updated_sequence,
-        })
-    }
-
-    fn view(&self) -> NetworkPolicyRuleView {
-        NetworkPolicyRuleView {
-            rule_id: self.rule_id.clone(),
-            owner_instance_id: self.owner_instance_id.clone(),
-            decision: self.decision,
-            remote: self.remote.to_string(),
-            gray_target: self.gray_target.clone(),
-            timeout_ms: self.timeout_ms,
-            concurrency_limit: self.concurrency_limit,
-            fallback: self.fallback.map(enforcement_verdict),
-            rule_revision: self.rule_revision,
-            updated_sequence: self.updated_sequence,
-        }
-    }
-
-    fn matches_filter(
-        &self,
-        decision: Option<NetworkPolicyDecision>,
-        remote: Option<NetworkPolicyRemoteSelector>,
-    ) -> bool {
-        decision.is_none_or(|decision| decision == self.decision)
-            && remote.is_none_or(|remote| remote == self.remote)
-    }
-}
-
 #[derive(Clone, Debug)]
-pub(super) struct NetworkPolicyStore {
+pub struct NetworkPolicyStore {
     revision: u64,
     next_rule_id: u64,
     next_sequence: u64,
@@ -99,7 +24,7 @@ pub(super) struct NetworkPolicyStore {
 }
 
 impl NetworkPolicyStore {
-    pub(super) fn load(path: &Path) -> Result<Self, String> {
+    pub fn load(path: &Path) -> Result<Self, String> {
         let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
@@ -149,7 +74,7 @@ impl NetworkPolicyStore {
         Ok(store)
     }
 
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             revision: 0,
             next_rule_id: 1,
@@ -160,24 +85,33 @@ impl NetworkPolicyStore {
         }
     }
 
-    pub(super) fn revision(&self) -> u64 {
+    pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    pub(super) fn find(&self, endpoint: &SocketAddr) -> Option<&StoredNetworkRule> {
+    /// Returns exact endpoints before any-port rules, matching lookup precedence.
+    pub fn effective_rule_views(&self) -> Vec<NetworkPolicyRuleView> {
+        self.effective_by_endpoint
+            .values()
+            .chain(self.effective_by_ip.values())
+            .map(StoredNetworkRule::view)
+            .collect()
+    }
+
+    pub fn find(&self, endpoint: &SocketAddr) -> Option<&StoredNetworkRule> {
         self.effective_by_endpoint
             .get(endpoint)
             .or_else(|| self.effective_by_ip.get(&endpoint.ip()))
     }
 
-    pub(super) fn is_rule_current(&self, rule: &StoredNetworkRule) -> bool {
+    pub fn is_rule_current(&self, rule: &StoredNetworkRule) -> bool {
         self.by_owner
             .get(&rule.owner_instance_id)
             .and_then(|rules| rules.get(&rule.rule_id))
             .is_some_and(|current| current.rule_revision == rule.rule_revision)
     }
 
-    pub(super) fn list(
+    pub fn list(
         &self,
         filter: NetworkPolicyListFilter,
         cursor: Option<&str>,
@@ -226,7 +160,7 @@ impl NetworkPolicyStore {
         })
     }
 
-    pub(super) fn match_dry_run(
+    pub fn match_dry_run(
         &self,
         request: NetworkPolicyMatchDryRunRequest,
         default_decision: NetworkPolicyDecision,
@@ -246,43 +180,35 @@ impl NetworkPolicyStore {
         })
     }
 
-    pub(super) fn validate_apply<F>(
+    pub fn validate_apply(
         &self,
         owner_instance_id: &str,
         grants: &[NetworkPolicyRulesApplyGrant],
         request: &NetworkPolicyApplyRequest,
-        target_active: F,
-    ) -> NetworkPolicyApplyResult
-    where
-        F: Fn(&str) -> bool,
-    {
-        match self.candidate_after(owner_instance_id, grants, request, target_active) {
-            Ok(_) => accepted_result(self.revision, request.items.len() as u32),
-            Err(errors) => rejected_result(self.revision, errors),
+    ) -> NetworkPolicyApplyResult {
+        match self.candidate_after(owner_instance_id, grants, request) {
+            Ok(_) => Self::accepted_result(self.revision, request.items.len() as u32),
+            Err(errors) => Self::rejected_result(self.revision, errors),
         }
     }
 
-    pub(super) fn apply<F>(
+    pub fn apply(
         &mut self,
         owner_instance_id: &str,
         grants: &[NetworkPolicyRulesApplyGrant],
         request: NetworkPolicyApplyRequest,
-        target_active: F,
-    ) -> NetworkPolicyApplyResult
-    where
-        F: Fn(&str) -> bool,
-    {
+    ) -> NetworkPolicyApplyResult {
         let applied_count = request.items.len() as u32;
-        match self.candidate_after(owner_instance_id, grants, &request, target_active) {
+        match self.candidate_after(owner_instance_id, grants, &request) {
             Ok(candidate) => {
                 *self = candidate;
-                accepted_result(self.revision, applied_count)
+                Self::accepted_result(self.revision, applied_count)
             }
-            Err(errors) => rejected_result(self.revision, errors),
+            Err(errors) => Self::rejected_result(self.revision, errors),
         }
     }
 
-    pub(super) fn remove_owner(&mut self, owner_instance_id: &str) -> Result<bool, String> {
+    pub fn remove_owner(&mut self, owner_instance_id: &str) -> Result<bool, String> {
         if owner_instance_id == STATIC_POLICY_OWNER {
             return Err("static network policy owner cannot be removed".to_string());
         }
@@ -294,16 +220,12 @@ impl NetworkPolicyStore {
         Ok(true)
     }
 
-    fn candidate_after<F>(
+    fn candidate_after(
         &self,
         owner_instance_id: &str,
         grants: &[NetworkPolicyRulesApplyGrant],
         request: &NetworkPolicyApplyRequest,
-        target_active: F,
-    ) -> Result<Self, Vec<NetworkPolicyApplyError>>
-    where
-        F: Fn(&str) -> bool,
-    {
+    ) -> Result<Self, Vec<NetworkPolicyApplyError>> {
         let mut errors = NetworkRuleValidator::request(self.revision, owner_instance_id, request);
         if !errors.is_empty() {
             return Err(errors);
@@ -326,7 +248,6 @@ impl NetworkPolicyStore {
                 &mut owner_rules,
                 item,
                 next_revision,
-                &target_active,
                 grants,
             ) {
                 errors.push(NetworkRuleValidator::apply_error(
@@ -376,19 +297,14 @@ impl NetworkPolicyStore {
         Ok(candidate)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn apply_item<F>(
+    fn apply_item(
         &mut self,
         owner_instance_id: &str,
         owner_rules: &mut BTreeMap<String, StoredNetworkRule>,
         item: &NetworkPolicyPatchItem,
         next_revision: u64,
-        target_active: &F,
         grants: &[NetworkPolicyRulesApplyGrant],
-    ) -> Result<(), String>
-    where
-        F: Fn(&str) -> bool,
-    {
+    ) -> Result<(), String> {
         match item.op {
             NetworkPolicyPatchOp::Delete => {
                 if item.rule.is_some() {
@@ -425,11 +341,6 @@ impl NetworkPolicyStore {
                         .ok_or_else(|| "gray network rule requires gray_target".to_string())?;
                     if target == owner_instance_id {
                         return Err("gray network rule cannot target its policy owner".to_string());
-                    }
-                    if !target_active(target) {
-                        return Err(format!(
-                            "gray_target {target} is not an active control decider"
-                        ));
                     }
                 }
                 self.next_sequence = self
@@ -484,7 +395,9 @@ impl NetworkPolicyStore {
             let NetworkPolicyRemoteSelector::Endpoint(endpoint) = rule.remote else {
                 continue;
             };
-            if let Some(existing) = by_ip.get(&endpoint.ip()) {
+            if let Some(existing) = by_ip.get(&endpoint.ip())
+                && existing.owner_instance_id != rule.owner_instance_id
+            {
                 return Err(format!(
                     "network remote {} overlaps {} owned by {}",
                     rule.remote, existing.remote, existing.owner_instance_id
@@ -503,39 +416,27 @@ impl NetworkPolicyStore {
     }
 }
 
-fn accepted_result(revision: u64, applied_count: u32) -> NetworkPolicyApplyResult {
-    NetworkPolicyApplyResult {
-        status: NetworkPolicyApplyStatus::Accepted,
-        new_revision: revision,
-        applied_count,
-        rejected_count: 0,
-        errors: Vec::new(),
+impl NetworkPolicyStore {
+    fn accepted_result(revision: u64, applied_count: u32) -> NetworkPolicyApplyResult {
+        NetworkPolicyApplyResult {
+            status: NetworkPolicyApplyStatus::Accepted,
+            new_revision: revision,
+            applied_count,
+            rejected_count: 0,
+            errors: Vec::new(),
+        }
     }
-}
 
-fn rejected_result(
-    revision: u64,
-    errors: Vec<NetworkPolicyApplyError>,
-) -> NetworkPolicyApplyResult {
-    NetworkPolicyApplyResult {
-        status: NetworkPolicyApplyStatus::Rejected,
-        new_revision: revision,
-        applied_count: 0,
-        rejected_count: errors.len() as u32,
-        errors,
-    }
-}
-
-fn verdict_decision(verdict: ControlVerdict) -> EnforcementDecision {
-    match verdict {
-        ControlVerdict::Allow => EnforcementDecision::Allow,
-        ControlVerdict::Deny => EnforcementDecision::Deny,
-    }
-}
-
-fn enforcement_verdict(decision: EnforcementDecision) -> ControlVerdict {
-    match decision {
-        EnforcementDecision::Allow => ControlVerdict::Allow,
-        EnforcementDecision::Deny => ControlVerdict::Deny,
+    fn rejected_result(
+        revision: u64,
+        errors: Vec<NetworkPolicyApplyError>,
+    ) -> NetworkPolicyApplyResult {
+        NetworkPolicyApplyResult {
+            status: NetworkPolicyApplyStatus::Rejected,
+            new_revision: revision,
+            applied_count: 0,
+            rejected_count: errors.len() as u32,
+            errors,
+        }
     }
 }

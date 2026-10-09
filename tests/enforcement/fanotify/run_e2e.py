@@ -177,9 +177,11 @@ rules_enabled = false
 rules_path = "/etc/actrail/provider-rules.conf"
 unknown_provider_label = "unknown"
 
+[access_control.file.open]
+backend = "fanotify"
+
 [enforcement]
 enabled = true
-backend = "fanotify"
 scope = "trace"
 rules_path = "{rules_path}"
 default_decision = "allow"

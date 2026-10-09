@@ -1,11 +1,11 @@
 //! Construction for the storage-backed attach service.
 
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, FileObservationConfig, IdleDetectionConfig, NetworkControlConfig,
-    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    launch_seccomp_requirements,
+    AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
+    IdleDetectionConfig, NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    StorageRetentionConfig, TraceFinalizationConfig, launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -22,7 +22,7 @@ use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
-use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::enforcement::FileEnforcementService;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
@@ -59,7 +59,9 @@ impl StorageAttachService {
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics: WorkloadDiagnostics,
-        enforcement: FanotifyEnforcementService,
+        access_control_config: AccessControlConfig,
+        enforcement_config: EnforcementConfig,
+        enforcement: FileEnforcementService,
         command_control: CommandControlConfig,
         network_control: NetworkControlConfig,
         export_runtime: ExportRuntime,
@@ -84,6 +86,8 @@ impl StorageAttachService {
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics,
+            access_control_config,
+            enforcement_config,
             enforcement,
             command_control,
             network_control,
@@ -113,7 +117,9 @@ impl StorageAttachService {
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics: WorkloadDiagnostics,
-        enforcement: FanotifyEnforcementService,
+        access_control_config: AccessControlConfig,
+        enforcement_config: EnforcementConfig,
+        enforcement: FileEnforcementService,
         command_control_config: CommandControlConfig,
         network_control_config: NetworkControlConfig,
         export_runtime: ExportRuntime,
@@ -161,6 +167,7 @@ impl StorageAttachService {
             &process_seccomp_config,
             &network_control_config,
             &command_control_config,
+            &access_control_config,
         );
         let socket_payload_gate = SocketHttpPayloadGate::new(
             payload_config.socket.http_sniff_max_bytes,
@@ -185,8 +192,53 @@ impl StorageAttachService {
                 && payload_config.tls.enabled
                 && payload_config.tls.capture_backend.is_sync(),
         );
-        let command_control = CommandControlService::new(&command_control_config)?;
-        let network_control = NetworkControlService::new(&network_control_config)?;
+        let lsm_access_control = if access_control_config.uses_lsm() {
+            if !ebpf_config.enabled {
+                return Err(control_contract::reply::ControlError::new(
+                    "lsm_startup",
+                    "LSM requires an available host eBPF collector",
+                ));
+            }
+            Some(
+                access_control::lsm::LsmController::new(
+                    access_control_config.backends.lsm.clone(),
+                    enforcement_config,
+                    access_control_config.file.clone(),
+                    if access_control_config.command.exec.is_lsm() {
+                        command_control_config.clone()
+                    } else {
+                        CommandControlConfig::disabled()
+                    },
+                    if access_control_config.network.connect.is_lsm() {
+                        network_control_config.clone()
+                    } else {
+                        NetworkControlConfig::disabled()
+                    },
+                )
+                .map_err(|message| {
+                    control_contract::reply::ControlError::new("lsm_policy", message)
+                })?,
+            )
+        } else {
+            None
+        };
+        if let Some(controller) = &lsm_access_control
+            && access_control_config.file.uses_lsm()
+        {
+            enforcement.bind_lsm(controller.clone())?;
+        }
+        let command_control =
+            CommandControlService::new(&if !access_control_config.command.exec.is_seccomp() {
+                CommandControlConfig::disabled()
+            } else {
+                command_control_config
+            })?;
+        let network_control =
+            NetworkControlService::new(&if !access_control_config.network.connect.is_seccomp() {
+                NetworkControlConfig::disabled()
+            } else {
+                network_control_config
+            })?;
         let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
         let post_trace_coordinator = PostTraceCoordinator::new(trace_finalization.post_trace)?;
         let mut alert_ingress = AlertIngress::new(
@@ -209,6 +261,23 @@ impl StorageAttachService {
                 control_contract::reply::ControlError::new("idle_detection_config", message)
             })?;
         let resource_metrics = ResourceMetricsSampler::new(resource_metrics, storage.as_mut())?;
+        let mut collector = EbpfCollector::new(
+            ebpf_config,
+            payload_config,
+            process_seccomp_config.clone(),
+            file_observation.summary.clone(),
+            semantic_retention.projection_enabled,
+            file_collection,
+            file_observation.enabled
+                && semantic_retention.projection_enabled
+                && file_observation.enumerate.enabled,
+            file_observation.enabled
+                && semantic_retention.projection_enabled
+                && file_observation.tty.enabled,
+        );
+        if let Some(controller) = &lsm_access_control {
+            collector.set_lsm_controller(controller.clone());
+        }
         Ok(Self {
             profiles,
             host_id: crate::host_id::get(),
@@ -216,19 +285,10 @@ impl StorageAttachService {
             storage,
             process_registry,
             process_id_block_size: block_size,
-            collector: EbpfCollector::new(
-                ebpf_config,
-                payload_config,
-                process_seccomp_config.clone(),
-                file_observation.summary.clone(),
-                semantic_retention.projection_enabled,
-                file_collection,
-                file_observation.enabled
-                    && semantic_retention.projection_enabled
-                    && file_observation.enumerate.enabled,
-                file_observation.enabled
-                    && semantic_retention.projection_enabled
-                    && file_observation.tty.enabled,
+            collector,
+            lsm_access_control,
+            lsm_boundary_alerts: crate::services::access_control::LsmBoundaryAlerts::new(
+                &access_control_config.backends.lsm,
             ),
             host_ebpf_preflight: Default::default(),
             identity_reader: ProcfsIdentityReader,

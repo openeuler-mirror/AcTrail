@@ -13,13 +13,13 @@ use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use storage_factory::StorageConfig;
 
 use super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig, CommandControlConfig,
-    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, ExistingContainerCgroups,
-    FileObservationConfig, IdleDetectionConfig, IpcLineageConfig, NetworkControlConfig,
-    PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, ResourceMetricsMode, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig,
+    CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
+    ExistingContainerCgroups, FileObservationConfig, IdleDetectionConfig, IpcLineageConfig,
+    NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
+    ProcessSeccompConfig, ResourceMetricsConfig, ResourceMetricsMode, SeccompNotifyConfig,
+    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, StorageRetentionConfig,
+    TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -80,6 +80,7 @@ pub struct OperatorConfig {
     pub resource_metrics: ResourceMetricsConfig,
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
+    pub access_control: AccessControlConfig,
     pub enforcement: EnforcementConfig,
     pub command_control: CommandControlConfig,
     pub network_control: NetworkControlConfig,
@@ -292,6 +293,7 @@ pub fn launch_seccomp_requirements(
     process_seccomp: &ProcessSeccompConfig,
     network_control: &NetworkControlConfig,
     command_control: &CommandControlConfig,
+    access_control: &AccessControlConfig,
 ) -> LaunchSeccompRequirements {
     LaunchSeccompRequirements::new(
         payload.tls.enabled && payload.tls.capture_backend.requires_seccomp_notify(),
@@ -300,9 +302,15 @@ pub fn launch_seccomp_requirements(
             || (seccomp_notify.enabled
                 && payload.tls.enabled
                 && payload.tls.capture_backend.is_sync()),
-        network_control.enabled,
+        network_control.enabled && access_control.network.connect.is_seccomp(),
     )
-    .with_command_control(command_control.enabled)
+    .with_command_control(command_control.enabled && access_control.command.exec.is_seccomp())
+    .with_file_enforcement(
+        crate::capture_profile::FileEnforcementSeccompRequirements::new(
+            access_control.file.mkdir.is_seccomp(),
+            access_control.file.rmdir.is_seccomp(),
+        ),
+    )
 }
 
 impl OperatorConfig {
@@ -316,6 +324,11 @@ impl OperatorConfig {
             &self.process_seccomp,
             &self.network_control,
             &self.command_control,
+            &self.access_control.resolve(
+                self.enforcement.enabled,
+                self.command_control.enabled,
+                self.network_control.enabled,
+            ),
         )
     }
 
@@ -437,6 +450,7 @@ fn merge_toml_value(base: &mut toml::Value, patch: toml::Value) {
 }
 
 fn validate_seccomp_config(
+    access_control: &AccessControlConfig,
     notify: &SeccompNotifyConfig,
     payload_tls: &PayloadTlsConfig,
     payload_socket: &PayloadSocketConfig,
@@ -465,7 +479,8 @@ fn validate_seccomp_config(
             "process_seccomp_enabled=true requires seccomp_notify_enabled=true".to_string(),
         );
     }
-    if enforcement.enabled && !enforcement.seccomp_syscalls.is_empty() && !notify.enabled {
+    if enforcement.enabled && !access_control.file.seccomp_syscalls().is_empty() && !notify.enabled
+    {
         return Err("enforcement seccomp syscalls require seccomp_notify_enabled=true".to_string());
     }
     let command_control_requested = capability_requested(

@@ -9,6 +9,7 @@ default = []
 perf-buffer = []
 
 [dependencies]
+access_control = { path = "../../../access_control" }
 collector_binding = { path = "../../../contracts/collector/binding" }
 collector_capability = { path = "../../../contracts/collector/capability" }
 collector_event = { path = "../../../contracts/collector/event" }

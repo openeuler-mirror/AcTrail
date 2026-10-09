@@ -1,103 +1,21 @@
-//! Static and runtime-owned command policy storage.
-
-use std::collections::{BTreeMap, BTreeSet};
+use super::parser::StaticRuleParser;
+use super::path::CommandExecutablePath;
+use super::rule::{STATIC_POLICY_OWNER, StoredCommandRule};
+use super::validation::CommandRuleDraftValidator;
+use crate::policy::path::PolicyPath;
+use plugin_system::{
+    CommandPolicyApplyError, CommandPolicyApplyRequest, CommandPolicyApplyResult,
+    CommandPolicyDecision, CommandPolicyListFilter, CommandPolicyListResult,
+    CommandPolicyMatchDryRunRequest, CommandPolicyMatchDryRunResult, CommandPolicyPatchItem,
+    CommandPolicyPatchOp, CommandPolicyRuleView, CommandPolicyRulesApplyGrant,
+};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use plugin_system::{
-    CommandPolicyApplyError, CommandPolicyApplyRequest, CommandPolicyApplyResult,
-    CommandPolicyApplyStatus, CommandPolicyDecision, CommandPolicyListFilter,
-    CommandPolicyListResult, CommandPolicyMatchDryRunRequest, CommandPolicyMatchDryRunResult,
-    CommandPolicyPatchItem, CommandPolicyPatchOp, CommandPolicyRuleDraft, CommandPolicyRuleView,
-    CommandPolicyRulesApplyGrant,
-};
-
-use super::decision::{CommandGrantScope, CommandPath, CommandRuleDraftValidator};
-
-mod args;
-mod parser;
-
-use args::CommandArgsPattern;
-use parser::StaticRuleParser;
-
-pub(super) const STATIC_POLICY_OWNER: &str = "actrail.static";
-const GENERATED_RULE_ID_PREFIX: &str = "command-rule";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StoredCommandRule {
-    pub(super) owner_instance_id: String,
-    pub(super) rule_id: String,
-    pub(super) decision: CommandPolicyDecision,
-    pub(super) executable: PathBuf,
-    args: CommandArgsPattern,
-    pub(super) gray_target: Option<String>,
-    pub(super) priority: i32,
-    pub(super) rule_revision: u64,
-    pub(super) updated_sequence: u64,
-}
-
-impl StoredCommandRule {
-    pub(super) fn args_view(&self) -> Option<Vec<String>> {
-        self.args.view()
-    }
-
-    fn from_draft(
-        owner_instance_id: &str,
-        item_rule_id: Option<&str>,
-        draft: &CommandPolicyRuleDraft,
-        rule_revision: u64,
-        updated_sequence: u64,
-        generated_rule_id: u64,
-    ) -> Result<Self, String> {
-        let rule_id = item_rule_id
-            .map(str::to_string)
-            .or_else(|| draft.rule_id.clone())
-            .unwrap_or_else(|| format!("{GENERATED_RULE_ID_PREFIX}-{generated_rule_id}"));
-        CommandRuleDraftValidator::validate_id(&rule_id)?;
-        CommandRuleDraftValidator::validate_shape(draft)?;
-        Ok(Self {
-            owner_instance_id: owner_instance_id.to_string(),
-            rule_id,
-            decision: draft.decision,
-            executable: CommandPath::normalize_absolute(&draft.executable)?,
-            args: CommandArgsPattern::parse(draft.args.as_deref())?,
-            gray_target: draft.gray_target.clone(),
-            priority: draft.priority,
-            rule_revision,
-            updated_sequence,
-        })
-    }
-
-    fn view(&self) -> CommandPolicyRuleView {
-        CommandPolicyRuleView {
-            rule_id: self.rule_id.clone(),
-            owner_instance_id: self.owner_instance_id.clone(),
-            decision: self.decision,
-            executable: self.executable.display().to_string(),
-            args: self.args.view(),
-            gray_target: self.gray_target.clone(),
-            priority: self.priority,
-            rule_revision: self.rule_revision,
-            updated_sequence: self.updated_sequence,
-        }
-    }
-
-    fn matches_filter(&self, filter: &CommandPolicyListFilter) -> bool {
-        filter
-            .decision
-            .is_none_or(|decision| decision == self.decision)
-            && filter.executable_prefix.as_ref().is_none_or(|prefix| {
-                self.executable
-                    .display()
-                    .to_string()
-                    .starts_with(prefix.as_str())
-            })
-    }
-}
-
 #[derive(Clone, Debug)]
-pub(super) struct CommandPolicyStore {
+pub struct CommandPolicyStore {
     revision: u64,
     next_rule_id: u64,
     next_sequence: u64,
@@ -106,7 +24,7 @@ pub(super) struct CommandPolicyStore {
 }
 
 impl CommandPolicyStore {
-    pub(super) fn load(path: &Path) -> Result<Self, String> {
+    pub fn load(path: &Path) -> Result<Self, String> {
         let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
@@ -138,7 +56,7 @@ impl CommandPolicyStore {
                 ));
             }
         }
-        validate_owner_rules(STATIC_POLICY_OWNER, &static_rules)?;
+        CommandRuleDraftValidator::validate_owner_rules(STATIC_POLICY_OWNER, &static_rules)?;
         if !static_rules.is_empty() {
             store.revision = 1;
             for rule in static_rules.values_mut() {
@@ -152,7 +70,7 @@ impl CommandPolicyStore {
         Ok(store)
     }
 
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             revision: 0,
             next_rule_id: 1,
@@ -162,30 +80,43 @@ impl CommandPolicyStore {
         }
     }
 
-    pub(super) fn revision(&self) -> u64 {
+    pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    pub(super) fn find(&self, executable: &Path, args: &[String]) -> Option<&StoredCommandRule> {
+    /// Returns effective rules in matching order within each executable scope.
+    pub fn effective_rule_views(&self) -> Vec<CommandPolicyRuleView> {
+        self.effective_by_executable
+            .values()
+            .flatten()
+            .map(|rule| {
+                let mut view = rule.view();
+                view.executable = rule.execution_executable.display().to_string();
+                view
+            })
+            .collect()
+    }
+
+    pub fn find(&self, executable: &Path, args: &[String]) -> Option<&StoredCommandRule> {
         self.effective_by_executable
             .get(executable)
             .and_then(|rules| rules.iter().find(|rule| rule.args.matches(args)))
     }
 
-    pub(super) fn requires_args(&self, executable: &Path) -> bool {
+    pub fn requires_args(&self, executable: &Path) -> bool {
         self.effective_by_executable
             .get(executable)
             .is_some_and(|rules| rules.iter().any(|rule| rule.args.requires_snapshot()))
     }
 
-    pub(super) fn is_rule_current(&self, rule: &StoredCommandRule) -> bool {
+    pub fn is_rule_current(&self, rule: &StoredCommandRule) -> bool {
         self.by_owner
             .get(&rule.owner_instance_id)
             .and_then(|rules| rules.get(&rule.rule_id))
             .is_some_and(|current| current.rule_revision == rule.rule_revision)
     }
 
-    pub(super) fn list(
+    pub fn list(
         &self,
         filter: CommandPolicyListFilter,
         cursor: Option<&str>,
@@ -229,12 +160,13 @@ impl CommandPolicyStore {
         })
     }
 
-    pub(super) fn match_dry_run(
+    pub fn match_dry_run(
         &self,
         request: CommandPolicyMatchDryRunRequest,
         default_decision: CommandPolicyDecision,
     ) -> Result<CommandPolicyMatchDryRunResult, String> {
-        let executable = CommandPath::normalize_absolute(&request.executable)?;
+        CommandExecutablePath::normalize_absolute(&request.executable)?;
+        let executable = PolicyPath::bind(Path::new(&request.executable))?;
         let matched = self.find(&executable, &request.args);
         Ok(CommandPolicyMatchDryRunResult {
             matched: matched.is_some(),
@@ -249,43 +181,38 @@ impl CommandPolicyStore {
         })
     }
 
-    pub(super) fn validate_apply<F>(
+    pub fn validate_apply(
         &self,
         owner_instance_id: &str,
         grants: &[CommandPolicyRulesApplyGrant],
         request: &CommandPolicyApplyRequest,
-        target_active: F,
-    ) -> CommandPolicyApplyResult
-    where
-        F: Fn(&str) -> bool,
-    {
-        match self.candidate_after(owner_instance_id, grants, request, target_active) {
-            Ok(_) => accepted_result(self.revision, request.items.len() as u32),
-            Err(errors) => rejected_result(self.revision, errors),
+    ) -> CommandPolicyApplyResult {
+        match self.candidate_after(owner_instance_id, grants, request) {
+            Ok(_) => CommandRuleDraftValidator::accepted_result(
+                self.revision,
+                request.items.len() as u32,
+            ),
+            Err(errors) => CommandRuleDraftValidator::rejected_result(self.revision, errors),
         }
     }
 
-    pub(super) fn apply<F>(
+    pub fn apply(
         &mut self,
         owner_instance_id: &str,
         grants: &[CommandPolicyRulesApplyGrant],
         request: CommandPolicyApplyRequest,
-        target_active: F,
-    ) -> CommandPolicyApplyResult
-    where
-        F: Fn(&str) -> bool,
-    {
+    ) -> CommandPolicyApplyResult {
         let applied_count = request.items.len() as u32;
-        match self.candidate_after(owner_instance_id, grants, &request, target_active) {
+        match self.candidate_after(owner_instance_id, grants, &request) {
             Ok(candidate) => {
                 *self = candidate;
-                accepted_result(self.revision, applied_count)
+                CommandRuleDraftValidator::accepted_result(self.revision, applied_count)
             }
-            Err(errors) => rejected_result(self.revision, errors),
+            Err(errors) => CommandRuleDraftValidator::rejected_result(self.revision, errors),
         }
     }
 
-    pub(super) fn remove_owner(&mut self, owner_instance_id: &str) -> Result<bool, String> {
+    pub fn remove_owner(&mut self, owner_instance_id: &str) -> Result<bool, String> {
         if owner_instance_id == STATIC_POLICY_OWNER {
             return Err("static command policy owner cannot be removed".to_string());
         }
@@ -297,24 +224,21 @@ impl CommandPolicyStore {
         Ok(true)
     }
 
-    fn candidate_after<F>(
+    fn candidate_after(
         &self,
         owner_instance_id: &str,
         grants: &[CommandPolicyRulesApplyGrant],
         request: &CommandPolicyApplyRequest,
-        target_active: F,
-    ) -> Result<Self, Vec<CommandPolicyApplyError>>
-    where
-        F: Fn(&str) -> bool,
-    {
-        let mut request_errors = validate_request(self.revision, owner_instance_id, request);
+    ) -> Result<Self, Vec<CommandPolicyApplyError>> {
+        let mut request_errors =
+            CommandRuleDraftValidator::validate_request(self.revision, owner_instance_id, request);
         if !request_errors.is_empty() {
             return Err(request_errors);
         }
         let next_revision = match self.revision.checked_add(1) {
             Some(revision) => revision,
             None => {
-                return Err(vec![apply_error(
+                return Err(vec![CommandRuleDraftValidator::apply_error(
                     0,
                     "revision-overflow",
                     "command policy revision overflow",
@@ -332,15 +256,24 @@ impl CommandPolicyStore {
                 &mut owner_rules,
                 item,
                 next_revision,
-                &target_active,
                 grants,
             ) {
-                request_errors.push(apply_error(index as u32, "invalid-rule", message));
+                request_errors.push(CommandRuleDraftValidator::apply_error(
+                    index as u32,
+                    "invalid-rule",
+                    message,
+                ));
             }
         }
         if request_errors.is_empty() {
-            if let Err(message) = validate_owner_rules(owner_instance_id, &owner_rules) {
-                request_errors.push(apply_error(0, "duplicate-scope", message));
+            if let Err(message) =
+                CommandRuleDraftValidator::validate_owner_rules(owner_instance_id, &owner_rules)
+            {
+                request_errors.push(CommandRuleDraftValidator::apply_error(
+                    0,
+                    "duplicate-scope",
+                    message,
+                ));
             }
         }
         if !request_errors.is_empty() {
@@ -358,19 +291,14 @@ impl CommandPolicyStore {
         Ok(candidate)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn apply_item<F>(
+    fn apply_item(
         &mut self,
         owner_instance_id: &str,
         owner_rules: &mut BTreeMap<String, StoredCommandRule>,
         item: &CommandPolicyPatchItem,
         next_revision: u64,
-        target_active: &F,
         grants: &[CommandPolicyRulesApplyGrant],
-    ) -> Result<(), String>
-    where
-        F: Fn(&str) -> bool,
-    {
+    ) -> Result<(), String> {
         match item.op {
             CommandPolicyPatchOp::Delete => {
                 if item.rule.is_some() {
@@ -398,7 +326,7 @@ impl CommandPolicyStore {
                         "item rule_id {item_id} does not match draft rule_id {draft_id}"
                     ));
                 }
-                validate_draft_grant(grants, draft)?;
+                CommandRuleDraftValidator::validate_draft_grant(grants, draft)?;
                 if draft.decision == CommandPolicyDecision::Gray {
                     let target = draft
                         .gray_target
@@ -406,11 +334,6 @@ impl CommandPolicyStore {
                         .ok_or_else(|| "gray command rule requires gray_target".to_string())?;
                     if target == owner_instance_id {
                         return Err("gray command rule cannot target its policy owner".to_string());
-                    }
-                    if !target_active(target) {
-                        return Err(format!(
-                            "gray_target {target} is not an active control decider"
-                        ));
                     }
                 }
                 self.next_sequence = self
@@ -426,6 +349,7 @@ impl CommandPolicyStore {
                     self.next_sequence,
                     generated_rule_id,
                 )?;
+                CommandRuleDraftValidator::validate_bound_grant(grants, &rule)?;
                 if item.rule_id.is_none() && draft.rule_id.is_none() {
                     self.next_rule_id = self
                         .next_rule_id
@@ -450,7 +374,7 @@ impl CommandPolicyStore {
         let mut effective = BTreeMap::<PathBuf, Vec<StoredCommandRule>>::new();
         for rule in self.by_owner.values().flat_map(|rules| rules.values()) {
             effective
-                .entry(rule.executable.clone())
+                .entry(rule.execution_executable.clone())
                 .or_default()
                 .push(rule.clone());
         }
@@ -465,121 +389,5 @@ impl CommandPolicyStore {
             });
         }
         self.effective_by_executable = effective;
-    }
-}
-
-fn validate_request(
-    revision: u64,
-    owner_instance_id: &str,
-    request: &CommandPolicyApplyRequest,
-) -> Vec<CommandPolicyApplyError> {
-    let mut errors = Vec::new();
-    if owner_instance_id.trim().is_empty() || owner_instance_id == STATIC_POLICY_OWNER {
-        errors.push(apply_error(
-            0,
-            "invalid-owner",
-            "command policy owner must be a non-static plugin instance id",
-        ));
-    }
-    if request.base_revision != revision {
-        errors.push(apply_error(
-            0,
-            "revision-conflict",
-            format!(
-                "command policy base revision {} does not match current revision {revision}",
-                request.base_revision
-            ),
-        ));
-    }
-    if request.mutation_id.trim().is_empty() {
-        errors.push(apply_error(
-            0,
-            "invalid-mutation-id",
-            "command policy mutation_id must not be empty",
-        ));
-    }
-    if request.items.is_empty() {
-        errors.push(apply_error(
-            0,
-            "empty-mutation",
-            "command policy apply requires at least one item",
-        ));
-    }
-    errors
-}
-
-fn validate_owner_rules(
-    owner_instance_id: &str,
-    rules: &BTreeMap<String, StoredCommandRule>,
-) -> Result<(), String> {
-    let mut scopes = BTreeSet::new();
-    for (key, rule) in rules {
-        if key != &rule.rule_id {
-            return Err(format!(
-                "command policy owner {owner_instance_id} has inconsistent rule id {key}"
-            ));
-        }
-        if !scopes.insert((rule.executable.clone(), rule.args.logical_scope())) {
-            return Err(format!(
-                "command policy owner {owner_instance_id} has duplicate executable {} args {}",
-                rule.executable.display(),
-                rule.args.describe(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_draft_grant(
-    grants: &[CommandPolicyRulesApplyGrant],
-    draft: &CommandPolicyRuleDraft,
-) -> Result<(), String> {
-    let executable = CommandPath::normalize_absolute(&draft.executable)?;
-    if grants.iter().any(|grant| {
-        grant.decision == draft.decision
-            && CommandGrantScope::parse(&grant.path_scope)
-                .is_ok_and(|scope| scope.contains(&executable))
-    }) {
-        return Ok(());
-    }
-    Err(format!(
-        "missing command-policy.rules.apply grant for {} {}",
-        draft.decision.as_str(),
-        executable.display()
-    ))
-}
-
-fn accepted_result(revision: u64, applied_count: u32) -> CommandPolicyApplyResult {
-    CommandPolicyApplyResult {
-        status: CommandPolicyApplyStatus::Accepted,
-        new_revision: revision,
-        applied_count,
-        rejected_count: 0,
-        errors: Vec::new(),
-    }
-}
-
-fn rejected_result(
-    revision: u64,
-    errors: Vec<CommandPolicyApplyError>,
-) -> CommandPolicyApplyResult {
-    CommandPolicyApplyResult {
-        status: CommandPolicyApplyStatus::Rejected,
-        new_revision: revision,
-        applied_count: 0,
-        rejected_count: errors.len() as u32,
-        errors,
-    }
-}
-
-fn apply_error(
-    item_index: u32,
-    code: impl Into<String>,
-    message: impl Into<String>,
-) -> CommandPolicyApplyError {
-    CommandPolicyApplyError {
-        item_index,
-        code: code.into(),
-        message: message.into(),
     }
 }

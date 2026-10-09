@@ -39,8 +39,9 @@ impl EventMeta {
             "resource-sampler" => 4,
             "application-protocol-analyzer" => 5,
             "network-control" => 6,
-            "fanotify-enforcement" => 7,
+            "file-enforcement" => 7,
             "tls-sync" => 8,
+            "lsm-access-control" => 9,
             _ => return None,
         };
         let flags_code = encode_event_flags(flags, has_payload_blocks, has_policy_details);
@@ -73,8 +74,9 @@ impl EventMeta {
             4 => "resource-sampler",
             5 => "application-protocol-analyzer",
             6 => "network-control",
-            7 => "fanotify-enforcement",
+            7 => "file-enforcement",
             8 => "tls-sync",
+            9 => "lsm-access-control",
             _ => return Err(SqlError::InvalidQuery),
         };
         Ok(CollectorName::new(name))

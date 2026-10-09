@@ -9,6 +9,7 @@ default = []
 perf-buffer = ["ebpf_collector/perf-buffer"]
 
 [dependencies]
+access_control = { path = "../../access_control" }
 idle_detector = { path = "../../core/idle_detector" }
 agent_host = { path = "../../adapters/agent_host" }
 alert_contract = { path = "../../contracts/alert" }

@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "access_control"
+version = "0.8.0"
+dependencies = [
+ "config_core",
+ "libbpf-rs",
+ "plugin_system",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "actrail_plugin_abi"
 version = "0.8.0"
 
@@ -724,6 +735,7 @@ dependencies = [
 name = "daemon"
 version = "0.8.0"
 dependencies = [
+ "access_control",
  "agent_host",
  "agent_lifecycle_contract",
  "alert-delivery-contract",
@@ -815,6 +827,7 @@ dependencies = [
 name = "ebpf_collector"
 version = "0.8.0"
 dependencies = [
+ "access_control",
  "collector_binding",
  "collector_capability",
  "collector_event",

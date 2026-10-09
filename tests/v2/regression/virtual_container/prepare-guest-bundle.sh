@@ -428,6 +428,9 @@ $capabilities
 ]
 opportunistic_capabilities = []
 
+[enforcement]
+enabled = false
+
 [ebpf]
 enabled = $ebpf_enabled
 memlock_rlimit = "inherit"

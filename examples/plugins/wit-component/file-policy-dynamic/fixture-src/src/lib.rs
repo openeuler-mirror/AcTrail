@@ -128,7 +128,7 @@ impl RuntimeConfigGuest for Component {
             Ok(candidate) => candidate,
             Err(error) => return Ok(vec![error]),
         };
-        if candidate == current {
+        if current.rules.is_empty() && candidate.rules.is_empty() {
             return Ok(Vec::new());
         }
         let request = projection_request(&current, &candidate, "web config validation")?;
@@ -420,7 +420,7 @@ fn publish_and_commit(
     candidate: PolicyConfig,
     reason: &str,
 ) -> Result<(), String> {
-    if current == candidate {
+    if current.rules.is_empty() && candidate.rules.is_empty() {
         let mut stored = POLICY_CONFIG.lock();
         if stored.is_none() {
             *stored = Some(candidate);

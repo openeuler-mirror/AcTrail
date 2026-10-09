@@ -35,7 +35,7 @@
           },
           "path": {
             "title": "Path",
-            "description": "Absolute file or directory path matched by this rule. It must be within a writable file-policy scope granted when the plugin was loaded.",
+            "description": "Declared absolute file or directory path. Publication binds existing symlinks to an execution path covered by the grant; the target may be created later. Fanotify open requires installable directory marks.",
             "type": "string",
             "minLength": 1,
             "examples": ["/srv/agent/workspace/private.txt"]
@@ -48,7 +48,7 @@
           },
           "gray_target": {
             "title": "Gray target instance index",
-            "description": "Required only for gray decisions. This is the loaded control-plugin instance index that makes the synchronous decision.",
+            "description": "Required only for gray decisions. Control-plugin instance index used for synchronous decisions; the target may become active after publication. Requests are denied while it is unavailable.",
             "type": "integer",
             "minimum": 1
           }

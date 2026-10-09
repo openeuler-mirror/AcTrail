@@ -134,6 +134,7 @@ pub(crate) struct ResolvedProcessIdentity {
 }
 
 pub struct EbpfProgramLoader {
+    lsm_controller: Option<std::sync::Arc<access_control::lsm::LsmController>>,
     config: EbpfCollectorConfig,
     payload: PayloadConfig,
     process: ProcessSeccompConfig,
@@ -150,6 +151,7 @@ struct PidNamespace {
 }
 
 pub struct EbpfRuntime {
+    pub(crate) lsm: Option<access_control::lsm::LsmRuntime>,
     pub(crate) attach_plan: AttachPlan,
     /// Dedicated kernel transport consumer. Declared first so it stops (and
     /// drops the kernel buffer) before the BPF object and its map fds close.
@@ -197,6 +199,7 @@ impl EbpfProgramLoader {
         file_tty_observation: bool,
     ) -> Self {
         Self {
+            lsm_controller: None,
             config,
             payload,
             process,
@@ -209,6 +212,13 @@ impl EbpfProgramLoader {
 
     pub fn config(&self) -> &EbpfCollectorConfig {
         &self.config
+    }
+
+    pub fn set_lsm_controller(
+        &mut self,
+        controller: std::sync::Arc<access_control::lsm::LsmController>,
+    ) {
+        self.lsm_controller = Some(controller);
     }
 
     pub(crate) fn file_collection(&self) -> &config_core::daemon::FileCollectionConfig {

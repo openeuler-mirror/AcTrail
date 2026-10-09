@@ -289,14 +289,21 @@ impl EbpfProgramLoader {
         let object = open_object
             .load()
             .map_err(|error| LoaderError::new("load_object", error.to_string()))?;
-        EbpfRuntime::from_object(
+        let mut runtime = EbpfRuntime::from_object(
             object,
             &self.config,
             &effective_payload,
             &self.process,
             &self.file_io_summary_config,
             attach_plan,
-        )
+        )?;
+        if let Some(controller) = &self.lsm_controller {
+            runtime.lsm = Some(
+                access_control::lsm::LsmRuntime::attach(controller, &runtime.object)
+                    .map_err(|error| LoaderError::new("lsm_attach", error))?,
+            );
+        }
+        Ok(runtime)
     }
 }
 
@@ -445,6 +452,7 @@ impl EbpfRuntime {
         }
 
         Ok(Self {
+            lsm: None,
             attach_plan: attach_plan.clone(),
             object,
             links,

@@ -20,6 +20,7 @@ sudo -E CONTAINER_AUTO_E2E_BASE_IMAGE=ubuntu:24.04 \
 `actrailctl launch --host-ebpf auto --seccomp-notify auto`。测试覆盖 host eBPF 与
 seccomp notify 的四种组合，并验证容器隔离和 `required` 权限失败语义。
 每轮 daemon 启动均通过 `actrailctl init -f --patch` 刷新默认配置并应用场景设置。
+场景配置显式关闭文件、命令和网络治理，使纯观测权限矩阵无需加载 LSM 治理程序。
 跨 trace 注入使用 `fixtures/tls_injection.py` 发送当前 TLS-sync 二进制 payload 帧，
 携带发送进程的真实身份，验证授权拒绝审计及目标 trace 未写入伪造数据。
 同一 aggregate case 会先执行 `test_deployment.py`，覆盖 openEuler/Ubuntu 一键部署

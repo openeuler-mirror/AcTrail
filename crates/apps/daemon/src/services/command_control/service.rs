@@ -23,7 +23,6 @@ use super::audit::{
     CommandAuditBuilder, CommandDecisionSource, CommandEnforcementDraft, failure_draft,
 };
 use super::decision::{CommandSyscall, ExecNotificationContext};
-use super::rules::{CommandPolicyStore, StoredCommandRule};
 use super::worker::{
     CachedCommandDecision, CommandWakeFd, GrayDecisionWorker, PluginDecisionCompletion,
     ReusableDecisionKey, respond_deferred,
@@ -31,6 +30,7 @@ use super::worker::{
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::identity::ResolvedTraceProcess;
 use crate::services::seccomp_notify::NotificationContinuation;
+use access_control::policy::command::{CommandPolicyStore, StoredCommandRule};
 
 pub(crate) struct CommandControlService {
     pub(super) backend: Option<Arc<Mutex<CommandControlBackend>>>,
@@ -39,7 +39,6 @@ pub(crate) struct CommandControlService {
 #[derive(Clone)]
 pub(in crate::services) struct CommandPolicyHostFacade {
     backend: Option<Arc<Mutex<CommandControlBackend>>>,
-    plugins: ControlPluginRuntime,
 }
 
 pub(super) struct CommandControlBackend {
@@ -97,13 +96,9 @@ impl CommandControlService {
             .collect()
     }
 
-    pub(in crate::services) fn command_policy_host(
-        &self,
-        plugins: ControlPluginRuntime,
-    ) -> CommandPolicyHostFacade {
+    pub(in crate::services) fn command_policy_host(&self) -> CommandPolicyHostFacade {
         CommandPolicyHostFacade {
             backend: self.backend.clone(),
-            plugins,
         }
     }
 
@@ -464,9 +459,7 @@ impl CommandPolicyHost for CommandPolicyHostFacade {
         let backend = self.lock_backend()?;
         Ok(backend
             .rules
-            .validate_apply(owner_instance_id, grants, request, |target| {
-                self.plugins.is_instance_active(target)
-            }))
+            .validate_apply(owner_instance_id, grants, request))
     }
 
     fn rules_apply(
@@ -476,11 +469,7 @@ impl CommandPolicyHost for CommandPolicyHostFacade {
         request: CommandPolicyApplyRequest,
     ) -> Result<CommandPolicyApplyResult, PluginRuntimeError> {
         let mut backend = self.lock_backend()?;
-        let result = backend
-            .rules
-            .apply(owner_instance_id, grants, request, |target| {
-                self.plugins.is_instance_active(target)
-            });
+        let result = backend.rules.apply(owner_instance_id, grants, request);
         if result.status == CommandPolicyApplyStatus::Accepted && result.applied_count > 0 {
             backend.reusable_decisions.clear();
         }

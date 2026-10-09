@@ -25,8 +25,13 @@ pub enum Capability {
     PolicyIngestProcessing,
     PolicyDecisionRecord,
     EnforcementFilePermissionFanotify,
+    EnforcementFileMkdirSeccomp,
+    EnforcementFileRmdirSeccomp,
     EnforcementCommandExecutionSeccomp,
     EnforcementNetworkConnectSeccomp,
+    EnforcementFilePermissionLsm,
+    EnforcementCommandExecutionLsm,
+    EnforcementNetworkConnectLsm,
 }
 
 impl Capability {
@@ -52,9 +57,14 @@ impl Capability {
             Self::StdioChunk => "stdio-chunk",
             Self::PolicyIngestProcessing => "policy-ingest-processing",
             Self::PolicyDecisionRecord => "policy-decision-record",
+            Self::EnforcementFileMkdirSeccomp => "enforcement-file-mkdir-seccomp",
+            Self::EnforcementFileRmdirSeccomp => "enforcement-file-rmdir-seccomp",
             Self::EnforcementFilePermissionFanotify => "enforcement-file-permission-fanotify",
             Self::EnforcementCommandExecutionSeccomp => "enforcement-command-execution-seccomp",
             Self::EnforcementNetworkConnectSeccomp => "enforcement-network-connect-seccomp",
+            Self::EnforcementFilePermissionLsm => "enforcement-file-permission-lsm",
+            Self::EnforcementCommandExecutionLsm => "enforcement-command-execution-lsm",
+            Self::EnforcementNetworkConnectLsm => "enforcement-network-connect-lsm",
         }
     }
 }
@@ -84,9 +94,14 @@ impl std::str::FromStr for Capability {
             "stdio-chunk" => Ok(Self::StdioChunk),
             "policy-ingest-processing" => Ok(Self::PolicyIngestProcessing),
             "policy-decision-record" => Ok(Self::PolicyDecisionRecord),
+            "enforcement-file-mkdir-seccomp" => Ok(Self::EnforcementFileMkdirSeccomp),
+            "enforcement-file-rmdir-seccomp" => Ok(Self::EnforcementFileRmdirSeccomp),
             "enforcement-file-permission-fanotify" => Ok(Self::EnforcementFilePermissionFanotify),
             "enforcement-command-execution-seccomp" => Ok(Self::EnforcementCommandExecutionSeccomp),
             "enforcement-network-connect-seccomp" => Ok(Self::EnforcementNetworkConnectSeccomp),
+            "enforcement-file-permission-lsm" => Ok(Self::EnforcementFilePermissionLsm),
+            "enforcement-command-execution-lsm" => Ok(Self::EnforcementCommandExecutionLsm),
+            "enforcement-network-connect-lsm" => Ok(Self::EnforcementNetworkConnectLsm),
             other => Err(format!("unknown capability {other}")),
         }
     }

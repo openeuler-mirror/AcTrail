@@ -239,9 +239,11 @@ rules_enabled = false
 rules_path = "/etc/actrail/provider-rules.conf"
 unknown_provider_label = "unknown"
 
+[access_control.network.connect]
+backend = "seccomp"
+
 [enforcement]
 enabled = false
-backend = "fanotify"
 scope = "trace"
 rules_path = "{tmp / 'unused-enforcement-rules.conf'}"
 default_decision = "allow"

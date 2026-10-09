@@ -166,7 +166,21 @@ impl AttachService for StorageAttachService {
                         &Capability::EnforcementCommandExecutionSeccomp,
                     ),
             )
-            .with_file_enforcement(self.enforcement.seccomp_requirements()?);
+            .with_file_enforcement({
+                let requirements = self.enforcement.seccomp_requirements()?;
+                config_core::capture_profile::FileEnforcementSeccompRequirements::new(
+                    requirements.mkdir
+                        && capability_requested(
+                            &profile.capabilities,
+                            &Capability::EnforcementFileMkdirSeccomp,
+                        ),
+                    requirements.rmdir
+                        && capability_requested(
+                            &profile.capabilities,
+                            &Capability::EnforcementFileRmdirSeccomp,
+                        ),
+                )
+            });
         let decision = resolve_deployment_permissions(
             policy,
             profile,
@@ -269,6 +283,7 @@ impl AttachService for StorageAttachService {
         {
             fds.push(fd);
         }
+        fds.extend(self.collector.lsm_poll_fd());
         fds.extend(self.enforcement.event_poll_fds());
         fds.extend(self.command_control.event_poll_fds());
         fds.extend(self.network_control.event_poll_fds());
@@ -292,6 +307,7 @@ impl AttachService for StorageAttachService {
             .then_some(self.finalization_poll_interval),
         );
         timeout = min_optional_timeout(timeout, self.storage_retention.poll_timeout());
+        timeout = min_optional_timeout(timeout, self.lsm_boundary_alerts.poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.file_io_poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.event_transport_loss_poll_timeout());
         Ok(timeout)

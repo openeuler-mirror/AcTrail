@@ -26,12 +26,11 @@ use super::worker::{
     complete_plugin_decision,
 };
 use crate::services::control_runtime::ControlPluginRuntime;
+use crate::services::enforcement::fanotify::FileKey;
 use crate::services::enforcement::fanotify::{PermissionEventFd, PermissionMetadata, respond};
-use crate::services::enforcement::rules::{
-    EnforcementRule, EnforcementRules, FileKey, RuleDecision,
-};
 use crate::services::identity::ControlActorIdentityResolver;
 use crate::services::identity::TraceIdentityResolver;
+use access_control::policy::file::{EnforcementRule, EnforcementRules, RuleDecision};
 
 pub(super) fn handle_permission_event(
     fanotify_fd: RawFd,

@@ -2,7 +2,6 @@
 
 mod audit;
 mod decision;
-mod rules;
 mod service;
 mod worker;
 

@@ -6,7 +6,11 @@ use std::mem::size_of;
 use std::os::fd::RawFd;
 use std::path::Path;
 
-use crate::services::enforcement::rules::FileKey;
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) struct FileKey {
+    pub dev: u64,
+    pub ino: u64,
+}
 
 pub(super) struct FanotifyHandle {
     fd: RawFd,

@@ -28,7 +28,7 @@
           },
           "executable": {
             "title": "Executable",
-            "description": "Exact absolute tracee-namespace executable path covered by a command-policy grant.",
+            "description": "Declared absolute executable path. Publication binds existing symlinks to an execution path covered by the grant; the target may be created later. Upsert again to bind a changed symlink target.",
             "type": "string",
             "pattern": "^/",
             "examples": ["/usr/bin/bash"]
@@ -50,7 +50,7 @@
           },
           "gray_target": {
             "title": "Gray target instance ID",
-            "description": "Required only for gray. The active control-decider instance that receives the synchronous decision request.",
+            "description": "Required only for gray. Control-decider instance that receives synchronous requests; it may become active after publication. Requests are denied while it is unavailable.",
             "type": "string",
             "minLength": 1
           }

@@ -1,5 +1,6 @@
 //! Concrete daemon services backed by procfs bootstrap and storage persistence.
 
+pub(crate) mod access_control;
 pub(crate) mod alert_forwarding;
 pub(crate) mod alert_ingress;
 #[path = "services/application_protocol/service.rs"]

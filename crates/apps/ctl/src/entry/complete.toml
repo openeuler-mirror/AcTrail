@@ -1,4 +1,5 @@
-# Complete capture: read whole socket operations through the seccomp-notify path.
+# Access control inherits the default LSM backends.
+# Complete capture reads whole socket operations through the seccomp-notify path.
 [payload.socket]
 capture_backend = "bpf-copy-seccomp-fallback"
 

@@ -1,20 +1,17 @@
 //! Exec notification capture and tracee-namespace path resolution.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use control_contract::reply::ControlError;
 use linux_platform::process_seccomp::KernelProcessSyscall;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
-use plugin_system::{
-    CommandExecutionContext, CommandPolicyDecision, CommandPolicyRuleDraft,
-    ControlActorProcessIdentity,
-};
+use plugin_system::{CommandExecutionContext, ControlActorProcessIdentity};
 use process_identity::ProcessIdentityManager;
 use sha2::{Digest, Sha256};
 
 use crate::services::identity::{ControlActorIdentityResolver, ResolvedTraceProcess};
-use crate::services::seccomp_notify::{read_c_string, read_process_bytes};
+use crate::services::seccomp_notify::{TraceePath, read_c_string, read_process_bytes};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CommandSyscall {
@@ -231,33 +228,6 @@ impl ExecNotificationContext {
 pub(super) struct CommandPath;
 
 impl CommandPath {
-    pub(super) fn normalize_absolute(raw: &str) -> Result<PathBuf, String> {
-        if raw.is_empty() {
-            return Err("command executable must not be empty".to_string());
-        }
-        if raw.contains('\0') {
-            return Err("command executable contains NUL".to_string());
-        }
-        let path = Path::new(raw);
-        if !path.is_absolute() {
-            return Err(format!("command executable {raw} must be absolute"));
-        }
-        let mut normalized = PathBuf::from("/");
-        for component in path.components() {
-            match component {
-                Component::RootDir | Component::CurDir => {}
-                Component::ParentDir => {
-                    normalized.pop();
-                }
-                Component::Normal(part) => normalized.push(part),
-                Component::Prefix(_) => {
-                    return Err(format!("command executable {raw} must be a Unix path"));
-                }
-            }
-        }
-        Ok(normalized)
-    }
-
     fn resolve(
         pid: u32,
         syscall: CommandSyscall,
@@ -265,122 +235,17 @@ impl CommandPath {
         dirfd: Option<i32>,
         flags: Option<u64>,
     ) -> Result<PathBuf, String> {
-        if Path::new(requested).is_absolute() {
-            return Self::normalize_absolute(requested);
-        }
         let empty_path = syscall == CommandSyscall::Execveat
             && requested.is_empty()
             && flags.is_some_and(|value| value & libc::AT_EMPTY_PATH as u64 != 0);
-        let base = if empty_path {
-            Self::read_proc_link(
-                pid,
-                "fd",
-                dirfd.ok_or_else(|| "execveat AT_EMPTY_PATH lacks dirfd".to_string())?,
-            )?
-        } else {
-            if requested.is_empty() {
-                return Err(format!("{} executable path is empty", syscall.as_str()));
-            }
-            match (syscall, dirfd) {
-                (CommandSyscall::Execve, _) | (_, Some(libc::AT_FDCWD)) => {
-                    Self::read_proc_link(pid, "cwd", 0)?
-                }
-                (CommandSyscall::Execveat, Some(fd)) => Self::read_proc_link(pid, "fd", fd)?,
-                (CommandSyscall::Execveat, None) => {
-                    return Err("execveat notification lacks dirfd".to_string());
-                }
-            }
-        };
-        if empty_path {
-            return Self::normalize_proc_link(base);
-        }
-        let joined = base.join(requested);
-        Self::normalize_absolute(&joined.display().to_string())
-    }
-
-    fn read_proc_link(pid: u32, kind: &str, value: i32) -> Result<PathBuf, String> {
-        let link = if kind == "cwd" {
-            PathBuf::from(format!("/proc/{pid}/cwd"))
-        } else {
-            PathBuf::from(format!("/proc/{pid}/fd/{value}"))
-        };
-        let target = std::fs::read_link(&link)
-            .map_err(|error| format!("resolve {} failed: {error}", link.display()))?;
-        Self::normalize_proc_link(target)
-    }
-
-    fn normalize_proc_link(target: PathBuf) -> Result<PathBuf, String> {
-        let raw = target.display().to_string();
-        if raw.ends_with(" (deleted)") {
-            return Err(format!(
-                "command executable {} is deleted and cannot be mapped into the tracee namespace",
-                target.display()
-            ));
-        }
-        Self::normalize_absolute(&raw)
-    }
-}
-
-pub(super) enum CommandGrantScope {
-    Exact(PathBuf),
-    Recursive(PathBuf),
-}
-
-pub(super) struct CommandRuleDraftValidator;
-
-impl CommandRuleDraftValidator {
-    pub(super) fn validate_id(rule_id: &str) -> Result<(), String> {
-        if rule_id.trim().is_empty() {
-            return Err("command rule id must not be empty".to_string());
-        }
-        if rule_id.chars().any(char::is_whitespace) {
-            return Err(format!(
-                "command rule id {rule_id} must not contain whitespace"
-            ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn validate_shape(draft: &CommandPolicyRuleDraft) -> Result<(), String> {
-        match (draft.decision, draft.gray_target.as_deref()) {
-            (CommandPolicyDecision::Default, _) => {
-                Err("command rule decision cannot be default".to_string())
-            }
-            (CommandPolicyDecision::Gray, None) => {
-                Err("gray command rule requires gray_target".to_string())
-            }
-            (CommandPolicyDecision::Gray, Some(target)) if target.trim().is_empty() => {
-                Err("gray command rule target must not be empty".to_string())
-            }
-            (CommandPolicyDecision::Allow | CommandPolicyDecision::Deny, Some(_)) => {
-                Err("allow/deny command rule must not include gray_target".to_string())
-            }
-            _ => Ok(()),
-        }
-    }
-}
-
-impl CommandGrantScope {
-    pub(super) fn parse(raw: &str) -> Result<Self, String> {
-        let recursive_base = raw.strip_suffix("/**");
-        let check = recursive_base.unwrap_or(raw);
-        if check.contains('*') {
-            return Err(format!(
-                "command policy grant {raw} may only use /** as its final suffix"
-            ));
-        }
-        match recursive_base {
-            Some("") => Err("command policy recursive grant base must not be empty".to_string()),
-            Some(base) => CommandPath::normalize_absolute(base).map(Self::Recursive),
-            None => CommandPath::normalize_absolute(raw).map(Self::Exact),
-        }
-    }
-
-    pub(super) fn contains(&self, executable: &Path) -> bool {
-        match self {
-            Self::Exact(path) => path == executable,
-            Self::Recursive(base) => executable.starts_with(base),
-        }
+        TraceePath::new(pid)
+            .and_then(|paths| paths.executable(requested, dirfd, empty_path))
+            .map_err(|error| {
+                format!(
+                    "resolve {} executable {requested}: {error}",
+                    syscall.as_str()
+                )
+            })
     }
 }
 

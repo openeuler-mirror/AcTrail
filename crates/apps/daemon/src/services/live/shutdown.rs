@@ -105,6 +105,14 @@ impl StorageAttachService {
         }
         let export_budget =
             shutdown_deadline.remaining_budget(self.finalization_shutdown_drain_timeout);
+        if let Err(error) = self.drain_lsm_audit(trace_runtime) {
+            failures.push(format!(
+                "LSM audit drain: {}: {}",
+                error.code, error.message
+            ));
+        }
+        self.lsm_boundary_alerts
+            .finish_all(&self.alert_ingress, trace_runtime);
         let export_probe = self.begin_shutdown_stage_probe(
             ShutdownDrainStage::Export,
             export_budget,
@@ -446,6 +454,8 @@ impl StorageAttachService {
                 self.network_control.forget_trace(trace_id),
                 "network_control_forget_trace",
             );
+            self.lsm_boundary_alerts
+                .finish_trace(trace_id, &self.alert_ingress, trace_runtime);
             trace_runtime.forget_trace(trace_id);
             finalized_this_cycle += 1;
             self.log_diagnostic(

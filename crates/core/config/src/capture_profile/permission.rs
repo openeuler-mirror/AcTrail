@@ -216,6 +216,10 @@ pub fn resolve_deployment_permissions(
         },
     };
 
+    if configured_profile.requires_lsm_access_control() && !selected_host_ebpf {
+        return Err("LSM access control requires host eBPF; disabling or degrading host eBPF would remove kernel identity binding".to_string());
+    }
+
     let selected_seccomp_notify = match policy.seccomp_notify {
         PermissionMode::Disabled => false,
         PermissionMode::Required if !seccomp_notify_configured => {
