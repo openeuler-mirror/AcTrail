@@ -44,7 +44,7 @@ trace trace-N entered Active
 
 ### 2.2 executable 与参数按精确语义匹配
 
-实际规则中的 `executable` 必须是 tracee namespace 内的精确绝对路径。AcTrail 会做词法规范化，但不会把 symlink 解析到最终 inode，因此 `/bin/bash` 和 `/usr/bin/bash` 是不同的规则目标。
+实际规则中的 `executable` 是声明的绝对路径。AcTrail 在加载或 upsert 时按 daemon 的文件系统视图解析已有 symlink，并绑定执行路径；例如 `/bin/bash` 指向 `/usr/bin/bash` 时，规则保留声明 `/bin/bash`，实际治理路径 `/usr/bin/bash`。目标可以尚未创建。
 
 `args` 匹配 `argv[1..]`：
 
@@ -195,12 +195,15 @@ actraild stop
 actrailctl init --force
 ```
 
-默认配置已经启用 seccomp notify 和命令治理，并在 capture profile 中请求 `proc-lifecycle` 与 `enforcement-command-execution-seccomp`。核对以下关键值，不需要另建专用配置：
+默认后端为 LSM，命令控制域默认关闭。本示例使用 argv 和同步插件裁决，需要启用命令控制并显式选择 seccomp，同时向 capture profile 添加 `enforcement-command-execution-seccomp`，保留默认文件控制所需的 `proc-lifecycle` 与 `enforcement-file-permission-lsm`：
 
 ```toml
 [seccomp_notify]
 enabled = true
 reserved_listener_fd = 253
+
+[access_control.command.exec]
+backend = "seccomp"
 
 [command_control]
 enabled = true
@@ -779,7 +782,7 @@ test "$(sed -n '1p' "$MARKER")" = ACTRAIL_COMMAND_OK
 
 ## 7. gray 与 reusable 的扩展体验边界
 
-本指南主流程只验证本地 deny，不加载远程决策插件。需要体验 gray 时，必须额外授予 **Ask plugin**，并把 `gray_target` 指向一个 active、非自身的 `control-decider` 实例：
+本指南主流程只验证本地 deny，不加载远程决策插件。需要体验 gray 时，必须额外授予 **Ask plugin**，并把 `gray_target` 指向一个非自身的 `control-decider` 实例。规则允许提前发布；实际请求需要目标 active，否则拒绝：
 
 ```json
 {
@@ -865,7 +868,7 @@ curl --noproxy '*' -sS http://127.0.0.1:18080/api/plugins/catalog
 4. 同一 owner 中 rule ID 是否重复；
 5. 同一 owner 中 `(executable, args 逻辑范围)` 是否重复；
 6. allow/deny 是否错误填写 `gray_target`；
-7. gray target 是否 active、是否为其他 control-decider 实例。
+7. gray target 是否为其他 control-decider 实例；实际请求被拒绝时，确认目标是否 active。
 
 Test 失败后必须重新 GET Configuration 和 dry-run revision，确认旧状态未变；不要假设合法子集已经生效。
 
@@ -930,7 +933,7 @@ test ! -e "$MARKER"
 ## 10. 当前体验需要保留的风险认知
 
 1. **动态配置不能视为跨重启持久化状态。** 插件或 daemon 重启后必须重新读取并确认规则，不要依赖上一次操作残留状态。
-2. **executable 别名不会自动合并。** `/bin/bash` 与 `/usr/bin/bash` 需要分别授权和配置；验收前必须核对真实运行路径。
+2. **规则绑定发布时解析到的执行路径。** A 指向 B 时发布的规则持续治理 B；A 改链后，重新 upsert 才更新绑定。授权需覆盖声明范围及 grant 解析后的执行范围；验收前应核对 daemon 与实际工作负载的文件系统视图。
 3. **一次性 Xiaoo CLI 不证明同 trace 的交互式热更新。** 动态路由能影响已安装 seccomp filter 的活动 trace，但本指南主流程用新 trace 验证卸载恢复；需要同 trace 证据时应使用真正保持活动并可继续发命令的 agent 会话。
 4. **真实 agent 输出存在外部依赖。** 模型认证、网络、配额和 agent 自身工具选择都会影响耗时；开始前必须执行 4.6。
 5. **告警到达时间不能与 agent 终态绑定。** 前端轮询和手动 REST 查询只能观察最终落库结果，不能把一次没有立即返回当成“不会产生告警”。

@@ -128,6 +128,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
                 .shutdown_wait_ms
                 .saturating_sub(config.supervision_poll_interval_ms),
             config.workload_diagnostics.clone(),
+            config.access_control.clone(),
             enforcement.clone(),
             config.command_control.clone(),
             config.network_control.clone(),
@@ -157,6 +158,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
                 .shutdown_wait_ms
                 .saturating_sub(config.supervision_poll_interval_ms),
             config.workload_diagnostics.clone(),
+            config.access_control.clone(),
             enforcement.clone(),
             config.command_control.clone(),
             config.network_control.clone(),

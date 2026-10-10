@@ -501,7 +501,7 @@ impl Default for CaptureDocument {
                 "net-application-plaintext-http",
                 "net-application-http2-frames",
                 "resource-metrics",
-                "enforcement-file-permission-fanotify",
+                "enforcement-file-permission-lsm",
             ]
             .into_iter()
             .map(str::to_string)

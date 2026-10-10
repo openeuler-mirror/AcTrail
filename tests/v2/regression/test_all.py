@@ -40,6 +40,12 @@ from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.command_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as COMMAND_POLICY_XIAOO,
 )
+from tests.v2.regression.file_policy_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as FILE_POLICY_XIAOO,
+)
+from tests.v2.regression.lsm_access_control_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as LSM_ACCESS_CONTROL_XIAOO,
+)
 from tests.v2.regression.network_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as NETWORK_POLICY_XIAOO,
 )
@@ -107,6 +113,7 @@ DEFAULT_TESTS = [
     QODERCLI,
     XIAOO,
     COMMAND_POLICY_XIAOO,
+    FILE_POLICY_XIAOO,
     NETWORK_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
@@ -124,6 +131,7 @@ DEFAULT_TESTS = [
 ]
 
 OPTIONAL_TESTS = [
+    LSM_ACCESS_CONTROL_XIAOO,
     RESOURCE_METRICS_CGROUP,
     SANDBOX_OOM_KILLED_ALERT_HOST,
     EXECUTION_ISOLATION_FIRECRACKER,

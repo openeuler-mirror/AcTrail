@@ -194,7 +194,7 @@ impl StorageAttachService {
         self.persist_observed_event_batch_with_process_records(trace_runtime, events, Vec::new())
     }
 
-    pub(super) fn persist_observed_event_batch_with_process_records(
+    pub(in crate::services) fn persist_observed_event_batch_with_process_records(
         &mut self,
         trace_runtime: &TraceRuntime,
         events: Vec<DomainEvent>,

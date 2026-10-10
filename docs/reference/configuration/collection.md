@@ -19,7 +19,7 @@ flowchart LR
 
 ## `[capture]`
 
-`profile_name` 标识配置意图；`capabilities` 是每条 trace 必须满足的能力契约。当前 full-monitor 模板包含 process lifecycle/exec、file、mmap、network、stdio、TLS/socket plaintext、HTTP/HTTP2、resource metrics，以及 fanotify 文件治理能力。普通 IPC 的 `ipc-pipe-fifo`、`ipc-unix-socket` 默认不请求，P/C 等配置也不请求；MCP 专属通道关联独立于这两个能力。命令治理和 seccomp-notify 默认关闭，必须显式启用。
+`profile_name` 标识配置意图；`capabilities` 是每条 trace 必须满足的能力契约。当前 full-monitor 模板包含 process lifecycle/exec、file、mmap、network、stdio、TLS/socket plaintext、HTTP/HTTP2、resource metrics，以及 LSM 文件打开治理能力。普通 IPC 的 `ipc-pipe-fifo`、`ipc-unix-socket` 默认不请求，P/C 等配置也不请求；MCP 专属通道关联独立于这两个能力。访问控制各操作的后端默认使用 LSM，文件打开治理默认开启，目录操作、命令和网络治理须显式启用。`init` 的 complete 默认模式开启 seccomp-notify 以完整采集 socket 正文；该观测开关的字段默认值为关闭。profile 模式关闭主动治理与 seccomp-notify。
 
 `agent_descendant_observation_depth` 控制 Agent 被识别后新建后代的详细采集深度。默认 `-1` 表示不限制；`0` 表示 Agent 保持详细采集、其未来后代仅保留生命周期；正数表示继续详细采集对应层数的未来后代。识别前已经存在的进程保持完整采集，生命周期和治理不受该选项影响。
 

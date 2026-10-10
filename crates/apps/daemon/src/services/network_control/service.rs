@@ -21,7 +21,6 @@ use trace_runtime::registry::TraceRuntime;
 
 use super::audit::{NetworkAuditBuilder, NetworkDecisionSource, failure_event};
 use super::request::{NetworkConnectContext, NetworkRemote};
-use super::rules::{NetworkPolicyStore, StoredNetworkRule};
 use super::worker::{
     CachedNetworkDecision, GrayDecisionWorker, NetworkWakeFd, PluginDecisionCompletion,
     ReusableDecisionKey, respond_deferred,
@@ -29,6 +28,7 @@ use super::worker::{
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::identity::ResolvedTraceProcess;
 use crate::services::seccomp_notify::NotificationContinuation;
+use access_control::policy::network::{NetworkPolicyStore, StoredNetworkRule};
 
 pub(crate) struct NetworkControlService {
     pub(super) backend: Option<Arc<Mutex<NetworkControlBackend>>>,
@@ -37,7 +37,6 @@ pub(crate) struct NetworkControlService {
 #[derive(Clone)]
 pub(in crate::services) struct NetworkPolicyHostFacade {
     backend: Option<Arc<Mutex<NetworkControlBackend>>>,
-    plugins: ControlPluginRuntime,
 }
 
 pub(super) struct NetworkControlBackend {
@@ -99,13 +98,9 @@ impl NetworkControlService {
             .collect()
     }
 
-    pub(in crate::services) fn network_policy_host(
-        &self,
-        plugins: ControlPluginRuntime,
-    ) -> NetworkPolicyHostFacade {
+    pub(in crate::services) fn network_policy_host(&self) -> NetworkPolicyHostFacade {
         NetworkPolicyHostFacade {
             backend: self.backend.clone(),
-            plugins,
         }
     }
 
@@ -495,9 +490,7 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
         let backend = self.lock_backend()?;
         Ok(backend
             .rules
-            .validate_apply(owner_instance_id, grants, request, |target| {
-                self.plugins.is_instance_active(target)
-            }))
+            .validate_apply(owner_instance_id, grants, request))
     }
 
     fn rules_apply(
@@ -507,11 +500,7 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
         request: NetworkPolicyApplyRequest,
     ) -> Result<NetworkPolicyApplyResult, PluginRuntimeError> {
         let mut backend = self.lock_backend()?;
-        let result = backend
-            .rules
-            .apply(owner_instance_id, grants, request, |target| {
-                self.plugins.is_instance_active(target)
-            });
+        let result = backend.rules.apply(owner_instance_id, grants, request);
         if result.status == NetworkPolicyApplyStatus::Accepted && result.applied_count > 0 {
             backend.clear_reusable_cache();
         }

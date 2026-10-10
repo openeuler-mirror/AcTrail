@@ -35,6 +35,67 @@ impl EbpfPreflightReport {
 }
 
 impl StorageAttachService {
+    pub(in crate::services) fn require_lsm_preflight(
+        &mut self,
+    ) -> Result<(), control_contract::reply::ControlError> {
+        let mut capabilities = Vec::new();
+        for (name, profile) in self.profiles.capture_profiles() {
+            let Some(report) = self.host_ebpf_preflight.get(name) else {
+                if !profile.requires_lsm_access_control() {
+                    continue;
+                }
+                return Err(control_contract::reply::ControlError::new(
+                    "lsm_preflight",
+                    "LSM profile was not preflighted",
+                ));
+            };
+            if !report.available {
+                if !profile.requires_lsm_access_control() {
+                    continue;
+                }
+                return Err(control_contract::reply::ControlError::new(
+                    "lsm_preflight",
+                    format!(
+                        "profile {}: {}: {}",
+                        name.as_str(),
+                        report.failure_stage.as_deref().unwrap_or("load"),
+                        report
+                            .failure_message
+                            .as_deref()
+                            .unwrap_or("LSM kernel control unavailable")
+                    ),
+                ));
+            }
+            capabilities.extend(
+                profile
+                    .capabilities
+                    .iter()
+                    .filter(|request| request.mode != model_core::capability::RequestMode::Disabled)
+                    .cloned(),
+            );
+        }
+        if capabilities.is_empty() {
+            return Err(control_contract::reply::ControlError::new(
+                "lsm_preflight",
+                "LSM requires an available host eBPF capture profile",
+            ));
+        }
+        // Load the union once after individual startup checks. The collector
+        // deduplicates requests and keeps Required when profiles share a capability.
+        // This runtime owns LSM task scope for the daemon's entire lifetime.
+        self.collector
+            .preflight_capability_requests(&capabilities)
+            .map_err(|error| {
+                control_contract::reply::ControlError::new(
+                    "lsm_preflight",
+                    format!(
+                        "load configured profile union: {}: {}",
+                        error.stage, error.message
+                    ),
+                )
+            })
+    }
+
     pub(crate) fn preflight_host_ebpf(&mut self) {
         let started_at = Instant::now();
         self.host_ebpf_preflight.clear();

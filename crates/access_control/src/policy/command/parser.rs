@@ -1,7 +1,7 @@
 use plugin_system::{CommandPolicyDecision, CommandPolicyRuleDraft};
 
-use super::{STATIC_POLICY_OWNER, StoredCommandRule};
-use crate::services::command_control::decision::CommandRuleDraftValidator;
+use super::rule::{STATIC_POLICY_OWNER, StoredCommandRule};
+use super::validation::CommandRuleDraftValidator;
 
 pub(super) struct StaticRuleParser;
 

@@ -396,6 +396,8 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             "\n[seccomp_notify]\n"
             "enabled = true\n"
             "reserved_listener_fd = 253\n"
+            '\n[access_control.command.exec]\nbackend = "seccomp"\n'
+            '\n[enforcement]\nenabled = false\n'
             "\n[command_control]\n"
             "enabled = true\n"
             f"rules_path = {paths['rules']}\n"

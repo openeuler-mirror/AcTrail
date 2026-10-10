@@ -8,7 +8,8 @@ use model_core::process::ProcessIdentity;
 use plugin_system::{DecisionScope, FilePolicyOperation};
 
 use crate::services::alert_ingress::{FileAccessBoundaryAlert, FileAccessDenySource};
-use crate::services::enforcement::rules::{EnforcementRule, FileKey};
+use crate::services::enforcement::fanotify::FileKey;
+use access_control::policy::file::EnforcementRule;
 
 pub(in crate::services) struct EnforcementOutcomeDraft {
     pub trace_id: TraceId,
@@ -127,7 +128,11 @@ fn audit_draft(
     EnforcementAuditDraft {
         metadata_partial,
         payload: EnforcementPayload {
-            backend: "fanotify".to_string(),
+            backend: match operation {
+                FilePolicyOperation::Mkdir | FilePolicyOperation::Rmdir => "seccomp-user-notify",
+                _ => "fanotify",
+            }
+            .to_string(),
             operation: operation.as_str().to_string(),
             decision: decision.decision.as_str().to_string(),
             path: decision

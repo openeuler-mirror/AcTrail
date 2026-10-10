@@ -68,6 +68,7 @@ impl StorageAttachService {
         self.drain_post_trace_runtime_impl()?;
         self.drain_resource_metrics_impl(trace_runtime)?;
         self.drain_tls_sync_events_impl(trace_runtime)?;
+        warn_best_effort(self.drain_lsm_audit(trace_runtime), "lsm_audit");
         let active_bindings = self.collector.active_binding_trace_count();
         let active_path = self.collector_ready()
             && (active_bindings > 0 || self.collector.has_pending_file_io_events());

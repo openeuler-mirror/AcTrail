@@ -201,6 +201,9 @@ capabilities = ["proc-lifecycle", "fs-access-basic"]
 opportunistic_capabilities = []
 disabled_capabilities = []
 
+[enforcement]
+enabled = false
+
 [payload.tls]
 enabled = false
 sync_event_socket_path = {quote(str(self.run_dir / 'tls-sync.sock'))}

@@ -250,7 +250,11 @@ WIT component 控制插件通过 hostcall 查询当前决策上下文和文件�
 | `concurrency-limit` | option<u32> | 插件并发限制。 |
 | `fallback` | option<string> | 超时或错误 fallback。 |
 
-策略批量更新使用独立的文件策略规则接口。插件需要声明并获得 `file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute-scope>` grant，然后调用规则更新接口。
+策略批量更新使用独立的文件策略规则接口。插件需要声明并获得 `file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute-scope>` grant，然后调用规则更新接口。动态 gray 规则的 `gray-target` 使用 control-plugin 实例索引，发布时允许目标尚未 active；实际请求到达时目标不可用则拒绝。
+
+文件和命令规则保留声明路径用于列表、规则身份与授权。启动加载或 upsert 时，在 daemon 的文件系统视图中解析已有符号链接，绑定执行路径；目标及后续路径组件可以尚未创建。例如声明 A 时 A 指向 B，规则绑定 B；A 改为指向 C 后仍治理 B，重新 upsert 才绑定 C。绑定的是路径名，B 处普通文件被替换后仍受该规则治理。其他规则发布和 owner 撤销不会重新解析保留规则。
+
+动态发布要求同一 grant 覆盖声明范围，并且该 grant 解析后的范围覆盖绑定执行范围。精确 A grant 可以授权 A 当时指向的 B；`/safe/**` 中指向范围外的链接需要取得覆盖声明和执行范围的 grant。fanotify open 还需要能安装目录标记；mkdir/rmdir 规则以及 LSM 文件规则允许目标目录尚未创建。
 
 WASM core module 入口：
 
@@ -280,7 +284,7 @@ WIT component 入口：
 | --- | --- | --- |
 | `syscall` | string | `execve` 或 `execveat`。 |
 | `requested-path` | string | tracee 原始请求路径。 |
-| `resolved-path` | string | tracee namespace 内词法规范化后的绝对路径。 |
+| `resolved-path` | string | tracee namespace 内解析已有符号链接后的绝对路径。 |
 | `argv` | list<string> | 在配置的数量、单参数和总字节上限内完整复制的 argv。 |
 | `execveat-dirfd` | option<s32> | `execveat` dirfd；`execve` 为 none。 |
 | `execveat-flags` | option<u64> | `execveat` flags；`execve` 为 none。 |
@@ -296,7 +300,7 @@ argv 超过任一限制时，daemon 直接使用 `command_control.failure_decisi
 | `command-policy.rules.validate` | 校验一批 AON patch，不修改路由。 |
 | `command-policy.rules.apply:kind=<allow\|deny\|gray>,path=<absolute-path-or-/**-scope>` | 只允许发布指定决策类型和 executable 范围。 |
 
-每个 apply request 包含 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。规则 draft/view 的 `args: option<list<string>>` 匹配 `argv[1..]`：none 表示任意参数，空 list 表示无额外参数，只有最后一个 `"*"` 可匹配任意剩余参数。dry-run request 必须同时提交 `executable` 和实际 `args: list<string>`。revision 不匹配、任一规则非法、grant 越权或 gray target 不可用时整批 rejected。
+每个 apply request 包含 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。规则 draft/view 的 `args: option<list<string>>` 匹配 `argv[1..]`：none 表示任意参数，空 list 表示无额外参数，只有最后一个 `"*"` 可匹配任意剩余参数。dry-run request 必须同时提交 `executable` 和实际 `args: list<string>`。revision 不匹配、任一规则非法或 grant 越权时整批 rejected。gray target 可以在规则发布后启动；实际请求到达时目标不可用则拒绝。
 
 WASM core module 入口使用版本 2 的长度前缀二进制请求/响应：
 
@@ -342,7 +346,14 @@ WIT component 入口：
 | `network-policy.rules.validate` | 校验一批 AON patch，不修改路由。 |
 | `network-policy.rules.apply:kind=<allow\|deny\|gray>,remote=<*\|numeric-ip:port\|numeric-ip:*>` | 只允许发布指定决策类型和远端范围；IPv6 使用 `[ip]:port` 或 `[ip]:*`。 |
 
-`network-policy-apply-request` 包含精确 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。每条动态 rule draft 使用 `remote` 表达精确数字 IPv4/IPv6 endpoint 或单 IP 全端口 selector；实际规则不接受裸 `*`。grant 的 `*` 覆盖全部 selector，`IP:*` 覆盖同 IP 的全端口和精确 endpoint，精确 grant 只覆盖自身。规则不提供 priority；同一 `IP:*` 与该 IP 的任何精确 endpoint 视为重叠，静态精确规则或任意动态 owner 间的重复/重叠会使整批请求 rejected。gray 规则还必须同时提供非自身的活动 `gray-target`、正数 `timeout-ms`、正数 `concurrency-limit` 和 `allow|deny` fallback。allow/deny 规则不得携带这些 gray 字段。
+`network-policy-apply-request` 包含精确 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。每条动态 rule draft 使用 `remote` 表达精确数字 IPv4/IPv6 endpoint 或单 IP 全端口 selector；静态规则使用相同 selector 语法，实际规则不接受裸 `*`。grant 的 `*` 覆盖全部 selector，`IP:*` 覆盖同 IP 的全端口和精确 endpoint，精确 grant 只覆盖自身。规则不提供 priority；同一 owner 可以同时配置 `IP:*` 和该 IP 的精确 endpoint，匹配时精确 endpoint 优先。所有静态规则属于同一静态 owner，同样支持全端口规则及端口例外。相同 selector 的重复规则，以及不同 owner 之间的全端口与精确 endpoint 重叠，会使整批请求 rejected。gray 规则还必须同时提供非自身的 `gray-target`、正数 `timeout-ms`、正数 `concurrency-limit` 和 `allow|deny` fallback。allow/deny 规则不得携带这些 gray 字段。
+
+`network_control.rules_path` 指定的静态文件每行使用以下格式。`remote` 支持 `192.0.2.1:443`、`192.0.2.1:*`、`[2001:db8::1]:443` 和 `[2001:db8::1]:*`；其中 `*` 匹配该 IP 的全部端口。`sync-plugin` 规则需要选择支持同步插件决策的 seccomp 后端。
+
+```text
+<rule-id> <allow|deny> connect <remote>
+<rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <remote>
+```
 
 `network-control-host` 的 WIT component 入口如下；这些入口不向 WASM core module 提供，声明网络策略管理能力的 core module 会在加载时失败。只做 gray 决策且需要结构化网络上下文的 component 使用最小 `network-control-plugin` world；同时提供管理命令和运行时配置的策略 publisher 使用 `managed-network-control-plugin`：
 
@@ -365,7 +376,7 @@ v1 网络控制的准确边界是 `AF_INET`/`AF_INET6` 的 `connect(2)`，即“
 
 该入口由 `actraild plugin cmd --instance <id> -- <plugin args...>` 调用，属于低频管理面，不参与文件或命令执行热路径。AcTrail 只转发 argv 并限制输入输出大小；插件自己解释子命令。
 
-网络策略 publisher 使用 `managed-network-control-plugin`，导出同样的 `control-decider`、`management-command` 和 `runtime-config`，并额外导入 `network-control-host`。官方 `wasm.network-policy-dynamic` 的 `decide` 会明确返回错误，因为该实例只负责发布本地路由，gray 规则必须指向另一个活动 control-decider。
+网络策略 publisher 使用 `managed-network-control-plugin`，导出同样的 `control-decider`、`management-command` 和 `runtime-config`，并额外导入 `network-control-host`。官方 `wasm.network-policy-dynamic` 的 `decide` 会明确返回错误，因为该实例只负责发布本地路由，gray 规则必须指向另一个 control-decider，允许先发布规则再启动目标；实际请求到达时目标不可用则拒绝。
 
 ## 控制决策返回码
 

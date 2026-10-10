@@ -282,6 +282,15 @@ impl EbpfCollector {
     }
 
     fn idle_runtime_needs_replan(&self, attach_plan: &AttachPlan) -> bool {
+        // LSM task-local membership may outlive best-effort observation records.
+        // Keep its runtime until daemon shutdown, even when observation appears idle.
+        if self
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.lsm.is_some())
+        {
+            return false;
+        }
         self.active_binding_trace_count() == 0
             && self.runtime.as_ref().is_some_and(|runtime| {
                 !attach_plan.is_satisfied_by(runtime.attached_capabilities())

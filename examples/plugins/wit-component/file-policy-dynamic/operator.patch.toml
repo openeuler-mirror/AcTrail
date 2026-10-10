@@ -55,9 +55,11 @@ enabled = false
 [provider]
 rules_enabled = false
 
+[access_control.file.open]
+backend = "fanotify"
+
 [enforcement]
 enabled = true
-backend = "fanotify"
 scope = "trace"
 rules_path = "/tmp/actrail-file-policy-demo/rules.conf"
 default_decision = "allow"

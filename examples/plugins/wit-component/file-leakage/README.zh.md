@@ -53,6 +53,9 @@ sudo target/release/actrailctl --config "$CONFIG" init --force
 [capture]
 capabilities = ["proc-lifecycle", "fs-access-basic"]
 
+[enforcement]
+enabled = false
+
 [plugins.discovery]
 directory = "~/.actrail/plugins"
 

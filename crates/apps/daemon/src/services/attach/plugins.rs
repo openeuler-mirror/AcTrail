@@ -195,23 +195,32 @@ impl StorageAttachService {
                 }
             }
             PluginPurpose::ControlDecider => {
-                let file_policy_host = self
-                    .enforcement
-                    .file_policy_host(self.control_plugins.clone());
-                let command_policy_host = self
-                    .command_control
-                    .command_policy_host(self.control_plugins.clone());
-                let network_policy_host = self
-                    .network_control
-                    .network_policy_host(self.control_plugins.clone());
+                let file_policy_host: Arc<dyn plugin_system::FilePolicyHost> =
+                    Arc::new(self.enforcement.file_policy_host());
+                let command_policy_host: Arc<dyn plugin_system::CommandPolicyHost> = match self
+                    .lsm_access_control
+                    .as_ref()
+                    .filter(|controller| controller.command_enabled())
+                {
+                    Some(controller) => controller.clone(),
+                    None => Arc::new(self.command_control.command_policy_host()),
+                };
+                let network_policy_host: Arc<dyn plugin_system::NetworkPolicyHost> = match self
+                    .lsm_access_control
+                    .as_ref()
+                    .filter(|controller| controller.network_enabled())
+                {
+                    Some(controller) => controller.clone(),
+                    None => Arc::new(self.network_control.network_policy_host()),
+                };
                 let decider = build_control_decider_from_manifest(
                     &command.instance_id,
                     &manifest,
                     plugin_config_raw.as_deref(),
                     host_grants,
-                    Some(std::sync::Arc::new(file_policy_host)),
-                    Some(std::sync::Arc::new(command_policy_host)),
-                    Some(std::sync::Arc::new(network_policy_host)),
+                    Some(file_policy_host),
+                    Some(command_policy_host),
+                    Some(network_policy_host),
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
@@ -367,6 +376,11 @@ impl StorageAttachService {
             .iter()
             .any(|status| status.instance_id == instance_id)
         {
+            if let Some(controller) = &self.lsm_access_control {
+                controller
+                    .remove_owner(instance_id)
+                    .map_err(|message| ControlError::new("lsm_policy_remove_owner", message))?;
+            }
             self.enforcement.remove_plugin_policy_owner(instance_id)?;
             self.command_control
                 .remove_plugin_policy_owner(instance_id)?;

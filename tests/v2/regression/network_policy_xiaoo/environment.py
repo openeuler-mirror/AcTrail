@@ -358,6 +358,8 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
             "reserved_listener_fd = 253\n"
             "\n[process_seccomp]\n"
             "enabled = true\n"
+            '\n[access_control.network.connect]\nbackend = "seccomp"\n'
+            '\n[enforcement]\nenabled = false\n'
             "\n[network_control]\n"
             "enabled = true\n"
             f"rules_path = {paths['rules']}\n"

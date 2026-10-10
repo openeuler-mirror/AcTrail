@@ -18,7 +18,7 @@ Web Plugin command -> 插件 command handler -> 插件内存配置 -> actraild �
 - 已安装 release 二进制和官方插件包。
 - actraild 配置同时启用了 `proc-lifecycle` 和 `enforcement-file-permission-fanotify` capture capability；前者保证子进程从 `fork` 后、`exec` 前就继承控制身份。
 - `[seccomp_notify]` 中 `enabled = true`。
-- `[enforcement]` 中 `enabled = true`。`seccomp_syscalls` 默认允许策略使用 `mkdir` 和 `rmdir`，`seccomp_path_max_bytes` 默认是 `4096`。只有 trace 启动时合并路由表中存在对应操作的有效规则，actrailctl 才会安装该操作的 seccomp 通知过滤器；没有目录操作规则时不会增加这条通知开销。`rules_path` 指向的静态规则文件可以不存在或不包含规则；没有匹配规则时使用 `default_decision`，默认值 `allow` 会直接放行。
+- `[enforcement]` 中 `enabled = true`。文件打开在 `[access_control.file.open]` 选择 `fanotify`；目录操作在 `[access_control.file.mkdir]` 和 `[access_control.file.rmdir]` 各设置 `enabled = true`、`backend = "seccomp"`，并在 capture 中加入 `enforcement-file-mkdir-seccomp` 和 `enforcement-file-rmdir-seccomp`。目录过滤器按启用配置安装，支持启动后动态发布规则。`seccomp_path_max_bytes` 默认为 `4096`；静态规则可为空，无匹配时采用 `default_decision`。
 
 release 安装程序把候选插件安装到：
 
@@ -68,7 +68,7 @@ release 安装程序把候选插件安装到：
 | `rule_id` | 新规则可省略 | 插件拥有的稳定规则 ID。提交新规则时由插件生成，例如 `dynamic-1`。 |
 | `decision` | 是 | `allow`、`deny` 或 `gray`。 |
 | `operation` | 否 | `any`、`open`、`mkdir` 或 `rmdir`。默认 `any`，同时匹配文件打开、目录创建和目录删除。 |
-| `path` | 是 | 要匹配的绝对文件或目录路径。必须位于加载时授予的 scope 内。 |
+| `path` | 是 | 声明的绝对文件或目录路径，可使用符号链接或尚未创建的目标；发布时绑定执行路径，并校验 grant 覆盖范围。 |
 | `priority` | 是 | 路由优先级，数值越大优先级越高。默认值为 `10`。 |
 | `gray_target` | gray 必填 | 接收同步判定的控制插件实例索引；非 gray 规则不能填写。 |
 
@@ -78,6 +78,10 @@ release 安装程序把候选插件安装到：
 2. 校验成功后 **Update configuration** 才会启用。点击后，配置提交给插件；插件验证并发布路由成功后才更新内存配置。
 
 如果规则超出 Host grants、gray 规则缺少 `gray_target`、规则 ID 重复或路径无效，测试或更新会返回明确错误，插件内存配置保持原值。
+
+规则列表保留声明路径。upsert 时在 daemon 的文件系统视图中解析已有符号链接：A 当时指向 B，就绑定 B；A 后来改为指向 C，已有规则继续治理 B。重新 upsert 该规则会绑定当前目标，其他 owner 发布或卸载不会改变其绑定。规则绑定路径名，B 处普通文件替换后仍受治理。
+
+同一 grant 必须覆盖声明范围，且其解析后的范围覆盖执行范围。精确 A grant 可覆盖当时解析到的 B；递归范围内的链接跳到范围外时，需要覆盖声明和执行范围的 grant。fanotify open 需要可安装的目录标记；mkdir/rmdir 规则与 LSM 文件规则允许目标目录尚未创建。
 
 单次配置文档的大小上限由 manifest 中的 `hostcall_limits.plugin_config.read_max_bytes` 控制；官方包默认允许 `65536` 字节。超过上限时，查询、校验和提交都会直接失败。
 

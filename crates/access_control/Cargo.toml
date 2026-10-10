@@ -1,0 +1,12 @@
+[package]
+name = "access_control"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+config_core = { path = "../core/config" }
+plugin_system = { path = "../core/plugin_system" }
+serde_json = "1.0"
+tracing = "0.1"
+libbpf-rs = "0.25"

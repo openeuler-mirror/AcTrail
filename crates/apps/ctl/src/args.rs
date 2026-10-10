@@ -398,7 +398,11 @@ fn launch_seccomp_config(config: Option<&OperatorConfig>) -> Result<LaunchSeccom
         payload_socket_max_segment_bytes: config.payload_config.socket.max_segment_bytes,
         process_syscalls: config.process_seccomp.syscalls.clone(),
         network_syscalls: config.network_control.syscalls.clone(),
-        file_enforcement_syscalls: config.enforcement.seccomp_syscalls.clone(),
+        file_enforcement_syscalls: if config.enforcement.enabled {
+            config.access_control.file.seccomp_syscalls()
+        } else {
+            Vec::new()
+        },
         reserved_listener_fd: config.seccomp_notify.reserved_listener_fd,
     })
 }

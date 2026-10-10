@@ -13,11 +13,12 @@ use storage_factory::{
 };
 
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
-    ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig, DEFAULT_ACTIVE_TRACE_MAX,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
-    DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
-    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+    AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig,
+    ClusterConfig, ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+    DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
+    DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
+    DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
@@ -34,19 +35,18 @@ use super::super::{
     DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE, DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS,
     DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
     DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
-    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
-    EnforcementScope, EnforcementSeccompSyscall, ExistingContainerCgroups,
-    FileBulkReadObservationConfig, FileCollectionConfig, FileIoCollectionConfig,
-    FileIoSummaryConfig, FileMetadataRetention, FileObservationConfig, FileRawEventRetention,
-    FileTtyObservationConfig, FsEnumerateObservationConfig, Http2DataContentRetention,
-    HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention, IpcLineageConfig,
-    L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention,
-    L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig, LlmRequestBodyExportRetention,
-    LlmRequestContentRetention, LlmResponseContentRetention, LlmStreamClassifierConfig,
-    LlmToolCallRetention, LlmToolResultContentExportRetention, LlmTrajectoryConfig,
-    LlmUsageRetention, McpJsonRpcContentRetention, MemlockRlimit, NetworkControlConfig,
-    NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig,
-    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy, EnforcementScope,
+    ExistingContainerCgroups, FileBulkReadObservationConfig, FileCollectionConfig,
+    FileIoCollectionConfig, FileIoSummaryConfig, FileMetadataRetention, FileObservationConfig,
+    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+    Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention,
+    IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
+    L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig,
+    LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmResponseContentRetention,
+    LlmStreamClassifierConfig, LlmToolCallRetention, LlmToolResultContentExportRetention,
+    LlmTrajectoryConfig, LlmUsageRetention, McpJsonRpcContentRetention, MemlockRlimit,
+    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
+    PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
@@ -141,6 +141,7 @@ pub(super) struct OperatorDocument {
     application: ApplicationDocument,
     resource_metrics: ResourceMetricsDocument,
     provider: ProviderDocument,
+    access_control: AccessControlConfig,
     enforcement: EnforcementDocument,
     command_control: CommandControlDocument,
     network_control: NetworkControlDocument,
@@ -172,6 +173,7 @@ impl Default for OperatorDocument {
             application: ApplicationDocument::default(),
             resource_metrics: ResourceMetricsDocument::default(),
             provider: ProviderDocument::default(),
+            access_control: AccessControlConfig::default(),
             enforcement: EnforcementDocument::default(),
             command_control: CommandControlDocument::default(),
             network_control: NetworkControlDocument::default(),
@@ -407,9 +409,9 @@ impl OperatorDocument {
                     .map(|provider| provider.unknown_provider_label.clone())
                     .unwrap_or_else(|| ProviderDocument::default().unknown_provider_label),
             },
+            access_control: config.access_control.clone(),
             enforcement: EnforcementDocument {
                 enabled: config.enforcement.enabled,
-                backend: enforcement_backend_as_str(config.enforcement.backend).to_string(),
                 scope: enforcement_scope_as_str(config.enforcement.scope).to_string(),
                 rules_path: config.enforcement.rules_path.display().to_string(),
                 builtin_rules: config
@@ -423,13 +425,6 @@ impl OperatorDocument {
                     .to_string(),
                 audit_enabled: config.enforcement.audit_enabled,
                 event_buffer_bytes: config.enforcement.event_buffer_bytes,
-                seccomp_syscalls: config
-                    .enforcement
-                    .seccomp_syscalls
-                    .iter()
-                    .map(enforcement_seccomp_syscall_as_str)
-                    .map(str::to_string)
-                    .collect(),
                 seccomp_path_max_bytes: config.enforcement.seccomp_path_max_bytes,
             },
             command_control: CommandControlDocument {
@@ -519,7 +514,19 @@ impl OperatorDocument {
         validate_enforcement_config(&enforcement, &capabilities)?;
         let command_control = self.command_control.to_config()?;
         let network_control = self.network_control.to_config()?;
+        let access_control = self.access_control.resolve(
+            enforcement.enabled,
+            command_control.enabled,
+            network_control.enabled,
+        );
+        access_control.validate(&capabilities)?;
+        if access_control.uses_lsm() && ebpf_config.enabled_mode == EbpfEnabledMode::False {
+            return Err(
+                "LSM access control requires host eBPF enabled for kernel identity binding".into(),
+            );
+        }
         validate_seccomp_config(
+            &access_control,
             &seccomp_notify,
             &payload_config.tls,
             &payload_config.socket,
@@ -637,6 +644,7 @@ impl OperatorDocument {
             resource_metrics,
             trace_finalization,
             provider_rule_set: self.provider.to_config(),
+            access_control: self.access_control.clone(),
             enforcement,
             command_control,
             network_control,

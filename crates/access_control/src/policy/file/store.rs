@@ -1,68 +1,32 @@
-//! File-access enforcement rule store.
+mod query;
 
-mod model;
-mod scope;
-
+use super::model::{RuleIdentityKind, RuleTier, StoredPolicyRule};
+use super::parser::FileRuleParser;
+use super::scope::PathScope;
+use super::types::{
+    BUILTIN_POLICY_OWNER, EnforcementRule, HOST_RULE_ID_PREFIX, RuleDecision, STATIC_POLICY_OWNER,
+};
+use super::validation::FilePolicyValidation;
+use config_core::daemon::EnforcementDecision;
+use plugin_system::{
+    FilePolicyApplyError, FilePolicyApplyMode, FilePolicyApplyPrecondition, FilePolicyApplyRequest,
+    FilePolicyApplyResult, FilePolicyApplyStatus, FilePolicyDecision, FilePolicyOperation,
+    FilePolicyPatchItem, FilePolicyPatchOp, FilePolicyRulesApplyGrant,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use config_core::daemon::EnforcementDecision;
-use plugin_system::{
-    FilePolicyApplyError, FilePolicyApplyMode, FilePolicyApplyPrecondition, FilePolicyApplyRequest,
-    FilePolicyApplyResult, FilePolicyApplyStatus, FilePolicyDecision, FilePolicyListFilter,
-    FilePolicyListResult, FilePolicyMatchDryRunRequest, FilePolicyMatchDryRunResult,
-    FilePolicyOperation, FilePolicyPatchItem, FilePolicyPatchOp, FilePolicyRulesApplyGrant,
-};
-
-use self::model::{
-    RuleIdentityKind, RuleTier, StoredPolicyRule, apply_result_from_errors, parse_rule,
-    validate_draft_grant, validate_gray_target, validate_rule_grant,
-};
-use self::scope::{PathScope, absolute_scope, normalized_scope};
-
-const BUILTIN_POLICY_OWNER: &str = "actrail.builtin";
-const STATIC_POLICY_OWNER: &str = "actrail.static";
-const HOST_RULE_ID_PREFIX: &str = "fp";
-const DEFAULT_GRAY_TIMEOUT_MS: u64 = 30_000;
-const DEFAULT_GRAY_CONCURRENCY_LIMIT: u32 = 32;
-const DEFAULT_GRAY_FALLBACK: EnforcementDecision = EnforcementDecision::Deny;
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct FileKey {
-    pub dev: u64,
-    pub ino: u64,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileRuleCoverage {
+    Fanotify,
+    Lsm,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct EnforcementRule {
-    pub(super) owner_instance_id: String,
-    pub rule_id: String,
-    pub decision: RuleDecision,
-    pub operation: String,
-    pub path: PathBuf,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct BuiltinIgnoreMark {
-    pub path: PathBuf,
-    pub recursive: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum RuleDecision {
-    Local(EnforcementDecision),
-    SyncPlugin {
-        instance_id: String,
-        timeout_ms: u64,
-        concurrency_limit: u32,
-        fallback: EnforcementDecision,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct EnforcementRules {
+pub struct EnforcementRules {
+    coverage: FileRuleCoverage,
     revision: u64,
     next_rule_id: u64,
     next_sequence: u64,
@@ -72,10 +36,22 @@ pub(super) struct EnforcementRules {
 }
 
 impl EnforcementRules {
-    pub(super) fn load(path: &Path) -> Result<Self, String> {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        Self::load_with_coverage(path, FileRuleCoverage::Fanotify)
+    }
+
+    /// Loads rules without fanotify directory coverage validation or mark planning.
+    /// The same mode applies to subsequent validation and policy mutations.
+    pub fn load_for_lsm(path: &Path) -> Result<Self, String> {
+        Self::load_with_coverage(path, FileRuleCoverage::Lsm)
+    }
+
+    fn load_with_coverage(path: &Path, coverage: FileRuleCoverage) -> Result<Self, String> {
         match fs::read_to_string(path) {
-            Ok(raw) => Self::parse(&raw),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(Self::empty()),
+            Ok(raw) => Self::parse(&raw, coverage),
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                Ok(Self::empty_with_coverage(coverage))
+            }
             Err(error) => Err(format!(
                 "read enforcement rules {}: {error}",
                 path.display()
@@ -83,15 +59,15 @@ impl EnforcementRules {
         }
     }
 
-    pub(super) fn parse(raw: &str) -> Result<Self, String> {
-        let mut store = Self::empty();
+    fn parse(raw: &str, coverage: FileRuleCoverage) -> Result<Self, String> {
+        let mut store = Self::empty_with_coverage(coverage);
         let mut rule_ids = BTreeSet::new();
         for (line_index, line) in raw.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let rule = parse_rule(trimmed)
+            let rule = FileRuleParser::parse_rule(trimmed)
                 .map_err(|error| format!("enforcement rule line {}: {error}", line_index + 1))?;
             if !rule_ids.insert(rule.rule_id.clone()) {
                 return Err(format!(
@@ -106,125 +82,12 @@ impl EnforcementRules {
         Ok(store)
     }
 
-    pub(super) fn find_path(
-        &self,
-        operation: FilePolicyOperation,
-        path: &Path,
-    ) -> Option<&EnforcementRule> {
-        self.effective_rules
-            .iter()
-            .find(|rule| rule.matches_path(operation, path))
-            .map(|rule| &rule.rule)
-    }
-
-    pub(super) fn has_operation_rules(&self, operation: FilePolicyOperation) -> bool {
-        self.effective_rules
-            .iter()
-            .any(|rule| rule.operation.matches(operation))
-    }
-
-    pub(super) fn find_builtin_allow(&self, path: &Path) -> Option<&EnforcementRule> {
-        self.effective_rules
-            .iter()
-            .find(|rule| {
-                rule.is_builtin_allow() && rule.matches_path(FilePolicyOperation::Open, path)
-            })
-            .map(|rule| &rule.rule)
-    }
-
-    pub(super) fn install_builtin_allow_rules<I>(&mut self, rules: I) -> Result<(), String>
-    where
-        I: IntoIterator<Item = (String, String)>,
-    {
-        for (rule_id, path) in rules {
-            self.insert_builtin_allow_rule(rule_id, path)?;
-        }
-        self.rebuild_effective()
-    }
-
-    pub(super) fn mark_directories(&self) -> impl Iterator<Item = &PathBuf> {
-        self.mark_directories.iter()
-    }
-
-    pub(super) fn builtin_ignore_marks(&self) -> Vec<BuiltinIgnoreMark> {
-        self.effective_rules
-            .iter()
-            .filter(|rule| rule.is_builtin_allow())
-            .map(|rule| BuiltinIgnoreMark {
-                path: rule.scope.display_base(),
-                recursive: rule.scope.is_recursive(),
-            })
-            .collect()
-    }
-
-    pub(super) fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    pub(super) fn list(
-        &self,
-        filter: FilePolicyListFilter,
-        cursor: Option<&str>,
-        limit: u32,
-    ) -> FilePolicyListResult {
-        let start = cursor
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or_default();
-        let limit = usize::try_from(limit).unwrap_or(usize::MAX).max(1);
-        let mut views = self
-            .by_owner
-            .values()
-            .flat_map(|rules| rules.values())
-            .filter(|rule| rule.matches_filter(&filter))
-            .map(StoredPolicyRule::view)
-            .collect::<Vec<_>>();
-        views.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
-        let total = views.len();
-        let rules = views
-            .into_iter()
-            .skip(start)
-            .take(limit)
-            .collect::<Vec<_>>();
-        let next = start.saturating_add(rules.len());
-        FilePolicyListResult {
-            rules,
-            next_cursor: (next < total).then(|| next.to_string()),
-            source_revision: self.revision,
-        }
-    }
-
-    pub(super) fn match_dry_run(
-        &self,
-        request: FilePolicyMatchDryRunRequest,
-        default_decision: FilePolicyDecision,
-    ) -> Result<FilePolicyMatchDryRunResult, String> {
-        let path = normalized_scope(&request.path)?;
-        let canonical_path = path.display_path();
-        let matched = self.effective_rules.iter().find(|rule| {
-            rule.operation.matches(request.operation) && rule.scope.contains_scope(&path)
-        });
-        Ok(FilePolicyMatchDryRunResult {
-            matched: matched.is_some(),
-            decision: matched
-                .map(|rule| rule.decision)
-                .unwrap_or(default_decision),
-            rule_id: matched.map(|rule| rule.rule_id.clone()),
-            operation: request.operation,
-            canonical_path,
-            source_revision: self.revision,
-        })
-    }
-
-    pub(super) fn validate_apply<F>(
+    pub fn validate_apply(
         &self,
         owner_instance_id: &str,
         grants: &[FilePolicyRulesApplyGrant],
         request: &FilePolicyApplyRequest,
-        gray_target_exists: F,
-    ) -> FilePolicyApplyResult
-    where
-        F: Fn(u64) -> bool,
-    {
+    ) -> FilePolicyApplyResult {
         if let Some(result) = self.reject_invalid_precondition(&request.precondition) {
             return result;
         }
@@ -233,21 +96,16 @@ impl EnforcementRules {
             grants,
             request.precondition.base_revision,
             &request.items,
-            &gray_target_exists,
         );
-        apply_result_from_errors(self.revision, 0, errors)
+        FilePolicyValidation::apply_result_from_errors(self.revision, 0, errors)
     }
 
-    pub(super) fn apply<F>(
+    pub fn apply(
         &mut self,
         owner_instance_id: &str,
         grants: &[FilePolicyRulesApplyGrant],
         request: FilePolicyApplyRequest,
-        gray_target_exists: F,
-    ) -> Result<(FilePolicyApplyResult, Vec<PathBuf>), String>
-    where
-        F: Fn(u64) -> bool,
-    {
+    ) -> Result<(FilePolicyApplyResult, Vec<PathBuf>), String> {
         if let Some(result) = self.reject_invalid_precondition(&request.precondition) {
             return Ok((result, Vec::new()));
         }
@@ -256,7 +114,6 @@ impl EnforcementRules {
             grants,
             request.precondition.base_revision,
             &request.items,
-            &gray_target_exists,
         );
 
         let mut applied = 0_u32;
@@ -270,7 +127,7 @@ impl EnforcementRules {
                 continue;
             }
             let mutation_revision = self.revision.saturating_add(1);
-            self.apply_item(owner_instance_id, item, mutation_revision)?;
+            self.apply_item(owner_instance_id, grants, item, mutation_revision)?;
             applied = applied.saturating_add(1);
         }
         if applied > 0 {
@@ -293,7 +150,7 @@ impl EnforcementRules {
         ))
     }
 
-    pub(super) fn remove_owner(&mut self, owner_instance_id: &str) -> Result<Vec<PathBuf>, String> {
+    pub fn remove_owner(&mut self, owner_instance_id: &str) -> Result<Vec<PathBuf>, String> {
         if self.by_owner.remove(owner_instance_id).is_none() {
             return Ok(Vec::new());
         }
@@ -306,7 +163,7 @@ impl EnforcementRules {
         precondition: &FilePolicyApplyPrecondition,
     ) -> Option<FilePolicyApplyResult> {
         if precondition.apply_mode == FilePolicyApplyMode::Aon {
-            return Some(apply_result_from_errors(
+            return Some(FilePolicyValidation::apply_result_from_errors(
                 self.revision,
                 0,
                 vec![FilePolicyApplyError {
@@ -317,7 +174,7 @@ impl EnforcementRules {
             ));
         }
         if precondition.base_revision > self.revision {
-            return Some(apply_result_from_errors(
+            return Some(FilePolicyValidation::apply_result_from_errors(
                 self.revision,
                 0,
                 vec![FilePolicyApplyError {
@@ -333,8 +190,18 @@ impl EnforcementRules {
         None
     }
 
-    fn empty() -> Self {
+    pub fn empty() -> Self {
+        Self::empty_with_coverage(FileRuleCoverage::Fanotify)
+    }
+
+    /// Creates an empty policy store whose mutations require no fanotify coverage.
+    pub fn empty_for_lsm() -> Self {
+        Self::empty_with_coverage(FileRuleCoverage::Lsm)
+    }
+
+    fn empty_with_coverage(coverage: FileRuleCoverage) -> Self {
         Self {
+            coverage,
             revision: 0,
             next_rule_id: 1,
             next_sequence: 1,
@@ -344,20 +211,26 @@ impl EnforcementRules {
         }
     }
 
-    fn insert_static_rule(&mut self, rule: EnforcementRule) -> Result<(), String> {
+    fn insert_static_rule(&mut self, mut rule: EnforcementRule) -> Result<(), String> {
         let decision = match &rule.decision {
             RuleDecision::Local(EnforcementDecision::Allow) => FilePolicyDecision::Allow,
             RuleDecision::Local(EnforcementDecision::Deny) => FilePolicyDecision::Deny,
             RuleDecision::SyncPlugin { .. } => FilePolicyDecision::Gray,
         };
-        let stored = StoredPolicyRule {
+        let scope = PathScope::absolute_scope(&rule.path.to_string_lossy())?;
+        let execution_scope = scope.bind()?;
+        let scope = PathScope::normalized_scope(&scope.display_path())?;
+        rule.path = execution_scope.display_base();
+        let mut stored = StoredPolicyRule {
             owner_instance_id: STATIC_POLICY_OWNER.to_string(),
             rule_id: rule.rule_id.clone(),
             tier: RuleTier::Static,
             identity: RuleIdentityKind::Static,
             decision,
             operation: FilePolicyOperation::from_wire(&rule.operation)?,
-            scope: PathScope::Exact(rule.path.clone()),
+            scope,
+            execution_scope,
+            mark_directories: BTreeSet::new(),
             gray_target: None,
             priority: 0,
             enabled: true,
@@ -365,6 +238,9 @@ impl EnforcementRules {
             updated_sequence: self.next_sequence(),
             rule,
         };
+        if self.coverage == FileRuleCoverage::Fanotify {
+            stored.prepare_mark_directories()?;
+        }
         self.by_owner
             .entry(STATIC_POLICY_OWNER.to_string())
             .or_default()
@@ -383,13 +259,14 @@ impl EnforcementRules {
         {
             return Err(format!("duplicate builtin file policy rule id {rule_id}"));
         }
-        let scope = absolute_scope(&path)?;
+        let scope = PathScope::absolute_scope(&path)?;
+        let execution_scope = scope.bind()?;
         let rule = EnforcementRule {
             owner_instance_id: BUILTIN_POLICY_OWNER.to_string(),
             rule_id: rule_id.clone(),
             decision: RuleDecision::Local(EnforcementDecision::Allow),
             operation: FilePolicyOperation::Open.as_str().to_string(),
-            path: scope.display_base(),
+            path: execution_scope.display_base(),
         };
         let stored = StoredPolicyRule {
             owner_instance_id: BUILTIN_POLICY_OWNER.to_string(),
@@ -399,6 +276,8 @@ impl EnforcementRules {
             decision: FilePolicyDecision::Allow,
             operation: FilePolicyOperation::Open,
             scope,
+            execution_scope,
+            mark_directories: BTreeSet::new(),
             gray_target: None,
             priority: i32::MAX,
             enabled: true,
@@ -413,26 +292,17 @@ impl EnforcementRules {
         Ok(())
     }
 
-    fn validate_apply_items<F>(
+    fn validate_apply_items(
         &self,
         owner_instance_id: &str,
         grants: &[FilePolicyRulesApplyGrant],
         base_revision: u64,
         items: &[FilePolicyPatchItem],
-        gray_target_exists: &F,
-    ) -> Vec<FilePolicyApplyError>
-    where
-        F: Fn(u64) -> bool,
-    {
+    ) -> Vec<FilePolicyApplyError> {
         let mut errors = Vec::new();
         for (index, item) in items.iter().enumerate() {
-            if let Err(message) = self.validate_item(
-                owner_instance_id,
-                grants,
-                base_revision,
-                item,
-                gray_target_exists,
-            ) {
+            if let Err(message) = self.validate_item(owner_instance_id, grants, base_revision, item)
+            {
                 errors.push(FilePolicyApplyError {
                     item_index: index as u32,
                     code: "invalid-rule".to_string(),
@@ -443,26 +313,21 @@ impl EnforcementRules {
         errors
     }
 
-    fn validate_item<F>(
+    fn validate_item(
         &self,
         owner_instance_id: &str,
         grants: &[FilePolicyRulesApplyGrant],
         base_revision: u64,
         item: &FilePolicyPatchItem,
-        gray_target_exists: &F,
-    ) -> Result<(), String>
-    where
-        F: Fn(u64) -> bool,
-    {
+    ) -> Result<(), String> {
         match item.op {
             FilePolicyPatchOp::Upsert => {
                 let draft = item
                     .rule
                     .as_ref()
                     .ok_or_else(|| "upsert requires rule".to_string())?;
-                validate_draft_grant(grants, draft)?;
-                validate_gray_target(draft, gray_target_exists)?;
-                let draft_rule = StoredPolicyRule::from_draft(
+                FilePolicyValidation::validate_draft_grant(grants, draft)?;
+                let mut draft_rule = StoredPolicyRule::from_draft(
                     owner_instance_id,
                     draft,
                     item.rule_id.as_deref(),
@@ -470,7 +335,10 @@ impl EnforcementRules {
                     1,
                     self.next_rule_id,
                 )?;
-                draft_rule.validate_mark_directories()?;
+                FilePolicyValidation::validate_bound_grant(grants, &draft_rule)?;
+                if self.coverage == FileRuleCoverage::Fanotify {
+                    draft_rule.prepare_mark_directories()?;
+                }
                 self.validate_not_stale_upsert(owner_instance_id, base_revision, &draft_rule)?;
             }
             FilePolicyPatchOp::Delete | FilePolicyPatchOp::Enable | FilePolicyPatchOp::Disable => {
@@ -484,7 +352,16 @@ impl EnforcementRules {
                     .and_then(|rules| rules.get(rule_id))
                     .ok_or_else(|| format!("rule {rule_id} not found for owner"))?;
                 self.validate_not_stale_rule(base_revision, existing)?;
-                validate_rule_grant(grants, existing.decision, &existing.scope)?;
+                FilePolicyValidation::validate_rule_grant(
+                    grants,
+                    existing.decision,
+                    &existing.scope,
+                )?;
+                if item.op == FilePolicyPatchOp::Enable
+                    && self.coverage == FileRuleCoverage::Fanotify
+                {
+                    existing.collect_mark_directories()?;
+                }
             }
         }
         Ok(())
@@ -527,6 +404,7 @@ impl EnforcementRules {
     fn apply_item(
         &mut self,
         owner_instance_id: &str,
+        grants: &[FilePolicyRulesApplyGrant],
         item: FilePolicyPatchItem,
         mutation_revision: u64,
     ) -> Result<(), String> {
@@ -537,7 +415,7 @@ impl EnforcementRules {
                     .ok_or_else(|| "upsert requires rule".to_string())?;
                 let sequence = self.next_sequence();
                 let next_rule_id = self.next_available_host_rule_number(owner_instance_id);
-                let stored = StoredPolicyRule::from_draft(
+                let mut stored = StoredPolicyRule::from_draft(
                     owner_instance_id,
                     &draft,
                     item.rule_id.as_deref(),
@@ -545,6 +423,10 @@ impl EnforcementRules {
                     sequence,
                     next_rule_id,
                 )?;
+                FilePolicyValidation::validate_bound_grant(grants, &stored)?;
+                if self.coverage == FileRuleCoverage::Fanotify {
+                    stored.prepare_mark_directories()?;
+                }
                 if stored.is_host_auto() {
                     self.next_rule_id = next_rule_id.saturating_add(1);
                 }
@@ -598,7 +480,11 @@ impl EnforcementRules {
                 else {
                     return Err(format!("rule {rule_id} not found for owner"));
                 };
-                rule.enabled = item.op == FilePolicyPatchOp::Enable;
+                let enabled = item.op == FilePolicyPatchOp::Enable;
+                if enabled && self.coverage == FileRuleCoverage::Fanotify {
+                    rule.prepare_mark_directories()?;
+                }
+                rule.enabled = enabled;
                 rule.updated_revision = mutation_revision;
                 rule.updated_sequence = sequence;
             }
@@ -646,9 +532,11 @@ impl EnforcementRules {
                 .then_with(|| right.updated_sequence.cmp(&left.updated_sequence))
         });
         let mut mark_directories = BTreeSet::new();
-        for rule in &effective {
-            if rule.contributes_mark_directories() {
-                rule.scope.collect_mark_directories(&mut mark_directories)?;
+        if self.coverage == FileRuleCoverage::Fanotify {
+            for rule in &effective {
+                if rule.contributes_mark_directories() {
+                    mark_directories.extend(rule.mark_directories.iter().cloned());
+                }
             }
         }
         self.effective_rules = effective;

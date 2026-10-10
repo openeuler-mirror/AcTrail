@@ -333,15 +333,6 @@ pub(super) fn network_control_seccomp_syscall_as_str(
     }
 }
 
-pub(super) fn enforcement_seccomp_syscall_as_str(
-    value: &EnforcementSeccompSyscall,
-) -> &'static str {
-    match value {
-        EnforcementSeccompSyscall::Mkdir => "mkdir",
-        EnforcementSeccompSyscall::Rmdir => "rmdir",
-    }
-}
-
 pub(super) fn semantic_content_owner_as_str(value: SemanticContentOwner) -> &'static str {
     match value {
         SemanticContentOwner::HighestConsumed => "highest_consumed",
@@ -472,12 +463,6 @@ pub(super) fn sse_data_policy_as_str(value: SseDataPolicy) -> &'static str {
     match value {
         SseDataPolicy::Disabled => "disabled",
         SseDataPolicy::Preview => "preview",
-    }
-}
-
-pub(super) fn enforcement_backend_as_str(value: EnforcementBackend) -> &'static str {
-    match value {
-        EnforcementBackend::Fanotify => "fanotify",
     }
 }
 

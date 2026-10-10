@@ -99,7 +99,7 @@ class DynamicNetworkPolicyE2E:
         scope_verifier.require_selector_validation()
         self._start_agents()
         self._require_atomic_rejection()
-        self._require_overlap_rejection()
+        self._require_endpoint_precedence()
         self._require_live_local_updates()
         self._require_reusable_cache()
         self._require_timeout_and_overload()
@@ -319,34 +319,41 @@ class DynamicNetworkPolicyE2E:
         if self._source_revision() != before:
             raise AssertionError("failed network Configuration Test changed daemon revision")
 
-    def _require_overlap_rejection(self) -> None:
+    def _require_endpoint_precedence(self) -> None:
         assert self.api is not None
-        before = self._source_revision()
         initial = self.api.config(INSTANCE).get("config")
-        candidate = {
-            "rules": [
-                {
-                    "rule_id": "overlap-all-ports",
-                    "decision": "deny",
-                    "remote": self.remote_scope,
-                },
-                {
-                    "rule_id": "overlap-exact-port",
-                    "decision": "allow",
-                    "remote": self.endpoint,
-                },
-            ]
-        }
-        validation = self.api.validate_config(INSTANCE, candidate)
-        errors = validation.get("errors")
-        if validation.get("valid") is not False or not isinstance(errors, list):
-            raise AssertionError(f"overlapping network selectors were accepted: {validation}")
-        if not any("overlap" in str(error) for error in errors):
-            raise AssertionError(f"overlap rejection reason is missing: {validation}")
-        if self.api.config(INSTANCE).get("config") != initial:
-            raise AssertionError("overlap validation changed plugin memory")
-        if self._source_revision() != before:
-            raise AssertionError("overlap validation changed daemon revision")
+        for exact, wildcard in (("allow", "deny"), ("deny", "allow")):
+            candidate = {"rules": [
+                {"rule_id": "overlap-all-ports", "decision": wildcard, "remote": self.remote_scope},
+                {"rule_id": "overlap-exact-port", "decision": exact, "remote": self.endpoint},
+            ]}
+            before = (
+                self.api.config(INSTANCE).get("config"),
+                self._plugin_command(["rule", "list"]), self._source_revision(),
+            )
+            validation = self.api.validate_config(INSTANCE, candidate)
+            if validation.get("valid") is not True:
+                raise AssertionError(f"same-owner endpoint exception was rejected: {validation}")
+            after = (
+                self.api.config(INSTANCE).get("config"),
+                self._plugin_command(["rule", "list"]), self._source_revision(),
+            )
+            if after != before:
+                raise AssertionError("endpoint exception validation changed policy state")
+            updated = self.api.update_config(INSTANCE, candidate)
+            if updated.get("config") != candidate:
+                raise AssertionError(f"endpoint exception publication changed config: {updated}")
+            for remote, decision, rule_id in (
+                (self.endpoint, exact, "overlap-exact-port"),
+                (self.secondary_endpoint, wildcard, "overlap-all-ports"),
+            ):
+                output = self._plugin_command(["rule", "dry-run", remote])
+                if any(field not in output.split() for field in (
+                    f"decision={decision}", f"rule_id={rule_id}", f"owner={INSTANCE}",
+                )):
+                    raise AssertionError(f"endpoint exception matched the wrong rule: {output}")
+        if self.api.update_config(INSTANCE, initial).get("config") != initial:
+            raise AssertionError("restoring network policy changed its initial configuration")
 
     def _require_live_local_updates(self) -> None:
         self._update_rule("deny")

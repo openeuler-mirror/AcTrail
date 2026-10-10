@@ -47,8 +47,13 @@ impl OperatorConfigInitializer {
                     !matches!(
                         request.capability,
                         Capability::EnforcementFilePermissionFanotify
+                            | Capability::EnforcementFileMkdirSeccomp
+                            | Capability::EnforcementFileRmdirSeccomp
                             | Capability::EnforcementCommandExecutionSeccomp
                             | Capability::EnforcementNetworkConnectSeccomp
+                            | Capability::EnforcementFilePermissionLsm
+                            | Capability::EnforcementCommandExecutionLsm
+                            | Capability::EnforcementNetworkConnectLsm
                     )
                 });
                 config = config.patch(include_str!("profile.toml"))?;

@@ -12,7 +12,7 @@ use plugin_system::DecisionScope;
 use process_identity::ProcessIdentityManager;
 
 use super::request::{NetworkConnectContext, NetworkRemote};
-use super::rules::StoredNetworkRule;
+use access_control::policy::network::StoredNetworkRule;
 
 pub(super) const NETWORK_CONTROL_COLLECTOR_NAME: &str = "network-control";
 

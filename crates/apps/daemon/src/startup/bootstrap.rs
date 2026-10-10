@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config_core::daemon::{
-    AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig, CommandControlConfig,
-    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
-    HandObservationConfig, IdleDetectionConfig, NetworkControlConfig, PayloadConfig,
-    PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig, SandboxAlertsConfig,
-    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
-    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    WorkloadDiagnosticsConfig,
+    AccessControlConfig, AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig,
+    CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
+    FileObservationConfig, HandObservationConfig, IdleDetectionConfig, NetworkControlConfig,
+    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
+    SandboxAlertsConfig, SandboxAlertsSynchronousConfig, SandboxEvidenceConfig,
+    SandboxEvidenceSynchronousConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    StorageRetentionConfig, TraceFinalizationConfig, WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
@@ -91,6 +91,7 @@ impl LocalDaemonServer {
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
+        access_control: AccessControlConfig,
         enforcement: EnforcementConfig,
         command_control: CommandControlConfig,
         network_control: NetworkControlConfig,
@@ -117,6 +118,7 @@ impl LocalDaemonServer {
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
+            access_control,
             enforcement,
             command_control,
             network_control,
@@ -162,6 +164,7 @@ impl LocalDaemonServer {
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics_config: WorkloadDiagnosticsConfig,
+        access_control: AccessControlConfig,
         enforcement: EnforcementConfig,
         command_control: CommandControlConfig,
         network_control: NetworkControlConfig,
@@ -189,6 +192,7 @@ impl LocalDaemonServer {
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
+            access_control,
             enforcement,
             command_control,
             network_control,

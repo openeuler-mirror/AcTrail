@@ -31,6 +31,8 @@ fn is_ebpf_only_capability(capability: &Capability) -> bool {
             | Capability::StdioChunk
             | Capability::SocketPlaintextPayload
             | Capability::EnforcementFilePermissionFanotify
+            | Capability::EnforcementFileMkdirSeccomp
+            | Capability::EnforcementFileRmdirSeccomp
     )
 }
 
@@ -40,6 +42,8 @@ fn is_seccomp_only_capability(capability: &Capability) -> bool {
         capability,
         Capability::EnforcementCommandExecutionSeccomp
             | Capability::EnforcementNetworkConnectSeccomp
+            | Capability::EnforcementFileMkdirSeccomp
+            | Capability::EnforcementFileRmdirSeccomp
     )
 }
 
@@ -79,12 +83,28 @@ impl CaptureProfile {
     }
 
     pub fn supports_host_ebpf_observation(&self) -> bool {
+        self.requires_lsm_access_control()
+            || self.capabilities.iter().any(|request| {
+                request.mode != RequestMode::Disabled
+                    && is_ebpf_only_capability(&request.capability)
+            })
+    }
+
+    /// LSM enforcement requires the shared kernel process identity binding.
+    pub fn requires_lsm_access_control(&self) -> bool {
         self.capabilities.iter().any(|request| {
-            request.mode != RequestMode::Disabled && is_ebpf_only_capability(&request.capability)
+            request.mode != RequestMode::Disabled
+                && matches!(
+                    request.capability,
+                    Capability::EnforcementFilePermissionLsm
+                        | Capability::EnforcementCommandExecutionLsm
+                        | Capability::EnforcementNetworkConnectLsm
+                )
         })
     }
 
     pub fn for_permissions(&self, permissions: DeploymentPermissions) -> Self {
+        let lsm_control = self.requires_lsm_access_control();
         let mut profile = self.clone();
         profile.name = ProfileName::new(format!(
             "{}{}",
@@ -92,7 +112,9 @@ impl CaptureProfile {
             permissions.profile_suffix()
         ));
         profile.capabilities.retain(|request| {
-            (permissions.host_ebpf || !is_ebpf_only_capability(&request.capability))
+            (permissions.host_ebpf
+                || !is_ebpf_only_capability(&request.capability)
+                || (lsm_control && request.capability == Capability::ProcLifecycle))
                 && (permissions.seccomp_notify || !is_seccomp_only_capability(&request.capability))
                 && (!matches!(
                     request.capability,
