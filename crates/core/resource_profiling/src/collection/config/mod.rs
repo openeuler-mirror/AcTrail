@@ -1,0 +1,2 @@
+mod resource_collection_config;
+pub use resource_collection_config::ResourceCollectionConfig;

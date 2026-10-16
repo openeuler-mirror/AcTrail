@@ -36,30 +36,30 @@ use super::super::{
     DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
     DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
     EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy, EnforcementScope,
-    ExistingContainerCgroups, FileBulkReadObservationConfig, FileCollectionConfig,
-    FileIoCollectionConfig, FileIoSummaryConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
-    Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention,
-    IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
-    L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig,
-    LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmResponseContentRetention,
-    LlmStreamClassifierConfig, LlmToolCallRetention, LlmToolResultContentExportRetention,
-    LlmTrajectoryConfig, LlmUsageRetention, McpJsonRpcContentRetention, MemlockRlimit,
-    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
-    PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    FileBulkReadObservationConfig, FileCollectionConfig, FileIoCollectionConfig,
+    FileIoSummaryConfig, FileMetadataRetention, FileObservationConfig, FileRawEventRetention,
+    FileTtyObservationConfig, FsEnumerateObservationConfig, Http2DataContentRetention,
+    HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention, IpcLineageConfig,
+    L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention,
+    L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig, LlmRequestBodyExportRetention,
+    LlmRequestContentRetention, LlmResponseContentRetention, LlmStreamClassifierConfig,
+    LlmToolCallRetention, LlmToolResultContentExportRetention, LlmTrajectoryConfig,
+    LlmUsageRetention, McpJsonRpcContentRetention, MemlockRlimit, NetworkControlConfig,
+    NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig,
+    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
     PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
     PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
     PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
     PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
-    PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall, ResourceMetricsConfig,
-    ResourceMetricsMode, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
-    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    WebAlertsConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig,
+    SemanticContentOwner, SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
+    SseEventContentRetention, StartupPluginFailurePolicy, StartupPluginLoadConfig,
+    StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig,
+    WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
-    validate_ipc_lineage_config, validate_resource_metrics_config, validate_seccomp_config,
+    validate_ipc_lineage_config, validate_seccomp_config,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -116,7 +116,7 @@ use sandbox_alerts::*;
 use sandbox_evidence::*;
 use semantic::*;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct OperatorDocument {
     control: ControlDocument,
@@ -139,7 +139,7 @@ pub(super) struct OperatorDocument {
     idle_detection: IdleDetectionDocument,
     file_observation: FileObservationDocument,
     application: ApplicationDocument,
-    resource_metrics: ResourceMetricsDocument,
+    resource_profiling: toml::Table,
     provider: ProviderDocument,
     access_control: AccessControlConfig,
     enforcement: EnforcementDocument,
@@ -171,7 +171,7 @@ impl Default for OperatorDocument {
             idle_detection: IdleDetectionDocument::default(),
             file_observation: FileObservationDocument::default(),
             application: ApplicationDocument::default(),
-            resource_metrics: ResourceMetricsDocument::default(),
+            resource_profiling: toml::Table::new(),
             provider: ProviderDocument::default(),
             access_control: AccessControlConfig::default(),
             enforcement: EnforcementDocument::default(),
@@ -186,6 +186,20 @@ impl ConfigModel for OperatorDocument {
     const MODEL_NAME: &'static str = "operator";
 
     fn validate(&self) -> Result<(), ConfigError> {
+        let profiling =
+            resource_profiling::ResourceProfilingConfig::parse(&self.resource_profiling)
+                .map_err(ConfigError::new)?;
+        if !profiling.workload_enabled()
+            && self
+                .capture
+                .capabilities
+                .iter()
+                .any(|capability| capability == "resource-metrics")
+        {
+            return Err(ConfigError::new(
+                "capture requires resource-metrics while resource_profiling.collection.workload is disabled",
+            ));
+        }
         if self.capture.capabilities.is_empty() {
             return Err(ConfigError::new("capture.capabilities must not be empty"));
         }
@@ -199,7 +213,10 @@ impl OperatorDocument {
     }
 
     pub(super) fn default_toml() -> Result<String, String> {
-        Self::default().to_toml().map_err(|error| error.to_string())
+        let mut document = Self::default();
+        document.resource_profiling =
+            resource_profiling::ResourceProfilingConfig::default_document()?;
+        document.to_toml().map_err(|error| error.to_string())
     }
 
     pub(super) fn from_config(config: &OperatorConfig) -> Self {
@@ -369,33 +386,7 @@ impl OperatorDocument {
             semantic_retention: SemanticRetentionDocument::from_config(&config.semantic_retention),
             file_observation: FileObservationDocument::from_config(&config.file_observation),
             application: ApplicationDocument::from_config(&config.application_protocol),
-            resource_metrics: ResourceMetricsDocument {
-                enabled: config.resource_metrics.enabled,
-                mode: config.resource_metrics.mode.as_str().to_string(),
-                existing_container_cgroups: config
-                    .resource_metrics
-                    .existing_container_cgroups
-                    .as_str()
-                    .to_string(),
-                external_cgroup_failure_threshold: config
-                    .resource_metrics
-                    .external_cgroup_failure_threshold,
-                interval_ms: config.resource_metrics.interval_ms,
-                include_children: config.resource_metrics.include_children,
-                include_system: config.resource_metrics.include_system,
-                cgroup_root: config.resource_metrics.cgroup_root.display().to_string(),
-                finalization_timeout_ms: config.resource_metrics.finalization_timeout_ms,
-                orphan_limit: config.resource_metrics.orphan_limit,
-                cpu_alert_percent_millis: disabled_or_u64_as_string(
-                    config.resource_metrics.cpu_alert_percent_millis,
-                ),
-                memory_alert_rss_kb: disabled_or_u64_as_string(
-                    config.resource_metrics.memory_alert_rss_kb,
-                ),
-                memory_alert_current_bytes: disabled_or_u64_as_string(
-                    config.resource_metrics.memory_alert_current_bytes,
-                ),
-            },
+            resource_profiling: config.resource_profiling.clone(),
             provider: ProviderDocument {
                 rules_enabled: config.provider_rule_set.is_some(),
                 rules_path: config
@@ -508,8 +499,6 @@ impl OperatorDocument {
             payload_config.socket.enabled,
             &capabilities,
         )?;
-        let resource_metrics = self.resource_metrics.to_config()?;
-        validate_resource_metrics_config(&resource_metrics, &capabilities)?;
         let enforcement = self.enforcement.to_config()?;
         validate_enforcement_config(&enforcement, &capabilities)?;
         let command_control = self.command_control.to_config()?;
@@ -641,7 +630,7 @@ impl OperatorDocument {
             idle_detection: self.idle_detection.to_config()?,
             file_observation: self.file_observation.to_config()?,
             application_protocol,
-            resource_metrics,
+            resource_profiling: self.resource_profiling.clone(),
             trace_finalization,
             provider_rule_set: self.provider.to_config(),
             access_control: self.access_control.clone(),

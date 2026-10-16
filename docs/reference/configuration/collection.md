@@ -111,6 +111,10 @@ Stdio 的 stdin/stdout/stderr 分别有 capture 和 storage mode；当前模板�
 
 ## `[semantic_retention]`
 
+HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: br`，再交给 JSON/SSE 解析。压缩的 `text/event-stream` 和 `application/json` 正文按其 Content-Type 保留。TLS 裁剪摘要作为截断标记传递，不参与原始流拼接。
+
+`semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 分别限制原始 HTTP 流缓冲和解码后的正文大小。内容编码损坏、无法解码或超出容量时，仅隔离当前流并记录诊断。
+
 NoOp 存储不准备纯落盘事件字段，也不执行记录批次的持久化事务和存储克隆。已配置的语义分析与有效在线导出继续运行；不能以不落盘代替关闭分析。文件事件被摘要接管后，不再预先构造不会输出的独立修改动作。
 
 `projection_enabled` 默认 `true`。设为 `false` 时，停止进程、命令、文件、HTTP、LLM、MCP、工具和治理事件的语义动作及关联投影，同时关闭相应正文组装、投影诊断和结束时输出。进程身份注册、trace 生命周期及原始事件记录继续运行；payload 采集、应用协议事件解析和原始 payload 保留由各自配置控制。该开关在 daemon 启动时生效。

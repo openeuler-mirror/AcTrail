@@ -20,6 +20,8 @@ mod alerts;
 mod plugins;
 #[path = "http/query.rs"]
 mod query;
+#[path = "http/resources.rs"]
+mod resources;
 use query::{
     parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query, parse_llm_nav_mode,
     parse_llm_request_content_node_query, parse_llm_request_content_query, parse_llm_rows_query,
@@ -336,6 +338,9 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         return Ok(render::asset(path)
             .map(Response::static_asset)
             .unwrap_or_else(|| Response::text(STATUS_NOT_FOUND, "not found")));
+    }
+    if let Some(response) = resources::ResourceHttp::new(context).route(path, query) {
+        return response;
     }
     if let Some(response) =
         alerts::AlertHttp::new(&context.storage, context.alerts).route(path, query)

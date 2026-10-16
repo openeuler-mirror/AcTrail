@@ -14,8 +14,16 @@ static __always_inline int emit_socket_payload_completion(
     __u64 completed_size
 ) {
     __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+    struct task_struct *task = actrail_bpf_get_current_task();
+    __u32 observer_pid = observer_tgid_for_task(task);
+    __u32 observer_tid = observer_tid_for_task(task);
     struct actrail_socket_payload_completion_event *event;
     __u64 sequence;
+
+    /* seccomp notifications use the listener's PID namespace, not kernel IDs. */
+    if (!observer_pid || !observer_tid) {
+        return 0;
+    }
 
     event = actrail_event_reserve(sizeof(*event));
     if (!event) {
@@ -24,8 +32,8 @@ static __always_inline int emit_socket_payload_completion(
     }
 
     event->kind = ACTRAIL_SOCKET_PAYLOAD_COMPLETION;
-    event->pid = tgid;
-    event->tid = tid;
+    event->observer_tgid = observer_pid;
+    event->observer_tid = observer_tid;
     event->direction = op->direction;
     event->trace_id = op->trace_id;
     event->observed_ktime_ns = op->started_ktime_ns;
@@ -44,8 +52,8 @@ static __always_inline int emit_socket_payload_completion(
     event->flags = 0;
     event->syscall = op->syscall;
     event->fd_generation = op->fd_generation;
-    event->host_pid = kernel_pid_tgid >> 32;
-    event->host_tid = (__u32)kernel_pid_tgid;
+    event->kernel_tgid = kernel_pid_tgid >> 32;
+    event->kernel_tid = (__u32)kernel_pid_tgid;
 
     actrail_event_submit(ctx, event);
     return 0;

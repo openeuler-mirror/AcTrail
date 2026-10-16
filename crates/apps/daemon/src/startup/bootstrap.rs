@@ -10,10 +10,10 @@ use config_core::daemon::{
     AccessControlConfig, AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig,
     CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
     FileObservationConfig, HandObservationConfig, IdleDetectionConfig, NetworkControlConfig,
-    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig,
-    SandboxAlertsConfig, SandboxAlertsSynchronousConfig, SandboxEvidenceConfig,
-    SandboxEvidenceSynchronousConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    StorageRetentionConfig, TraceFinalizationConfig, WorkloadDiagnosticsConfig,
+    PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig, SandboxAlertsConfig,
+    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    WorkloadDiagnosticsConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
@@ -83,7 +83,7 @@ impl LocalDaemonServer {
         idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
-        resource_metrics: ResourceMetricsConfig,
+        resource_metrics: resource_profiling::ResourceProfilingConfig,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         alert_forwarding_config: AlertForwardingConfig,
@@ -156,7 +156,7 @@ impl LocalDaemonServer {
         idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
-        resource_metrics: ResourceMetricsConfig,
+        resource_metrics: resource_profiling::ResourceProfilingConfig,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         alert_forwarding_config: AlertForwardingConfig,

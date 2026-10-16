@@ -16,6 +16,7 @@ use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
 use super::http::{HTTP1_PROTOCOL_HINT, content_length_admission};
+use super::identity::SocketCaptureKey;
 use super::request::{SocketReadRequest, fd_is_socket, socket_symbol, tgid_from_status};
 use crate::services::payload_gate::{
     socket_payload_prefix_is_http_candidate, socket_payload_prefix_is_tls_hello,
@@ -83,21 +84,36 @@ impl SeccompSocketService {
         if !membership.capture_enabled {
             return Ok(());
         }
-        let fd_state = collector
-            .lookup_socket_fd_state(tgid, request.fd)
-            .map_err(|error| ControlError::new(error.stage, error.message))?;
-        if fd_state.is_some_and(|state| state.tls_owned()) {
+        let Some((kernel_pid, pid_generation)) = collector.socket_capture_process(tgid, trace_id)
+        else {
+            return Ok(());
+        };
+        let Some(fd_state) = collector
+            .lookup_socket_fd_state(kernel_pid, request.fd)
+            .map_err(|error| ControlError::new(error.stage, error.message))?
+        else {
+            return Ok(());
+        };
+        if fd_state.tls_owned() {
             return Ok(());
         }
-        let fd_generation = fd_state.map_or(0, |state| state.generation());
+        let fd_generation = fd_state.generation();
         let stream_key = SocketContinuationKey {
             trace_id: trace_id.get(),
-            pid: tgid,
+            kernel_tgid: kernel_pid,
+            pid_generation,
             fd: request.fd,
             fd_generation,
             direction: SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
         };
-        let capture_key = SocketCaptureKey::from_request(tgid, notification.pid, &request);
+        let capture_key = SocketCaptureKey::from_request(
+            trace_id,
+            pid_generation,
+            fd_generation,
+            kernel_pid,
+            notification.pid,
+            &request,
+        );
         let linear_payload_range = request.linear_payload_range();
         let prefix_size = self
             .http_sniff_max_bytes
@@ -108,12 +124,10 @@ impl SeccompSocketService {
             return Ok(());
         };
         if socket_payload_prefix_is_tls_hello(&prefix) {
-            if let Some(fd_state) = fd_state {
-                collector
-                    .mark_socket_fd_tls_owned(tgid, request.fd, fd_state.generation())
-                    .map_err(|error| ControlError::new(error.stage, error.message))?;
-                self.continuations.remove(&stream_key);
-            }
+            collector
+                .mark_socket_fd_tls_owned(kernel_pid, request.fd, fd_generation)
+                .map_err(|error| ControlError::new(error.stage, error.message))?;
+            self.continuations.remove(&stream_key);
             return Ok(());
         }
         let reached_sniff_limit =
@@ -234,7 +248,7 @@ impl SeccompSocketService {
                     direction: PayloadDirection::Outbound,
                     stream_key: PayloadStreamKey::new(format!(
                         "socket:{}:{}:{}",
-                        completion.pid, completion.fd, completion.fd_generation
+                        completion.kernel_tgid, completion.fd, completion.fd_generation
                     )),
                     sequence: completion.sequence,
                     original_size: if truncation == PayloadTruncationState::Truncated {
@@ -268,6 +282,7 @@ impl SeccompSocketService {
     }
 
     pub(crate) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.captures.retain(|key, _| key.trace_id != trace_id);
         self.continuations
             .retain(|key, _| key.trace_id != trace_id.get());
     }
@@ -622,7 +637,8 @@ impl SocketCaptureUpdate {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct SocketContinuationKey {
     trace_id: u64,
-    pid: u32,
+    kernel_tgid: u32,
+    pid_generation: u64,
     fd: u32,
     fd_generation: u32,
     direction: u32,
@@ -643,40 +659,6 @@ impl HttpBodyContinuation {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct SocketCaptureKey {
-    pid: u32,
-    tid: u32,
-    fd: u32,
-    syscall: u32,
-    buffer_ptr: u64,
-    requested_size: u64,
-}
-
-impl SocketCaptureKey {
-    fn from_request(pid: u32, tid: u32, request: &SocketReadRequest) -> Self {
-        Self {
-            pid,
-            tid,
-            fd: request.fd,
-            syscall: request.syscall,
-            buffer_ptr: request.key_buffer_ptr,
-            requested_size: request.key_requested_size,
-        }
-    }
-
-    fn from_completion(completion: &SocketPayloadCompletion) -> Self {
-        Self {
-            pid: completion.pid,
-            tid: completion.tid,
-            fd: completion.fd,
-            syscall: completion.syscall,
-            buffer_ptr: completion.buffer_ptr,
-            requested_size: completion.requested_size,
-        }
-    }
-}
-
 fn linear_suffix_offset(
     initial_range: Option<(u64, u64)>,
     current_range: Option<(u64, u64)>,
@@ -692,194 +674,4 @@ fn linear_suffix_offset(
 }
 
 #[cfg(test)]
-mod tests {
-    use ebpf_collector::SOCKET_PAYLOAD_SYSCALL_SENDTO;
-
-    use super::*;
-
-    #[test]
-    fn captures_linear_suffix_before_initial_completion_is_applied() {
-        let mut service = test_service();
-        let stream_key = test_stream_key();
-        let body_len = 120_499;
-        let header = request_header(body_len, 961);
-        let request_size = header.len() as u64 + body_len;
-        let initial_ptr = 0x25_724f_40f00;
-        let initial_key = test_capture_key(initial_ptr, request_size);
-        let initial_update = service.http_message_capture_update(
-            &stream_key,
-            stream_key.fd_generation,
-            &initial_key,
-            Some((initial_ptr, request_size)),
-            &header,
-        );
-
-        // The first notification installs provisional state before the syscall is resumed.
-        service.prepare_capture_update(&initial_update);
-
-        // This is the ordering from the reported trace: the retry notification is drained
-        // before the first syscall completion is polled from the BPF ring buffer.
-        let first_completed = 89_060;
-        let suffix_size = request_size - first_completed;
-        let suffix_update = service
-            .continuation_capture_update(
-                &stream_key,
-                Some((initial_ptr + first_completed, suffix_size)),
-            )
-            .expect("the contiguous suffix must be captured while completion is pending");
-        match &suffix_update {
-            SocketCaptureUpdate::Continuation {
-                read_limit,
-                body_offset,
-                header_bytes_remaining,
-                ..
-            } => {
-                assert_eq!(*read_limit, suffix_size);
-                assert_eq!(*body_offset, Some(first_completed - header.len() as u64));
-                assert_eq!(*header_bytes_remaining, 0);
-            }
-            other => panic!("expected continuation update, got {other:?}"),
-        }
-
-        service
-            .apply_capture_update(
-                initial_update,
-                first_completed,
-                first_completed,
-                first_completed,
-            )
-            .unwrap();
-        let continuation = service
-            .continuations
-            .get(&stream_key)
-            .expect("the suffix is still outstanding");
-        assert_eq!(
-            continuation.confirmed_body_end,
-            first_completed - header.len() as u64
-        );
-
-        service
-            .apply_capture_update(suffix_update, suffix_size, suffix_size, suffix_size)
-            .unwrap();
-        assert!(!service.continuations.contains_key(&stream_key));
-    }
-
-    #[test]
-    fn captures_relocated_suffix_while_initial_completion_is_pending() {
-        let mut service = test_service();
-        let stream_key = test_stream_key();
-        let body_len = 135_200;
-        let header = request_header(body_len, 961);
-        let request_size = header.len() as u64 + body_len;
-        let initial_ptr = 0x25_724f_40f00;
-        let initial_key = test_capture_key(initial_ptr, request_size);
-        let initial_update = service.http_message_capture_update(
-            &stream_key,
-            stream_key.fd_generation,
-            &initial_key,
-            Some((initial_ptr, request_size)),
-            &header,
-        );
-        service.prepare_capture_update(&initial_update);
-
-        let first_completed = 89_060;
-        let suffix_size = request_size - first_completed;
-        let suffix_update = service
-            .continuation_capture_update(&stream_key, Some((0x99_0000, suffix_size)))
-            .expect("same-stream body continuation must not depend on buffer identity");
-        match &suffix_update {
-            SocketCaptureUpdate::Continuation {
-                read_limit,
-                body_offset,
-                header_bytes_remaining,
-                ..
-            } => {
-                assert_eq!(*read_limit, body_len);
-                assert_eq!(*body_offset, None);
-                assert_eq!(*header_bytes_remaining, 0);
-            }
-            other => panic!("expected continuation update, got {other:?}"),
-        }
-
-        service
-            .apply_capture_update(
-                initial_update,
-                first_completed,
-                first_completed,
-                first_completed,
-            )
-            .unwrap();
-        service
-            .apply_capture_update(suffix_update, suffix_size, suffix_size, suffix_size)
-            .unwrap();
-        assert!(!service.continuations.contains_key(&stream_key));
-    }
-
-    #[test]
-    fn same_key_captures_complete_in_notification_order() {
-        let mut service = test_service();
-        let key = test_capture_key(0x25_724f_40f00, 2);
-        service.queue_capture(key.clone(), test_captured_operation(vec![1]));
-        service.queue_capture(key.clone(), test_captured_operation(vec![2]));
-
-        assert_eq!(service.take_capture(&key).unwrap().bytes, vec![1]);
-        assert!(service.captures.contains_key(&key));
-        assert_eq!(service.take_capture(&key).unwrap().bytes, vec![2]);
-        assert!(!service.captures.contains_key(&key));
-    }
-
-    fn test_service() -> SeccompSocketService {
-        SeccompSocketService {
-            enabled: true,
-            max_operation_bytes: 4 * 1024 * 1024,
-            max_segment_bytes: 4095,
-            http_sniff_max_bytes: 65_536,
-            max_pending_operations: 1024,
-            max_stream_states: 1024,
-            captures: BTreeMap::new(),
-            continuations: BTreeMap::new(),
-        }
-    }
-
-    fn test_stream_key() -> SocketContinuationKey {
-        SocketContinuationKey {
-            trace_id: 1,
-            pid: 2_715_018,
-            fd: 19,
-            fd_generation: 11,
-            direction: SOCKET_PAYLOAD_DIRECTION_OUTBOUND,
-        }
-    }
-
-    fn test_capture_key(buffer_ptr: u64, requested_size: u64) -> SocketCaptureKey {
-        SocketCaptureKey {
-            pid: 2_715_018,
-            tid: 2_715_018,
-            fd: 19,
-            syscall: SOCKET_PAYLOAD_SYSCALL_SENDTO,
-            buffer_ptr,
-            requested_size,
-        }
-    }
-
-    fn test_captured_operation(bytes: Vec<u8>) -> CapturedSocketOperation {
-        CapturedSocketOperation {
-            trace_id: TraceId::new(1),
-            process: ProcessObservation::default(),
-            bytes,
-            protocol_hint: None,
-            update: SocketCaptureUpdate::None,
-        }
-    }
-
-    fn request_header(content_length: u64, header_len: usize) -> Vec<u8> {
-        let mut header =
-            format!("POST /v1/messages HTTP/1.1\r\nContent-Length: {content_length}\r\nX-Pad: ")
-                .into_bytes();
-        assert!(header.len() + 4 <= header_len);
-        header.resize(header_len - 4, b'x');
-        header.extend_from_slice(b"\r\n\r\n");
-        assert_eq!(header.len(), header_len);
-        header
-    }
-}
+mod tests;

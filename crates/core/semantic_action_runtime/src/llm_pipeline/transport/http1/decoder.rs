@@ -1,5 +1,6 @@
 //! Stateful HTTP/1 wire decoder.
 
+use super::content_decoder::Http1ContentDecoder;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ pub(in crate::llm_pipeline) enum Http1Direction {
 pub(in crate::llm_pipeline) enum Http1DecodeFailure {
     BufferCapacity,
     InvalidContentLength,
+    InvalidContentEncoding,
     InvalidHead,
     InvalidChunkSize,
     InvalidChunkTerminator,
@@ -26,6 +28,7 @@ impl Http1DecodeFailure {
         match self {
             Self::BufferCapacity => "buffer_capacity",
             Self::InvalidContentLength => "invalid_content_length",
+            Self::InvalidContentEncoding => "invalid_content_encoding",
             Self::InvalidHead => "invalid_head",
             Self::InvalidChunkSize => "invalid_chunk_size",
             Self::InvalidChunkTerminator => "invalid_chunk_terminator",
@@ -103,7 +106,7 @@ struct ActiveMessage {
     status_code: Option<String>,
     reason: Option<String>,
     headers_text: String,
-    body: Option<Arc<Vec<u8>>>,
+    body: Option<Http1ContentDecoder>,
     body_start: usize,
     wire_cursor: usize,
     framing: BodyFraming,
@@ -147,7 +150,10 @@ impl Http1Decoder {
                 status_code: None,
                 reason: None,
                 headers_text: String::new(),
-                body: Some(Arc::new(Vec::new())),
+                body: Some(
+                    Http1ContentDecoder::new("", max_buffer_bytes)
+                        .expect("identity content encoding"),
+                ),
                 body_start: 0,
                 wire_cursor: 0,
                 framing: BodyFraming::Chunked,
@@ -185,7 +191,10 @@ impl Http1Decoder {
         let DecodeState::ReadingBody(active) = &mut self.state else {
             return Ok(None);
         };
-        Self::advance_body(active, wire, end_of_stream)?;
+        if let Err(failure) = Self::advance_body(active, wire, end_of_stream) {
+            self.state = DecodeState::Failed(failure);
+            return Err(failure);
+        }
         Ok(Some(active.snapshot()))
     }
 
@@ -204,6 +213,14 @@ impl Http1Decoder {
             .map_err(|_| Http1DecodeFailure::InvalidHead)?
             .to_string();
         let parsed = ParsedHead::parse(self.direction, &headers_text)?;
+        let content = Http1ContentDecoder::new(
+            if parsed.framing == BodyFraming::None {
+                ""
+            } else {
+                &headers_text
+            },
+            self.max_buffer_bytes,
+        )?;
         self.state = DecodeState::ReadingBody(ActiveMessage {
             protocol: parsed.protocol,
             method: parsed.method,
@@ -217,10 +234,11 @@ impl Http1Decoder {
             // need separate owned storage.
             body: if self.direction == Http1Direction::Request
                 && matches!(parsed.framing, BodyFraming::Fixed(_))
+                && content.is_identity()
             {
                 None
             } else {
-                Some(Arc::new(Vec::new()))
+                Some(content)
             },
             body_start,
             wire_cursor: body_start,
@@ -247,14 +265,19 @@ impl Http1Decoder {
                     .checked_add(expected)
                     .ok_or(Http1DecodeFailure::BufferCapacity)?;
                 let available_end = wire.len().min(expected_end);
-                active.copy_wire_delta(wire, available_end);
+                active.copy_wire_delta(wire, available_end)?;
                 active.complete = active.wire_cursor == expected_end;
             }
             BodyFraming::UntilEof => {
-                active.copy_wire_delta(wire, wire.len());
+                active.copy_wire_delta(wire, wire.len())?;
                 active.complete = end_of_stream;
             }
             BodyFraming::Chunked => Self::advance_chunked(active, wire)?,
+        }
+        if active.complete
+            && let Some(body) = &mut active.body
+        {
+            body.finish()?;
         }
         Ok(())
     }
@@ -277,7 +300,13 @@ impl Http1Decoder {
                         .trim();
                     let size = match usize::from_str_radix(size_text, 16) {
                         Ok(size) => size,
-                        Err(_) if sse_field_line(&wire[active.wire_cursor..line_end]) => {
+                        Err(_)
+                            if active
+                                .body
+                                .as_ref()
+                                .is_none_or(Http1ContentDecoder::is_identity)
+                                && sse_field_line(&wire[active.wire_cursor..line_end]) =>
+                        {
                             // Some L0 sources expose a de-chunked body while
                             // retaining the original Transfer-Encoding header.
                             // Switch only after one complete, decisive SSE
@@ -285,9 +314,9 @@ impl Http1Decoder {
                             active.framing = BodyFraming::UntilEof;
                             active.wire_cursor = active.body_start;
                             if let Some(body) = &mut active.body {
-                                Arc::make_mut(body).clear();
+                                body.clear_identity();
                             }
-                            active.copy_wire_delta(wire, wire.len());
+                            active.copy_wire_delta(wire, wire.len())?;
                             return Ok(());
                         }
                         Err(_) => return Err(Http1DecodeFailure::InvalidChunkSize),
@@ -305,7 +334,7 @@ impl Http1Decoder {
                     let available = wire.len().saturating_sub(active.wire_cursor);
                     let copied = available.min(remaining);
                     let end = active.wire_cursor + copied;
-                    active.copy_wire_delta(wire, end);
+                    active.copy_wire_delta(wire, end)?;
                     let remaining = remaining - copied;
                     if remaining != 0 {
                         active.chunk = ChunkState::Data { remaining };
@@ -366,14 +395,15 @@ pub(in crate::llm_pipeline) fn raw_chunked_candidate(bytes: &[u8]) -> bool {
 }
 
 impl ActiveMessage {
-    fn copy_wire_delta(&mut self, wire: &[u8], end: usize) {
+    fn copy_wire_delta(&mut self, wire: &[u8], end: usize) -> Result<(), Http1DecodeFailure> {
         if end <= self.wire_cursor {
-            return;
+            return Ok(());
         }
         if let Some(body) = &mut self.body {
-            Arc::make_mut(body).extend_from_slice(&wire[self.wire_cursor..end]);
+            body.append(&wire[self.wire_cursor..end])?;
         }
         self.wire_cursor = end;
+        Ok(())
     }
 
     fn snapshot(&self) -> DecodedHttp1Message {
@@ -386,7 +416,7 @@ impl ActiveMessage {
             reason: self.reason.clone(),
             headers_text: self.headers_text.clone(),
             body: match &self.body {
-                Some(body) => DecodedHttp1Body::Shared(Arc::clone(body)),
+                Some(body) => DecodedHttp1Body::Shared(body.snapshot()),
                 None => DecodedHttp1Body::WireRange(self.body_start..self.wire_cursor),
             },
             declared_body_len: match self.framing {

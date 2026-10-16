@@ -176,14 +176,26 @@ enabled = false
 http1_enabled = false
 http2_enabled = false
 
-[resource_metrics]
+[resource_profiling]
 enabled = true
-mode = "cgroup-v2"
+
+[resource_profiling.collection.workload]
+mode = "cgroup"
 interval_ms = 50
-cgroup_root = "{self._cgroup}"
+
+[resource_profiling.collection.workload.cgroup]
+mode = "v2"
+
+[resource_profiling.collection.workload.cgroup.v2.managed]
+root = "{self._cgroup}"
+recovery_scan_limit = 64
 finalization_timeout_ms = 1000
-orphan_limit = 64
+
+[resource_profiling.alerts]
 memory_alert_rss_kb = "1"
+
+[resource_profiling.collection.workload.cgroup.v2.process_rss]
+enabled = true
 
 [enforcement]
 enabled = false
@@ -454,11 +466,12 @@ enabled = false
         return self._cgroup / str(row[0])
 
     def _event_count(self, trace_id: int) -> int:
-        if not self._database.is_file():
+        database = self._config.parent / "actrail-resources.sqlite"
+        if not database.is_file():
             return 0
-        with sqlite3.connect(self._database) as connection:
+        with sqlite3.connect(database) as connection:
             row = connection.execute(
-                "SELECT COUNT(*) FROM events WHERE trace_id = ? AND kind = 'resource'",
+                "SELECT COUNT(*) FROM resource_samples WHERE trace_id = ? AND kind = 'workload'",
                 (trace_id,),
             ).fetchone()
         return int(row[0]) if row is not None else 0
@@ -467,17 +480,13 @@ enabled = false
         result = self._command(
             (
                 str(self._binary("actrailviewer")),
-                "--storage-path",
-                str(self._database),
-                "--output-format",
-                "json",
-                "events",
-                "--trace-id",
-                f"trace-{trace_id}",
+                "--config", str(self._config),
+                "--output-format", "json",
+                "workload-resources", "--trace-id", f"trace-{trace_id}",
+                "--limit", "10000",
             )
         )
-        events = json.loads(result.stdout)["events"]
-        return [event["payload"] for event in events if event["variant"] == "resource"]
+        return [sample["payload"] for sample in json.loads(result.stdout)]
 
     def _doctor_ok(self) -> bool:
         result = subprocess.run(

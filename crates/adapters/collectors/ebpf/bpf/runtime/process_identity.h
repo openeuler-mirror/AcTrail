@@ -91,19 +91,17 @@ static __always_inline int observer_pid_at_level(
     return 1;
 }
 
-static __always_inline __u32 observer_tgid_for_task(struct task_struct *task) {
+static __always_inline __u32 observer_tid_for_task(struct task_struct *task) {
     const __u32 config_key = 0;
     struct actrail_observer_pid_namespace *observer =
         bpf_map_lookup_elem(&observer_pid_namespace, &config_key);
-    struct task_struct *leader = 0;
     struct pid *thread_pid = 0;
     unsigned int pid_level = 0;
     __u64 cached_level_plus_one;
     __u32 observer_pid = 0;
 
     if (!task || !observer || !observer->ino ||
-        ACTRAIL_CORE_READ(&leader, task, group_leader) != 0 || !leader ||
-        ACTRAIL_CORE_READ(&thread_pid, leader, thread_pid) != 0 || !thread_pid ||
+        ACTRAIL_CORE_READ(&thread_pid, task, thread_pid) != 0 || !thread_pid ||
         ACTRAIL_CORE_READ(&pid_level, thread_pid, level) != 0 ||
         pid_level > ACTRAIL_MAX_PID_NAMESPACE_LEVEL) {
         observer_pid_diag_inc(ACTRAIL_OBSERVER_PID_RESOLUTION_FAIL);
@@ -152,6 +150,16 @@ static __always_inline __u32 observer_tgid_for_task(struct task_struct *task) {
 
     observer_pid_diag_inc(ACTRAIL_OBSERVER_PID_RESOLUTION_FAIL);
     return 0;
+}
+
+static __always_inline __u32 observer_tgid_for_task(struct task_struct *task) {
+    struct task_struct *leader = 0;
+
+    if (!task || ACTRAIL_CORE_READ(&leader, task, group_leader) != 0 || !leader) {
+        observer_pid_diag_inc(ACTRAIL_OBSERVER_PID_RESOLUTION_FAIL);
+        return 0;
+    }
+    return observer_tid_for_task(leader);
 }
 
 static __always_inline int current_process_group_dead(void) {

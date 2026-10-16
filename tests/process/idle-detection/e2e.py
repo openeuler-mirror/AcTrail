@@ -140,8 +140,9 @@ enabled = false
 enabled = false
 [process_seccomp]
 enabled = false
-[resource_metrics]
+[resource_profiling]
 enabled = false
+
 [enforcement]
 enabled = false
 [command_control]

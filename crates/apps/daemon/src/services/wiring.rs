@@ -5,8 +5,8 @@ use config_core::daemon::{
     AccessControlConfig, AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig,
     CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
     FileObservationConfig, IdleDetectionConfig, NetworkControlConfig, PayloadConfig,
-    PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
+    PluginAlertRuntimeConfig, ProcessSeccompConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    StorageRetentionConfig, TraceFinalizationConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -31,7 +31,9 @@ use super::enforcement::{
 };
 use super::network_control::NetworkControlService;
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
-use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
+use super::resource_profiling::{
+    COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME, ResourceProfilingAdapter,
+};
 use super::workload_diagnostics::WorkloadDiagnostics;
 
 const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
@@ -50,7 +52,7 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
     idle_detection: IdleDetectionConfig,
     file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
+    resource_metrics: resource_profiling::ResourceProfilingConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     alert_forwarding_config: AlertForwardingConfig,
@@ -105,7 +107,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
     idle_detection: IdleDetectionConfig,
     file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
+    resource_metrics: resource_profiling::ResourceProfilingConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     alert_forwarding_config: AlertForwardingConfig,
@@ -164,7 +166,7 @@ fn build_runtime_wiring_with_attach_service(
     idle_detection: IdleDetectionConfig,
     file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
+    resource_metrics: resource_profiling::ResourceProfilingConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     alert_forwarding_config: AlertForwardingConfig,
@@ -185,7 +187,7 @@ fn build_runtime_wiring_with_attach_service(
         },
         active_trace_max as usize,
     );
-    let storage = open_storage_backend(&storage_config, StorageOpenMode::ReadWrite)
+    let mut storage = open_storage_backend(&storage_config, StorageOpenMode::ReadWrite)
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     let trace_id_seed = storage
         .next_trace_id_seed()
@@ -198,6 +200,9 @@ fn build_runtime_wiring_with_attach_service(
         command_control_config.enabled,
         network_control_config.enabled,
     );
+    // Open internal files before fanotify starts intercepting permission events.
+    let resource_service =
+        ResourceProfilingAdapter::new(resource_metrics.clone(), storage.as_mut())?;
     let enforcement = FileEnforcementService::new(
         enforcement_config.clone(),
         access_control_config.file.clone(),
@@ -220,7 +225,7 @@ fn build_runtime_wiring_with_attach_service(
             idle_detection.clone(),
             file_observation.clone(),
             application_protocol.clone(),
-            resource_metrics.clone(),
+            resource_service,
             storage_retention.clone(),
             plugin_alert_runtime,
             alert_forwarding.clone(),
@@ -249,7 +254,7 @@ fn build_runtime_wiring_with_attach_service(
             idle_detection.clone(),
             file_observation.clone(),
             application_protocol.clone(),
-            resource_metrics.clone(),
+            resource_service,
             storage_retention,
             plugin_alert_runtime,
             alert_forwarding.clone(),
@@ -264,7 +269,7 @@ fn build_runtime_wiring_with_attach_service(
             export_runtime,
         )?,
     };
-    // Startup recovery may have persisted final resource events and diagnostics.
+    // Startup recovery may have persisted lifecycle records and diagnostics.
     // Seed the live allocator after constructing the service to avoid reusing IDs.
     let event_id_seed = attach_service
         .storage
@@ -293,7 +298,7 @@ fn build_runtime_wiring_with_attach_service(
     if application_protocol.enabled {
         available_collectors.push(APPLICATION_PROTOCOL_COLLECTOR_NAME.to_string());
     }
-    if resource_metrics.enabled {
+    if resource_metrics.workload_enabled() {
         available_collectors.push(RESOURCE_METRICS_COLLECTOR_NAME.to_string());
     }
     if access_control_config.file.open.is_fanotify()
@@ -342,7 +347,7 @@ fn build_runtime_wiring_with_attach_service(
     if application_protocol.enabled {
         collector_descriptors.push(application_protocol_descriptor(&application_protocol));
     }
-    if resource_metrics.enabled {
+    if resource_metrics.workload_enabled() {
         collector_descriptors.push(resource_metrics_descriptor());
     }
     if access_control_config.file.open.is_fanotify()

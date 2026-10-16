@@ -10,6 +10,7 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
+resource_profiling = { path = "../../core/resource_profiling" }
 alert_contract = { path = "../../contracts/alert" }
 config_core = { path = "../../core/config" }
 control_contract = { path = "../../contracts/control_plane" }

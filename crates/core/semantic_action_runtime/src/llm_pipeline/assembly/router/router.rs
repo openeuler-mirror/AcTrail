@@ -98,6 +98,9 @@ impl ResetContext {
     fn diagnostic_code(self, transport: ResetTransport) -> LlmPipelineDiagnosticCode {
         match transport {
             ResetTransport::Http1 => match self.http1_decode_failure {
+                Some(Http1DecodeFailure::InvalidContentEncoding) => {
+                    LlmPipelineDiagnosticCode::Http1ProtocolDecodeFailed
+                }
                 Some(Http1DecodeFailure::InvalidHead) => {
                     LlmPipelineDiagnosticCode::Http1InvalidHead
                 }

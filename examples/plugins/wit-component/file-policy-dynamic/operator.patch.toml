@@ -49,7 +49,7 @@ http2_enabled = false
 sse_enabled = false
 sse_data_policy = "disabled"
 
-[resource_metrics]
+[resource_profiling]
 enabled = false
 
 [provider]

@@ -4,8 +4,8 @@ use config_core::daemon::{
     AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
     DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
     IdleDetectionConfig, NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    StorageRetentionConfig, TraceFinalizationConfig, launch_seccomp_requirements,
+    ProcessSeccompConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
+    TraceFinalizationConfig, launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -27,7 +27,7 @@ use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
 use crate::services::process_seccomp::ProcessSeccompService;
-use crate::services::resource_metrics::ResourceMetricsSampler;
+use crate::services::resource_profiling::ResourceProfilingAdapter;
 use crate::services::retention::StorageRetentionService;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
@@ -52,7 +52,7 @@ impl StorageAttachService {
         idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
-        resource_metrics: ResourceMetricsConfig,
+        resource_metrics: ResourceProfilingAdapter,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         alert_forwarding: AlertForwardingService,
@@ -110,7 +110,7 @@ impl StorageAttachService {
         idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
-        resource_metrics: ResourceMetricsConfig,
+        resource_metrics: ResourceProfilingAdapter,
         storage_retention_config: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         alert_forwarding: AlertForwardingService,
@@ -260,7 +260,6 @@ impl StorageAttachService {
             idle_detector::IdleDetector::new(idle_detection).map_err(|message| {
                 control_contract::reply::ControlError::new("idle_detection_config", message)
             })?;
-        let resource_metrics = ResourceMetricsSampler::new(resource_metrics, storage.as_mut())?;
         let mut collector = EbpfCollector::new(
             ebpf_config,
             payload_config,

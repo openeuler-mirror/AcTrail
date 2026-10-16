@@ -1,0 +1,2 @@
+mod noop_host_resource_profiling_backend;
+pub(crate) use noop_host_resource_profiling_backend::NoOpHostResourceProfilingBackend;

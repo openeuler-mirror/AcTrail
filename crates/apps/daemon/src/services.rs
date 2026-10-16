@@ -19,7 +19,7 @@ pub(crate) mod payload;
 pub(crate) mod payload_gate;
 pub(crate) mod post_trace;
 pub(crate) mod process_seccomp;
-pub(crate) mod resource_metrics;
+pub(crate) mod resource_profiling;
 pub(crate) mod retention;
 pub(crate) mod sandbox_alerts;
 pub(crate) mod sandbox_plugins;

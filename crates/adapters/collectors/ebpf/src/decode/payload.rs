@@ -120,10 +120,12 @@ pub struct TlsDiagnosticEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SocketPayloadCompletion {
-    pub pid: u32,
-    pub tid: u32,
-    pub host_pid: u32,
-    pub host_tid: u32,
+    /// Process and thread coordinates in the observer's PID namespace.
+    pub observer_tgid: u32,
+    pub observer_tid: u32,
+    /// Kernel coordinates used by BPF maps and socket stream identities.
+    pub kernel_tgid: u32,
+    pub kernel_tid: u32,
     pub trace_id: TraceId,
     pub observed_at: SystemTime,
     pub sequence: u64,
@@ -239,10 +241,10 @@ pub fn decode_socket_payload_completion(
     event: KernelSocketPayloadCompletionEvent,
 ) -> SocketPayloadCompletion {
     SocketPayloadCompletion {
-        pid: event.pid,
-        tid: event.tid,
-        host_pid: event.host_pid,
-        host_tid: event.host_tid,
+        observer_tgid: event.observer_tgid,
+        observer_tid: event.observer_tid,
+        kernel_tgid: event.kernel_tgid,
+        kernel_tid: event.kernel_tid,
         trace_id: event.trace_id,
         observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
         sequence: event.sequence,

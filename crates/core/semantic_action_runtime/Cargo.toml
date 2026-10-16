@@ -6,6 +6,7 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 base64 = "0.22"
+brotli = "8"
 config_core = { path = "../config" }
 flate2 = "1"
 libc = "0.2"

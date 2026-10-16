@@ -89,7 +89,6 @@ CREATE TABLE IF NOT EXISTS trace_resource_scopes (
     accounting_method TEXT NOT NULL,
     lifecycle_state TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    final_event_id INTEGER,
     updated_at INTEGER NOT NULL
 );
 
@@ -462,16 +461,15 @@ CREATE TABLE IF NOT EXISTS trace_external_cgroup_bindings (
     updated_at           INTEGER NOT NULL,
     last_good_at         INTEGER,
     closed_at            INTEGER,
-    final_event_id       INTEGER,
     CHECK (
         (lifecycle_state = 'active' AND stale_reason IS NULL
-         AND closed_at IS NULL AND final_event_id IS NULL)
+         AND closed_at IS NULL)
         OR
         (lifecycle_state = 'stale' AND stale_reason IS NOT NULL
-         AND closed_at IS NULL AND final_event_id IS NULL)
+         AND closed_at IS NULL)
         OR
         (lifecycle_state = 'closed'
-         AND closed_at IS NOT NULL AND final_event_id IS NOT NULL)
+         AND closed_at IS NOT NULL)
     )
 );
 
@@ -484,6 +482,7 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_writable_schema_state(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     connection.execute_batch(CREATE_EXTERNAL_CGROUP_BINDINGS_SQL)?;
+    connection.execute_batch(include_str!("cgroup_v1/schema.sql"))?;
     connection.execute_batch(include_str!("semantic_actions/store/schema.sql"))?;
     connection.execute_batch(crate::alerts::schema::CREATE_SQL)?;
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
@@ -619,6 +618,20 @@ fn validate_schema(
     require_external_bindings: bool,
 ) -> Result<(), rusqlite::Error> {
     crate::alerts::schema::validate(connection)?;
+    if require_external_bindings {
+        require_schema_object(connection, "table", "trace_cgroup_v1_bindings")?;
+        for column in [
+            "trace_id",
+            "host_boot_id",
+            "cpuacct",
+            "memory",
+            "created_at",
+            "stale_reason",
+            "closed_at",
+        ] {
+            require_column(connection, "trace_cgroup_v1_bindings", column)?;
+        }
+    }
     require_schema_object(connection, "table", "tls_flow_diagnostics")?;
     require_column(connection, "tls_flow_diagnostics", "trace_id")?;
     require_column(connection, "tls_flow_diagnostics", "stream_key")?;
@@ -648,7 +661,6 @@ fn validate_schema(
         require_column(connection, "trace_resource_scopes", "accounting_method")?;
         require_column(connection, "trace_resource_scopes", "lifecycle_state")?;
         require_column(connection, "trace_resource_scopes", "created_at")?;
-        require_column(connection, "trace_resource_scopes", "final_event_id")?;
         require_column(connection, "trace_resource_scopes", "updated_at")?;
     }
     require_column(connection, "events", "process_id")?;
@@ -781,7 +793,6 @@ fn validate_schema(
             "updated_at",
             "last_good_at",
             "closed_at",
-            "final_event_id",
         ] {
             require_column(connection, "trace_external_cgroup_bindings", column)?;
         }

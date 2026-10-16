@@ -37,11 +37,11 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
     """Standalone acceptance using an isolated daemon and disposable Docker container."""
 
     def _operator_patch(self) -> str:
-        patch = super()._operator_patch().replace('mode = "cgroup-v2"', 'mode = "auto"')
-        patch = patch.replace(f'cgroup_root = "{self._cgroup}"',
-                              f'cgroup_root = "{self._inputs.work_dir / "unavailable-managed-root"}"')
+        patch = super()._operator_patch().replace('mode = "cgroup"', 'mode = "auto"')
+        patch = patch.replace(f'root = "{self._cgroup}"',
+                              f'root = "{self._inputs.work_dir / "unavailable-managed-root"}"')
         return patch.replace('memory_alert_rss_kb = "1"',
-                             'existing_container_cgroups = "require"\nmemory_alert_rss_kb = "1"') + '\n[sandbox_evidence]\nschema_version = 2\n'
+                             'memory_alert_rss_kb = "1"\n\n[resource_profiling.collection.workload.cgroup.v2.external]\npolicy = "require"') + '\n[sandbox_evidence]\nschema_version = 2\n'
 
     def exercise(self, image: str) -> None:
         self._prepare_config()

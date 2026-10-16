@@ -1,12 +1,16 @@
 #!/bin/sh
 set -eu
 
-: "${ACTRAIL_HOST_OOM_TRIGGER:?}"
-: "${ACTRAIL_HOST_COORD_DIR:?}"
+if [ "$#" -ne 2 ]; then
+  echo "usage: oom-cgroup-trigger.sh OOM_TRIGGER COORD_DIR" >&2
+  exit 64
+fi
+oom_trigger="${1:?OOM_TRIGGER is required}"
+coord_dir="${2:?COORD_DIR is required}"
 
-start_file="$ACTRAIL_HOST_COORD_DIR/oom.start"
-pid_file="$ACTRAIL_HOST_COORD_DIR/oom.pid"
-group_file="$ACTRAIL_HOST_COORD_DIR/oom.cgroup"
+start_file="$coord_dir/oom.start"
+pid_file="$coord_dir/oom.pid"
+group_file="$coord_dir/oom.cgroup"
 trigger_pid=""
 group=""
 mode=""
@@ -78,7 +82,7 @@ case "$before" in
 esac
 
 rm -f "$start_file" "$pid_file"
-python3 "$ACTRAIL_HOST_OOM_TRIGGER" "$start_file" &
+python3 "$oom_trigger" "$start_file" &
 trigger_pid=$!
 printf '%s\n' "$trigger_pid" > "$pid_file"
 if [ "$mode" = v2 ]; then
@@ -133,7 +137,7 @@ remaining=50
 while [ "$remaining" -gt 0 ]; do
   after="$(awk '$1 == "oom_kill" { print $2 }' /proc/vmstat)"
   if [ "$after" -gt "$before" ]; then
-    touch "$ACTRAIL_HOST_COORD_DIR/oom.completed"
+    touch "$coord_dir/oom.completed"
     echo "ACTRAIL_HOST_OOM_KILL_OK pid=$(cat "$pid_file") before=$before after=$after cgroup_before=$cgroup_oom_before cgroup_after=$cgroup_oom_after released_at_ms=$released_at_ms"
     exit 0
   fi

@@ -228,8 +228,8 @@ def _remove_recorded_cgroup(coord_dir: Path) -> str | None:
 
 def _run_monitored_root(settle_seconds: float) -> int:
     script = _required_environment_path("ACTRAIL_HOST_OOM_SCRIPT", file=True)
-    _required_environment_path("ACTRAIL_HOST_OOM_TRIGGER", file=True)
-    _required_environment_path("ACTRAIL_HOST_COORD_DIR", file=False)
+    trigger = _required_environment_path("ACTRAIL_HOST_OOM_TRIGGER", file=True)
+    coord_dir = _required_environment_path("ACTRAIL_HOST_COORD_DIR", file=False)
     _set_process_name()
     root = _current_root_marker()
     print(
@@ -241,7 +241,7 @@ def _run_monitored_root(settle_seconds: float) -> int:
     time.sleep(settle_seconds)
     _require_root_process_name()
     completed = subprocess.run(
-        ("/bin/sh", str(script)),
+        ("/bin/sh", str(script), str(trigger), str(coord_dir)),
         capture_output=True,
         text=True,
         check=False,

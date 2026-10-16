@@ -192,7 +192,6 @@ pub(super) fn event_counts_from_variants(
             "ipc" => counts.ipc += count,
             "stdio" => counts.stdio += count,
             "application" => counts.application += count,
-            "resource" => counts.resource += count,
             "control" => counts.control += count,
             "loss" => counts.loss += count,
             "label" => counts.label += count,
@@ -214,7 +213,7 @@ pub(super) fn event_counts(events: &[DomainEvent]) -> EventCounts {
             EventPayload::Ipc(_) => counts.ipc += 1,
             EventPayload::Stdio(_) => counts.stdio += 1,
             EventPayload::Application(_) => counts.application += 1,
-            EventPayload::Resource(_) => counts.resource += 1,
+
             EventPayload::Control(_) => counts.control += 1,
             EventPayload::Loss(_) => counts.loss += 1,
             EventPayload::Label(_) => counts.label += 1,
@@ -230,7 +229,7 @@ pub(super) fn counts_json(
     payload_segments: usize,
 ) -> String {
     format!(
-        "{{\"events\":{},\"process\":{},\"net\":{},\"file\":{},\"ipc\":{},\"stdio\":{},\"application\":{},\"resource\":{},\"control\":{},\"loss\":{},\"label\":{},\"enforcement\":{},\"payloads\":{},\"retained_payload_bytes\":{}}}",
+        "{{\"events\":{},\"process\":{},\"net\":{},\"file\":{},\"ipc\":{},\"stdio\":{},\"application\":{},\"control\":{},\"loss\":{},\"label\":{},\"enforcement\":{},\"payloads\":{},\"retained_payload_bytes\":{}}}",
         counts.events,
         counts.process,
         counts.net,
@@ -238,7 +237,6 @@ pub(super) fn counts_json(
         counts.ipc,
         counts.stdio,
         counts.application,
-        counts.resource,
         counts.control,
         counts.loss,
         counts.label,
@@ -264,7 +262,7 @@ fn event_operation(event: &DomainEvent) -> String {
             .unwrap_or_default(),
         EventPayload::Stdio(payload) => payload.stream.clone(),
         EventPayload::Application(payload) => payload.operation.clone(),
-        EventPayload::Resource(payload) => payload.scope.clone(),
+
         EventPayload::Control(payload) => payload.action.clone(),
         EventPayload::Loss(payload) => payload.reason.clone(),
         EventPayload::Label(payload) => payload.provider.clone(),
@@ -283,7 +281,7 @@ fn event_summary(event: &DomainEvent) -> String {
         EventPayload::File(payload) => payload.path.clone().unwrap_or_default(),
         EventPayload::Ipc(payload) => payload.peer.clone().unwrap_or_default(),
         EventPayload::Application(payload) => payload.summary.clone(),
-        EventPayload::Resource(payload) => resource_summary(payload),
+
         EventPayload::Label(payload) => payload
             .confidence_millis
             .map(|value| format!("confidence_millis={value}"))
@@ -307,7 +305,7 @@ fn event_metadata(event: &DomainEvent) -> std::collections::BTreeMap<String, Str
         EventPayload::File(payload) => payload.metadata.clone(),
         EventPayload::Ipc(payload) => payload.metadata.clone(),
         EventPayload::Application(payload) => payload.metadata.clone(),
-        EventPayload::Resource(payload) => resource_metadata(payload),
+
         EventPayload::Label(payload) => payload.evidence.clone(),
         EventPayload::Enforcement(payload) => enforcement_metadata(payload),
         _ => std::collections::BTreeMap::new(),
@@ -331,118 +329,6 @@ fn enforcement_metadata(
     metadata
 }
 
-fn resource_metadata(
-    payload: &model_core::event::ResourcePayload,
-) -> std::collections::BTreeMap<String, String> {
-    let mut metadata = payload.metadata.clone();
-    metadata.insert("subject".to_string(), payload.subject.clone());
-    metadata.insert(
-        "accounting_method".to_string(),
-        payload.accounting_method.as_str().to_string(),
-    );
-    metadata.insert(
-        "accounting_coverage".to_string(),
-        payload.accounting_coverage.as_str().to_string(),
-    );
-    metadata.insert(
-        "sample_kind".to_string(),
-        payload.sample_kind.as_str().to_string(),
-    );
-    if let Some(cpu_percent_millis) = payload.cpu_percent_millis {
-        metadata.insert(
-            "cpu_percent".to_string(),
-            format_percent_millis(cpu_percent_millis),
-        );
-        metadata.insert(
-            "cpu_percent_millis".to_string(),
-            cpu_percent_millis.to_string(),
-        );
-    }
-    if let Some(rss_kb) = payload.rss_kb {
-        metadata.insert("rss_kb".to_string(), rss_kb.to_string());
-    }
-    if let Some(virtual_memory_kb) = payload.virtual_memory_kb {
-        metadata.insert(
-            "virtual_memory_kb".to_string(),
-            virtual_memory_kb.to_string(),
-        );
-    }
-    for (key, value) in [
-        ("memory_current_bytes", payload.memory_current_bytes),
-        ("memory_peak_bytes", payload.memory_peak_bytes),
-        ("memory_anon_bytes", payload.memory_anon_bytes),
-        ("memory_file_bytes", payload.memory_file_bytes),
-        (
-            "memory_swap_current_bytes",
-            payload.memory_swap_current_bytes,
-        ),
-        ("cpu_usage_usec", payload.cpu_usage_usec),
-        ("cpu_user_usec", payload.cpu_user_usec),
-        ("cpu_system_usec", payload.cpu_system_usec),
-        ("cpu_nr_throttled", payload.cpu_nr_throttled),
-        ("cpu_throttled_usec", payload.cpu_throttled_usec),
-        ("io_read_bytes", payload.io_read_bytes),
-        ("io_write_bytes", payload.io_write_bytes),
-        ("pids_current", payload.pids_current),
-        ("pids_peak", payload.pids_peak),
-        ("process_rss_sum_kb", payload.process_rss_sum_kb),
-    ] {
-        if let Some(value) = value {
-            metadata.insert(key.to_string(), value.to_string());
-        }
-    }
-    insert_memory_event_metadata(&mut metadata, "memory_events", &payload.memory_events);
-    insert_memory_event_metadata(
-        &mut metadata,
-        "memory_events_local",
-        &payload.memory_events_local,
-    );
-    metadata
-}
-
-fn insert_memory_event_metadata(
-    metadata: &mut std::collections::BTreeMap<String, String>,
-    prefix: &str,
-    counters: &Option<model_core::event::MemoryEventCounters>,
-) {
-    let Some(counters) = counters else {
-        return;
-    };
-    for (key, value) in [
-        ("low", counters.low),
-        ("high", counters.high),
-        ("max", counters.max),
-        ("oom", counters.oom),
-        ("oom_kill", counters.oom_kill),
-        ("oom_group_kill", counters.oom_group_kill),
-    ] {
-        if let Some(value) = value {
-            metadata.insert(format!("{prefix}.{key}"), value.to_string());
-        }
-    }
-}
-
-fn resource_summary(payload: &model_core::event::ResourcePayload) -> String {
-    format!(
-        "{} method={} coverage={} cpu={} cgroup_memory_current_bytes={} rss_kb={}",
-        payload.subject,
-        payload.accounting_method.as_str(),
-        payload.accounting_coverage.as_str(),
-        payload
-            .cpu_percent_millis
-            .map(format_percent_millis)
-            .unwrap_or_default(),
-        payload
-            .memory_current_bytes
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        payload
-            .rss_kb
-            .map(|value| value.to_string())
-            .unwrap_or_default()
-    )
-}
-
 fn network_summary(payload: &NetPayload) -> String {
     let mut summary = String::new();
     let _ = write!(
@@ -454,10 +340,6 @@ fn network_summary(payload: &NetPayload) -> String {
     summary
 }
 
-fn format_percent_millis(value: u64) -> String {
-    format!("{}.{:03}", value / 1000, value % 1000)
-}
-
 #[derive(Default)]
 pub(super) struct EventCounts {
     events: usize,
@@ -467,7 +349,6 @@ pub(super) struct EventCounts {
     ipc: usize,
     stdio: usize,
     application: usize,
-    resource: usize,
     control: usize,
     loss: usize,
     label: usize,

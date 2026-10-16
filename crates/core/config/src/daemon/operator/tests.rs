@@ -1,9 +1,7 @@
 use super::super::{
-    ExistingContainerCgroups, LlmRequestBodyExportRetention, LlmRequestContentRetention,
-    LlmToolResultContentExportRetention, ResourceMetricsMode,
+    LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmToolResultContentExportRetention,
 };
-use super::{OperatorConfig, launch_seccomp_requirements};
-use crate::daemon::{CommandControlConfig, PayloadSocketCaptureBackend};
+use super::OperatorConfig;
 
 fn parse_l0_llm_call(patch: &str) -> Result<OperatorConfig, String> {
     OperatorConfig::init()
@@ -158,68 +156,4 @@ fn logical_agent_tool_names_have_safe_defaults_and_round_trip() {
     let rendered = config.dump().expect("operator config renders");
     let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
     assert_eq!(reparsed.agent_invocation, config.agent_invocation);
-}
-
-#[test]
-fn resource_metrics_cgroup_settings_parse_and_round_trip() {
-    let config = OperatorConfig::init()
-        .expect("default operator config initializes")
-        .patch(
-            "[resource_metrics]\n\
-             mode = \"cgroup-v2\"\n\
-             existing_container_cgroups = \"require\"\n\
-             external_cgroup_failure_threshold = 5\n\
-             cgroup_root = \"/sys/fs/cgroup/actrail-test\"\n\
-             finalization_timeout_ms = 45000\n\
-             orphan_limit = 77\n",
-        )
-        .expect("cgroup resource settings parse");
-
-    assert_eq!(config.resource_metrics.mode, ResourceMetricsMode::CgroupV2);
-    assert_eq!(
-        config.resource_metrics.existing_container_cgroups,
-        ExistingContainerCgroups::Require
-    );
-    assert_eq!(config.resource_metrics.external_cgroup_failure_threshold, 5);
-    assert_eq!(
-        config.resource_metrics.cgroup_root.to_string_lossy(),
-        "/sys/fs/cgroup/actrail-test"
-    );
-    assert_eq!(config.resource_metrics.finalization_timeout_ms, 45_000);
-    assert_eq!(config.resource_metrics.orphan_limit, 77);
-
-    let rendered = config.dump().expect("operator config renders");
-    let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
-    assert_eq!(reparsed.resource_metrics, config.resource_metrics);
-}
-
-#[test]
-fn procfs_rejects_existing_container_cgroups() {
-    let error = OperatorConfig::init()
-        .expect("default operator config initializes")
-        .patch("[resource_metrics]\nmode = \"procfs\"\nexisting_container_cgroups = \"prefer\"\n")
-        .expect_err("procfs plus external cgroups must fail validation");
-    assert!(
-        error
-            .to_string()
-            .contains("must be disabled when mode=procfs")
-    );
-}
-
-#[test]
-fn charged_memory_alert_round_trips_and_rejects_zero() {
-    let config = OperatorConfig::init()
-        .unwrap()
-        .patch("[resource_metrics]\nmemory_alert_current_bytes = \"1048576\"\n")
-        .unwrap();
-    assert_eq!(
-        config.resource_metrics.memory_alert_current_bytes,
-        Some(1048576)
-    );
-    assert!(
-        OperatorConfig::init()
-            .unwrap()
-            .patch("[resource_metrics]\nmemory_alert_current_bytes = \"0\"\n")
-            .is_err()
-    );
 }

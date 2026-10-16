@@ -9,12 +9,14 @@ use model_core::diagnostics::{
     LlmPipelineDiagnosticSeverity, LlmPipelineDiagnosticStage,
 };
 use model_core::event::DomainEvent;
-use model_core::external_cgroup::{ExternalBindingStaleReason, ExternalCgroupBinding};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
-use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
+use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
@@ -171,17 +173,11 @@ impl StorageBackend for SqliteStorage {
         &mut self,
         trace_id: TraceId,
         lifecycle_state: ResourceScopeLifecycleState,
-        final_event_id: Option<model_core::ids::EventId>,
+
         updated_at: std::time::SystemTime,
     ) -> Result<(), StorageError> {
-        SqliteStorage::update_resource_scope_state(
-            self,
-            trace_id,
-            lifecycle_state,
-            final_event_id,
-            updated_at,
-        )
-        .map_err(|error| StorageError::new("update_resource_scope_state", error.to_string()))
+        SqliteStorage::update_resource_scope_state(self, trace_id, lifecycle_state, updated_at)
+            .map_err(|error| StorageError::new("update_resource_scope_state", error.to_string()))
     }
 
     fn create_external_cgroup_binding(
@@ -251,18 +247,13 @@ impl StorageBackend for SqliteStorage {
             })
     }
 
-    fn append_final_event_and_close_external_binding(
+    fn close_external_cgroup_binding(
         &mut self,
-        event: DomainEvent,
+        trace_id: TraceId,
         closed_at: std::time::SystemTime,
-    ) -> Result<model_core::ids::EventId, StorageError> {
-        SqliteStorage::append_final_event_and_close_external_binding(self, event, closed_at)
-            .map_err(|error| {
-                StorageError::new(
-                    "append_final_event_and_close_external_binding",
-                    error.to_string(),
-                )
-            })
+    ) -> Result<(), StorageError> {
+        SqliteStorage::close_external_cgroup_binding(self, trace_id, closed_at)
+            .map_err(|e| StorageError::new("close_external_cgroup_binding", e.to_string()))
     }
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError> {

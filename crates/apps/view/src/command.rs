@@ -9,6 +9,8 @@ use model_core::payload::{PayloadDirection, PayloadSegmentId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageCommand {
+    HostResources,
+    WorkloadResources,
     Traces,
     Summary,
     Processes,
@@ -31,6 +33,7 @@ pub enum RowLimit {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ViewInvocation {
+    pub resource_query: Option<resource_profiling::storage::database::ResourceQuery>,
     pub command: StorageCommand,
     pub config_path: PathBuf,
     pub storage_config_path: Option<PathBuf>,
@@ -95,6 +98,11 @@ struct ViewerCli {
 impl ViewerCli {
     fn into_invocation(self) -> Result<ViewInvocation, String> {
         Ok(ViewInvocation {
+            resource_query: match &self.command {
+                Some(ViewerCommandArgs::HostResources(args)) => Some(args.query()?),
+                Some(ViewerCommandArgs::WorkloadResources(args)) => Some(args.query()),
+                _ => None,
+            },
             command: self
                 .command
                 .as_ref()
@@ -117,6 +125,8 @@ impl ViewerCli {
 
 #[derive(Clone, Debug, Subcommand)]
 enum ViewerCommandArgs {
+    HostResources(crate::host_resources::HostResourceArgs),
+    WorkloadResources(WorkloadResourceArgs),
     #[command(about = "List traces in storage")]
     Traces(LimitedArgs),
     #[command(about = "Show a trace summary")]
@@ -146,6 +156,8 @@ enum ViewerCommandArgs {
 impl From<&ViewerCommandArgs> for StorageCommand {
     fn from(command: &ViewerCommandArgs) -> Self {
         match command {
+            ViewerCommandArgs::HostResources(_) => Self::HostResources,
+            ViewerCommandArgs::WorkloadResources(_) => Self::WorkloadResources,
             ViewerCommandArgs::Traces(_) => Self::Traces,
             ViewerCommandArgs::Summary(_) => Self::Summary,
             ViewerCommandArgs::Processes(_) => Self::Processes,
@@ -175,6 +187,22 @@ struct LimitedArgs {
 struct TraceArgs {
     #[arg(long = "trace-id", value_parser = parse_trace_id, value_name = "ID")]
     trace_id: Option<TraceId>,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+struct WorkloadResourceArgs {
+    #[command(flatten)]
+    trace: TraceArgs,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..), help = "Maximum number of samples, newest first")]
+    limit: u32,
+}
+impl WorkloadResourceArgs {
+    fn query(&self) -> resource_profiling::storage::database::ResourceQuery {
+        use resource_profiling::storage::database::{ResourceKind, ResourceQuery};
+        let mut query = ResourceQuery::new(ResourceKind::Workload, self.limit);
+        query.trace_id = self.trace.trace_id;
+        query
+    }
 }
 
 #[derive(Clone, Debug, clap::Args)]
@@ -243,6 +271,7 @@ fn export_output_path(command: &Option<ViewerCommandArgs>) -> Option<PathBuf> {
 fn trace_id_for_command(command: &Option<ViewerCommandArgs>) -> Option<TraceId> {
     match command {
         Some(ViewerCommandArgs::Summary(args)) => args.trace_id,
+        Some(ViewerCommandArgs::WorkloadResources(args)) => args.trace.trace_id,
         Some(ViewerCommandArgs::Processes(args))
         | Some(ViewerCommandArgs::Events(args))
         | Some(ViewerCommandArgs::Network(args))
@@ -254,7 +283,9 @@ fn trace_id_for_command(command: &Option<ViewerCommandArgs>) -> Option<TraceId> 
         Some(ViewerCommandArgs::ExportJson(args)) | Some(ViewerCommandArgs::ExportOtel(args)) => {
             args.trace.trace_id
         }
-        Some(ViewerCommandArgs::Traces(_)) | None => None,
+        Some(ViewerCommandArgs::Traces(_)) | Some(ViewerCommandArgs::HostResources(_)) | None => {
+            None
+        }
     }
 }
 
@@ -267,7 +298,9 @@ fn row_limit_for_command(command: &Option<ViewerCommandArgs>) -> Result<Option<R
         | Some(ViewerCommandArgs::Diagnostics(args)) => row_limit(args.limit.head, args.limit.tail),
         Some(ViewerCommandArgs::Actions(args)) => row_limit(args.limit.head, args.limit.tail),
         Some(ViewerCommandArgs::Payloads(args)) => row_limit(args.limit.head, args.limit.tail),
-        Some(ViewerCommandArgs::Summary(_))
+        Some(ViewerCommandArgs::HostResources(_))
+        | Some(ViewerCommandArgs::WorkloadResources(_))
+        | Some(ViewerCommandArgs::Summary(_))
         | Some(ViewerCommandArgs::TlsFlow(_))
         | Some(ViewerCommandArgs::ExportJson(_))
         | Some(ViewerCommandArgs::ExportOtel(_))

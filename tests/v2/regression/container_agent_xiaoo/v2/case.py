@@ -12,6 +12,7 @@ from tests.v2.common.core import TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAgentXiaooConfig
+from .llm_evidence import ContainerLlmEvidence
 
 
 class ContainerAgentXiaooCase(TestCase):
@@ -93,8 +94,11 @@ class ContainerAgentXiaooCase(TestCase):
             )
         test_context.report_progress(
             "trace_validation",
-            "container attribution and trace evidence validated",
+            "checking complete outbound task bodies and valid request/reply pairs",
         )
+        ContainerLlmEvidence(
+            self._runtime / "scenario", self._config.bin_dir / "actrailviewer"
+        ).require()
         return TestResult(
             TestStatus.PASSED,
             "real xiaoO multi-container acceptance completed",

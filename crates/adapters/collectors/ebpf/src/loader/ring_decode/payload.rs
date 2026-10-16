@@ -144,10 +144,12 @@ pub struct KernelSocketPayloadEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelSocketPayloadCompletionEvent {
-    pub pid: u32,
-    pub tid: u32,
-    pub host_pid: u32,
-    pub host_tid: u32,
+    /// Observer namespace coordinates, matching seccomp notification PIDs.
+    pub observer_tgid: u32,
+    pub observer_tid: u32,
+    /// Kernel coordinates; these remain stable across observer namespaces.
+    pub kernel_tgid: u32,
+    pub kernel_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
@@ -447,8 +449,8 @@ pub(super) fn decode_socket_payload_completion_event(
         ));
     }
     Ok(KernelSocketPayloadCompletionEvent {
-        pid: read_u32(raw, 4).expect("event length checked"),
-        tid: read_u32(raw, 8).expect("event length checked"),
+        observer_tgid: read_u32(raw, 4).expect("event length checked"),
+        observer_tid: read_u32(raw, 8).expect("event length checked"),
         direction: read_u32(raw, 12).expect("event length checked"),
         trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
         observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
@@ -462,7 +464,7 @@ pub(super) fn decode_socket_payload_completion_event(
         flags: read_u32(raw, 84).expect("event length checked"),
         syscall: read_u32(raw, 88).expect("event length checked"),
         fd_generation: read_u32(raw, 92).expect("event length checked"),
-        host_pid: read_u32(raw, 96).expect("event length checked"),
-        host_tid: read_u32(raw, 100).expect("event length checked"),
+        kernel_tgid: read_u32(raw, 96).expect("event length checked"),
+        kernel_tid: read_u32(raw, 100).expect("event length checked"),
     })
 }

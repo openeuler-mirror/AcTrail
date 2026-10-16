@@ -1,65 +1,126 @@
-# Host workload memory accounting
+# Host and workload resource metrics
+
+Resource collection, alerts and storage belong to `resource_profiling`. Host and
+workload collection can run together. Their samples use the selected resource
+storage backend; the default SQLite database is `actrail-resources.sqlite`, relative
+to the operator configuration directory. Trace events and cgroup control records
+use the main storage database.
+
+## Collection
 
 For a workload started by `actrailctl launch`, cgroup v2 measures charged memory
 for the entire workload hierarchy, including descendants. `memory_current_bytes`
-is the kernel's `memory.current`; `memory_peak_bytes` is optional. Summed process
-RSS remains a diagnostic (`process_rss_sum_kb`), not a replacement for cgroup
-charges. CPU, I/O and PID counters accompany memory where supported.
-
-## Configuration
+is the kernel's `memory.current`; `memory_peak_bytes` is optional.
+`process_rss_sum_kb` measures summed process RSS separately. CPU, I/O and PID
+counters accompany memory where supported.
 
 Use a writable delegated cgroup v2 root for the daemon service. The systemd
 service needs `Delegate=yes` and `DelegateSubgroup=daemon` (systemd 254+).
-Set the root to that service's actual cgroup path, for example:
+Set the root to the service's actual cgroup path:
 
 ```toml
-[resource_metrics]
+[resource_profiling.collection.workload]
 enabled = true
-mode = "cgroup-v2"
-cgroup_root = "/sys/fs/cgroup/system.slice/actraild.service"
+mode = "cgroup"
 interval_ms = 1000
+
+[resource_profiling.collection.workload.cgroup]
+mode = "v2"
+
+[resource_profiling.collection.workload.cgroup.v2.managed]
+root = "/sys/fs/cgroup/system.slice/actraild.service"
+recovery_scan_limit = 1024
 finalization_timeout_ms = 30000
-orphan_limit = 1024
+
+[resource_profiling.alerts]
 memory_alert_current_bytes = "1073741824"
 ```
 
-`auto` is the default mode and permits fallback when managed cgroup
-setup is unavailable; `cgroup-v2` requires successful preflight. Once moving the
-stopped launch PID commits admission, later errors fail admission rather than
-silently switching accounting. Ordinary host attachment has no managed launch
-scope and continues to use procfs. Check accounting method, coverage and fallback
-metadata on events before interpreting measurements.
+Workload `auto` permits admission fallback to procfs when a cgroup source cannot
+bind the target. Explicit workload `cgroup` mode requires successful binding.
+Once moving the stopped launch PID commits admission, later errors fail admission.
+Check accounting method, coverage and fallback metadata on samples before
+interpreting measurements.
 
 The daemon stays in its own leaf; launches enter trace workload leaves before
 exec and descendants inherit membership. After trace completion, sampling waits
-for an empty scope, persists one final event, and removes the empty scope. A
-timeout produces partial coverage and does not kill surviving descendants.
-Durable scope records support recovery after daemon restart.
+for an empty scope and submits a final sample. Control completion is persisted
+before removing the empty scope. A timeout produces partial coverage and leaves
+surviving descendants running. Durable control records support restart recovery.
+If a recovered scope has disappeared, recovery marks the trace terminal and
+degraded and records a diagnostic. Failed final counter reads are bounded by the
+finalization timeout. Nested empty directories are cleaned with retry after
+partial progress.
 
-If a recovered scope has disappeared, recovery persists a partial final sample,
-marks the trace terminal and degraded, and records a diagnostic. Failed final
-counter reads are bounded by the finalization timeout even when the scope is empty.
-Nested empty directories are cleaned with retry after partial progress. Archived
-databases can be opened read-only without first running a writable migration.
+Host CPU, memory and load use `[resource_profiling.collection.host]`.
+Its `enabled` and `interval_ms` settings default to `true` and `1000`. Host samples
+are identified by kernel boot ID. Host CPU uses total machine capacity as 100%;
+workload CPU uses one logical CPU as 100%. The first sample has no CPU rate until
+a baseline exists.
 
-See the [validation record](../designs/resource-metrics-validation.md) and
-[review fixes and staged contract fields](../designs/resource-metrics-host-review-fixes.md).
+## Storage and queries
+
+```toml
+[resource_profiling.storage]
+backend = "database"
+queue_capacity_batches = 64
+
+[resource_profiling.storage.database]
+backend = "sqlite"
+
+[resource_profiling.storage.database.sqlite]
+path = "./actrail-resources.sqlite"
+write_timeout_ms = 1000
+
+[resource_profiling.storage.database.sqlite.retention]
+enabled = true
+max_age_seconds = 604800
+sweep_interval_seconds = 60
+max_samples_per_sweep = 4096
+```
+
+The resource SQLite path may point to the same file as the main SQLite storage.
+Set both paths explicitly to the same absolute path to share the file. Each
+backend owns its tables and retention policy. Separate resource databases are
+also supported. The daemon opens configured resource databases before enabling
+fanotify and excludes their database, WAL and SHM files from self interception.
+
+Output is best-effort. Bounded queues and write timeouts isolate storage failures
+from collection and control completion. Full queues or failed writes may lose
+samples, including final samples. Resource retention runs during writes and is
+independent of trace retention.
+
+`remote` sends to Prometheus remote-write or InfluxDB line-protocol endpoints.
+`hybrid` sends independently to a configured list of database and remote backends.
+See the [configuration layout](../architecture/resource_profiling/04.config-layout.md)
+for each branch's fields.
+
+```bash
+actrailviewer --config operator.toml --output-format json host-resources --limit 100
+actrailviewer --config operator.toml --output-format json workload-resources --trace-id trace-1 --limit 100
+```
+
+Resource commands open the configured resource database read-only.
+`--storage-path` supplies a resource SQLite database directly. Hybrid queries
+require exactly one database child. Remote-only data is queried through the
+receiving service. Web serves workload samples at
+`GET /api/traces/{id}/resources?limit=100` on the originating host.
+
+Main storage schema version 42 requires a database created with the current
+schema. An incompatible database is rejected at startup.
 
 ## Verification
 
 ```bash
-cargo test -p linux_cgroup -p linux_platform -p config_core -p sqlite_storage
-cargo test -p daemon -p view -p web
-python3 -m unittest tests.v2.regression.resource_metrics_cgroup.test_case
+cargo build --release -p daemon -p ctl -p view -p web
+python3 tests/process/resource-profiling/e2e.py --out tmp/resource-profiling-e2e
+python3 tests/process/resource-profiling/storage_e2e.py --out tmp/resource-storage-e2e --prometheus /path/to/prometheus --influxd /path/to/influxd
 sudo -E python3 tests/v2/regression/test_all.py --no-profile --case resource_metrics_cgroup
 ```
 
-The privileged regression needs root, cgroup v2, systemd 254+ and release daemon,
-CLI and viewer binaries. A prerequisite skip is not acceptance evidence. It tests
-hierarchy placement, inherited membership, final events, restart and timeout.
-The SQLite tests include frozen DDL from `fb5a6c68` to exercise existing databases.
-
-See the [design](../designs/resource-metrics-cgroup-implementation-plan.md),
-[RSS/COW experiment](../designs/resource-metrics-rss-accounting/README.md), and
-[three-PR plan](../designs/resource-metrics-pr-split-plan.md). Experiment results
-describe the historical revision recorded there, not this rebased branch.
+The process tests launch real Xiaoo workloads with refreshed default configuration.
+The storage test uses real Prometheus and InfluxDB receivers and an unavailable
+Hybrid child to verify independent output. The privileged cgroup v2 regression
+requires root, cgroup v2 and systemd 254+; it checks hierarchy placement, inherited
+membership, completion, restart and timeout. Missing prerequisites are reported as
+skips.

@@ -93,7 +93,10 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
     if let Some(host_id) = daemon::host_id::get() {
         tracing::info!(host_id = %host_id, "actraild host id resolved");
     }
-    let enforcement = enforcement_with_builtin_rules(config_path, config)?;
+    let mut resource_config =
+        resource_profiling::ResourceProfilingConfig::parse(&config.resource_profiling)?;
+    resource_config.resolve_paths(config_path.parent().unwrap_or_else(|| Path::new(".")));
+    let enforcement = enforcement_with_builtin_rules(config_path, config, &resource_config)?;
     let ebpf_resolution = resolve_ebpf_collector_config(config.ebpf_config.clone());
     if let Some(detail) = &ebpf_resolution.degrade_detail {
         tracing::warn!(detail = %detail, "actraild ebpf auto-degraded");
@@ -118,7 +121,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.idle_detection.clone(),
             config.file_observation.clone(),
             config.application_protocol.clone(),
-            config.resource_metrics.clone(),
+            resource_config,
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
             config.alert_forwarding.clone(),
@@ -148,7 +151,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.idle_detection.clone(),
             config.file_observation.clone(),
             config.application_protocol.clone(),
-            config.resource_metrics.clone(),
+            resource_config,
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
             config.alert_forwarding.clone(),
@@ -395,6 +398,7 @@ fn run_plugin_command(
 fn enforcement_with_builtin_rules(
     config_path: &Path,
     config: &OperatorConfig,
+    resource_config: &resource_profiling::ResourceProfilingConfig,
 ) -> Result<EnforcementConfig, String> {
     let mut enforcement = config.enforcement.clone();
     append_builtin_rule(&mut enforcement, "actrail.self.config", config_path)?;
@@ -412,6 +416,13 @@ fn enforcement_with_builtin_rules(
             &mut enforcement,
             "actrail.self.storage-shm",
             &path_with_suffix(path, "-shm"),
+        )?;
+    }
+    for (index, path) in resource_config.local_files().iter().enumerate() {
+        append_builtin_rule(
+            &mut enforcement,
+            &format!("actrail.self.resource-storage-{index}"),
+            path,
         )?;
     }
     append_builtin_rule(

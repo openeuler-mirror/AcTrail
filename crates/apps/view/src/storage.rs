@@ -32,9 +32,18 @@ pub fn render_storage_view(invocation: ViewInvocation) -> Result<String, String>
         }
     }
 
+    if matches!(
+        invocation.command,
+        StorageCommand::HostResources | StorageCommand::WorkloadResources
+    ) {
+        return crate::resource_source::ResourceSource::render(&invocation);
+    }
     let storage_config = source::storage_config(&invocation)?;
     let mut storage = source::open_storage(&storage_config)?;
     match invocation.command {
+        StorageCommand::HostResources | StorageCommand::WorkloadResources => {
+            unreachable!("resource commands use resource storage")
+        }
         StorageCommand::Traces => {
             let traces = source::list_traces(storage.as_ref())?;
             Ok(match invocation.output_format {

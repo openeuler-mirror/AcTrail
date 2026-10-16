@@ -51,12 +51,12 @@ use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
-use model_core::resource_scope::TraceResourceScope;
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityError;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
 use recording_runtime::RecordingWriter;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action_runtime::LiveSemanticActionRuntime;
 use storage_core::StorageBackend;
 use trace_runtime::commands::TrackTraceRequest;
@@ -74,7 +74,7 @@ use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
 use crate::services::process_seccomp::{ProcessSeccompObservation, ProcessSeccompService};
-use crate::services::resource_metrics::ResourceMetricsSampler;
+use crate::services::resource_profiling::ResourceProfilingAdapter;
 use crate::services::retention::StorageRetentionService;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
@@ -127,7 +127,7 @@ pub(crate) struct StorageAttachService {
     pub(super) semantic_retention: SemanticRetentionConfig,
     pub(super) file_observation: FileObservationConfig,
     pub(super) application_protocol: ApplicationProtocolAnalyzer,
-    pub(super) resource_metrics: ResourceMetricsSampler,
+    pub(super) resource_metrics: ResourceProfilingAdapter,
     pub(super) storage_retention: StorageRetentionService,
     pub(super) enforcement: FileEnforcementService,
     pub(super) control_plugins: ControlPluginRuntime,
@@ -382,16 +382,15 @@ impl StorageAttachService {
             let entry = trace_runtime.get_trace(bootstrap.trace_id).ok_or_else(|| {
                 ControlError::new("trace_missing", "trace disappeared during bootstrap")
             })?;
-            let root_pid = bootstrap
-                .root_observation
-                .host
-                .as_ref()
-                .map(|host| host.pid)
-                .ok_or_else(|| ControlError::new("pid_resolution", "root host PID is missing"))?;
-            match self
-                .resource_metrics
-                .admit_stopped_launch(entry, root_pid, command.launch_mode)
-            {
+            let coordinates =
+                bootstrap.root_observation.host.as_ref().ok_or_else(|| {
+                    ControlError::new("pid_resolution", "root host PID is missing")
+                })?;
+            match self.resource_metrics.admit_stopped_launch(
+                entry,
+                coordinates,
+                command.launch_mode,
+            ) {
                 Ok(scope) => scope,
                 Err(error) => {
                     let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());

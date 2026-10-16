@@ -8,7 +8,7 @@ enabled = false
 http1_enabled = false
 http2_enabled = false
 
-[resource_metrics]
+[resource_profiling]
 enabled = false
 
 [payload.stdio]

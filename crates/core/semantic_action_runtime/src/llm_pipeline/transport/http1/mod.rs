@@ -1,3 +1,4 @@
+mod content_decoder;
 mod decoder;
 mod resynchronizer;
 

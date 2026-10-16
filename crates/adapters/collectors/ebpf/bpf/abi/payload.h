@@ -58,8 +58,8 @@ struct actrail_socket_payload_event {
 
 struct actrail_socket_payload_completion_event {
     __u32 kind;
-    __u32 pid;
-    __u32 tid;
+    __u32 observer_tgid;
+    __u32 observer_tid;
     __u32 direction;
     __u64 trace_id;
     __u64 observed_ktime_ns;
@@ -73,8 +73,8 @@ struct actrail_socket_payload_completion_event {
     __u32 flags;
     __u32 syscall;
     __u32 fd_generation;
-    __u32 host_pid;
-    __u32 host_tid;
+    __u32 kernel_tgid;
+    __u32 kernel_tid;
 };
 enum actrail_stdio_payload_abi {
     ACTRAIL_STDIO_PAYLOAD_ABI_MAX_BYTES = 4096,

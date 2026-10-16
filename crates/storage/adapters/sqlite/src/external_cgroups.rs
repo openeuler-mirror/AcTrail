@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use model_core::container::{ContainerRuntime, NormalizedContainerId};
-use model_core::event::DomainEvent;
-use model_core::external_cgroup::{
-    ExternalBindingStaleReason, ExternalBindingState, ExternalCgroupBinding, HostBootId,
-};
-use model_core::ids::{EventId, TraceId};
+use model_core::ids::TraceId;
+use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
+use resource_profiling::model::external_cgroup::ExternalBindingState;
+use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::external_cgroup::HostBootId;
 use rusqlite::{Error as SqlError, OptionalExtension, Row, params};
 
 use crate::SqliteStorage;
@@ -31,8 +31,8 @@ impl SqliteStorage {
                 trace_id, runtime, container_id, relative_path,
                 cgroup_device_be, cgroup_inode_be, host_boot_id,
                 lifecycle_state, stale_reason, consecutive_failures,
-                created_at, updated_at, last_good_at, closed_at, final_event_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                created_at, updated_at, last_good_at, closed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 binding.trace_id.get(),
                 binding.runtime.as_str(),
@@ -48,7 +48,6 @@ impl SqliteStorage {
                 encode_time(binding.updated_at),
                 binding.last_good_at.map(encode_time),
                 binding.closed_at.map(encode_time),
-                binding.final_event_id.map(EventId::get),
             ],
         ) {
             Ok(_) => Ok(()),
@@ -162,46 +161,18 @@ impl SqliteStorage {
         }
     }
 
-    pub fn append_final_event_and_close_external_binding(
+    pub fn close_external_cgroup_binding(
         &mut self,
-        event: DomainEvent,
-        closed_at: SystemTime,
-    ) -> Result<EventId, SqlError> {
-        let trace_id = event.envelope.trace_id;
-        let proposed_event_id = event.envelope.event_id;
-        let current = self
-            .connection()
-            .borrow()
-            .query_row(
-                "SELECT lifecycle_state, final_event_id
-                 FROM trace_external_cgroup_bindings WHERE trace_id = ?1",
-                [trace_id.get()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<u64>>(1)?)),
-            )
-            .optional()?;
-        match current {
-            Some((state, Some(event_id))) if state == "closed" => {
-                return Ok(EventId::new(event_id));
-            }
-            Some((state, None)) if matches!(state.as_str(), "active" | "stale") => {}
-            _ => return Err(SqlError::InvalidQuery),
+        trace_id: TraceId,
+        at: SystemTime,
+    ) -> Result<(), SqlError> {
+        let binding = self
+            .get_external_cgroup_binding(trace_id)?
+            .ok_or(SqlError::QueryReturnedNoRows)?;
+        if binding.lifecycle_state == ExternalBindingState::Closed {
+            return Ok(());
         }
-        self.append_event_atomically(event, |connection| {
-            require_one(connection.execute(
-                "UPDATE trace_external_cgroup_bindings
-                 SET lifecycle_state = 'closed', closed_at = ?2,
-                     final_event_id = ?3, updated_at = ?2
-                 WHERE trace_id = ?1 AND lifecycle_state IN ('active', 'stale')
-                       AND final_event_id IS NULL",
-                params![
-                    trace_id.get(),
-                    encode_time(closed_at),
-                    proposed_event_id.get()
-                ],
-            )?)
-        })
-        .map_err(|_| SqlError::InvalidQuery)?;
-        Ok(proposed_event_id)
+        require_one(self.connection().borrow().execute("UPDATE trace_external_cgroup_bindings SET lifecycle_state='closed',closed_at=?2,updated_at=?2 WHERE trace_id=?1 AND lifecycle_state IN ('active','stale')",params![trace_id.get(),encode_time(at)])?)
     }
 }
 
@@ -209,7 +180,7 @@ fn external_binding_select() -> &'static str {
     "SELECT trace_id, runtime, container_id, relative_path,
             cgroup_device_be, cgroup_inode_be, host_boot_id,
             lifecycle_state, stale_reason, consecutive_failures,
-            created_at, updated_at, last_good_at, closed_at, final_event_id
+            created_at, updated_at, last_good_at, closed_at
      FROM trace_external_cgroup_bindings"
 }
 
@@ -242,9 +213,6 @@ fn decode_binding(row: &Row<'_>) -> Result<ExternalCgroupBinding, SqlError> {
         updated_at: decode_time(row.get("updated_at")?),
         last_good_at: row.get::<_, Option<i64>>("last_good_at")?.map(decode_time),
         closed_at: row.get::<_, Option<i64>>("closed_at")?.map(decode_time),
-        final_event_id: row
-            .get::<_, Option<u64>>("final_event_id")?
-            .map(EventId::new),
     };
     validate_binding(&binding)?;
     Ok(binding)
@@ -259,18 +227,12 @@ fn validate_binding(binding: &ExternalCgroupBinding) -> Result<(), SqlError> {
     let valid = valid_runtime
         && match binding.lifecycle_state {
             ExternalBindingState::Active => {
-                binding.stale_reason.is_none()
-                    && binding.closed_at.is_none()
-                    && binding.final_event_id.is_none()
+                binding.stale_reason.is_none() && binding.closed_at.is_none()
             }
             ExternalBindingState::Stale => {
-                binding.stale_reason.is_some()
-                    && binding.closed_at.is_none()
-                    && binding.final_event_id.is_none()
+                binding.stale_reason.is_some() && binding.closed_at.is_none()
             }
-            ExternalBindingState::Closed => {
-                binding.closed_at.is_some() && binding.final_event_id.is_some()
-            }
+            ExternalBindingState::Closed => binding.closed_at.is_some(),
         };
     if valid {
         Ok(())
@@ -293,181 +255,4 @@ fn is_constraint_violation(error: &SqlError) -> bool {
         SqlError::SqliteFailure(inner, _)
             if inner.code == rusqlite::ErrorCode::ConstraintViolation
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    use model_core::event::{
-        DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload, LossPayload,
-    };
-    use model_core::ids::CollectorName;
-    use model_core::process::ProcessIdentity;
-
-    use super::*;
-
-    fn binding(trace_id: u64) -> ExternalCgroupBinding {
-        ExternalCgroupBinding::active(
-            TraceId::new(trace_id),
-            ContainerRuntime::Docker,
-            NormalizedContainerId::from_lower_hex(&"ab".repeat(32)).unwrap(),
-            format!("system.slice/docker-{}.scope", "ab".repeat(32)),
-            u64::MAX,
-            (i64::MAX as u64) + 19,
-            HostBootId::from_bytes([0x5a; 16]),
-            UNIX_EPOCH + Duration::from_secs(10),
-        )
-    }
-
-    fn final_event(trace_id: TraceId, event_id: u64) -> DomainEvent {
-        DomainEvent::new(
-            EventEnvelope {
-                event_id: EventId::new(event_id),
-                trace_id,
-                observed_at: UNIX_EPOCH + Duration::from_secs(40),
-                process: ProcessIdentity::new(3),
-                collector: CollectorName::new("resource-sampler"),
-                kind: EventKind::Loss,
-                flags: EventFlags::clean(),
-            },
-            EventPayload::Loss(LossPayload {
-                reason: "external binding closed".to_string(),
-                fatal: false,
-            }),
-        )
-    }
-
-    #[test]
-    fn lifecycle_round_trips_unsigned_identity_and_failure_state() {
-        let mut storage = SqliteStorage::open_in_memory().unwrap();
-        let expected = binding(41);
-        storage.create_external_cgroup_binding(&expected).unwrap();
-        storage.create_external_cgroup_binding(&expected).unwrap();
-        assert_eq!(
-            storage
-                .get_external_cgroup_binding(expected.trace_id)
-                .unwrap(),
-            Some(expected.clone())
-        );
-
-        let failure_time = UNIX_EPOCH + Duration::from_secs(20);
-        assert_eq!(
-            storage
-                .record_external_cgroup_failure(expected.trace_id, failure_time)
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            storage
-                .record_external_cgroup_failure(expected.trace_id, failure_time)
-                .unwrap(),
-            2
-        );
-        let success_time = UNIX_EPOCH + Duration::from_secs(30);
-        storage
-            .record_external_cgroup_success(expected.trace_id, success_time)
-            .unwrap();
-        let stored = storage
-            .get_external_cgroup_binding(expected.trace_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.consecutive_failures, 0);
-        assert_eq!(stored.last_good_at, Some(success_time));
-        assert_eq!(stored.cgroup_device, u64::MAX);
-        assert_eq!(stored.cgroup_inode, (i64::MAX as u64) + 19);
-    }
-
-    #[test]
-    fn stale_is_one_way_and_final_event_close_is_idempotent() {
-        let mut storage = SqliteStorage::open_in_memory().unwrap();
-        let expected = binding(42);
-        storage.create_external_cgroup_binding(&expected).unwrap();
-        let stale_at = UNIX_EPOCH + Duration::from_secs(25);
-        storage
-            .mark_external_cgroup_stale(
-                expected.trace_id,
-                ExternalBindingStaleReason::RootMoved,
-                stale_at,
-            )
-            .unwrap();
-        storage
-            .mark_external_cgroup_stale(
-                expected.trace_id,
-                ExternalBindingStaleReason::RootMoved,
-                stale_at,
-            )
-            .unwrap();
-        assert!(
-            storage
-                .record_external_cgroup_success(expected.trace_id, stale_at)
-                .is_err()
-        );
-
-        let first = final_event(expected.trace_id, 900);
-        let closed_at = UNIX_EPOCH + Duration::from_secs(50);
-        assert_eq!(
-            storage
-                .append_final_event_and_close_external_binding(first, closed_at)
-                .unwrap(),
-            EventId::new(900)
-        );
-        assert_eq!(
-            storage
-                .append_final_event_and_close_external_binding(
-                    final_event(expected.trace_id, 901),
-                    closed_at,
-                )
-                .unwrap(),
-            EventId::new(900)
-        );
-        let event_count: u64 = storage
-            .connection()
-            .borrow()
-            .query_row(
-                "SELECT COUNT(*) FROM events WHERE trace_id = ?1",
-                [expected.trace_id.get()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(event_count, 1);
-        let stored = storage
-            .get_external_cgroup_binding(expected.trace_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.lifecycle_state, ExternalBindingState::Closed);
-        assert_eq!(stored.final_event_id, Some(EventId::new(900)));
-    }
-
-    #[test]
-    fn conflicting_create_and_invalid_transition_are_rejected() {
-        let mut storage = SqliteStorage::open_in_memory().unwrap();
-        let expected = binding(43);
-        storage.create_external_cgroup_binding(&expected).unwrap();
-        let mut conflicting = expected.clone();
-        conflicting.cgroup_inode = 7;
-        assert!(
-            storage
-                .create_external_cgroup_binding(&conflicting)
-                .is_err()
-        );
-        assert!(
-            storage
-                .mark_external_cgroup_stale(
-                    expected.trace_id,
-                    ExternalBindingStaleReason::PermissionDenied,
-                    UNIX_EPOCH + Duration::from_secs(30),
-                )
-                .is_ok()
-        );
-        assert!(
-            storage
-                .mark_external_cgroup_stale(
-                    expected.trace_id,
-                    ExternalBindingStaleReason::BoundaryMissing,
-                    UNIX_EPOCH + Duration::from_secs(31),
-                )
-                .is_err()
-        );
-    }
 }

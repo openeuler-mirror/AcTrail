@@ -124,6 +124,7 @@ import {
   readCommands,
   readTraceDiagnostics,
   readTraceEvents,
+  readTraceResources,
   readTracePayloads,
   readTraceProcesses,
   readTraceSummary,
@@ -503,6 +504,8 @@ async function ensureTracePartForActiveTab() {
   }
   if (activeTab.value === TAB_IDS.timeline) {
     await ensureTracePart(traceId, 'timeline', readTraceTimeline);
+  } else if (activeTab.value === TAB_IDS.resources) {
+    await ensureTracePart(traceId, 'resources', readTraceResources);
   } else if (eventBackedTab(activeTab.value)) {
     await ensureTracePart(traceId, 'events', readTraceEvents);
   } else if (activeTab.value === TAB_IDS.payloads) {
@@ -780,8 +783,7 @@ function eventBackedTab(tab) {
   return (
     tab === TAB_IDS.events ||
     tab === TAB_IDS.files ||
-    tab === TAB_IDS.network ||
-    tab === TAB_IDS.resources
+    tab === TAB_IDS.network
   );
 }
 

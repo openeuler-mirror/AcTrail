@@ -209,6 +209,15 @@ impl CgroupV2CounterReader {
         parse_populated(&self.read_required("cgroup.events", "cgroup.events")?)
     }
 
+    /// Enumerate from the retained directory object, even if its former path
+    /// has been removed and reused. Descendant symlinks remain forbidden.
+    pub fn read_subtree_pids(&self) -> Result<Vec<u32>, CgroupError> {
+        let directory = PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd()));
+        let mut pids = BTreeSet::new();
+        collect_subtree_pids_recursive(&directory, &mut pids)?;
+        Ok(pids.into_iter().collect())
+    }
+
     pub fn read_counters(&mut self) -> Result<CgroupCounters, CgroupError> {
         let memory_current_bytes = parse_single_u64(
             &self.read_required("memory.current", "memory.current")?,

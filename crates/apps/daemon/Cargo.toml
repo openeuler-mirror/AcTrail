@@ -45,6 +45,7 @@ sandbox_resource_alert = { path = "../../plugins/sandbox_resource_alert" }
 sandbox_upstream_transport = { path = "../../adapters/sandbox_link/upstream" }
 plugin_wasm_runtime = { path = "../../core/plugin_wasm_runtime" }
 process_identity = { path = "../../core/process_identity" }
+resource_profiling = { path = "../../core/resource_profiling" }
 process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
 provider_evidence = { path = "../../contracts/provider_label/evidence" }
 provider_label = { path = "../../contracts/provider_label/label" }

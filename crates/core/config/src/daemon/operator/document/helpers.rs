@@ -75,22 +75,6 @@ pub(super) fn require_zstd_level(key: &'static str, value: i32) -> Result<i32, S
     }
 }
 
-pub(super) fn parse_disabled_or_positive_u64(
-    key: &'static str,
-    raw: &str,
-) -> Result<Option<u64>, String> {
-    if raw == "disabled" {
-        return Ok(None);
-    }
-    let value = raw
-        .parse::<u64>()
-        .map_err(|error| format!("invalid {key}: {error}"))?;
-    if value == u64::default() {
-        return Err(format!("invalid {key}: value must be positive or disabled"));
-    }
-    Ok(Some(value))
-}
-
 pub(super) fn parse_duration_millis(
     key: &'static str,
     raw: &str,
@@ -196,12 +180,6 @@ pub(super) fn memlock_rlimit_as_str(value: MemlockRlimit) -> String {
         MemlockRlimit::Unlimited => "unlimited".to_string(),
         MemlockRlimit::Bytes(bytes) => format!("bytes:{bytes}"),
     }
-}
-
-pub(super) fn disabled_or_u64_as_string(value: Option<u64>) -> String {
-    value
-        .map(|raw| raw.to_string())
-        .unwrap_or_else(|| "disabled".to_string())
 }
 
 pub(super) fn payload_tls_capture_backend_as_str(value: PayloadTlsCaptureBackend) -> &'static str {

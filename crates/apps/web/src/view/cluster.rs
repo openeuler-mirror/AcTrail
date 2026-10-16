@@ -578,7 +578,7 @@ fn trace_row_json(row: &ClusterTraceRow) -> String {
 
 fn counts_json(row: &ClusterTraceRow) -> String {
     format!(
-        "{{\"events\":{},\"process\":{},\"net\":0,\"file\":0,\"ipc\":0,\"stdio\":0,\"application\":0,\"resource\":0,\"control\":0,\"loss\":0,\"label\":0,\"enforcement\":0,\"payloads\":{},\"retained_payload_bytes\":{},\"diagnostics\":{},\"actions\":{},\"links\":{}}}",
+        "{{\"events\":{},\"process\":{},\"net\":0,\"file\":0,\"ipc\":0,\"stdio\":0,\"application\":0,\"control\":0,\"loss\":0,\"label\":0,\"enforcement\":0,\"payloads\":{},\"retained_payload_bytes\":{},\"diagnostics\":{},\"actions\":{},\"links\":{}}}",
         row.event_count,
         row.process_count,
         row.payload_segment_count,

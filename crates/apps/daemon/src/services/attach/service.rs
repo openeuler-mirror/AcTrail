@@ -35,10 +35,12 @@ impl StorageAttachService {
             memberships,
             process_records,
             self.resource_metrics.external_binding(trace_id),
+            self.resource_metrics.v1_binding(trace_id),
         ) {
             self.resource_metrics.finish_external_finalization(trace_id);
             return Err(ControlError::new(error.stage, error.message));
         }
+        self.resource_metrics.activate_v1(trace_id);
         if emit_bootstrap_diagnostic {
             let diagnostic = DiagnosticRecord::new(
                 self.next_diagnostic_id()?,
@@ -510,7 +512,8 @@ fn persist_admitted_trace(
     trace: model_core::trace::TraceRecord,
     memberships: Vec<model_core::process::ProcessMembership>,
     processes: Vec<ProcessRecord>,
-    binding: Option<model_core::external_cgroup::ExternalCgroupBinding>,
+    binding: Option<resource_profiling::model::external_cgroup::ExternalCgroupBinding>,
+    v1_binding: Option<resource_profiling::model::cgroup_v1_binding::CgroupV1Binding>,
 ) -> Result<(), storage_core::StorageError> {
     let transaction = storage.begin()?;
     let result = (|| {
@@ -520,6 +523,9 @@ fn persist_admitted_trace(
         storage.create_trace(trace)?;
         for membership in memberships {
             storage.upsert_membership(membership)?;
+        }
+        if let Some(binding) = v1_binding {
+            storage.create_cgroup_v1_binding(&binding)?;
         }
         if let Some(binding) = binding {
             storage.create_external_cgroup_binding(binding)?;
@@ -539,10 +545,10 @@ fn persist_admitted_trace(
 mod admission_tests {
     use super::*;
     use model_core::container::{ContainerRuntime, NormalizedContainerId};
-    use model_core::external_cgroup::{ExternalCgroupBinding, HostBootId};
     use model_core::ids::{OtelTraceId, ProfileName, TraceId, TraceName};
     use model_core::process::{HostProcessCoordinates, ProcessMembership};
     use model_core::trace::{TraceAlertToken, TraceRecord};
+    use resource_profiling::model::external_cgroup::{ExternalCgroupBinding, HostBootId};
 
     #[test]
     fn binding_failure_rolls_back_trace_processes_and_memberships_then_retry_commits() {
@@ -584,7 +590,8 @@ mod admission_tests {
                 trace.clone(),
                 vec![member.clone()],
                 vec![record.clone()],
-                Some(binding.clone())
+                Some(binding.clone()),
+                None
             )
             .is_err()
         );
@@ -599,6 +606,7 @@ mod admission_tests {
             vec![member],
             vec![record],
             Some(binding),
+            None,
         )
         .unwrap();
         assert!(storage.get_trace(id).unwrap().is_some());

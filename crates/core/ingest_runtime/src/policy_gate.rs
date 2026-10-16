@@ -60,22 +60,7 @@ fn payload_fields(payload: &EventPayload) -> BTreeMap<String, String> {
             fields.insert("operation".to_string(), payload.operation.clone());
             fields.insert("summary".to_string(), payload.summary.clone());
         }
-        EventPayload::Resource(payload) => {
-            fields.insert("scope".to_string(), payload.scope.clone());
-            fields.insert("subject".to_string(), payload.subject.clone());
-            fields.insert(
-                "accounting_method".to_string(),
-                payload.accounting_method.as_str().to_string(),
-            );
-            fields.insert(
-                "accounting_coverage".to_string(),
-                payload.accounting_coverage.as_str().to_string(),
-            );
-            fields.insert(
-                "sample_kind".to_string(),
-                payload.sample_kind.as_str().to_string(),
-            );
-        }
+
         EventPayload::Control(payload) => {
             fields.insert("action".to_string(), payload.action.clone());
         }
