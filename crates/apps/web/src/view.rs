@@ -1,13 +1,15 @@
 //! Storage-backed API view rendering.
 
-#[path = "view/action_tree_projection.rs"]
-mod action_tree_projection;
+#[path = "view/action_content.rs"]
+mod action_content;
+pub(crate) use action_content::ActionContentView;
 #[path = "view/action_tree_roles.rs"]
 mod action_tree_roles;
 #[path = "view/actions.rs"]
 mod actions;
 #[path = "view/agent_idle.rs"]
 mod agent_idle;
+pub(crate) use agent_idle::IdleView;
 #[path = "view/alerts.rs"]
 mod alerts;
 #[path = "view/cluster.rs"]
@@ -22,18 +24,21 @@ mod events;
 mod llm_trajectory;
 #[path = "view/payloads.rs"]
 mod payloads;
-#[path = "view/projection_cache.rs"]
-mod projection_cache;
 #[path = "view/runtime_config.rs"]
 mod runtime_config;
 #[path = "view/stats.rs"]
 mod stats;
 #[path = "view/time_attribution.rs"]
 mod time_attribution;
+#[path = "view/timeline.rs"]
+mod timeline;
+pub(crate) use timeline::trace_counts_json;
 #[path = "view/topology.rs"]
 mod topology;
 #[path = "view/traces.rs"]
 mod traces;
+pub(crate) use timeline::{TimelineView, trace_metadata_json};
+pub(crate) use traces::trace_page_json;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,7 +46,7 @@ use model_core::ids::{RequestId, TraceId};
 use model_core::payload::PayloadSegmentId;
 use storage_core::{
     PayloadSegmentQuery, SemanticActionChildPageQuery, SnapshotView, StorageBackend,
-    StorageOpenMode, TraceFilter, TraceLeasePurpose,
+    StorageOpenMode, TraceLeasePurpose,
 };
 use storage_factory::{StorageConfig, open_storage_backend};
 
@@ -128,19 +133,6 @@ pub(super) fn web_request_id() -> Result<RequestId, String> {
     let millis = u64::try_from(duration.as_millis())
         .map_err(|_| "system clock millis overflowed request id")?;
     Ok(RequestId::new(millis))
-}
-
-pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
-    let storage = open_storage(storage_config)?;
-    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
-    let traces = storage
-        .list_traces(&TraceFilter::default())
-        .map_err(|error| format!("list traces failed: {}: {}", error.stage, error.message))?;
-    let rows = traces
-        .iter()
-        .map(|trace| process_display.render_trace(trace))
-        .collect::<Vec<_>>();
-    Ok(format!("{{\"traces\":[{}]}}", rows.join(",")))
 }
 
 pub fn token_usage_stats_json(
@@ -294,12 +286,12 @@ pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<Strin
 
 pub fn trace_summary_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
-    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let trace_id = TraceId::new(trace_id);
     let trace = storage
         .get_trace(trace_id)
         .map_err(|error| format!("read trace failed: {}: {}", error.stage, error.message))?
         .ok_or_else(|| format!("trace {trace_id} not found"))?;
+    let process_display = traces::ProcessDisplayIndex::for_trace(storage.as_ref(), &trace)?;
     let variant_counts = storage.count_events_by_variant(trace_id).map_err(|error| {
         format!(
             "count events by variant failed: {}: {}",
@@ -433,28 +425,8 @@ pub fn trace_diagnostics_json(
 }
 
 pub fn clear_cache_json() -> Result<String, String> {
-    let cleared = projection_cache::clear_projection_cache()
-        .saturating_add(time_attribution::clear_time_attribution_cache());
+    let cleared = time_attribution::clear_time_attribution_cache();
     Ok(format!("{{\"cleared\":{cleared}}}"))
-}
-
-pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
-    let mut storage = open_storage(storage_config)?;
-    actions::action_tree_json(
-        storage_config
-            .path()
-            .ok_or("action tree projection requires SQLite storage")?,
-        storage.as_mut(),
-        TraceId::new(trace_id),
-    )
-}
-
-pub fn waterfall_initial_json(
-    storage_config: &StorageConfig,
-    trace_id: u64,
-) -> Result<String, String> {
-    let mut storage = open_storage(storage_config)?;
-    actions::waterfall_initial_json(storage.as_mut(), TraceId::new(trace_id))
 }
 
 pub fn action_tree_root_json(
@@ -594,18 +566,11 @@ pub fn action_mcp_jsonrpc_content_json(
     )
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LlmRequestContentNodeQuery {
-    pub pointer: String,
-    pub offset: usize,
-    pub limit: usize,
-}
-
 pub fn action_llm_request_content_node_json(
     storage_config: &StorageConfig,
     trace_id: u64,
     action_id: &str,
-    query: LlmRequestContentNodeQuery,
+    query: storage_core::ContentNodeQuery,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::llm_request_content_node_json(

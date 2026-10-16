@@ -1,3 +1,4 @@
+// Format semantic action labels and targets consistently across trace views.
 import { mcpActionMeta } from '../mcp/messageClassification.js';
 
 const FILE_ACTION_KINDS = new Set([
@@ -11,6 +12,9 @@ const FILE_ACTION_KINDS = new Set([
 
 export function semanticActionLabel(action) {
   const attributes = action?.attributes ?? {};
+  if (action?.kind === 'http.message') {
+    return action.title || action.kind;
+  }
   if (action?.kind === 'process.exec' && action.status === 'error') {
     const errno = Number(attributes.errno ?? attributes['syscall.result']);
     return Math.abs(errno) === 2 ? 'process.exec (not found)' : 'process.exec (failed)';

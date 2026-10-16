@@ -40,24 +40,19 @@
       </header>
       <div class="trace-layout">
         <nav class="recent-traces" :aria-label="t('stats.agent.trace.recent')">
+          <TraceListControls :pager="tracePages" />
           <button
             v-for="trace in railTraces"
             :key="trace.id"
+            :data-trace-id="trace.id"
             type="button"
             :class="{ active: selectedTraceId === trace.id }"
             @click="selectTrace(trace.id)"
           ><strong>{{ trace.name }}</strong><small>#{{ trace.id }} · {{ trace.state }}</small></button>
-          <button
-            v-if="hiddenTraceCount"
-            class="add-trace"
-            type="button"
-            :title="t('stats.agent.trace.add', { count: hiddenTraceCount })"
-            :aria-label="t('stats.agent.trace.add', { count: hiddenTraceCount })"
-            @click="addTrace"
-          >+{{ hiddenTraceCount }}</button>
           <p v-if="!railTraces.length">{{ t('stats.agent.empty.traces') }}</p>
         </nav>
         <div class="trace-drilldown">
+          <p v-if="selectedTraceId != null" class="selected-trace-label">{{ selectedMetadata?.name ?? selectedTraceId }} · #{{ selectedTraceId }}</p>
           <CompactTraceTimeline
             :segments="model.traceTimelineSegments"
             :mode="timelineMode"
@@ -138,7 +133,8 @@
 
 <script setup>
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { readLlmRequestsActivity, readTimeAttributionActivity, readTraceTimeAttribution } from '../../../api';
+import { readLlmRequestsActivity, readTimeAttributionActivity, readTraceTimeAttribution, readTraceMetadata } from '../../../api';
+import TraceListControls from '../../traces/TraceListControls.vue';
 import Hint from '../../../components/Hint.vue';
 import { useLocale } from '../../../locale';
 import { defaultRange, formatLatencyUs, formatNumber, rangeToMillis } from '../llm/model';
@@ -150,11 +146,10 @@ import { AgentStatsModel, formatDurationNanos } from './model';
 const InputTokenDistributionChart = defineAsyncComponent(() => import('./InputTokenDistributionChart.vue'));
 const ToolMixPanel = defineAsyncComponent(() => import('./ToolMixPanel.vue'));
 
-const props = defineProps({ traces: { type: Array, required: true }, refreshNonce: { type: Number, default: 0 } });
+const props = defineProps({ tracePages: { type: Object, required: true }, traces: { type: Array, required: true }, refreshNonce: { type: Number, default: 0 } });
 const emit = defineEmits(['loading', 'open-trace']);
 const { t } = useLocale();
 const range = ref(defaultRange());
-const DEFAULT_VISIBLE_TRACES = 3;
 const TIMELINE_MODE_STORAGE_KEY = 'actrail.stats.timeline-mode';
 const timelineModes = Object.freeze([{ id: 'compact' }, { id: 'actual' }]);
 const timelineMode = ref(readTimelineMode());
@@ -163,17 +158,13 @@ const llm = ref(null);
 const attribution = ref(null);
 const traceAttribution = ref(null);
 const selectedTraceId = ref(null);
-const visibleTraceCount = ref(DEFAULT_VISIBLE_TRACES);
+const selectedMetadata = ref(null);
 const loading = ref(false);
 const traceLoading = ref(false);
 const error = ref('');
 let controller = null;
 let traceController = null;
-// `/api/traces` answers oldest-first, so the rail sorts by creation time and
-// keeps the remaining traces behind the add entry.
-const orderedTraces = computed(() => [...props.traces].sort(compareTraceRecency));
-const railTraces = computed(() => orderedTraces.value.slice(0, visibleTraceCount.value));
-const hiddenTraceCount = computed(() => Math.max(orderedTraces.value.length - railTraces.value.length, 0));
+const railTraces = computed(() => props.traces);
 const model = computed(() => new AgentStatsModel({ llm: llm.value, attribution: attribution.value, trace: traceAttribution.value }));
 const traceTimeSeries = computed(() => localizedTimeSeries(
   traceAttribution.value ? model.value.traceTimeSeries : model.value.timeSeries,
@@ -184,7 +175,7 @@ watch(timelineMode, (mode) => {
   window.localStorage.setItem(TIMELINE_MODE_STORAGE_KEY, mode);
 });
 watch(railTraces, (rows) => {
-  if (!rows.some((row) => row.id === selectedTraceId.value)) selectTrace(rows[0]?.id ?? null);
+  if (selectedTraceId.value == null && rows.length) selectTrace(rows[0].id);
 }, { immediate: true });
 watch(loading, (value) => emit('loading', value));
 onMounted(reload);
@@ -225,8 +216,11 @@ async function reload() {
 
 async function selectTrace(traceId) {
   traceController?.abort();
+  if (String(selectedTraceId.value) !== String(traceId)) {
+    selectedMetadata.value = null;
+    traceAttribution.value = null;
+  }
   selectedTraceId.value = traceId;
-  traceAttribution.value = null;
   if (traceId == null) {
     traceController = null;
     traceLoading.value = false;
@@ -236,8 +230,15 @@ async function selectTrace(traceId) {
   traceController = activeController;
   traceLoading.value = true;
   try {
-    const result = await readTraceTimeAttribution(traceId, { signal: activeController.signal });
-    if (traceController === activeController) traceAttribution.value = result;
+    const metadata = readTraceMetadata(traceId, { signal: activeController.signal }).then((result) => {
+      if (traceController === activeController) selectedMetadata.value = result.trace;
+    });
+    const attribution = readTraceTimeAttribution(traceId, { signal: activeController.signal }).then((result) => {
+      if (traceController === activeController) traceAttribution.value = result;
+    });
+    const results = await Promise.allSettled([metadata, attribution]);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
   } catch (cause) {
     if (traceController === activeController && cause.name !== 'AbortError') error.value = cause.message;
   } finally {
@@ -249,18 +250,6 @@ async function selectTrace(traceId) {
 }
 
 function formatDecimal(value) { return value == null ? '—' : Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 }); }
-function addTrace() { visibleTraceCount.value += 1; }
-function compareTraceRecency(left, right) {
-  const delta = traceCreatedNanos(right) - traceCreatedNanos(left);
-  return delta === 0n ? 0 : delta > 0n ? 1 : -1;
-}
-function traceCreatedNanos(trace) {
-  try {
-    return BigInt(trace?.created_at_unix_nanos ?? 0);
-  } catch {
-    return 0n;
-  }
-}
 function readTimelineMode() {
   const stored = window.localStorage.getItem(TIMELINE_MODE_STORAGE_KEY);
   return stored === 'actual' ? 'actual' : 'compact';

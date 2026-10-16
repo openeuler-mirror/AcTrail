@@ -1,3 +1,4 @@
+// Present HTTP endpoints, response status and captured content in action details.
 import { chip, compactChips, compactRows, firstPresent } from '../detail/insight.js';
 
 export function buildHttpDetailInsight(detail) {
@@ -31,8 +32,6 @@ export function buildHttpDetailInsight(detail) {
       endpointUrl,
       contentType: isResponse ? null : attrs.content_type,
       contentLength: isResponse ? null : attrs.content_length,
-      streamKey: attrs['payload.stream_key'] ?? attrs.stream_key,
-      sourceBoundary: attrs['payload.source_boundary'] ?? attrs.source_boundary,
     }),
     statusBlock({
       statusCode,
@@ -40,7 +39,6 @@ export function buildHttpDetailInsight(detail) {
       contentType: isResponse ? attrs.content_type : null,
       contentLength: isResponse ? attrs.content_length : null,
       bodyFormat: attrs['http.response.body_format'],
-      requestActionId: isResponse ? attrs['http.request.action_id'] : null,
     }),
     bodyBlock({
       bodyText: attrs['http.body_text'],
@@ -78,8 +76,6 @@ function endpointBlock({
   endpointUrl,
   contentType,
   contentLength,
-  streamKey,
-  sourceBoundary,
 }) {
   if (!website && !endpoint && !endpointUrl) {
     return null;
@@ -90,8 +86,6 @@ function endpointBlock({
     endpoint,
     content_type: contentType,
     content_length: contentLength,
-    stream_key: streamKey,
-    source_boundary: sourceBoundary,
   });
   return {
     id: 'http-endpoint',
@@ -102,14 +96,13 @@ function endpointBlock({
   };
 }
 
-function statusBlock({ statusCode, reason, contentType, contentLength, bodyFormat, requestActionId }) {
-  if (!statusCode && !reason && !bodyFormat && !requestActionId) {
+function statusBlock({ statusCode, reason, contentType, contentLength, bodyFormat }) {
+  if (!statusCode && !reason && !bodyFormat) {
     return null;
   }
   const rows = compactRows({
     status_code: statusCode,
     reason,
-    request_action_id: requestActionId,
     content_type: contentType,
     content_length: contentLength,
     body_format: bodyFormat,

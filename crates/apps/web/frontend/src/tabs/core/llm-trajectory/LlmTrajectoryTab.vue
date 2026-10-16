@@ -24,16 +24,9 @@
       </div>
       <div class="trajectory-legend">
         <span><i class="legend-line solid"></i>{{ t('legendStrictPrefix') }}</span>
-        <span><i class="legend-line dashed"></i>{{ t('legendInferredDelegation') }}</span>
       </div>
       <p v-if="graph?.partial" class="capability-warning">
         {{ t('partialGraph') }}
-      </p>
-      <p v-if="correlationLoading" class="summary-note" role="status">
-        {{ t('checking') }}
-      </p>
-      <p v-if="correlationError || offline.unavailable" class="capability-warning" role="status">
-        {{ t('contentUnavailable') }}
       </p>
     </aside>
 
@@ -141,12 +134,11 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 
-import { readActionDetail, readActionLlmRequestContent, readWaterfall } from '../../../api';
+import { readActionDetail } from '../../../api';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import FullscreenSurface from '../../../components/FullscreenSurface.vue';
 import { useModuleLocale } from '../../../locale';
 import { buildTrajectoryLayout } from './model';
-import { OfflineAgentCorrelation } from './offline-correlation.js';
 import strings from './locale';
 
 const { t } = useModuleLocale(strings);
@@ -160,10 +152,6 @@ const props = defineProps({
     type: Object,
     default: null,
   },
-  correlationOptions: {
-    type: Object,
-    default: () => ({}),
-  },
 });
 
 const selectedNodeId = ref(null);
@@ -171,13 +159,7 @@ const selectedDetail = ref(null);
 const detailError = ref('');
 let activeDetailLoad = null;
 
-const offline = ref({ edges: [], unavailable: 0 });
-const correlationLoading = ref(false);
-const correlationError = ref(false);
-const graph = computed(() => {
-  const recorded = props.trajectoryGraph ?? emptyGraph();
-  return { ...recorded, edges: [...(recorded.edges ?? []), ...offline.value.edges] };
-});
+const graph = computed(() => props.trajectoryGraph ?? emptyGraph());
 const layout = computed(() => buildTrajectoryLayout(graph.value));
 const summaryRows = computed(() => {
   const stats = graph.value.stats ?? {};
@@ -186,7 +168,6 @@ const summaryRows = computed(() => {
     ['Trajectories', stats.trajectory_count ?? 0],
     [t('stats.appendEdges'), stats.append_count ?? 0],
     [t('stats.forkEdges'), stats.fork_count ?? 0],
-    [t('stats.inferredDelegations'), offline.value.edges.length],
     [t('stats.duplicateRoots'), stats.duplicate_count ?? 0],
     [t('stats.stronglyLinked'), formatRatio(stats.strongly_linked_node_ratio)],
     [t('stats.duplicateRatio'), formatRatio(stats.duplicate_node_ratio)],
@@ -196,31 +177,6 @@ const summaryRows = computed(() => {
 watch(
   () => props.traceKey,
   () => clearDetail(),
-);
-
-watch(
-  () => [props.traceKey, props.trajectoryGraph, props.correlationOptions],
-  async ([traceKey, recorded, options], _previous, onCleanup) => {
-    const controller = new AbortController();
-    onCleanup(() => controller.abort());
-    offline.value = { edges: [], unavailable: 0 };
-    correlationError.value = false;
-    correlationLoading.value = false;
-    if (traceKey == null || !recorded) return;
-    const correlation = new OfflineAgentCorrelation({
-      readWaterfall, readActionDetail, readRequestContent: readActionLlmRequestContent,
-    }, options);
-    correlationLoading.value = true;
-    try {
-      const result = await correlation.derive(traceKey, recorded, controller.signal);
-      if (!controller.signal.aborted) offline.value = result;
-    } catch (error) {
-      if (!controller.signal.aborted) correlationError.value = true;
-    } finally {
-      if (!controller.signal.aborted) correlationLoading.value = false;
-    }
-  },
-  { immediate: true },
 );
 
 async function selectNode(node) {
@@ -401,10 +357,7 @@ function emptyGraph() {
   border-top: 2px solid currentColor;
 }
 
-.legend-line.dashed {
-  border-top-style: dashed;
-  opacity: 0.45;
-}
+
 
 .trajectory-viewport {
   position: relative;
@@ -430,9 +383,7 @@ function emptyGraph() {
   opacity: 0.9;
 }
 
-.edge-delegation {
-  stroke-dasharray: 6 4;
-}
+
 
 .lane-reuse-marker {
   color: var(--ui-muted);

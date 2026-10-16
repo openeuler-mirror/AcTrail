@@ -1,3 +1,4 @@
+<!-- Load selected action details and reveal request content on demand. -->
 <template>
   <aside v-if="shouldRender" class="detail-panel">
     <div class="detail-header">
@@ -10,7 +11,20 @@
       </button>
     </div>
 
+    <template v-if="detail?.raw?.kind === 'llm.request'">
+      <p v-if="panelError" class="detail-error">{{ panelError }}</p>
+      <LlmInsightPanel :detail="detail" :trace-id="traceId" />
+    </template>
+    <template v-else-if="detail?.raw?.kind === 'llm.response'">
+      <p v-if="panelError" class="detail-error">{{ panelError }}</p>
+      <LlmResponseContent :key="detail.raw.id" :detail="detail" />
+    </template>
+    <template v-else-if="detail?.raw?.kind === 'http.message'">
+      <p v-if="panelError" class="detail-error">{{ panelError }}</p>
+      <HttpInsightPanel :detail="detail" :trace-id="traceId" />
+    </template>
     <ProgressiveDisclosure
+      v-else
       v-model:expanded="showAllDetails"
       :enabled="progressiveDetails"
     >
@@ -29,16 +43,7 @@
 
         <LlmInsightPanel
           :detail="detail"
-          :request-content="llmRequestContent"
-          :request-loading="llmRequestLoading"
-          :request-error="llmRequestError"
-          :request-content-available="llmRequestContentAvailable"
-          @load-request-content="loadLlmRequestContent"
-        />
-        <LlmRequestCanonicalBody
           :trace-id="traceId"
-          :action-id="llmRequestActionId(detail)"
-          :metadata="llmRequestContentMetadata"
         />
         <HttpInsightPanel :detail="detail" />
         <CommandInsightPanel :detail="detail" />
@@ -51,6 +56,12 @@
       </template>
 
       <template #secondary>
+        <dl v-if="secondaryRows.length" class="detail-rows detail-secondary-rows">
+          <template v-for="[key, value] in secondaryRows" :key="key">
+            <dt>{{ key }}</dt>
+            <dd>{{ value }}</dd>
+          </template>
+        </dl>
         <section v-if="Object.keys(detailAttributes).length" class="detail-section">
           <h3>Attributes</h3>
           <JsonTree
@@ -110,7 +121,6 @@ import { ChevronDown, X } from '@lucide/vue';
 
 import {
   readActionFilePathSet,
-  readActionLlmRequestContent,
   readActionMcpJsonRpcContent,
   readPayload,
 } from '../api';
@@ -118,18 +128,23 @@ import CommandInsightPanel from './CommandInsightPanel.vue';
 import HttpInsightPanel from './HttpInsightPanel.vue';
 import JsonTree from './JsonTree.vue';
 import LlmInsightPanel from './LlmInsightPanel.vue';
+import LlmResponseContent from './llm/LlmResponseContent.vue';
 import McpInsightPanel from './McpInsightPanel.vue';
 import ProgressiveDisclosure from './ProgressiveDisclosure.vue';
-import LlmRequestCanonicalBody from './llm/LlmRequestCanonicalBody.vue';
 import { useModuleLocale } from '../locale';
 import strings from './locale';
 import { deriveMcpJsonRpcView, mcpJsonRpcContentSource } from '../mcp/jsonRpcContent';
 import { mcpPayloadEvidenceIds } from '../mcp/payloadEvidence';
+import { formatTime } from '../tabs/tableModel';
 
 const { t } = useModuleLocale(strings);
 
-const LLM_REQUEST_DETAIL_MAX_BYTES = 128 * 1024;
 const EMPTY_JSON_EXPANDED_PATHS = new Set();
+const FOCUSED_ROW_KEYS = new Set([
+  'target', 'status', 'completeness', 'started', 'ended', 'start_offset',
+  'duration', 'display_duration', 'ttft', 'output_tokens', 'total_tokens',
+  'model', 'exit_code', 'activities', 'interval',
+]);
 
 const props = defineProps({
   detail: {
@@ -171,18 +186,24 @@ const filePathSetError = ref('');
 const filePathSetLoading = ref(false);
 const filePathSetNextOffset = ref(0);
 const filePathSetHasMore = ref(false);
-const llmRequestContent = ref(null);
-const llmRequestError = ref('');
-const llmRequestLoading = ref(false);
 const showAllDetails = ref(false);
 const jsonExpansionByKey = ref(new Map());
 let activePayloadLoad = null;
 let activeFilePathSetLoad = null;
-let activeLlmRequestLoad = null;
 
 const detailTitle = computed(() => props.detail?.title ?? t('detail.noSelection'));
 const detailKind = computed(() => props.detail?.kind ?? 'detail');
-const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}));
+// Focus on the selected action; retain association metadata in the expanded view.
+const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}).filter(([key, value]) => (
+  !props.progressiveDetails || (FOCUSED_ROW_KEYS.has(key)
+    && !(key === 'completeness' && value === 'complete'))
+)).map(([key, value]) => [key,
+  props.progressiveDetails && (key === 'started' || key === 'ended') ? formatTime(value) : value,
+]));
+const secondaryRows = computed(() => props.progressiveDetails
+  ? Object.entries(props.detail?.rows ?? {}).filter(([key]) => (
+    !FOCUSED_ROW_KEYS.has(key) && key !== 'classification' && key !== 'semantic_label'
+  )) : []);
 const detailAttributes = computed(() => props.detail?.attributes ?? {});
 const detailRawValue = computed(() => props.detail?.raw ?? null);
 const MCP_PAYLOAD_DETAIL_KINDS = new Set([
@@ -195,21 +216,6 @@ const isMcpPayloadDetail = computed(() => MCP_PAYLOAD_DETAIL_KINDS.has(props.det
 const mcpPayload = computed(() => mcpPayloadView.value ?? payloadText.value);
 const mcpPayloadError = computed(() => (isMcpPayloadDetail.value ? payloadError.value : ''));
 const genericPayloadError = computed(() => (isMcpPayloadDetail.value ? '' : payloadError.value));
-const llmRequestContentMetadata = computed(() => {
-  const action = props.detail?.raw;
-  if (action?.kind !== 'llm.request') {
-    return null;
-  }
-  const attributes = action.attributes ?? {};
-  return {
-    state: attributes['llm.request.content_state'],
-    payloadBytes: attributes['llm.request.payload_bytes'],
-    blocks: attributes['llm.request.block_count'],
-  };
-});
-const llmRequestContentAvailable = computed(() => {
-  return llmRequestContentMetadata.value?.state === 'canonical_blocks';
-});
 const panelError = computed(() => props.error || genericPayloadError.value || filePathSetError.value);
 const shouldRender = computed(() => !props.hideWhenEmpty || Boolean(props.detail || panelError.value));
 const hasFilePathSet = computed(
@@ -231,9 +237,9 @@ const filePathSetRows = computed(() => {
 watch(
   () => [props.detail, props.traceId],
   ([nextDetail, traceId]) => {
+    showAllDetails.value = false;
     resetPayloadLoad();
     resetFilePathSetLoad();
-    resetLlmRequestLoad();
     let semanticMcpContent = null;
     let payloadSourceValid = true;
     try {
@@ -288,13 +294,6 @@ function resetFilePathSetLoad() {
   filePathSetHasMore.value = false;
 }
 
-function resetLlmRequestLoad() {
-  activeLlmRequestLoad = Symbol();
-  llmRequestContent.value = null;
-  llmRequestError.value = '';
-  llmRequestLoading.value = false;
-}
-
 async function loadPayloads(traceId, payloadIds, token) {
   try {
     payloadLoading.value = true;
@@ -347,39 +346,6 @@ async function loadMcpJsonRpcContent({
   }
 }
 
-async function loadLlmRequestContent() {
-  const actionId = llmRequestActionId(props.detail);
-  const token = activeLlmRequestLoad;
-  if (!props.traceId || !actionId || !llmRequestContentAvailable.value || llmRequestLoading.value) {
-    return;
-  }
-  try {
-    llmRequestLoading.value = true;
-    llmRequestError.value = '';
-    const response = await readActionLlmRequestContent(props.traceId, actionId, {
-      maxBytes: LLM_REQUEST_DETAIL_MAX_BYTES,
-    });
-    if (activeLlmRequestLoad === token) {
-      if (response.content?.truncated) {
-        llmRequestError.value = t('detail.requestInsightsTooLarge', {
-          kib: LLM_REQUEST_DETAIL_MAX_BYTES / 1024,
-        });
-        llmRequestContent.value = null;
-      } else {
-        llmRequestContent.value = response.content ?? null;
-      }
-    }
-  } catch (err) {
-    if (activeLlmRequestLoad === token) {
-      llmRequestError.value = String(err.message ?? err);
-    }
-  } finally {
-    if (activeLlmRequestLoad === token) {
-      llmRequestLoading.value = false;
-    }
-  }
-}
-
 async function loadMoreFilePathSet() {
   if (!props.detail?.filePathSetActionId || !props.traceId) {
     return;
@@ -423,14 +389,6 @@ async function loadFilePathSetPage({ traceId, actionId, pageSize, offset, append
       filePathSetLoading.value = false;
     }
   }
-}
-
-function llmRequestActionId(detail) {
-  const action = detail?.raw;
-  if (action?.kind === 'llm.request') {
-    return action.id;
-  }
-  return null;
 }
 
 function detailPayloadIds(detail) {

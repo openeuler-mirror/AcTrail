@@ -11,6 +11,7 @@ import urllib.request
 from pathlib import Path
 
 from .config import actrail_command, operator_config_path, read_config, required, run_checked
+from .lazy_tree import LazyTreeReader
 
 EPHEMERAL_PORT = 0
 NODE_ID_AGENT = "agent-process"
@@ -228,11 +229,7 @@ def require_web_time_attribution(
             timeout_seconds,
             poll_interval_seconds,
         )
-        action_tree = fetch_action_tree_json(
-            action_tree_url,
-            "",
-            timeout_seconds,
-        )
+        action_tree = LazyTreeReader(action_tree_url, timeout_seconds).collect()
         attribution = wait_for_time_attribution(
             attribution_url,
             timeout_seconds,
@@ -981,23 +978,13 @@ def read_web_action_tree_projection(
     required_parent_child_kinds: tuple[tuple[str, str], ...],
 ) -> dict[str, object]:
     wait_for_action_tree_root(base_url, timeout_seconds, poll_interval_seconds)
-    full = fetch_action_tree_json(base_url, "", timeout_seconds)
-    page_limit = action_tree_page_limit(full)
     seen: set[str] = set()
-    stack = [NODE_ID_AGENT]
     kind_counts: dict[str, int] = {}
     kind_by_id: dict[str, str] = {}
     parent_child_kind_counts: dict[tuple[str, str], int] = {}
     root_linkless_kinds: list[str] = []
-    while stack:
-        parent_id = stack.pop()
+    for parent_id, children in LazyTreeReader(base_url, timeout_seconds).pages():
         parent_kind = kind_by_id.get(parent_id)
-        children = fetch_action_tree_json(
-            base_url,
-            action_tree_children_path(parent_id, page_limit),
-            timeout_seconds,
-        )
-        child_state = {row["id"]: row for row in children.get("child_state", [])}
         linked_child_ids = {link.get("child") for link in children.get("links", [])}
         for action in children.get("actions", []):
             action_id = action.get("id")
@@ -1014,17 +1001,8 @@ def read_web_action_tree_projection(
             if parent_kind is not None:
                 pair = (parent_kind, kind)
                 parent_child_kind_counts[pair] = parent_child_kind_counts.get(pair, 0) + 1
-            state = child_state.get(action_id, {})
-            if state.get("has_children") and state.get("child_count", 0) > 0:
-                stack.append(action_id)
-    all_ids = {
-        action["id"]
-        for action in full.get("actions", [])
-        if isinstance(action.get("id"), str)
-    }
-    missing = sorted(all_ids - seen)
-    if missing:
-        raise RuntimeError("web action-tree has unreachable display actions: " + ", ".join(missing))
+    if not seen:
+        raise RuntimeError("web action-tree has no display actions")
     missing_kinds = [kind for kind in required_reachable_kinds if kind_counts.get(kind, 0) == 0]
     if missing_kinds:
         raise RuntimeError(
@@ -1058,31 +1036,13 @@ def read_web_action_tree_projection(
             + ", ".join(f"{parent}->{child}" for parent, child in missing_parent_child)
         )
     return {
-        "action_count": len(all_ids),
+        "action_count": len(seen),
         "reachable_count": len(seen),
         "kind_counts": kind_counts,
         "parent_child_kind_counts": parent_child_kind_counts,
         "root_linkless_count": len(root_linkless_kinds),
         "root_linkless_kinds": root_linkless_kinds,
     }
-
-
-def action_tree_page_limit(full_tree: dict) -> int:
-    action_count = len(
-        [
-            action
-            for action in full_tree.get("actions", [])
-            if isinstance(action.get("id"), str)
-        ]
-    )
-    if action_count == 0:
-        raise RuntimeError("web action-tree has no display actions")
-    return action_count
-
-
-def action_tree_children_path(parent_id: str, page_limit: int) -> str:
-    encoded_parent = urllib.parse.quote(parent_id, safe="")
-    return f"/children/{encoded_parent}?offset=0&limit={page_limit}"
 
 
 def wait_for_action_tree_root(

@@ -94,6 +94,7 @@
       <div id="app-content" ref="contentRef" class="app-content" tabindex="-1">
         <DashboardWorkspace
           v-if="activeWorkspace === WORKSPACE_IDS.dashboard"
+          :traces="traces"
           :refresh-nonce="refreshNonce"
           @open-workspace="activeWorkspace = $event"
           @loading="setWorkspaceLoading"
@@ -101,6 +102,7 @@
         <StatsWorkspace
           v-else-if="activeWorkspace === WORKSPACE_IDS.stats"
           :traces="traces"
+          :trace-pages="tracePages"
           :query="query"
           :refresh-nonce="refreshNonce"
           :notified-alert-id="lastNotifiedAlertId"
@@ -128,6 +130,7 @@
         <TraceWorkspace
           v-else
           :traces="traces"
+          :trace-pages="tracePages"
           :query="query"
           :refresh-nonce="refreshNonce"
           :pending-trace-selection="pendingTraceSelection"
@@ -189,6 +192,7 @@ import {
 } from '@lucide/vue';
 
 import { clearServerCache, listTraces } from './api';
+import { TracePages } from './workspaces/traces/pages.js';
 import ToolbarIconPicker from './components/ToolbarIconPicker.vue';
 import Tooltip from './components/Tooltip.vue';
 import DashboardWorkspace from './workspaces/DashboardWorkspace.vue';
@@ -243,7 +247,8 @@ const sidebarFrozenWidth = ref('auto');
 const sidebarRef = ref(null);
 const contentRef = ref(null);
 let sidebarAnimationTimer = null;
-const traces = ref([]);
+const tracePages = new TracePages(listTraces);
+const traces = tracePages.rows;
 const query = ref('');
 const error = ref('');
 const refreshing = ref(false);
@@ -308,9 +313,10 @@ watch(sidebarCollapsed, (collapsed) => {
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
 });
 
-onMounted(refresh);
+onMounted(() => tracePages.refresh());
 
 onBeforeUnmount(() => {
+  tracePages.cancel();
   window.clearTimeout(sidebarAnimationTimer);
   for (const timer of notificationTimers.values()) {
     window.clearTimeout(timer);
@@ -350,8 +356,7 @@ async function refresh() {
     refreshing.value = true;
     error.value = '';
     await clearServerCache();
-    const data = await listTraces();
-    traces.value = data.traces ?? [];
+    await tracePages.refresh();
     refreshNonce.value += 1;
   } catch (err) {
     error.value = String(err.message ?? err);

@@ -91,17 +91,6 @@ pub(super) fn link_json(link: &SemanticActionLink) -> String {
     )
 }
 
-pub(super) fn link_json_lite(link: &SemanticActionLink) -> String {
-    format!(
-        "{{\"parent\":{},\"child\":{},\"role\":{},\"origin\":{},\"valid\":{}}}",
-        json::string(&link.parent_action_id),
-        json::string(&link.child_action_id),
-        json::string(link.role.as_str()),
-        json::string(link.origin.as_str()),
-        json::boolean(link.valid)
-    )
-}
-
 fn evidence_json(evidence: &[SemanticEvidence]) -> String {
     let rows = evidence
         .iter()

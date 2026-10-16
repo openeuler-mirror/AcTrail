@@ -1,7 +1,6 @@
-//! Semantic action tree JSON for the web UI.
+//! Semantic action details and bounded content pages for the web UI.
 
 use std::path::Path;
-use std::time::SystemTime;
 
 use model_core::ids::TraceId;
 use semantic_action::{
@@ -13,114 +12,27 @@ use storage_core::{
     SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
 };
 
-use super::action_tree_projection::{
-    ActionDisplayProjection, DisplayChild, LlmCallDisplay, LlmToolDisplay,
-};
+use super::LlmNavMode;
 use super::action_tree_roles::{DISPLAY_PARENT_ROLES, NODE_ID_AGENT, ROOT_LINK_ROLES};
-use super::agent_idle::{AgentIdleInterval, AgentIdleProjection};
-use super::projection_cache;
-use super::{LlmNavMode, LlmRequestContentNodeQuery};
 use crate::json;
 
 #[path = "actions/serialization.rs"]
 mod serialization;
 
+use serialization::link_json;
 pub(super) use serialization::{action_json, action_json_lite};
-use serialization::{link_json, link_json_lite};
 
-const WATERFALL_INITIAL_ACTION_KINDS: &[&str] = &[
-    "command.invocation",
-    "agent.invocation",
-    "llm.call",
-    "llm.request",
-    "llm.response",
-];
-const WATERFALL_INITIAL_LINK_ROLES: &[&str] = &[
-    "agent.performed_action",
-    "agent.invocation.exec",
-    "agent.invocation.child_llm_request",
-    "command.contains_command_invocation",
-    "command.contains_llm_call",
-    "llm.call.request",
-    "llm.call.response",
-    "llm.request.llm_response",
-];
+#[path = "actions/llm_call_display.rs"]
+mod llm_call_display;
+#[path = "actions/llm_tool_display.rs"]
+mod llm_tool_display;
+use llm_call_display::LlmCallDisplay;
+use llm_tool_display::LlmToolDisplay;
 
-pub(super) fn action_tree_json(
-    storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-) -> Result<String, String> {
-    projection_cache::sync_trace_revision(storage, storage_path, trace_id);
-    let projection =
-        projection_cache::cached_action_display_projection(storage_path, trace_id, || {
-            ActionDisplayProjection::load(storage, trace_id)
-        })?;
-    let roots = projection
-        .root_action_ids
-        .iter()
-        .map(|action_id| json::string(action_id))
-        .collect::<Vec<_>>();
-    let actions = projection
-        .actions
-        .iter()
-        .map(action_json_lite)
-        .collect::<Vec<_>>();
-    let links = projection
-        .links
-        .iter()
-        .map(link_json_lite)
-        .collect::<Vec<_>>();
-    let associations = projection
-        .associations
-        .iter()
-        .map(link_json_lite)
-        .collect::<Vec<_>>();
-    let idle_intervals = AgentIdleProjection::load(storage, trace_id)?;
-    let idle_intervals_json = idle_intervals
-        .iter()
-        .map(AgentIdleInterval::json)
-        .collect::<Vec<_>>();
-    let axis_end = axis_end_unix_nanos(&projection.actions, &idle_intervals);
-    Ok(format!(
-        "{{\"roots\":[{}],\"actions\":[{}],\"links\":[{}],\"associations\":[{}],\"idle_intervals\":[{}],\"axis_end_unix_nanos\":{}}}",
-        roots.join(","),
-        actions.join(","),
-        links.join(","),
-        associations.join(","),
-        idle_intervals_json.join(","),
-        axis_end,
-    ))
-}
-
-pub(super) fn waterfall_initial_json(
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-) -> Result<String, String> {
-    let mut actions = storage
-        .semantic_actions_matching_kinds_lite(trace_id, WATERFALL_INITIAL_ACTION_KINDS)
-        .map_err(|error| storage_error("read waterfall actions", error))?;
-    LlmCallDisplay::normalize_loaded(&mut actions);
-    let links = storage
-        .semantic_action_links_matching_roles(trace_id, WATERFALL_INITIAL_LINK_ROLES)
-        .map_err(|error| storage_error("read waterfall links", error))?;
-    let idle_intervals = AgentIdleProjection::load(storage, trace_id)?;
-    let selected = actions.len();
-    let axis_end = axis_end_unix_nanos(&actions, &idle_intervals);
-    let actions = actions.iter().map(action_json_lite).collect::<Vec<_>>();
-    let links = links.iter().map(link_json_lite).collect::<Vec<_>>();
-    let idle_intervals = idle_intervals
-        .iter()
-        .map(AgentIdleInterval::json)
-        .collect::<Vec<_>>();
-    Ok(format!(
-        "{{\"actions\":[{}],\"links\":[{}],\"idle_intervals\":[{}],\"axis_end_unix_nanos\":{},\"selected_actions\":{},\"partial\":true}}",
-        actions.join(","),
-        links.join(","),
-        idle_intervals.join(","),
-        axis_end,
-        json::number(selected)
-    ))
+struct DisplayChild {
+    action: SemanticAction,
+    link: Option<semantic_action::SemanticActionLink>,
+    child_count: usize,
 }
 
 pub(super) fn action_tree_root_json(
@@ -383,135 +295,71 @@ pub(super) fn llm_request_content_node_json(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
     action_id: &str,
-    query: LlmRequestContentNodeQuery,
+    query: storage_core::ContentNodeQuery,
 ) -> Result<String, String> {
     let content = storage
-        .llm_request_content_page(trace_id, action_id, usize::MAX)
+        .llm_request_content_node(trace_id, action_id, &query)
         .map_err(|error| storage_error("read LLM request content node", error))?;
     let Some(content) = content else {
-        return Ok("{\"content\":null}".to_string());
+        return Ok("{\"content\":null}".into());
     };
-    let body = serde_json::from_str::<Value>(&content.body_json)
-        .map_err(|error| format!("parse canonical LLM request body failed: {error}"))?;
-    let node = body
-        .pointer(&query.pointer)
-        .ok_or_else(|| format!("JSON Pointer not found: {}", query.pointer))?;
-    let node_json = llm_request_node_json(node, &query);
     serde_json::to_string(&json_value!({
         "content": {
             "action_id": content.action_id,
             "format_version": content.format_version,
             "canonical_body_bytes": content.canonical_body_bytes,
-            "pointer": query.pointer,
-            "node": node_json,
+            "pointer": content.pointer,
+            "node": ContentNodeJson::render(content.node),
         }
     }))
     .map_err(|error| format!("serialize LLM request content node failed: {error}"))
 }
 
-fn llm_request_node_json(node: &Value, query: &LlmRequestContentNodeQuery) -> Value {
-    match node {
-        Value::Object(object) => {
-            let total = object.len();
-            let children = object
-                .iter()
-                .skip(query.offset)
-                .take(query.limit)
-                .map(|(key, value)| {
-                    llm_request_child_json(key, &json_pointer_child(&query.pointer, key), value)
-                })
-                .collect::<Vec<_>>();
-            branch_node_json("object", total, children, query)
+struct ContentNodeJson;
+
+impl ContentNodeJson {
+    fn render(node: storage_core::ContentNode) -> Value {
+        use storage_core::{ContentNode, ContentNodeKind};
+        match node {
+            ContentNode::Branch {
+                kind,
+                total_children,
+                offset,
+                limit,
+                next_offset,
+                children,
+            } => {
+                let children = children.into_iter().map(|child| json_value!({
+                    "token":child.token, "pointer":child.pointer, "type":child.kind.as_str(),
+                    "expandable":matches!(child.kind, ContentNodeKind::Array | ContentNodeKind::Object),
+                    "child_count":child.child_count,
+                })).collect::<Vec<_>>();
+                json_value!({"type":kind.as_str(), "expandable":true, "total_children":total_children,
+                    "offset":offset, "limit":limit, "next_offset":next_offset,
+                    "has_more":next_offset.is_some(), "children":children})
+            }
+            ContentNode::Leaf {
+                value,
+                value_bytes,
+                returned_bytes,
+                offset,
+                next_offset,
+                truncated,
+            } => {
+                let kind = match &value {
+                    Value::Null => "null",
+                    Value::Bool(_) => "boolean",
+                    Value::Number(_) => "number",
+                    Value::String(_) => "string",
+                    Value::Array(_) => "array",
+                    Value::Object(_) => "object",
+                };
+                json_value!({"type":kind, "expandable":false, "value":value,
+                    "offset":offset, "next_offset":next_offset, "has_more":next_offset.is_some(),
+                    "value_bytes":value_bytes, "returned_bytes":returned_bytes, "truncated":truncated})
+            }
         }
-        Value::Array(array) => {
-            let total = array.len();
-            let children = array
-                .iter()
-                .enumerate()
-                .skip(query.offset)
-                .take(query.limit)
-                .map(|(index, value)| {
-                    let token = index.to_string();
-                    llm_request_child_json(
-                        &token,
-                        &json_pointer_child(&query.pointer, &token),
-                        value,
-                    )
-                })
-                .collect::<Vec<_>>();
-            branch_node_json("array", total, children, query)
-        }
-        Value::Null => json_value!({
-            "type": "null",
-            "expandable": false,
-            "value": Value::Null,
-        }),
-        Value::Bool(value) => leaf_node_json("boolean", Value::Bool(*value)),
-        Value::Number(value) => leaf_node_json("number", Value::Number(value.clone())),
-        Value::String(value) => leaf_node_json("string", Value::String(value.clone())),
     }
-}
-
-fn branch_node_json(
-    kind: &str,
-    total: usize,
-    children: Vec<Value>,
-    query: &LlmRequestContentNodeQuery,
-) -> Value {
-    let returned = children.len();
-    let next_offset = query.offset.saturating_add(returned);
-    let has_more = next_offset < total;
-    json_value!({
-        "type": kind,
-        "expandable": true,
-        "total_children": total,
-        "offset": query.offset,
-        "limit": query.limit,
-        "next_offset": has_more.then_some(next_offset),
-        "has_more": has_more,
-        "children": children,
-    })
-}
-
-fn leaf_node_json(kind: &str, value: Value) -> Value {
-    json_value!({
-        "type": kind,
-        "expandable": false,
-        "value": value,
-    })
-}
-
-fn llm_request_child_json(token: &str, pointer: &str, value: &Value) -> Value {
-    json_value!({
-        "token": token,
-        "pointer": pointer,
-        "type": json_value_type(value),
-        "expandable": matches!(value, Value::Object(_) | Value::Array(_)),
-        "child_count": json_value_child_count(value),
-    })
-}
-
-fn json_value_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-fn json_value_child_count(value: &Value) -> Option<usize> {
-    match value {
-        Value::Array(array) => Some(array.len()),
-        Value::Object(object) => Some(object.len()),
-        _ => None,
-    }
-}
-
-fn json_pointer_child(parent: &str, token: &str) -> String {
-    format!("{parent}/{}", token.replace('~', "~0").replace('/', "~1"))
 }
 
 fn display_parent_role_names() -> Vec<&'static str> {
@@ -634,49 +482,6 @@ fn summary_json(summary: SemanticActionSummary) -> String {
 
 fn storage_error(stage: &str, error: StorageError) -> String {
     format!("{} failed: {}: {}", stage, error.stage, error.message)
-}
-
-/// Server-provided timeline axis end: `max(last_observed_at, server_now)` so
-/// open intervals and unfinished actions extend with server time, not the
-/// browser clock. Completed traces keep their last observed end; extending
-/// those to "now" would render a huge empty tail after the trace ended.
-fn axis_end_unix_nanos(actions: &[SemanticAction], intervals: &[AgentIdleInterval]) -> String {
-    let now = SystemTime::now();
-    let end = latest_observed_at(actions, intervals).unwrap_or(now);
-    let axis_end = if has_live_item(actions, intervals) {
-        end.max(now)
-    } else {
-        end
-    };
-    json::time_nanos(axis_end)
-}
-
-fn has_live_item(actions: &[SemanticAction], intervals: &[AgentIdleInterval]) -> bool {
-    actions.iter().any(|action| action.end_time.is_none())
-        || intervals.iter().any(|interval| interval.end_time.is_none())
-}
-
-fn latest_observed_at(
-    actions: &[SemanticAction],
-    intervals: &[AgentIdleInterval],
-) -> Option<SystemTime> {
-    let mut latest: Option<SystemTime> = None;
-    for time in actions
-        .iter()
-        .flat_map(|action| {
-            [Some(action.start_time), action.end_time]
-                .into_iter()
-                .flatten()
-        })
-        .chain(intervals.iter().flat_map(|interval| {
-            [Some(interval.start_time), interval.end_time]
-                .into_iter()
-                .flatten()
-        }))
-    {
-        latest = Some(latest.map_or(time, |current| current.max(time)));
-    }
-    latest
 }
 
 fn bool_json(value: bool) -> &'static str {

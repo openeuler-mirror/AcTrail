@@ -1,3 +1,5 @@
+<!-- Navigate a continuous trace axis and inspect selected actions on demand. -->
+<!-- Render timeline activities and focused details for the selected action. -->
 <template>
   <section class="tab-detail-layout flame-detail-layout" :class="{ 'detail-open': detailPanelVisible }">
     <section class="flame-panel tab-detail-main">
@@ -12,23 +14,8 @@
           </div>
         </div>
         <div class="flame-toolbar-actions">
-          <button
-            type="button"
-            class="tree-action"
-            :aria-pressed="showModelMessages"
-            @click="showModelMessages = !showModelMessages"
-          >
-            {{ showModelMessages ? t('hideModelMessages') : t('showModelMessages') }}
-          </button>
-          <button
-            v-if="waterfall.partial"
-            type="button"
-            class="tree-action"
-            :title="t('loadTitle')"
-            @click="$emit('load-full-waterfall')"
-          >
-            {{ t('loadFullTrace') }}
-          </button>
+          <ToggleSwitch class="flame-message-toggle" :checked="showModelMessages"
+            :label="t('modelMessages')" :aria-label="t('modelMessages')" @change="showModelMessages = $event" />
           <div class="flame-zoom-controls" :aria-label="t('zoomControls')">
             <button type="button" :title="t('zoomOut')" @click="zoomBy(1 / 1.4)">
               <Minus :size="15" aria-hidden="true" />
@@ -45,16 +32,12 @@
 
       <div class="flame-legend" :aria-label="t('legend')">
         <span><i class="agent"></i> {{ t('legendAgent') }}</span>
-        <span><i class="harness"></i> {{ t('legendHarness') }}</span>
+        <span><i class="harness"></i> {{ t('partialOther') }}</span>
         <small>{{ t('navigationHint') }}</small>
       </div>
 
-      <div v-if="unavailableRequestCount" class="flame-layer-empty">
-        {{ unavailableRequestCount }} request bodies unavailable. Agent grouping and background classification may be incomplete.
-      </div>
-
       <div
-        v-if="model.totalActivities"
+        v-if="timelineWindow || model.totalActivities"
         ref="navigationSurface"
         class="flame-navigation"
         :class="{ 'is-panning': panning }"
@@ -109,7 +92,6 @@
             <span class="flame-layer-dot"></span>
             <span class="flame-layer-copy">
               <strong>{{ layer.label }}</strong>
-              <small>{{ layer.description }}</small>
             </span>
             <span class="flame-layer-stats">
               <strong>{{ layer.activityCount }}</strong> activities
@@ -142,14 +124,13 @@
                     <Bot v-if="scope.role === 'main'" :size="15" aria-hidden="true" />
                     <CornerDownRight v-else :size="15" aria-hidden="true" />
                     <strong>
-                      {{ scope.role === 'main' ? 'MAIN' : `SUB ${scope.ordinal}` }}
+                      {{ scope.role === 'main' ? '?' : `SUB ${scope.ordinal}` }}
                     </strong>
                   </span>
                   <span class="flame-agent-scope-summary">
                     <span class="flame-agent-scope-copy">
                       <strong>{{ scope.label }}</strong>
-                      <small v-if="scope.role === 'main'">{{ t('primaryOwner') }}</small>
-                      <small v-else>
+                      <small v-if="scope.role !== 'main'">
                         Spawned by {{ scope.parentLabel }} · {{ scope.spawnLabel }}
                       </small>
                     </span>
@@ -238,35 +219,20 @@
       :trace-id="traceKey"
       :error="detailError"
       hide-when-empty
+      progressive-details
       @clear="clearSelection"
     />
   </section>
 </template>
 
 <script setup>
-import {
-  computed,
-  markRaw,
-  onBeforeUnmount,
-  ref,
-  shallowRef,
-  watch,
-} from 'vue';
-import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
-  CornerDownRight,
-  Layers3,
-  Minus,
-  Plus,
-  RotateCcw,
-} from '@lucide/vue';
+import { computed, markRaw, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { Bot, ChevronDown, ChevronRight, CornerDownRight, Layers3, Minus, Plus, RotateCcw } from '@lucide/vue';
 
-import { readActionDetail, readActionLlmRequestContent } from '../../../api.js';
+import { readActionDetail } from '../../../api.js';
 import { useModuleLocale } from '../../../locale';
-import { createRequestContextLoader } from './request-context.js';
 import DetailPanel from '../../../components/DetailPanel.vue';
+import ToggleSwitch from '../../../components/ToggleSwitch.vue';
 import TimelineOverview from '../../../components/timeline/TimelineOverview.vue';
 import { constrainTimeViewport } from '../time-navigation/model.js';
 import { useTimelineNavigation } from '../time-navigation/useTimelineNavigation.js';
@@ -288,6 +254,9 @@ import {
 } from './model';
 
 const props = defineProps({
+  timelineWindow: { type: Object, default: null },
+  timelineBounds: { type: Object, default: null },
+  timelineViewport: { type: Object, default: null },
   traceKey: {
     type: [String, Number],
     default: null,
@@ -301,15 +270,11 @@ const props = defineProps({
     default: '',
   },
 });
-
-defineEmits(['load-full-waterfall']);
-
+const emit = defineEmits(['update:viewport']);
 const model = shallowRef(emptyFlameGraphModel(t));
 const modelBuilding = ref(false);
-const unavailableRequestCount = ref(0);
-const showModelMessages = ref(false);
-const loadRequestContexts = createRequestContextLoader(readActionLlmRequestContent);
-const viewport = ref(null);
+const showModelMessages = ref(true);
+const viewport = computed(() => props.timelineViewport);
 const canvasViewport = markRaw({ startMs: 0, spanMs: 1 });
 const collapsedLayers = ref(new Set());
 const collapsedAgentScopes = ref(new Set());
@@ -322,7 +287,7 @@ let activeDetailLoad = null;
 let modelBuildToken = 0;
 let modelIdleHandle = null;
 
-const bounds = computed(() => ({ startMs: 0, spanMs: model.value.window.spanMs }));
+const bounds = computed(() => props.timelineBounds ?? { startMs: 0, spanMs: model.value.window.spanMs });
 const activeViewport = computed(() => viewport.value ?? bounds.value);
 const filteredLayers = computed(() => filterFlameGraph(model.value, props.query, {
   showModelMessages: showModelMessages.value,
@@ -349,15 +314,18 @@ watch(
     props.waterfall?.links,
     props.waterfall?.associations,
     props.traceKey,
+    props.timelineWindow,
   ],
   ([actions, links, associations, traceId]) => {
     scheduleModelBuild(actions, links, associations, traceId);
-    collapsedAgentScopes.value = new Set();
-    resetTimeViewport();
-    clearSelection();
   },
   { immediate: true },
 );
+watch(() => props.traceKey, () => {
+  collapsedAgentScopes.value = new Set();
+  clearSelection();
+});
+watch(activeViewport, syncCanvasViewport, { immediate: true });
 
 const {
   panning,
@@ -391,8 +359,6 @@ onBeforeUnmount(() => {
 function scheduleModelBuild(actions, links, associations, traceId) {
   modelBuildToken += 1;
   const token = modelBuildToken;
-  unavailableRequestCount.value = 0;
-  model.value = emptyFlameGraphModel(t);
   if (modelIdleHandle !== null) {
     if (typeof cancelIdleCallback === 'function') {
       cancelIdleCallback(modelIdleHandle);
@@ -402,22 +368,17 @@ function scheduleModelBuild(actions, links, associations, traceId) {
     modelIdleHandle = null;
   }
   if (!actions?.length && !links?.length) {
-    model.value = emptyFlameGraphModel(t);
-    resetTimeViewport();
+    model.value = { ...emptyFlameGraphModel(t), ...(props.timelineWindow ? { window: props.timelineWindow } : {}) };
     modelBuilding.value = false;
     return;
   }
   modelBuilding.value = true;
-  const build = async () => {
+  const build = () => {
     modelIdleHandle = null;
     const isCurrent = () => token === modelBuildToken;
     if (!isCurrent()) return;
-    const { contexts, unavailable } = await loadRequestContexts(traceId, actions ?? [], isCurrent);
-    if (!isCurrent()) return;
-    unavailableRequestCount.value = unavailable;
     // Flame-graph ownership must not depend on backend user-turn accounting.
-    model.value = buildFlameGraph(actions, links, null, associations, contexts, t);
-    resetTimeViewport();
+    model.value = buildFlameGraph(actions, links, associations, t, props.waterfall.contextActions, props.timelineWindow);
     modelBuilding.value = false;
   };
   if (typeof requestIdleCallback === 'function') {
@@ -507,13 +468,12 @@ function handleOverviewZoom({ factor, anchor }) {
 
 function setTimeViewport(nextViewport) {
   const next = constrainTimeViewport(nextViewport, bounds.value);
-  viewport.value = next;
+  emit('update:viewport', next);
   syncCanvasViewport(next);
 }
 
 function resetTimeViewport() {
-  viewport.value = null;
-  syncCanvasViewport(bounds.value);
+  setTimeViewport(bounds.value);
 }
 
 function syncCanvasViewport(nextViewport) {

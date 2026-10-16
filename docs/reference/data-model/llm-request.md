@@ -66,7 +66,7 @@ Hydration 必须递归替换原位置 placeholder，并重现完整 canonical pr
 
 `semantic_actions.attributes` 保留 model、byte counts、HTTP/stream metadata、payload provenance、manifest metadata 与可用的 trajectory metadata；不得包含 `llm.request.payload_text`。
 
-action 与统计的请求尺寸使用 `llm.request.payload_bytes`：正常消息来自 HTTP body 长度，限采识别可能采用声明长度。该值与 canonical JSON 长度不同。内容 API 的 `canonical_body_bytes` 只在按需重建时计算，表示截断前的 canonical JSON 长度；manifest 不持有该字段。
+action 与统计的请求尺寸使用 `llm.request.payload_bytes`：正常消息来自 HTTP body 长度，限采识别可能采用声明长度。该值与 canonical JSON 长度不同。内容 API 的 `canonical_body_bytes` 根据 skeleton 的 canonical 编码长度和每个 placeholder 对应 block 的 `uncompressed_bytes` 精确求和；manifest 不持有该字段。重复引用按出现次数计入正文长度。
 
 默认 action tree、JSON 与 OTEL 不内联重建的 request body。OTEL egress request body 必须同时满足：
 
@@ -83,6 +83,14 @@ GET /api/traces/{trace_id}/actions/{action_id}/content/llm-request?max_bytes=N
 ```
 
 状态必须区分 `available`、`shape_only`、`truncated`、`unavailable` 和 `corrupt`。超过 `request_body_export_max_bytes` 时，body 整体省略并标记 `too_large`，不能截断后伪装为完整 JSON。
+
+### 内容读取成本
+
+内容读取先解析当前 manifest 的 skeleton 并读取 refs 与 block 元数据，校验引用存在、ordinal、同 trace 归属和字节长度。前缀读取沿 canonical 顺序输出 skeleton，遇到 block 时通过 SQLite incremental BLOB 只读取剩余输出预算需要的字节；输出到达 `max_bytes` 后停止。UTF-8 不完整尾部被移除，`returned_bytes` 是实际返回长度。读取依赖 producer 写入的不可变 canonical block 约定，不对未读取的 block 内容执行语法或 hash 审计。
+
+节点接口按 JSON Pointer 导航，只展开路径与当前 children 页直接涉及的 block。单次请求对重复 block 共用已解码值，累计唯一 block 原始字节在读取前受 `block_read_budget` 限制，超限明确报请求预算错误。子节点类型与 child count 来自实际节点；block 内的 placeholder 同名对象是用户内容，不再次解释。String leaf 按 `preview_bytes` 返回 UTF-8 预览，`value_bytes` 和 `returned_bytes` 分别表示原字符串与预览的解码后 UTF-8 字节数；其他 scalar 使用 canonical JSON 字节数。
+
+Skeleton 和引用元数据仍按当前请求完整读取，未知字段可能直接保存在 skeleton；对象 key 排序也随当前对象规模增长。因此 `max_bytes` 是前缀输出与 block 字节读取上界，不能声明整个请求处理为 O(max_bytes)。节点解码成本受唯一 block 字节预算约束，解析后的 JSON 内存另有结构开销；对象分页需要当前对象的 key 排序。所有中间状态仅在一次请求期间存在。
 
 ## Purge 与隐私
 

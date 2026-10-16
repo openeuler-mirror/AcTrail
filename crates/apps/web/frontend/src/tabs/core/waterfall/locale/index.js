@@ -1,6 +1,10 @@
 /** Copy owned by the waterfall tab. */
 export default {
   'en-US': {
+    loadingAttribution: 'Loading time attribution…',
+    partialOther: 'Other observed activity',
+    partialOwnership: 'Agent ownership is incomplete on this page',
+    loadAttribution: 'Load time attribution for the whole trace',
     kicker: 'Trace chronology',
     title: 'Waterfall',
     countActions: '{count} actions',
@@ -82,6 +86,10 @@ export default {
     },
   },
   'zh-CN': {
+    loadingAttribution: '正在加载时间归因…',
+    partialOther: '其他已观测活动',
+    partialOwnership: '当前页的 Agent 归属信息不完整',
+    loadAttribution: '加载整个 Trace 的时间归因',
     kicker: 'Trace时序',
     title: '瀑布图',
     countActions: '{count}个动作',

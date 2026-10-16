@@ -1,6 +1,7 @@
 //! Semantic action contracts kept separate from raw fact events.
 
 pub mod attr_keys;
+mod content_node;
 pub mod evidence_roles;
 pub mod link_roles;
 pub mod llm;
@@ -8,6 +9,9 @@ pub mod model;
 pub mod model_identity;
 pub mod store;
 mod update;
+pub use content_node::{
+    ContentNode, ContentNodeChild, ContentNodeKind, ContentNodePage, ContentNodeQuery,
+};
 
 pub use update::{
     SemanticActionChange, SemanticActionFinalizationReason, SemanticActionUpdate,

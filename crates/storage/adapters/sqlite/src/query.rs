@@ -3,6 +3,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::params;
+#[path = "query/trace_counts.rs"]
+mod trace_counts;
+#[path = "query/trace_page.rs"]
+mod trace_page;
 use store_read_contract::ReadError;
 use store_read_contract::diagnostics::DiagnosticReadStore;
 use store_read_contract::events::EventReadStore;

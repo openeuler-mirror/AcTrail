@@ -1,5 +1,7 @@
+<!-- Reusable boolean switch with optional labels on both sides. -->
 <template>
   <label class="toggle" :class="{ 'is-disabled': disabled }">
+    <span v-if="offLabel" class="toggle-label">{{ offLabel }}</span>
     <input
       type="checkbox"
       class="toggle-input"
@@ -18,6 +20,7 @@ defineProps({
   checked: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: '' },
+  offLabel: { type: String, default: '' },
   ariaLabel: { type: String, default: '' },
 });
 

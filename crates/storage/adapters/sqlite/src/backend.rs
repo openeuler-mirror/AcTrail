@@ -61,6 +61,57 @@ impl StorageTransaction for LegacyTransaction {
 }
 
 impl StorageBackend for SqliteStorage {
+    fn action_content_source(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<storage_core::ActionContentSource>, StorageError> {
+        self.read_action_content_source(trace_id, action_id)
+    }
+    fn http_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &storage_core::HttpContentQuery,
+    ) -> Result<Option<storage_core::HttpContentPage>, StorageError> {
+        self.read_http_content_page(trace_id, action_id, query)
+    }
+    fn llm_request_content_node(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &storage_core::ContentNodeQuery,
+    ) -> Result<Option<storage_core::ContentNodePage>, StorageError> {
+        self.read_llm_request_content_node(trace_id, action_id, query)
+            .map_err(StorageError::from)
+    }
+    fn idle_page(
+        &self,
+        query: &storage_core::IdleQuery,
+    ) -> Result<storage_core::IdlePage, StorageError> {
+        self.read_idle_page(query)
+    }
+    fn trace_counts(&self, trace_id: TraceId) -> Result<storage_core::TraceCounts, StorageError> {
+        self.read_trace_counts(trace_id)
+    }
+    fn trace_page(
+        &self,
+        query: &storage_core::TracePageQuery,
+    ) -> Result<storage_core::TracePage, StorageError> {
+        self.read_trace_page(query)
+    }
+    fn timeline_page(
+        &self,
+        query: &storage_core::TimelineQuery,
+    ) -> Result<storage_core::TimelinePage, StorageError> {
+        self.read_timeline_page(query)
+    }
+    fn timeline_bounds(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<storage_core::TimelineBounds, StorageError> {
+        self.read_timeline_bounds(trace_id)
+    }
     fn retains_observations(&self) -> bool {
         true
     }

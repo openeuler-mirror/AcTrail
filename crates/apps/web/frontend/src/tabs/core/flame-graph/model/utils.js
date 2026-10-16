@@ -39,11 +39,6 @@ export const FLAME_GRAPH_ASSOCIATION_ROLES = new Set([
   'llm.request.trajectory_fork',
 ]);
 
-export const STRUCTURAL_KINDS = new Set([
-  'agent.identity',
-  'agent.exit',
-]);
-
 export const BACKGROUND_LLM_KINDS = new Set([
   'llm.call',
   'llm.request',

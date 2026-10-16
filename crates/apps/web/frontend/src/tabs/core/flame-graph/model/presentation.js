@@ -31,7 +31,7 @@ export function flameActivityDetail(activity, t) {
     lane: activity.toolEffect
       ? t('detailRows.toolEffects', { tool: activity.toolEffect.toolLabel })
       : t(GROUP_LABEL_KEYS[activity.group] ?? '') || activity.group,
-    classification: activity.layer === 'agent'
+    classification: activity.scopeIncomplete ? t('partialOwnership') : activity.layer === 'agent'
       ? t('detailRows.lineageLinked')
       : t('detailRows.lineageBackground'),
     start_offset: `+${formatOffset(activity.startOffsetMs)}`,
@@ -39,7 +39,7 @@ export function flameActivityDetail(activity, t) {
   };
   if (activity.agentScope) {
     detail.rows.agent_role = activity.agentScope.role === 'main'
-      ? 'Main agent'
+      ? t('partialOwnership')
       : activity.agentScope.label;
     if (activity.agentScope.relationSource) {
       detail.rows.agent_relationship = activity.agentScope.relationSource;
@@ -142,8 +142,8 @@ export function buildAgentLayer(
   const mainDefinition = {
     id: 'agent-main',
     role: 'main',
-    label: t('scope.mainAgent'),
-    agentType: t('scope.primary'),
+    label: t('partialOwnership'),
+    agentType: t('partialOwnership'),
     searchText: 'main agent primary',
     parentId: null,
     parentLabel: null,
@@ -515,7 +515,7 @@ function activityGroup(kind, layer, toolEffect = false) {
     ) {
       return 'tools';
     }
-    return kind.startsWith('file.') || kind === 'fs.enumerate' ? 'detail' : null;
+    return 'detail';
   }
   if (kind === 'command.invocation' || kind === 'agent.invocation') {
     return 'commands';
@@ -523,7 +523,7 @@ function activityGroup(kind, layer, toolEffect = false) {
   if (kind.startsWith('file.') || kind === 'fs.enumerate') {
     return 'filesystem';
   }
-  if (kind.startsWith('http.') || kind.startsWith('sse.') || kind.startsWith('mcp.')) {
+  if (kind.startsWith('http.') || kind.startsWith('sse.') || kind.startsWith('mcp.') || kind.startsWith('websocket.')) {
     return 'protocol';
   }
   if (kind === 'llm.request' || kind === 'llm.response') {
@@ -540,7 +540,7 @@ function activityGroup(kind, layer, toolEffect = false) {
   ) {
     return 'runtime';
   }
-  return null;
+  return 'runtime';
 }
 
 function toolEffectTracks(activities, idPrefix = 'agent', t) {

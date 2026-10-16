@@ -487,9 +487,6 @@ watch(
       }
     });
     requestEntries.value = entries;
-    if (entries.length) {
-      loadRequestEntry(entries[0]);
-    }
   },
   { immediate: true },
 );

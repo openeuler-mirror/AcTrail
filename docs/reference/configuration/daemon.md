@@ -89,6 +89,14 @@ SQLite 使用 WAL 时，备份和恢复必须包含配套 WAL/SHM 状态或在 d
 
 Web 默认监听 `127.0.0.1:18080`，request read timeout 为 `1000` ms。Web 还可能执行本地插件管理，不能直接暴露到不可信网络。
 
+`actrailweb` 的渐进时间线预算由启动环境设置：`ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT=250`、`ACTRAIL_WEB_TIMELINE_MAX_LIMIT=1000`、`ACTRAIL_WEB_TIMELINE_CANDIDATES=2000`、`ACTRAIL_WEB_TIMELINE_LINKS=2000`。值须为正整数，默认页大小不得超过最大页大小，最大页大小不得超过候选预算。参数与分页语义见 [Web Runtime](../../architecture/components/web-runtime.md#渐进时间线查询)。
+
+显式 idle 查询预算由 `ACTRAIL_WEB_IDLE_DEFAULT_LIMIT=100`、`ACTRAIL_WEB_IDLE_MAX_LIMIT=500`、`ACTRAIL_WEB_IDLE_CANDIDATES=1000` 设置。值须为小于 `i64::MAX` 的正整数，并满足默认页大小不超过最大页大小、最大页大小不超过候选预算；无效设置使 Web 启动失败。
+
+正文查询预算由 `ACTRAIL_WEB_CONTENT_MAX_BYTES=16777216`、`ACTRAIL_WEB_CONTENT_NODE_MAX_ITEMS=250`、`ACTRAIL_WEB_CONTENT_NODE_PREVIEW_BYTES=65536` 和 `ACTRAIL_WEB_CONTENT_NODE_BLOCK_BYTES=8388608` 设置，分别限制正文返回字节、节点页大小、叶子与普通 HTTP 正文默认页大小及请求内 block 读取。普通 HTTP 正文复用 block 预算限制解码量，每页重新解码相关正文，不缓存完整正文。各项须为小于 `i64::MAX` 的正整数；无效设置使 Web 启动失败。读取超过预算返回当前请求错误。字段语义见 [Web Runtime](../../architecture/components/web-runtime.md#正文查询预算)。
+
+本地与 Cluster trace 列表使用 `ACTRAIL_WEB_TRACES_DEFAULT_LIMIT=50`、`ACTRAIL_WEB_TRACES_MAX_LIMIT=250`，须为小于 `i64::MAX` 的正整数并满足默认每页数量不超过最大每页数量；无效配置使 Web 启动失败。列表按 `page` 和 `limit` 直接查询，返回过滤后的准确总数与总页数；配置不限制计数或跳页时扫描的元数据行数。
+
 Snapshot 默认目录为 `/var/lib/actrail/export`，当前生成配置的 `payload_bytes_enabled` 与 `payload_text_enabled` 都为 `true`。它们控制 graph JSON 的 payload 内容，不等同于 LLM semantic body export 或实时 OTEL attribute mode。
 
 ## `[supervision]`
