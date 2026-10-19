@@ -33,6 +33,59 @@ use crate::storage::NoOpStorage;
 use crate::transaction::NoOpTransaction;
 
 impl StorageBackend for NoOpStorage {
+    fn action_content_source(
+        &self,
+        _trace_id: TraceId,
+        _action_id: &str,
+    ) -> Result<Option<storage_core::ActionContentSource>, StorageError> {
+        Ok(None)
+    }
+    fn http_content_page(
+        &self,
+        _trace_id: TraceId,
+        _action_id: &str,
+        _query: &storage_core::HttpContentQuery,
+    ) -> Result<Option<storage_core::HttpContentPage>, StorageError> {
+        Ok(None)
+    }
+    fn llm_request_content_node(
+        &self,
+        _trace_id: TraceId,
+        _action_id: &str,
+        _query: &storage_core::ContentNodeQuery,
+    ) -> Result<Option<storage_core::ContentNodePage>, StorageError> {
+        Ok(None)
+    }
+    fn idle_page(
+        &self,
+        _query: &storage_core::IdleQuery,
+    ) -> Result<storage_core::IdlePage, StorageError> {
+        Ok(storage_core::IdlePage::empty(std::time::SystemTime::now()))
+    }
+    fn trace_counts(&self, _trace_id: TraceId) -> Result<storage_core::TraceCounts, StorageError> {
+        Ok(storage_core::TraceCounts::default())
+    }
+    fn trace_page(
+        &self,
+        query: &storage_core::TracePageQuery,
+    ) -> Result<storage_core::TracePage, StorageError> {
+        Ok(storage_core::TracePage {
+            page: query.page,
+            ..Default::default()
+        })
+    }
+    fn timeline_page(
+        &self,
+        _query: &storage_core::TimelineQuery,
+    ) -> Result<storage_core::TimelinePage, StorageError> {
+        Ok(storage_core::TimelinePage::default())
+    }
+    fn timeline_bounds(
+        &self,
+        _trace_id: TraceId,
+    ) -> Result<storage_core::TimelineBounds, StorageError> {
+        Ok(storage_core::TimelineBounds::default())
+    }
     fn retains_observations(&self) -> bool {
         false
     }

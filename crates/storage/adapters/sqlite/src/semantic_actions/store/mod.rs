@@ -569,12 +569,13 @@ impl SemanticActionReadStore for SqliteStorage {
             ));
         }
         let connection = self.connection().borrow();
-        crate::semantic_actions::llm_request_content::llm_request_content_page(
+        crate::semantic_actions::llm_request_content::ContentReader::load(
             &connection,
             trace_id,
             action_id,
-            max_bytes,
-        )
+        )?
+        .map(|reader| reader.prefix(max_bytes))
+        .transpose()
     }
 
     fn mcp_jsonrpc_content_page(

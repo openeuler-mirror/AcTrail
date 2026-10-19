@@ -2,6 +2,9 @@
 
 use rusqlite::Connection;
 
+#[path = "schema/query_indexes.rs"]
+mod query_indexes;
+
 use crate::semantic_actions::{codebook, storage_meta};
 
 const SQLITE_SCHEMA_VERSION_CURRENT: i32 = storage_meta::CURRENT_SCHEMA_VERSION;
@@ -490,7 +493,7 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
     validate_current_schema(connection)?;
     connection.pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)?;
-    migrate_query_indexes(connection)
+    query_indexes::QueryIndexes::prepare(connection)
 }
 
 #[cfg(test)]
@@ -562,26 +565,6 @@ mod baseline_upgrade_tests {
     }
 }
 
-fn migrate_query_indexes(connection: &Connection) -> Result<(), rusqlite::Error> {
-    connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_events_trace_id ON events(trace_id);
-         CREATE INDEX IF NOT EXISTS idx_payload_segments_trace_id ON payload_segments(trace_id);
-         CREATE INDEX IF NOT EXISTS idx_tls_flow_diagnostics_trace_id ON tls_flow_diagnostics(trace_id);
-         CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_start ON semantic_actions(trace_id, start_time);
-         CREATE INDEX IF NOT EXISTS idx_semantic_actions_trace_kind_start ON semantic_actions(trace_id, kind_code, start_time, action_key);
-         CREATE INDEX IF NOT EXISTS idx_semantic_action_links_trace_valid_role ON semantic_action_links(trace_id, valid, role_code);
-         DROP INDEX IF EXISTS idx_memberships_trace_parent;
-         DROP INDEX IF EXISTS idx_processes_host_pid;
-         DROP INDEX IF EXISTS idx_process_alias_namespace_pid;
-         DROP INDEX IF EXISTS idx_file_path_set_refs_path_set;
-         DROP INDEX IF EXISTS idx_file_path_set_action_refs_path_set;
-         DROP INDEX IF EXISTS idx_mcp_jsonrpc_action_refs_message;
-         DROP INDEX IF EXISTS idx_llm_request_lineage_parent;
-         DROP INDEX IF EXISTS idx_semantic_action_links_trace_valid_parent;
-         DROP INDEX IF EXISTS idx_semantic_action_links_trace_valid_child;",
-    )
-}
-
 pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
     if user_version(connection)? != SQLITE_SCHEMA_VERSION_CURRENT {
         return Err(rusqlite::Error::InvalidQuery);
@@ -592,6 +575,7 @@ pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Err
     // Resource registries are writer-owned lifecycle state. Read-only clients can
     // open databases created by dev before the additive registries were introduced.
     validate_schema(connection, false, false)?;
+    query_indexes::QueryIndexes::validate(connection)?;
     Ok(())
 }
 

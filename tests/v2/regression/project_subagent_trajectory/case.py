@@ -19,7 +19,7 @@ from .assertion import ProjectSubagentEvidence, ProjectSubagentTrajectoryAsserti
 from .agent import ProjectSubagentAgent
 from .config import ProjectSubagentTrajectoryConfig
 from .scenario import ProjectSubagentTrajectoryScenario
-from .web.assertion import OfflineDelegationAssertion
+from .web.assertion import PersistedTrajectoryWebAssertion
 
 
 class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
@@ -102,16 +102,13 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 "lineage-derived fields and statistics",
             )
             test_context.report_progress(
-                "web-offline-delegation",
-                "running the Web correlation module against recorded request content",
+                "web-persisted-trajectory",
+                "checking the Web layout against persisted request lineage",
             )
-            delegated = OfflineDelegationAssertion(self._environment, trace_id).require(
-                self._viewer_json(["actions", "--trace-id", str(trace_id)])
-            )
-            results["web-offline-delegation"] = TestResult(
+            nodes = PersistedTrajectoryWebAssertion(self._environment, trace_id).require()
+            results["web-persisted-trajectory"] = TestResult(
                 TestStatus.PASSED,
-                f"{delegated} long prompts have unique offline child links; "
-                "runtime persisted no prompt-derived child links",
+                f"Web layout preserves {nodes} recorded requests and persisted lineage edges",
             )
             analysis = assertion.require_real_analysis_scenario()
             results["web-analysis-scenario"] = TestResult(

@@ -1,11 +1,14 @@
+<!-- Coordinate trace selection, timeline navigation and on-demand workspace data. -->
 <template>
   <div class="workbench">
     <aside class="trace-rail">
       <div class="rail-title">{{ t('trace.railTitle') }}</div>
+      <TraceListControls :pager="tracePages" />
       <div class="trace-list">
         <button
           v-for="trace in orderedTraces"
           :key="trace.id"
+          :data-trace-id="trace.id"
           class="trace-row"
           :class="{ active: traceIdMatches(selectedTraceId, trace.id) }"
           type="button"
@@ -33,6 +36,7 @@
           </span>
         </div>
         <dl class="rail-summary-facts">
+          <div v-if="traceDetail?.trace?.local_id != null"><dt>{{ t('trace.localId') }}</dt><dd>{{ traceDetail.trace.local_id }}</dd></div>
           <div><dt>{{ t('trace.rootPid') }}</dt><dd>{{ traceDetail?.trace?.root_pid ?? '—' }}</dd></div>
           <div><dt>{{ t('trace.started') }}</dt><dd>{{ formatClock(traceDetail?.trace?.started_at) }}</dd></div>
         </dl>
@@ -46,7 +50,7 @@
             <component :is="metric.icon" :size="17" />
           </span>
           <span class="metric-label">{{ metric.label }}</span>
-          <strong><AnimatedNumber :value="metric.value" /></strong>
+          <strong><AnimatedNumber v-if="metric.value != null" :value="metric.value" /><span v-else>—</span></strong>
         </div>
       </section>
 
@@ -91,6 +95,12 @@
           role="tabpanel"
           :aria-labelledby="activeViewLabelId"
         >
+          <TimelineControls
+            v-if="timelineTab"
+            :filters="timeline.filters" :loading="timelineLoading"
+            :error="timelineError"
+            @apply="applyTimelineFilters" @retry="timeline.retry()"
+          />
           <div v-if="showLoadingPanel" class="loading-panel">
             <span class="loading-spinner" aria-hidden="true"></span>
             <p>{{ t('trace.loading') }}</p>
@@ -101,7 +111,8 @@
             :is="activeTabDefinition.component"
             v-bind="activeTabProps"
             @open-waterfall="openWaterfall"
-            @load-full-waterfall="loadFullWaterfall"
+            @load-attribution="ensureTimeAttributionForActiveTab"
+            @update:viewport="timeline.setViewport($event)"
           />
         </section>
       </section>
@@ -117,7 +128,6 @@ import { Activity, Boxes, Cpu, GitBranch } from '@lucide/vue';
 import AnimatedNumber from '../components/AnimatedNumber.vue';
 
 import {
-  readActionTree,
   readActionTreeRoot,
   readTraceAlerts,
   readLlmTrajectoryGraph,
@@ -127,17 +137,23 @@ import {
   readTraceResources,
   readTracePayloads,
   readTraceProcesses,
-  readTraceSummary,
+  readTraceMetadata,
+  readTraceCounts,
+  readTimelinePage,
   readTraceTimeAttribution,
   readTraceTimeline,
-  readWaterfall,
 } from '../api';
+import { emptyActionTree, emptyTrajectoryGraph, emptyCommands, withCommandTrace, freezeTraceList, freezeTracePayload, eventBackedTab, traceIdMatches, compareTraceRecency } from './timeline/utils.js';
+import TraceListControls from './traces/TraceListControls.vue';
+import TimelineControls from './timeline/TimelineControls.vue';
+import { TimelineWindow } from './timeline/window.js';
 import NavigationStrip from '../components/navigation/NavigationStrip.vue';
 import { useModuleLocale } from '../locale';
 import { TAB_DEFINITIONS, TAB_GROUP_DEFINITIONS, TAB_IDS } from '../tabs/registry';
 import strings from './locale';
 
 const props = defineProps({
+  tracePages: { type: Object, required: true },
   traces: {
     type: Array,
     required: true,
@@ -197,24 +213,34 @@ const lastTabByGroup = ref(
 );
 const selectedTraceId = ref(null);
 const traceDetail = shallowRef(null);
+const traceCounts = shallowRef(null);
 const actionTree = ref(emptyActionTree());
 const trajectoryGraph = shallowRef(emptyTrajectoryGraph());
 const commands = shallowRef(emptyCommands());
-const waterfall = shallowRef(emptyWaterfall());
+const timeline = new TimelineWindow(readTimelinePage);
+const waterfall = timeline.data;
+const timelineLoading = timeline.loading;
+const timelineError = timeline.error;
+const timelineTab = computed(() => [TAB_IDS.flameGraph, TAB_IDS.waterfall].includes(activeTab.value));
 const timeAttribution = shallowRef(null);
+const attributionLoading = ref(false);
 const waterfallFocus = shallowRef(null);
 const error = ref('');
 const loading = ref(false);
 let activeTraceLoad = null;
+let countsController = null;
 let activeTrajectoryLoad = null;
 let activeCommandsLoad = null;
-let activeWaterfallLoad = null;
+let activeTreeLoad = null;
 let activeAttributionLoad = null;
 let activeTracePartLoad = null;
 
-const selectedTrace = computed(() =>
-  props.traces.find((trace) => traceIdMatches(trace.id, selectedTraceId.value)),
-);
+const selectedTrace = computed(() => {
+  if (selectedTraceId.value == null) return null;
+  if (traceIdMatches(traceDetail.value?.trace?.id, selectedTraceId.value)) return traceDetail.value.trace;
+  return props.traces.find((trace) => traceIdMatches(trace.id, selectedTraceId.value))
+    ?? { id: selectedTraceId.value, name: String(selectedTraceId.value) };
+});
 // Newest traces sit at the top of the rail and are the default selection.
 const orderedTraces = computed(() => [...props.traces].sort(compareTraceRecency));
 const activeTraceName = computed(
@@ -249,38 +275,24 @@ const activeTabProps = computed(() => {
     tabProps.trajectoryGraph = trajectoryGraph.value;
   }
   if (activeTab.value === TAB_IDS.waterfall || activeTab.value === TAB_IDS.flameGraph) {
-    tabProps.waterfall = waterfall.value;
+    Object.assign(tabProps, timeline.viewProps);
   }
   if (activeTab.value === TAB_IDS.waterfall) {
+    tabProps.idleRange = timeline.filters;
     tabProps.focusInterval = waterfallFocus.value;
     tabProps.attribution = timeAttribution.value;
+    tabProps.attributionLoading = attributionLoading.value;
   }
   return tabProps;
 });
 
 const metrics = computed(() => {
-  const counts = traceDetail.value?.counts ?? {};
-  const semantic = actionTree.value?.summary ?? {};
+  const counts = traceCounts.value ?? {};
   return [
-    { key: 'events', label: t('trace.metricEvents'), value: counts.events ?? 0, icon: METRIC_ICONS.events },
-    {
-      key: 'payloads',
-      label: t('trace.metricPayloads'),
-      value: counts.payloads ?? traceDetail.value?.payloads?.length ?? 0,
-      icon: METRIC_ICONS.payloads,
-    },
-    {
-      key: 'actions',
-      label: t('trace.metricActions'),
-      value: semantic.actions ?? actionTree.value?.actions?.length ?? 0,
-      icon: METRIC_ICONS.actions,
-    },
-    {
-      key: 'processes',
-      label: t('trace.metricProcesses'),
-      value: traceDetail.value?.processes?.length ?? counts.process ?? 0,
-      icon: METRIC_ICONS.processes,
-    },
+    { key: 'events', label: t('trace.metricEvents'), value: counts.events ?? null, icon: METRIC_ICONS.events },
+    { key: 'payloads', label: t('trace.metricPayloads'), value: counts.payloads ?? null, icon: METRIC_ICONS.payloads },
+    { key: 'actions', label: t('trace.metricActions'), value: counts.actions ?? null, icon: METRIC_ICONS.actions },
+    { key: 'processes', label: t('trace.metricProcesses'), value: counts.processes ?? null, icon: METRIC_ICONS.processes },
   ];
 });
 
@@ -305,9 +317,7 @@ const showLoadingPanel = computed(() => {
   if (activeTab.value === TAB_IDS.commands) {
     return commands.value?.loadedTraceId !== selectedTraceId.value;
   }
-  if (activeTab.value === TAB_IDS.waterfall || activeTab.value === TAB_IDS.flameGraph) {
-    return waterfall.value?.loadedTraceId !== selectedTraceId.value;
-  }
+  if (timelineTab.value) return false;
   if (activeTab.value === TAB_IDS.llmTrajectory) {
     return trajectoryGraph.value?.loadedTraceId !== selectedTraceId.value;
   }
@@ -320,7 +330,7 @@ watch(selectedTraceId, async (traceId) => {
     actionTree.value = emptyActionTree();
     trajectoryGraph.value = emptyTrajectoryGraph();
     commands.value = emptyCommands();
-    waterfall.value = emptyWaterfall();
+    timeline.reset();
     timeAttribution.value = null;
     waterfallFocus.value = null;
     return;
@@ -346,6 +356,7 @@ watch(
 );
 
 watch(activeTab, async (tabId) => {
+  if (![TAB_IDS.flameGraph, TAB_IDS.waterfall].includes(tabId)) timeline.cancel();
   const group = tabGroupsByTabId.get(tabId);
   if (group) {
     lastTabByGroup.value = {
@@ -397,17 +408,19 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  activeTraceLoad = null;
+  countsController?.abort();
+  activeTreeLoad = null;
+  activeTrajectoryLoad = null;
+  activeCommandsLoad = null;
+  activeAttributionLoad = null;
+  activeTracePartLoad = null;
+  timeline.cancel();
   emit('loading', false);
 });
 
 function reconcileSelectedTrace() {
-  if (!props.traces.length) {
-    selectedTraceId.value = null;
-    return;
-  }
-  if (!selectedTrace.value) {
-    selectedTraceId.value = orderedTraces.value[0].id;
-  }
+  if (selectedTraceId.value == null && orderedTraces.value.length) selectedTraceId.value = orderedTraces.value[0].id;
 }
 
 function selectTrace(traceId) {
@@ -440,11 +453,16 @@ function selectLeafTab(tabId) {
 async function loadTrace(traceId) {
   const token = Symbol();
   activeTraceLoad = token;
-  traceDetail.value = null;
+  countsController?.abort();
+  countsController = new AbortController();
+  traceCounts.value = null;
+  traceDetail.value = traceIdMatches(traceDetail.value?.trace?.id, traceId) ? { trace: traceDetail.value.trace } : null;
   actionTree.value = emptyActionTree();
   commands.value = emptyCommands();
-  waterfall.value = emptyWaterfall();
+  timeline.reset();
   timeAttribution.value = null;
+  activeAttributionLoad = null;
+  attributionLoading.value = false;
   trajectoryGraph.value = emptyTrajectoryGraph();
   if (!traceIdMatches(waterfallFocus.value?.traceId, traceId)) {
     waterfallFocus.value = null;
@@ -459,7 +477,7 @@ async function loadTrace(traceId) {
     }
   };
 
-  const summaryLoad = readTraceSummary(traceId)
+  const summaryLoad = readTraceMetadata(traceId)
     .then((summaryData) => {
       if (isCurrent()) {
         traceDetail.value = summaryData;
@@ -467,16 +485,12 @@ async function loadTrace(traceId) {
     })
     .catch(fail);
 
-  const treeLoad = readActionTreeRoot(traceId)
-    .then((rootData) => {
-      if (isCurrent()) {
-        actionTree.value = emptyActionTree(rootData.summary, rootData);
-      }
-    })
-    .catch(fail);
+  readTraceCounts(traceId, { signal: countsController.signal })
+    .then(({ counts }) => { if (isCurrent()) traceCounts.value = counts; })
+    .catch(err => { if (err.name !== 'AbortError') fail(err); });
 
   try {
-    await Promise.all([summaryLoad, treeLoad]);
+    await summaryLoad;
     if (isCurrent()) {
       await ensureDataForActiveTab();
     }
@@ -493,7 +507,7 @@ async function ensureDataForActiveTab() {
     ensureTrajectoryForActiveTab(),
     ensureCommandsForActiveTab(),
     ensureWaterfallForActiveTab(),
-    ensureTimeAttributionForActiveTab(),
+    ensureTreeForActiveTab(),
   ]);
 }
 
@@ -589,72 +603,29 @@ async function ensureCommandsForActiveTab() {
   }
 }
 
-async function ensureWaterfallForActiveTab() {
+async function ensureTreeForActiveTab() {
   const traceId = selectedTraceId.value;
-  if (
-    !traceId
-    || (activeTab.value !== TAB_IDS.waterfall && activeTab.value !== TAB_IDS.flameGraph)
-  ) {
-    return;
-  }
-  const needsFullTrace = activeTab.value === TAB_IDS.flameGraph;
-  if (
-    waterfall.value?.loadedTraceId === traceId
-    && (!needsFullTrace || !waterfall.value?.partial)
-  ) {
-    return;
-  }
+  if (!traceId || activeTab.value !== TAB_IDS.actionTree || actionTree.value.loadedTraceId === traceId) return;
   const token = Symbol();
-  activeWaterfallLoad = token;
+  activeTreeLoad = token;
   try {
-    const data = needsFullTrace
-      ? await readActionTree(traceId)
-      : await readWaterfall(traceId);
-    if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
-      waterfall.value = withWaterfallTrace(
-        needsFullTrace
-          ? {
-              ...data,
-              selected_actions: data.actions?.length ?? 0,
-              total_actions: data.actions?.length ?? 0,
-              partial: false,
-            }
-          : data,
-        traceId,
-      );
+    const data = await readActionTreeRoot(traceId);
+    if (activeTreeLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
+      actionTree.value = { ...emptyActionTree(data.summary, data), loadedTraceId: traceId };
     }
   } catch (err) {
-    if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
-      error.value = String(err.message ?? err);
-    }
+    if (activeTreeLoad === token && traceIdMatches(selectedTraceId.value, traceId)) error.value = String(err.message ?? err);
   }
 }
 
-async function loadFullWaterfall() {
+async function ensureWaterfallForActiveTab() {
   const traceId = selectedTraceId.value;
-  if (!traceId || !waterfall.value?.partial) {
-    return;
-  }
-  const token = Symbol();
-  activeWaterfallLoad = token;
-  try {
-    const data = await readActionTree(traceId);
-    if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
-      waterfall.value = withWaterfallTrace(
-        {
-          ...data,
-          selected_actions: data.actions?.length ?? 0,
-          total_actions: data.actions?.length ?? 0,
-          partial: false,
-        },
-        traceId,
-      );
-    }
-  } catch (err) {
-    if (activeWaterfallLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
-      error.value = String(err.message ?? err);
-    }
-  }
+  if (!traceId || !timelineTab.value || waterfall.value.loadedTraceId === traceId || timelineLoading.value) return;
+  await timeline.load(traceId, { metadata: traceDetail.value });
+}
+
+function applyTimelineFilters(filters) {
+  if (selectedTraceId.value) timeline.load(selectedTraceId.value, { filters, metadata: traceDetail.value });
 }
 
 async function ensureTimeAttributionForActiveTab() {
@@ -669,7 +640,9 @@ async function ensureTimeAttributionForActiveTab() {
     return;
   }
   const token = Symbol();
+  if (attributionLoading.value) return;
   activeAttributionLoad = token;
+  attributionLoading.value = true;
   try {
     const data = await readTraceTimeAttribution(traceId);
     if (activeAttributionLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
@@ -679,6 +652,8 @@ async function ensureTimeAttributionForActiveTab() {
     if (activeAttributionLoad === token && traceIdMatches(selectedTraceId.value, traceId)) {
       error.value = String(err.message ?? err);
     }
+  } finally {
+    if (activeAttributionLoad === token) attributionLoading.value = false;
   }
 }
 
@@ -692,117 +667,9 @@ async function openWaterfall(target) {
     nonce: Date.now(),
   };
   activeTab.value = TAB_IDS.waterfall;
-  await ensureWaterfallForActiveTab();
+  await timeline.load(selectedTraceId.value, { filters: { ...timeline.filters, from: String(target.startNanos), to: String(target.endNanos) } });
 }
 
-function emptyActionTree(summary = null, rootData = null) {
-  return {
-    actions: [],
-    links: [],
-    roots: [],
-    summary,
-    rootData,
-    loadedTraceId: null,
-  };
-}
-
-function emptyTrajectoryGraph() {
-  return {
-    nodes: [],
-    edges: [],
-    stats: {},
-    capabilities: {},
-    partial: false,
-    loadedTraceId: null,
-  };
-
-}
-function emptyCommands() {
-  return {
-    actions: [],
-    links: [],
-    loadedTraceId: null,
-  };
-}
-
-function emptyWaterfall() {
-  return {
-    actions: [],
-    links: [],
-    associations: [],
-    roots: [],
-    selectedActions: 0,
-    totalActions: 0,
-    partial: false,
-    loadedTraceId: null,
-  };
-}
-
-function withWaterfallTrace(data, traceId) {
-  return {
-    actions: freezeTraceList(data.actions),
-    links: freezeTraceList(data.links),
-    associations: freezeTraceList(data.associations),
-    roots: data.roots ?? [],
-    idleIntervals: freezeTraceList(data.idle_intervals),
-    axisEnd: data.axis_end_unix_nanos ?? null,
-    selectedActions: data.selected_actions ?? data.actions?.length ?? 0,
-    totalActions:
-      data.total_actions ?? actionTree.value?.summary?.actions ?? data.actions?.length ?? 0,
-    partial: Boolean(data.partial),
-    loadedTraceId: traceId,
-  };
-}
-
-function withCommandTrace(commandData, traceId) {
-  return {
-    actions: freezeTraceList(commandData.actions),
-    links: freezeTraceList(commandData.links),
-    loadedTraceId: traceId,
-  };
-}
-
-function freezeTraceList(items) {
-  return (items ?? []).map((item) => markRaw(item));
-}
-
-function freezeTracePayload(data) {
-  if (!data || typeof data !== 'object') {
-    return data;
-  }
-  const next = { ...data };
-  for (const key of Object.keys(next)) {
-    if (Array.isArray(next[key])) {
-      next[key] = freezeTraceList(next[key]);
-    }
-  }
-  return next;
-}
-
-function eventBackedTab(tab) {
-  return (
-    tab === TAB_IDS.events ||
-    tab === TAB_IDS.files ||
-    tab === TAB_IDS.network
-  );
-}
-
-function traceIdMatches(left, right) {
-  return String(left ?? '') === String(right ?? '');
-}
-
-function compareTraceRecency(left, right) {
-  const delta = traceCreatedNanos(right) - traceCreatedNanos(left);
-  return delta === 0n ? 0 : delta > 0n ? 1 : -1;
-}
-
-function traceCreatedNanos(trace) {
-  try {
-    return BigInt(trace?.created_at_unix_nanos ?? 0);
-  } catch {
-    return 0n;
-  }
-}
 </script>
 
 <style scoped>
@@ -818,6 +685,8 @@ function traceCreatedNanos(trace) {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
+
+.trace-view-panel { overflow: auto; }
 
 .trace-group-panel-single {
   grid-template-rows: minmax(0, 1fr);

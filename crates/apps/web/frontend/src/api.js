@@ -17,8 +17,12 @@ export function clearServerCache() {
   });
 }
 
-export function listTraces() {
-  return fetchJson('/api/traces');
+export function listTraces({ signal, ...filters } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== '' && value != null) query.set(key, String(value));
+  }
+  return fetchJson(`/api/traces?${query}`, { signal });
 }
 
 export function listAlerts(limit = null) {
@@ -104,7 +108,7 @@ export function updateRuntimePluginConfig(instanceId, config) {
 }
 
 export function readTrace(traceId) {
-  return fetchJson(`/api/traces/${traceId}`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}`);
 }
 
 export function readTokenUsageStats({ fromMs, toMs, signal } = {}) {
@@ -170,48 +174,64 @@ export async function readLlmRequestsCsv({ fromMs, toMs, view = 'rows', signal }
 }
 
 export function readTraceSummary(traceId) {
-  return fetchJson(`/api/traces/${traceId}/summary`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/summary`);
 }
 
 export function readTraceTimeAttribution(traceId, { signal } = {}) {
-  return fetchJson(`/api/traces/${traceId}/time-attribution`, { signal });
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/time-attribution`, { signal });
 }
 
 export function readTraceEvents(traceId) {
-  return fetchJson(`/api/traces/${traceId}/events`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/events`);
 }
 
 export function readTracePayloads(traceId) {
-  return fetchJson(`/api/traces/${traceId}/payloads`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/payloads`);
 }
 
 export function readTraceTimeline(traceId) {
-  return fetchJson(`/api/traces/${traceId}/timeline`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/timeline`);
 }
 
 export function readTraceProcesses(traceId) {
-  return fetchJson(`/api/traces/${traceId}/processes`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/processes`);
 }
 
 export function readTraceDiagnostics(traceId) {
-  return fetchJson(`/api/traces/${traceId}/diagnostics`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/diagnostics`);
 }
 
-export function readActionTree(traceId) {
-  return fetchJson(`/api/traces/${traceId}/action-tree`);
+export function readTraceMetadata(traceId, { signal } = {}) {
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/metadata`, { signal });
 }
 
-export function readWaterfall(traceId, { signal } = {}) {
-  return fetchJson(`/api/traces/${traceId}/waterfall`, { signal });
+export function readTraceCounts(traceId, { signal } = {}) {
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/counts`, { signal });
+}
+
+export function readTimelinePage(traceId, { signal, ...filters } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== '' && value != null) query.set(key, String(value));
+  }
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/actions/timeline?${query}`, { signal });
+}
+
+export function readIdleIntervals(traceId, { signal, ...filters } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== '' && value != null) query.set(key, String(value));
+  }
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/idle-intervals?${query}`, { signal });
 }
 
 export function readActionTreeRoot(traceId) {
-  return fetchJson(`/api/traces/${traceId}/action-tree/root`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/action-tree/root`);
 }
 
 export function readActionTreeChildren(traceId, parentId, { offset, limit }) {
   return fetchJson(
-    `/api/traces/${traceId}/action-tree/children/${encodeURIComponent(parentId)}?offset=${offset}&limit=${limit}`,
+    `/api/traces/${encodeURIComponent(traceId)}/action-tree/children/${encodeURIComponent(parentId)}?offset=${offset}&limit=${limit}`,
   );
 }
 
@@ -230,45 +250,54 @@ export function readLlmTrajectoryGraph(traceId, { signal } = {}) {
 }
 
 export function readActionDetail(traceId, actionId, { signal } = {}) {
-  return fetchJson(`/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}`, { signal });
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}`, { signal });
+}
+
+export function readActionContentSource(traceId, actionId, { signal } = {}) {
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}/content/source`, { signal });
+}
+
+export function readActionHttpContent(traceId, actionId, { offset = 0, signal } = {}) {
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}/content/http?offset=${offset}`, { signal });
 }
 
 export function readActionFilePathSet(traceId, actionId, { offset, limit }) {
   return fetchJson(
-    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/file-path-set?offset=${offset}&limit=${limit}`,
+    `/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}/file-path-set?offset=${offset}&limit=${limit}`,
   );
 }
 
 export function readActionLlmRequestContent(traceId, actionId, { maxBytes, signal }) {
   return fetchJson(
-    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/llm-request?max_bytes=${maxBytes}`,
+    `/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}/content/llm-request?max_bytes=${maxBytes}`,
     { signal },
   );
 }
 
 export function readActionMcpJsonRpcContent(traceId, actionId, { maxBytes }) {
   return fetchJson(
-    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/mcp-jsonrpc?max_bytes=${maxBytes}`,
+    `/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}/content/mcp-jsonrpc?max_bytes=${maxBytes}`,
   );
 }
 
-export function readActionLlmRequestContentNode(traceId, actionId, { pointer, offset, limit }) {
+export function readActionLlmRequestContentNode(traceId, actionId, { pointer, offset, limit, signal }) {
   const query = [
     `pointer=${encodeURIComponent(pointer)}`,
     `offset=${encodeURIComponent(offset)}`,
     `limit=${encodeURIComponent(limit)}`,
   ].join('&');
   return fetchJson(
-    `/api/traces/${traceId}/actions/${encodeURIComponent(actionId)}/content/llm-request/node?${query}`,
+    `/api/traces/${encodeURIComponent(traceId)}/actions/${encodeURIComponent(actionId)}/content/llm-request/node?${query}`,
+    { signal },
   );
 }
 
 export function readCommands(traceId) {
-  return fetchJson(`/api/traces/${traceId}/commands`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/commands`);
 }
 
 export function readPayload(traceId, payloadId) {
-  return fetchJson(`/api/traces/${traceId}/payloads/${payloadId}`);
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/payloads/${payloadId}`);
 }
 
-export function readTraceResources(traceId) { return fetchJson(`/api/traces/${traceId}/resources?limit=1000`); }
+export function readTraceResources(traceId) { return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/resources?limit=1000`); }

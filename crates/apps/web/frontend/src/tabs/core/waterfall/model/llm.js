@@ -70,7 +70,7 @@ function resolveLlmCallContext(node, nodeById, parentByChild) {
   const parentCommand = commandAncestors[0] ?? null;
   const trigger = parentCommand?.action.attributes?.['agent.invocation.trigger'];
   const invocationKind = parentCommand?.action.attributes?.['invocation.kind'];
-  let scope = 'primary';
+  let scope = 'unknown';
   if (trigger === 'child_llm_request') {
     scope = 'subagent';
   } else if (commandAncestors.length > 1) {

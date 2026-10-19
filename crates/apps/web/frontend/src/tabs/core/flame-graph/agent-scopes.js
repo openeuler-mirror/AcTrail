@@ -1,59 +1,3 @@
-import { toolCallArguments } from './request-context.js';
-
-// Supplement missing stored links for this view only. Require an exact text block
-// and a unique pairing in the tool execution window; timing alone is insufficient.
-export function inferAgentRequestLinks(actions, links, actionById, displayIntervals, requestContexts) {
-  const validLinks = links.filter((link) => link.valid !== false);
-  const linkedInvocations = new Set();
-  const linkedRequests = new Set();
-  const continuingRequests = new Set();
-  const toolsByInvocation = new Map();
-  for (const link of validLinks) {
-    if (link.role === 'agent.invocation.child_llm_request') {
-      linkedInvocations.add(link.parent);
-      linkedRequests.add(link.child);
-    } else if (link.role === 'llm.request.trajectory_parent') {
-      continuingRequests.add(link.child);
-    } else if (link.role === 'llm.tool_call.agent_invocation') {
-      toolsByInvocation.set(link.child, link.parent);
-    }
-  }
-  const requests = actions.filter((action) => {
-    if (action.kind !== 'llm.request' || linkedRequests.has(action.id) || continuingRequests.has(action.id)) return false;
-    const trajectory = action.attributes?.['llm.request.trajectory_id'];
-    return (!trajectory || trajectory === action.id)
-      && requestContexts.has(action.id) && !requestContexts.get(action.id).backgroundKind;
-  });
-  const matches = [];
-  const requestMatchCounts = new Map();
-  for (const invocation of actions) {
-    if (invocation.kind !== 'agent.invocation' || linkedInvocations.has(invocation.id)) continue;
-    const toolId = invocation.attributes?.['agent.invocation.tool_call_action_id'] ?? toolsByInvocation.get(invocation.id);
-    const tool = actionById.get(toolId);
-    const prompt = toolCallArguments(tool, actionById)?.prompt;
-    if (typeof prompt !== 'string' || !prompt.trim()) continue;
-    const interval = displayIntervals.get(toolId) ?? {
-      startNanos: BigInt(invocation.start_time_unix_nanos),
-      endNanos: invocation.end_time_unix_nanos ? BigInt(invocation.end_time_unix_nanos) : null,
-    };
-    const candidates = requests.filter((request) => {
-      const start = BigInt(request.start_time_unix_nanos);
-      return start >= interval.startNanos && (interval.endNanos == null || start <= interval.endNanos)
-        && requestContexts.get(request.id).userTexts.some((text) => text.trim() === prompt.trim());
-    });
-    // Count every possible pairing, including invocations with several candidates.
-    for (const request of candidates) {
-      requestMatchCounts.set(request.id, (requestMatchCounts.get(request.id) ?? 0) + 1);
-    }
-    if (candidates.length === 1) matches.push({ invocation, request: candidates[0] });
-  }
-  return matches.filter(({ request }) => requestMatchCounts.get(request.id) === 1)
-    .map(({ invocation, request }) => ({
-      parent: invocation.id, child: request.id,
-      role: 'agent.invocation.child_llm_request', valid: true, inferred: true,
-    }));
-}
-
 export function deriveAgentScopes(invocations, actions, links, childrenByParent, t) {
   const validLinks = (links ?? []).filter((link) => link.valid !== false);
   const childRequestsByInvocation = new Map();
@@ -110,7 +54,7 @@ export function deriveAgentScopes(invocations, actions, links, childrenByParent,
         : t('scope.storedSource'),
       actionIds,
       parentId: 'agent-main',
-      parentLabel: t('scope.mainAgent'),
+      parentLabel: t('partialOwnership'),
       depth: 1,
       childCount: 0,
       spawnLabel: toolName ? `tool.call:${toolName}` : 'Agent invocation',

@@ -1,3 +1,4 @@
+// Format waterfall values and calculate stable time coordinates and ordering.
 import { shortTime } from '../../action-tree/common.js';
 
 export function toBigInt(value) {
@@ -52,4 +53,56 @@ export function windowLabel(window) {
     return '';
   }
   return `${shortTime(window.startIso)} → ${shortTime(window.endIso)} · ${formatOffset(window.spanMs)}`;
+}
+
+export function computeWindow(actions, intervals = [], axisEndNanos = null) {
+  let startNanos = null;
+  let endNanos = null;
+  let startIso = null;
+  let endIso = null;
+  const consider = (start, end, isoStart, isoEnd) => {
+    if (startNanos === null || start < startNanos) {
+      startNanos = start;
+      startIso = isoStart;
+    }
+    if (endNanos === null || end > endNanos) {
+      endNanos = end;
+      endIso = isoEnd;
+    }
+  };
+  for (const action of actions) {
+    const start = toBigInt(action.start_time_unix_nanos);
+    const end = action.end_time_unix_nanos ? toBigInt(action.end_time_unix_nanos) : start;
+    consider(start, end, action.start_time, action.end_time ?? action.start_time);
+  }
+  for (const interval of intervals) {
+    consider(
+      interval.startNanos,
+      interval.endNanos ?? interval.startNanos,
+      null,
+      null,
+    );
+  }
+  if (axisEndNanos) {
+    const axisEnd = toBigInt(axisEndNanos);
+    if (endNanos === null || axisEnd > endNanos) {
+      endNanos = axisEnd;
+    }
+  }
+  if (startNanos === null) {
+    return emptyWindow();
+  }
+  const spanMs = Math.max(nanosDiffMs(endNanos, startNanos), 1);
+  return { startNanos, endNanos, spanMs, startIso, endIso };
+}
+
+export function emptyWindow() {
+  return { startNanos: 0n, endNanos: 0n, spanMs: 1, startIso: null, endIso: null };
+}
+
+export function compareNodes(left, right) {
+  if (left.startOffsetMs !== right.startOffsetMs) {
+    return left.startOffsetMs - right.startOffsetMs;
+  }
+  return String(left.id).localeCompare(String(right.id));
 }

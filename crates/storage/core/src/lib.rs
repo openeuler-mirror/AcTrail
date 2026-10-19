@@ -1,9 +1,20 @@
 //! Unified storage backend facade.
 
+mod action_content;
 mod backend;
+pub use action_content::{ActionContentSource, HttpContentPage, HttpContentQuery};
 mod error;
+mod idle;
 mod payload_retention;
+mod timeline;
+mod trace_page;
 mod transaction;
+pub use idle::{IdleInterval, IdlePage, IdleQuery};
+pub use semantic_action::{
+    ContentNode, ContentNodeChild, ContentNodeKind, ContentNodePage, ContentNodeQuery,
+};
+pub use timeline::{TimelineBounds, TimelineCursor, TimelinePage, TimelineQuery};
+pub use trace_page::{TraceCounts, TracePage, TracePageQuery};
 
 pub use alert_contract::{
     AlertDefinition, AlertDefinitionId, AlertDraft, AlertId, AlertListLimit, AlertRecord,

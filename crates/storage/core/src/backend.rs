@@ -133,6 +133,9 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
     ) -> Result<(), StorageError>;
     fn get_trace(&self, trace_id: TraceId) -> Result<Option<TraceRecord>, StorageError>;
     fn list_traces(&self, filter: &TraceFilter) -> Result<Vec<TraceRecord>, StorageError>;
+    fn trace_counts(&self, trace_id: TraceId) -> Result<crate::TraceCounts, StorageError>;
+    fn trace_page(&self, query: &crate::TracePageQuery) -> Result<crate::TracePage, StorageError>;
+    fn idle_page(&self, query: &crate::IdleQuery) -> Result<crate::IdlePage, StorageError>;
 
     fn upsert_membership(&mut self, membership: ProcessMembership) -> Result<(), StorageError>;
     fn trace_memberships(&self, trace_id: TraceId) -> Result<Vec<ProcessMembership>, StorageError>;
@@ -275,6 +278,11 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         offset: usize,
         limit: usize,
     ) -> Result<SemanticActionPage, StorageError>;
+    fn timeline_page(
+        &self,
+        query: &crate::TimelineQuery,
+    ) -> Result<crate::TimelinePage, StorageError>;
+    fn timeline_bounds(&self, trace_id: TraceId) -> Result<crate::TimelineBounds, StorageError>;
     fn llm_request_lineage(
         &self,
         trace_id: TraceId,
@@ -399,6 +407,23 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         action_id: &str,
         max_bytes: usize,
     ) -> Result<Option<LlmRequestContentPage>, StorageError>;
+    fn action_content_source(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<crate::ActionContentSource>, StorageError>;
+    fn http_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &crate::HttpContentQuery,
+    ) -> Result<Option<crate::HttpContentPage>, StorageError>;
+    fn llm_request_content_node(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &crate::ContentNodeQuery,
+    ) -> Result<Option<crate::ContentNodePage>, StorageError>;
     fn mcp_jsonrpc_content_page(
         &self,
         trace_id: TraceId,

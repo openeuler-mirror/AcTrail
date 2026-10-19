@@ -17,6 +17,7 @@
       <AgentStatsWorkspace
         v-if="activeTab === STATS_TAB_IDS.agentOverview"
         :traces="traces"
+        :trace-pages="tracePages"
         :refresh-nonce="refreshNonce"
         @loading="$emit('loading', $event)"
         @open-trace="$emit('open-trace', $event)"
@@ -73,6 +74,7 @@ const tabs = computed(() => [
 ]);
 
 const props = defineProps({
+  tracePages: { type: Object, required: true },
   traces: {
     type: Array,
     required: true,

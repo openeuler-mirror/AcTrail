@@ -1,5 +1,6 @@
 //! SQLite-backed storage adapter.
 
+mod action_content;
 pub mod alerts;
 pub mod backend;
 pub mod config;

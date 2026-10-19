@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 REPO = Path(__file__).resolve().parents[3]
@@ -202,8 +203,10 @@ poll_interval_secs = "1s"
         self.trace = self.wait(self.trace_id, 'trace registration')
         web_port = AgentWorkload._free_port()
         self.web = f'http://127.0.0.1:{web_port}'
-        self.web_process = self.launch('web', [self.binary/'actrailweb', '--config', self.config, '--addr', '127.0.0.1', '--port', str(web_port)])
-        self.wait(lambda: self.request('GET', f'/api/traces/{self.trace}/action-tree', base=self.web), 'web')
+        self.web_process = self.launch('web', [self.binary/'actrailweb', '--config', self.config, '--addr', '127.0.0.1', '--port', str(web_port)],
+            env=dict(os.environ, ACTRAIL_WEB_IDLE_DEFAULT_LIMIT='1', ACTRAIL_WEB_IDLE_MAX_LIMIT='1',
+                     ACTRAIL_WEB_IDLE_CANDIDATES='1'))
+        self.wait(lambda: self.request('GET', f'/api/traces/{self.trace}/metadata', base=self.web), 'web')
 
     def trace_id(self):
         with sqlite3.connect(self.db.as_uri()+'?mode=ro', uri=True) as db:
@@ -242,11 +245,41 @@ poll_interval_secs = "1s"
         raise RuntimeError('OpenCode API has no permission reply endpoint')
 
     def snapshot(self, name):
-        graph = self.request('GET', f'/api/traces/{self.trace}/action-tree', base=self.web)
-        waterfall = self.request('GET', f'/api/traces/{self.trace}/waterfall', base=self.web)
-        assert graph['idle_intervals'] == waterfall['idle_intervals'], 'Web projections disagree'
-        self.save(name+'.json', {'alerts': self.alerts(), 'graph': graph, 'waterfall': waterfall})
-        return graph
+        result = self.idle_pages()
+        expected = {f"agent-hang-{row['alert_id']}" for row in self.detected()}
+        assert {row['id'] for row in result['idle_intervals']} == expected
+        for interval in result['idle_intervals']:
+            start = int(interval['start_time_unix_nanos'])
+            end = interval['end_time_unix_nanos']
+            if end is not None and int(end) > start + 1:
+                filtered = self.idle_pages(**{'from': str(start + 1), 'to': str(int(end) - 1)})
+                assert interval['id'] in {row['id'] for row in filtered['idle_intervals']}, \
+                    'overlap filter omitted an interval beginning before the window'
+        self.save(name+'.json', {'alerts': self.alerts(), 'idle_page': result})
+        return result
+
+    def idle_pages(self, **filters):
+        intervals = []
+        cursor = None
+        pages = []
+        while True:
+            params = dict(filters, limit='1')
+            if cursor is not None:
+                params['cursor'] = cursor
+            page = self.request('GET', f'/api/traces/{self.trace}/idle-intervals?'
+                                + urllib.parse.urlencode(params), base=self.web)
+            assert len(page['idle_intervals']) <= 1
+            assert page['scanned'] <= 1
+            intervals.extend(page['idle_intervals'])
+            pages.append(page)
+            if not page['has_more']:
+                break
+            following = page['next_cursor']
+            assert following is not None and following != cursor, 'idle cursor failed to advance'
+            cursor = following
+        assert len({row['id'] for row in intervals}) == len(intervals), 'duplicate idle interval'
+        return dict(idle_intervals=intervals, pages=pages,
+                    axis_end_unix_nanos=page['axis_end_unix_nanos'])
 
     def start_turn(self, session, label, gated=False, gate_skip=0):
         for kind in ('gate', 'model'):
@@ -358,10 +391,19 @@ poll_interval_secs = "1s"
             web_port = AgentWorkload._free_port()
             self.web = f'http://127.0.0.1:{web_port}'
             self.web_process = self.launch('web-history', [self.binary/'actrailweb', '--config', self.config,
-                '--addr', '127.0.0.1', '--port', str(web_port)])
-            self.wait(lambda: self.request('GET', f'/api/traces/{self.trace}/action-tree', base=self.web), 'fresh historical Web')
+                '--addr', '127.0.0.1', '--port', str(web_port)],
+                env=dict(os.environ, ACTRAIL_WEB_IDLE_DEFAULT_LIMIT='1', ACTRAIL_WEB_IDLE_MAX_LIMIT='1',
+                         ACTRAIL_WEB_IDLE_CANDIDATES='1'))
+            self.wait(lambda: self.request('GET', f'/api/traces/{self.trace}/metadata', base=self.web), 'fresh historical Web')
             reread = self.snapshot('fresh-web-history')
             assert reread['idle_intervals'] == history['idle_intervals'], 'history differs after Web restart'
+            empty = self.idle_pages(**{'from': str(int(reread['axis_end_unix_nanos']) + 1)})
+            assert not empty['idle_intervals'], 'closed intervals leaked beyond terminal time'
+            assert any(page['has_more'] and not page['idle_intervals'] for page in empty['pages']), \
+                'candidate-limited empty pages did not preserve continuation'
+            self.save('idle-empty-continuation.json', empty)
+            self.command('node', Path(__file__).with_name('browser.mjs'), self.web, self.trace,
+                         self.root, self.args.playwright, self.args.chromium)
             self.evidence['alerts'] = self.alerts()
             self.evidence['status'] = 'passed'
         except BaseException as error:
@@ -393,6 +435,8 @@ def main():
     parser.add_argument('--bin-dir', type=Path, default=REPO/'target/release')
     parser.add_argument('--opencode', type=Path, default=Path('/usr/local/bin/opencode'))
     parser.add_argument('--permission-poll-interval-ms', type=int, default=5000)
+    parser.add_argument('--playwright', default='/tmp/cliproxy-endpoint-browser/node_modules/playwright/index.mjs')
+    parser.add_argument('--chromium', default='/home/yzh/.cache/ms-playwright/chromium-1248/chrome-linux-arm64/chrome')
     args=parser.parse_args()
     Acceptance(args).run()
 
