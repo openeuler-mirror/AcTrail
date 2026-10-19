@@ -162,7 +162,7 @@ fn event_variant(payload: &EventPayload) -> &'static str {
         EventPayload::Ipc(_) => "ipc",
         EventPayload::Stdio(_) => "stdio",
         EventPayload::Application(_) => "application",
-        EventPayload::Resource(_) => "resource",
+
         EventPayload::Control(_) => "control",
         EventPayload::Loss(_) => "loss",
         EventPayload::Label(_) => "label",
@@ -178,7 +178,7 @@ fn event_payload_json(payload: &EventPayload) -> Value {
         EventPayload::Ipc(p) => serde_json::to_value(p),
         EventPayload::Stdio(p) => serde_json::to_value(p),
         EventPayload::Application(p) => serde_json::to_value(p),
-        EventPayload::Resource(p) => serde_json::to_value(p),
+
         EventPayload::Control(p) => serde_json::to_value(p),
         EventPayload::Loss(p) => serde_json::to_value(p),
         EventPayload::Label(p) => serde_json::to_value(p),

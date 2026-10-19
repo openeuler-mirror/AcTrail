@@ -15,11 +15,10 @@ use storage_factory::StorageConfig;
 use super::{
     AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig,
     CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
-    ExistingContainerCgroups, FileObservationConfig, IdleDetectionConfig, IpcLineageConfig,
-    NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, ResourceMetricsMode, SeccompNotifyConfig,
-    SemanticRetentionConfig, SocketPermissions, SseDataPolicy, StorageRetentionConfig,
-    TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    FileObservationConfig, IdleDetectionConfig, IpcLineageConfig, NetworkControlConfig,
+    PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
+    StorageRetentionConfig, TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -43,7 +42,7 @@ pub enum OperatorConfigInitStatus {
     Overwritten,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
@@ -77,7 +76,7 @@ pub struct OperatorConfig {
     pub semantic_retention: SemanticRetentionConfig,
     pub file_observation: FileObservationConfig,
     pub application_protocol: ApplicationProtocolConfig,
-    pub resource_metrics: ResourceMetricsConfig,
+    pub resource_profiling: toml::Table,
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
     pub access_control: AccessControlConfig,
@@ -582,29 +581,6 @@ fn validate_application_protocol_config(
     if http2_requested && !plaintext_payload_available {
         return Err(
             "net-application-http2-frames requires enabled tls-plaintext-payload or socket-plaintext-payload in the same profile"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn validate_resource_metrics_config(
-    config: &ResourceMetricsConfig,
-    capabilities: &[CapabilityRequest],
-) -> Result<(), String> {
-    if capability_requested(capabilities, &Capability::ResourceMetrics) && !config.enabled {
-        return Err("resource-metrics requires resource_metrics_enabled=true".to_string());
-    }
-    if !config.cgroup_root.is_absolute() || config.cgroup_root.file_name().is_none() {
-        return Err(
-            "resource_metrics.cgroup_root must be an absolute managed child path".to_string(),
-        );
-    }
-    if config.mode == ResourceMetricsMode::Procfs
-        && config.existing_container_cgroups != ExistingContainerCgroups::Disabled
-    {
-        return Err(
-            "resource_metrics.existing_container_cgroups must be disabled when mode=procfs"
                 .to_string(),
         );
     }

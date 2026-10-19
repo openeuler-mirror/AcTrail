@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
 use model_core::container::ContainerRuntime;
-use model_core::external_cgroup::{
-    ExternalBindingStaleReason, ExternalBindingState, ExternalCgroupBinding,
-};
-use model_core::ids::{EventId, TraceId};
-use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
+use model_core::ids::TraceId;
+use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
+use resource_profiling::model::external_cgroup::ExternalBindingState;
+use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use storage_core::StorageError;
 
 #[derive(Clone, Default)]
@@ -14,6 +15,7 @@ struct ControlRecords {
     traces: BTreeSet<TraceId>,
     scopes: BTreeMap<TraceId, TraceResourceScope>,
     bindings: BTreeMap<TraceId, ExternalCgroupBinding>,
+    v1: BTreeMap<TraceId, resource_profiling::model::cgroup_v1_binding::CgroupV1Binding>,
 }
 
 /// Sole in-memory resource registry; observations never enter this state.
@@ -25,6 +27,60 @@ pub(super) struct ResourceState {
 }
 
 impl ResourceState {
+    pub(super) fn v1(
+        &self,
+        id: TraceId,
+    ) -> Option<resource_profiling::model::cgroup_v1_binding::CgroupV1Binding> {
+        self.records.v1.get(&id).cloned()
+    }
+    pub(super) fn live_v1(
+        &self,
+    ) -> Vec<resource_profiling::model::cgroup_v1_binding::CgroupV1Binding> {
+        self.records
+            .v1
+            .values()
+            .filter(|b| b.closed_at.is_none())
+            .cloned()
+            .collect()
+    }
+    pub(super) fn create_v1(
+        &mut self,
+        binding: resource_profiling::model::cgroup_v1_binding::CgroupV1Binding,
+    ) -> Result<(), StorageError> {
+        if let Some(current) = self.records.v1.get(&binding.trace_id) {
+            return if *current == binding {
+                Ok(())
+            } else {
+                Err(Self::error())
+            };
+        }
+        if !self.records.traces.contains(&binding.trace_id) || binding.closed_at.is_some() {
+            return Err(Self::error());
+        }
+        self.write().v1.insert(binding.trace_id, binding);
+        Ok(())
+    }
+    pub(super) fn stale_v1(&mut self, id: TraceId, reason: &str) -> Result<(), StorageError> {
+        let binding = self
+            .write()
+            .v1
+            .get_mut(&id)
+            .filter(|b| b.closed_at.is_none())
+            .ok_or_else(Self::error)?;
+        binding.stale_reason.get_or_insert_with(|| reason.into());
+        Ok(())
+    }
+
+    pub(super) fn close_v1(&mut self, id: TraceId, at: SystemTime) -> Result<(), StorageError> {
+        self.write()
+            .v1
+            .get_mut(&id)
+            .ok_or_else(Self::error)?
+            .closed_at
+            .get_or_insert(at);
+        Ok(())
+    }
+
     fn error() -> StorageError {
         StorageError::new(
             "noop_resource_state",
@@ -88,9 +144,6 @@ impl ResourceState {
                 Err(Self::error())
             };
         }
-        if scope.lifecycle_state.is_live() && scope.final_event_id.is_some() {
-            return Err(Self::error());
-        }
         if self
             .records
             .scopes
@@ -107,15 +160,10 @@ impl ResourceState {
         &mut self,
         id: TraceId,
         state: ResourceScopeLifecycleState,
-        event: Option<EventId>,
         time: SystemTime,
     ) -> Result<(), StorageError> {
-        if state.is_live() && event.is_some() {
-            return Err(Self::error());
-        }
         let scope = self.write().scopes.get_mut(&id).ok_or_else(Self::error)?;
         scope.lifecycle_state = state;
-        scope.final_event_id = event;
         scope.updated_at = time;
         Ok(())
     }
@@ -124,18 +172,12 @@ impl ResourceState {
         let valid = !matches!(binding.runtime, ContainerRuntime::Unknown)
             && match binding.lifecycle_state {
                 ExternalBindingState::Active => {
-                    binding.stale_reason.is_none()
-                        && binding.closed_at.is_none()
-                        && binding.final_event_id.is_none()
+                    binding.stale_reason.is_none() && binding.closed_at.is_none()
                 }
                 ExternalBindingState::Stale => {
-                    binding.stale_reason.is_some()
-                        && binding.closed_at.is_none()
-                        && binding.final_event_id.is_none()
+                    binding.stale_reason.is_some() && binding.closed_at.is_none()
                 }
-                ExternalBindingState::Closed => {
-                    binding.closed_at.is_some() && binding.final_event_id.is_some()
-                }
+                ExternalBindingState::Closed => binding.closed_at.is_some(),
             };
         if !valid {
             return Err(Self::error());
@@ -207,21 +249,13 @@ impl ResourceState {
         }
     }
 
-    pub fn close(
-        &mut self,
-        id: TraceId,
-        event: EventId,
-        time: SystemTime,
-    ) -> Result<EventId, StorageError> {
-        let current = self.records.bindings.get(&id).ok_or_else(Self::error)?;
-        if current.lifecycle_state == ExternalBindingState::Closed {
-            return current.final_event_id.ok_or_else(Self::error);
-        }
+    pub fn close(&mut self, id: TraceId, time: SystemTime) -> Result<(), StorageError> {
         let binding = self.write().bindings.get_mut(&id).ok_or_else(Self::error)?;
-        binding.lifecycle_state = ExternalBindingState::Closed;
-        binding.closed_at = Some(time);
-        binding.final_event_id = Some(event);
-        binding.updated_at = time;
-        Ok(event)
+        if binding.lifecycle_state != ExternalBindingState::Closed {
+            binding.lifecycle_state = ExternalBindingState::Closed;
+            binding.closed_at = Some(time);
+            binding.updated_at = time;
+        }
+        Ok(())
     }
 }

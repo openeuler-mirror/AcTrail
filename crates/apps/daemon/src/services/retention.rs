@@ -32,12 +32,9 @@ impl StorageRetentionService {
     }
 
     pub(crate) fn poll_timeout(&self) -> Option<Duration> {
-        if !self.config.enabled {
-            return None;
-        }
-        let next_sweep_at = self.next_sweep_at?;
         let now = Instant::now();
-        Some(next_sweep_at.saturating_duration_since(now))
+        self.next_sweep_at
+            .map(|deadline| deadline.saturating_duration_since(now))
     }
 
     pub(crate) fn sweep_if_due(

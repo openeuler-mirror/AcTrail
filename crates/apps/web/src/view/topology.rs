@@ -224,7 +224,7 @@ fn event_lane(payload: &EventPayload) -> &'static str {
         EventPayload::Ipc(_) => "ipc",
         EventPayload::Stdio(_) => "stdio",
         EventPayload::Application(_) => "application",
-        EventPayload::Resource(_) => "resource",
+
         EventPayload::Control(_) => "control",
         EventPayload::Loss(_) => "loss",
         EventPayload::Label(_) => "label",
@@ -244,7 +244,7 @@ fn event_title(payload: &EventPayload) -> String {
         EventPayload::Ipc(payload) => payload.channel.clone(),
         EventPayload::Stdio(payload) => payload.stream.clone(),
         EventPayload::Application(payload) => payload.operation.clone(),
-        EventPayload::Resource(payload) => payload.scope.clone(),
+
         EventPayload::Control(payload) => payload.action.clone(),
         EventPayload::Loss(payload) => payload.reason.clone(),
         EventPayload::Label(payload) => payload.provider.clone(),
@@ -268,7 +268,7 @@ fn event_summary(payload: &EventPayload) -> String {
         EventPayload::Ipc(payload) => payload.peer.clone().unwrap_or_default(),
         EventPayload::Stdio(payload) => format!("{} bytes", payload.data.len()),
         EventPayload::Application(payload) => payload.summary.clone(),
-        EventPayload::Resource(payload) => resource_summary(payload),
+
         EventPayload::Control(payload) => payload.detail.clone(),
         EventPayload::Loss(payload) => format!("fatal={}", payload.fatal),
         EventPayload::Label(payload) => payload
@@ -281,29 +281,4 @@ fn event_summary(payload: &EventPayload) -> String {
             payload.path.clone().unwrap_or_default()
         ),
     }
-}
-
-fn resource_summary(payload: &model_core::event::ResourcePayload) -> String {
-    format!(
-        "{} method={} coverage={} cpu={} cgroup_memory_current_bytes={} rss_kb={}",
-        payload.subject,
-        payload.accounting_method.as_str(),
-        payload.accounting_coverage.as_str(),
-        payload
-            .cpu_percent_millis
-            .map(format_percent_millis)
-            .unwrap_or_default(),
-        payload
-            .memory_current_bytes
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        payload
-            .rss_kb
-            .map(|value| value.to_string())
-            .unwrap_or_default()
-    )
-}
-
-fn format_percent_millis(value: u64) -> String {
-    format!("{}.{:03}", value / 1000, value % 1000)
 }

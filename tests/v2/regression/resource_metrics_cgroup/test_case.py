@@ -22,7 +22,7 @@ class ResourceMetricsCgroupContractTest(unittest.TestCase):
 
             patch = case._operator_patch()
 
-            self.assertIn('mode = "cgroup-v2"', patch)
+            self.assertIn('mode = "cgroup"', patch)
             self.assertIn("/sys/fs/cgroup/system.slice/", patch)
             self.assertIn("finalization_timeout_ms = 1000", patch)
 

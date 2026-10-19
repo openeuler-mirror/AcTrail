@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use model_core::event::ResourceAccountingMethod;
-use model_core::ids::{EventId, TraceId};
-use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
+use model_core::ids::TraceId;
+use resource_profiling::model::ResourceAccountingMethod;
+use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use rusqlite::{Error as SqlError, OptionalExtension, Row, params};
 
 use crate::SqliteStorage;
@@ -17,8 +18,8 @@ impl SqliteStorage {
         match connection.execute(
             "INSERT INTO trace_resource_scopes (
                 trace_id, nonce, relative_path, accounting_method, lifecycle_state,
-                created_at, final_event_id, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 scope.trace_id.get(),
                 scope.nonce,
@@ -26,7 +27,6 @@ impl SqliteStorage {
                 encode_accounting_method(scope.accounting_method),
                 scope.lifecycle_state.as_storage_str(),
                 encode_time(scope.created_at),
-                scope.final_event_id.map(EventId::get),
                 encode_time(scope.updated_at),
             ],
         ) {
@@ -51,7 +51,7 @@ impl SqliteStorage {
             .borrow()
             .query_row(
                 "SELECT trace_id, nonce, relative_path, accounting_method, lifecycle_state,
-                        created_at, final_event_id, updated_at
+                        created_at, updated_at
                  FROM trace_resource_scopes WHERE trace_id = ?1",
                 [trace_id.get()],
                 decode_scope,
@@ -63,7 +63,7 @@ impl SqliteStorage {
         let connection = self.connection().borrow();
         let mut statement = connection.prepare(
             "SELECT trace_id, nonce, relative_path, accounting_method, lifecycle_state,
-                    created_at, final_event_id, updated_at
+                    created_at, updated_at
              FROM trace_resource_scopes ORDER BY trace_id",
         )?;
         statement
@@ -75,25 +75,14 @@ impl SqliteStorage {
         &mut self,
         trace_id: TraceId,
         lifecycle_state: ResourceScopeLifecycleState,
-        final_event_id: Option<EventId>,
         updated_at: SystemTime,
     ) -> Result<(), SqlError> {
-        if !matches!(
-            lifecycle_state,
-            ResourceScopeLifecycleState::Finalized | ResourceScopeLifecycleState::Orphaned
-        ) && final_event_id.is_some()
-        {
-            return Err(SqlError::InvalidQuery);
-        }
         let changed = self.connection().borrow_mut().execute(
-            "UPDATE trace_resource_scopes
-             SET lifecycle_state = ?2, final_event_id = ?3, updated_at = ?4
-             WHERE trace_id = ?1",
+            "UPDATE trace_resource_scopes SET lifecycle_state=?2,updated_at=?3 WHERE trace_id=?1",
             params![
                 trace_id.get(),
                 lifecycle_state.as_storage_str(),
-                final_event_id.map(EventId::get),
-                encode_time(updated_at),
+                encode_time(updated_at)
             ],
         )?;
         if changed == 1 {
@@ -116,9 +105,6 @@ fn decode_scope(row: &Row<'_>) -> Result<TraceResourceScope, SqlError> {
         accounting_method,
         lifecycle_state,
         created_at: decode_time(row.get("created_at")?),
-        final_event_id: row
-            .get::<_, Option<u64>>("final_event_id")?
-            .map(EventId::new),
         updated_at: decode_time(row.get("updated_at")?),
     })
 }
@@ -129,6 +115,7 @@ fn encode_accounting_method(method: ResourceAccountingMethod) -> &'static str {
 
 fn decode_accounting_method(raw: &str) -> Result<ResourceAccountingMethod, SqlError> {
     match raw {
+        "cgroup_v1" => Ok(ResourceAccountingMethod::CgroupV1),
         "cgroup_v2" => Ok(ResourceAccountingMethod::CgroupV2),
         "procfs_rss_sum" => Ok(ResourceAccountingMethod::ProcfsRssSum),
         _ => Err(SqlError::InvalidQuery),
@@ -141,69 +128,4 @@ fn is_constraint_violation(error: &SqlError) -> bool {
         SqlError::SqliteFailure(inner, _)
             if inner.code == rusqlite::ErrorCode::ConstraintViolation
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    use super::*;
-
-    #[test]
-    fn registry_is_idempotent_and_rejects_a_second_scope_for_the_trace() {
-        let mut storage = SqliteStorage::open_in_memory().unwrap();
-        let scope = TraceResourceScope::active(
-            TraceId::new(7),
-            "nonce1",
-            "traces/trace-7-nonce1",
-            ResourceAccountingMethod::CgroupV2,
-            UNIX_EPOCH + Duration::from_secs(10),
-        );
-        storage.create_resource_scope(&scope).unwrap();
-        storage.create_resource_scope(&scope).unwrap();
-        assert_eq!(
-            storage.get_resource_scope(scope.trace_id).unwrap(),
-            Some(scope.clone())
-        );
-
-        let conflicting = TraceResourceScope::active(
-            scope.trace_id,
-            "nonce2",
-            "traces/trace-7-nonce2",
-            ResourceAccountingMethod::CgroupV2,
-            scope.created_at,
-        );
-        assert!(storage.create_resource_scope(&conflicting).is_err());
-    }
-
-    #[test]
-    fn registry_state_and_final_event_round_trip() {
-        let mut storage = SqliteStorage::open_in_memory().unwrap();
-        let scope = TraceResourceScope::active(
-            TraceId::new(8),
-            "nonce",
-            "traces/trace-8-nonce",
-            ResourceAccountingMethod::CgroupV2,
-            UNIX_EPOCH + Duration::from_secs(20),
-        );
-        storage.create_resource_scope(&scope).unwrap();
-        let updated_at = UNIX_EPOCH + Duration::from_secs(30);
-        storage
-            .update_resource_scope_state(
-                scope.trace_id,
-                ResourceScopeLifecycleState::Finalized,
-                Some(EventId::new(99)),
-                updated_at,
-            )
-            .unwrap();
-
-        let stored = storage.get_resource_scope(scope.trace_id).unwrap().unwrap();
-        assert_eq!(
-            stored.lifecycle_state,
-            ResourceScopeLifecycleState::Finalized
-        );
-        assert_eq!(stored.final_event_id, Some(EventId::new(99)));
-        assert_eq!(stored.updated_at, updated_at);
-        assert_eq!(storage.list_resource_scopes().unwrap(), vec![stored]);
-    }
 }

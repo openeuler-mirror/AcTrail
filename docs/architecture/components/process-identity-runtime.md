@@ -27,6 +27,16 @@ AcTrail 不把任何裸 PID 当作跨层稳定身份。上层事件、membership
 
 进入观测范围后，eBPF 以 raw kernel TGID 为 key 缓存 `{start_boottime_ns, observer_pid}`。typed event 的公共 header 只做一次 O(1) cache lookup；cache miss 的单条事件 fail-local 丢弃并计数，decoder 仍可用已建立的精确 binding 做第二层恢复。TLS/seccomp correlation 另以 raw kernel pid_tgid 缓存 trace namespace 的 `(TGID,TID)`；未来线程无法在进程注册时预知，因此每个线程首次 TLS 触达时填充一次，后续 enter/completion 为 O(1)。线程 exit、trace unbind、进程 exit、取消、promotion rollback 与显式 untrack 必须清理对应 cache。
 
+Socket seccomp completion 明确携带 `observer_tgid/observer_tid` 与
+`kernel_tgid/kernel_tid`。内核根据已配置 observer namespace 的 level 和 inode
+投影当前 task 的线程坐标；该投影只用于与 seccomp notification 交付的 TID
+配对，不改变 BPF map 的 key。通知侧从既有精确 process binding 取得 kernel
+TGID 和 `start_boottime_ns`；操作关联键包含这两个字段、trace、FD generation、
+observer TID 和 syscall 参数。进程复用、FD 复用及不同 trace 的记录不得互相匹配。
+目标内存与 `/proc` 仍通过 observer 坐标访问，socket stream 与 FD map 始终使用
+kernel 坐标。该路径不新增线程逆索引，不在用户态扫描 task 或猜测 kernel TID；
+trace 结束时释放未完成的 socket capture 和 continuation。
+
 ## Fork、控制与 Exec
 
 `sched_process_fork` 发生时 current task 仍是 parent。eBPF 从 child `group_leader->thread_pid->numbers[]` 读取 observer namespace 对应的 TGID：首次按 namespace inode 在最多 33 层 PID namespace 中发现 observer level，随后缓存 level；稳态 fork 直接读取 `numbers[cached_level]` 并核验 inode，复杂度为 O(1)。

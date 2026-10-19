@@ -31,8 +31,6 @@ mod operator;
 mod payload;
 #[path = "daemon/process.rs"]
 mod process;
-#[path = "daemon/resource.rs"]
-mod resource;
 #[path = "daemon/finalization/config.rs"]
 mod trace_finalization;
 
@@ -125,7 +123,6 @@ pub use payload::{
     PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
-pub use resource::{ExistingContainerCgroups, ResourceMetricsConfig, ResourceMetricsMode};
 pub use trace_finalization::{
     DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
     DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,

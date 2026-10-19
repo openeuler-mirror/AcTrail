@@ -9,12 +9,14 @@ use alert_contract::{
 };
 use model_core::diagnostics::{DiagnosticRecord, LlmPipelineDiagnostic};
 use model_core::event::DomainEvent;
-use model_core::external_cgroup::{ExternalBindingStaleReason, ExternalCgroupBinding};
 use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
-use model_core::resource_scope::{ResourceScopeLifecycleState, TraceResourceScope};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
+use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
@@ -100,7 +102,7 @@ pub struct SemanticActionChildPageQuery {
     pub limit: usize,
 }
 
-pub trait StorageBackend {
+pub trait StorageBackend: crate::CgroupV1BindingStore {
     /// Whether observation records are retained and need protection from purge during history reads.
     fn retains_observations(&self) -> bool;
 
@@ -145,7 +147,7 @@ pub trait StorageBackend {
         &mut self,
         trace_id: TraceId,
         lifecycle_state: ResourceScopeLifecycleState,
-        final_event_id: Option<model_core::ids::EventId>,
+
         updated_at: SystemTime,
     ) -> Result<(), StorageError>;
 
@@ -179,11 +181,11 @@ pub trait StorageBackend {
     /// Discard a legacy interrupted admission only if its trace does not exist.
     fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError>;
 
-    fn append_final_event_and_close_external_binding(
+    fn close_external_cgroup_binding(
         &mut self,
-        event: DomainEvent,
+        trace_id: TraceId,
         closed_at: SystemTime,
-    ) -> Result<model_core::ids::EventId, StorageError>;
+    ) -> Result<(), StorageError>;
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError>;
     fn list_events(&self, trace_id: TraceId) -> Result<Vec<DomainEvent>, StorageError>;

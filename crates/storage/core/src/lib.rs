@@ -24,3 +24,6 @@ pub use store_retention_contract::tombstone::TraceTombstone;
 pub use store_snapshot_contract::lease::{TraceLease, TraceLeasePurpose, TraceLeaseToken};
 pub use store_snapshot_contract::view::SnapshotView;
 pub use transaction::StorageTransaction;
+
+mod cgroup_v1_bindings;
+pub use cgroup_v1_bindings::CgroupV1BindingStore;

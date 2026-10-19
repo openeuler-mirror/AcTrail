@@ -270,3 +270,5 @@ export function readCommands(traceId) {
 export function readPayload(traceId, payloadId) {
   return fetchJson(`/api/traces/${traceId}/payloads/${payloadId}`);
 }
+
+export function readTraceResources(traceId) { return fetchJson(`/api/traces/${traceId}/resources?limit=1000`); }

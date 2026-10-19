@@ -492,7 +492,9 @@ fn summary_segment(
         &event.pid_namespace,
         process_cache,
     )?;
-    let captured_size = event.bytes.len() as u64;
+    // Summary headers are metadata, not the next bytes of the TLS stream.
+    // Preserve a zero-byte incomplete operation so consumers observe the gap.
+    let captured_size = 0;
     let original_size = event.observed_size.max(captured_size);
     Ok(Some(RawPayloadSegment {
         trace_id,
@@ -518,7 +520,7 @@ fn summary_segment(
             "tls-summary;reason={};protocol={}",
             event.reason, event.protocol_hint
         )),
-        bytes: event.bytes,
+        bytes: Vec::new(),
     }))
 }
 

@@ -42,7 +42,14 @@ pub(super) fn inspect(
         &[b"octet-stream", b"application/zip", b"application/gzip"],
     );
     let attachment = header_value_contains_any(header, b"content-disposition", &[b"attachment"]);
-    let body_binary = !body.is_empty() && body_looks_binary(body);
+    // Content-Type describes the decoded representation. Compressed API
+    // responses must reach the HTTP content decoder without binary sniffing.
+    let text_api = header_value(header, b"content-type").is_some_and(|value| {
+        let mime = trim_ascii(value.split(|byte| *byte == b';').next().unwrap_or(value));
+        eq_ignore_ascii_case(mime, b"text/event-stream")
+            || eq_ignore_ascii_case(mime, b"application/json")
+    });
+    let body_binary = !text_api && !body.is_empty() && body_looks_binary(body);
     let large = content_length
         .map(|value| value > config.large_transfer_bytes)
         .unwrap_or(observed > config.large_transfer_bytes);
@@ -51,7 +58,7 @@ pub(super) fn inspect(
         PayloadDirection::Inbound => {
             large_binary_header
                 || body_binary
-                || (large && !body.is_empty() && !body_looks_text_api(body))
+                || (large && !text_api && !body.is_empty() && !body_looks_text_api(body))
         }
         PayloadDirection::Outbound => large && (binary_content_type || attachment || body_binary),
     };

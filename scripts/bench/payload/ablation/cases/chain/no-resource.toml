@@ -3,7 +3,7 @@
 profile_name = "default-full-monitor"
 capabilities = ["proc-lifecycle", "proc-exec-context", "net-transport", "tls-plaintext-payload", "net-application-plaintext-http", "net-application-http2-frames"]
 
-[resource_metrics]
+[resource_profiling]
 enabled = false
 
 [payload.stdio]

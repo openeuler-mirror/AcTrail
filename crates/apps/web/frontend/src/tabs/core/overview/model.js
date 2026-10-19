@@ -24,7 +24,6 @@ export function buildOverviewSections(traceDetail, actionTree) {
         ['Process', counts.process],
         ['File', counts.file],
         ['Network', counts.net],
-        ['Resource', counts.resource],
         ['Payload Bytes', counts.retained_payload_bytes],
       ]),
     },

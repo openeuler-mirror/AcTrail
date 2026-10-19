@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shlex
 import shutil
 import socket
 import time
@@ -438,11 +439,12 @@ class SandboxResourceAlertHostScenario:
                 "ACTRAIL_HOST_PROVIDER_SCRIPT": str(self._assets / "provider-proxy.py"),
                 "ACTRAIL_HOST_COORD_DIR": str(self._coord),
                 "ACTRAIL_HOST_TASK_FILE": str(self._assets / "task.bin"),
-                "ACTRAIL_HOST_OOM_SCRIPT": str(
-                    self._assets / "oom-cgroup-trigger.sh"
-                ),
-                "ACTRAIL_HOST_OOM_TRIGGER": str(
-                    self._assets / "oom_trigger.py"
+                "ACTRAIL_HOST_OOM_COMMAND": shlex.join(
+                    (
+                        str(self._assets / "oom-cgroup-trigger.sh"),
+                        str(self._assets / "oom_trigger.py"),
+                        str(self._coord),
+                    )
                 ),
                 "ACTRAIL_HOST_ROOT_PID_FILE": str(self._coord / "root.pid"),
                 "ACTRAIL_HOST_CHILD_RELEASE": str(self._coord / "child.release"),

@@ -233,8 +233,9 @@ capture_host = false
 sse_enabled = false
 sse_data_policy = "disabled"
 
-[resource_metrics]
+[resource_profiling]
 enabled = false
+
 """
 
     def start_services(self) -> None:

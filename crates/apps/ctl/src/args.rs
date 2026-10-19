@@ -21,14 +21,14 @@ use crate::clean::CleanArtifacts;
 use crate::launch::permission_policy::{DeploymentPermissionPolicy, PermissionMode};
 use crate::process_ref::process_ref;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CtlInvocation {
     pub socket_path: Option<PathBuf>,
     pub request_id: RequestId,
     pub command: CtlCommand,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CtlCommand {
     Init {
         config_path: PathBuf,

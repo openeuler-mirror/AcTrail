@@ -5,6 +5,8 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+toml = "0.8"
+resource_profiling = { path = "../../core/resource_profiling" }
 clap = { version = "4.6", features = ["derive"] }
 config_core = { path = "../../core/config" }
 json_graph_export = { path = "../../adapters/export/json_graph" }

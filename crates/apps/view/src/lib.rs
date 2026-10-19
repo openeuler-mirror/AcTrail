@@ -6,3 +6,7 @@ pub(crate) mod table;
 
 pub use command::{RowLimit, StorageCommand, ViewInvocation, parse_invocation};
 pub use storage::render_storage_view;
+mod host_resources;
+
+mod resource_source;
+mod workload_resources;

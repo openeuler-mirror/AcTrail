@@ -119,7 +119,7 @@ pub const fn encode_event_kind(value: EventKind) -> i64 {
         EventKind::Ipc => 3,
         EventKind::Stdio => 4,
         EventKind::Application => 5,
-        EventKind::Resource => 6,
+
         EventKind::Control => 7,
         EventKind::Loss => 8,
         EventKind::Label => 9,
@@ -135,7 +135,7 @@ pub fn decode_event_kind(code: i64) -> Result<EventKind, SqlError> {
         3 => Ok(EventKind::Ipc),
         4 => Ok(EventKind::Stdio),
         5 => Ok(EventKind::Application),
-        6 => Ok(EventKind::Resource),
+
         7 => Ok(EventKind::Control),
         8 => Ok(EventKind::Loss),
         9 => Ok(EventKind::Label),
@@ -152,7 +152,7 @@ pub const fn event_kind_name(value: EventKind) -> &'static str {
         EventKind::Ipc => "ipc",
         EventKind::Stdio => "stdio",
         EventKind::Application => "application",
-        EventKind::Resource => "resource",
+
         EventKind::Control => "control",
         EventKind::Loss => "loss",
         EventKind::Label => "label",
@@ -168,7 +168,7 @@ pub const fn payload_kind(payload: &EventPayload) -> EventKind {
         EventPayload::Ipc(_) => EventKind::Ipc,
         EventPayload::Stdio(_) => EventKind::Stdio,
         EventPayload::Application(_) => EventKind::Application,
-        EventPayload::Resource(_) => EventKind::Resource,
+
         EventPayload::Control(_) => EventKind::Control,
         EventPayload::Loss(_) => EventKind::Loss,
         EventPayload::Label(_) => EventKind::Label,

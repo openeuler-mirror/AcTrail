@@ -143,24 +143,37 @@ impl EbpfCollector {
             .map_err(loader_error)
     }
 
+    /// Resolve a live observer PID through the existing trace binding. Returned
+    /// coordinates are the kernel TGID and its start-time generation.
+    pub fn socket_capture_process(
+        &self,
+        observer_pid: u32,
+        trace_id: TraceId,
+    ) -> Option<(u32, u64)> {
+        let process = self.bindings.by_host_pid(observer_pid)?;
+        (process.trace_id == trace_id && process.kernel_start_time != 0)
+            .then_some((process.kernel_tgid, process.kernel_start_time))
+    }
+
+    /// `kernel_pid` indexes the BPF socket map, unlike observer `/proc` PIDs.
     pub fn lookup_socket_fd_state(
         &self,
-        pid: u32,
+        kernel_pid: u32,
         fd: u32,
     ) -> Result<Option<SocketPayloadFdState>, CollectorError> {
         self.runtime_ref()?
-            .lookup_socket_fd_state(pid, fd)
+            .lookup_socket_fd_state(kernel_pid, fd)
             .map_err(loader_error)
     }
 
     pub fn mark_socket_fd_tls_owned(
         &self,
-        pid: u32,
+        kernel_pid: u32,
         fd: u32,
         expected_generation: u32,
     ) -> Result<bool, CollectorError> {
         self.runtime_ref()?
-            .mark_socket_fd_tls_owned(pid, fd, expected_generation)
+            .mark_socket_fd_tls_owned(kernel_pid, fd, expected_generation)
             .map_err(loader_error)
     }
 

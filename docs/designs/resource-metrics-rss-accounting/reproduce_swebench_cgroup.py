@@ -211,14 +211,26 @@ enabled = false
 http1_enabled = false
 http2_enabled = false
 
-[resource_metrics]
+[resource_profiling]
 enabled = true
-mode = "cgroup-v2"
+
+[resource_profiling.workload]
+mode = "cgroup"
 interval_ms = 250
-cgroup_root = "{service_cgroup}"
+
+[resource_profiling.workload.cgroup]
+mode = "v2"
+
+[resource_profiling.workload.cgroup.v2.managed]
+root = "{service_cgroup}"
+recovery_scan_limit = 64
 finalization_timeout_ms = 5000
-orphan_limit = 64
+
+[resource_alerts]
 memory_alert_rss_kb = "1"
+
+[resource_profiling.workload.cgroup.v2.process_rss]
+enabled = true
 
 [enforcement]
 enabled = false
