@@ -1,0 +1,2 @@
+[payload.tls]
+capture_backend = "bpf-copy"

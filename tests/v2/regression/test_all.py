@@ -31,6 +31,9 @@ from tests.v2.regression.probe_codex_mcp.run_e2e import (  # noqa: E402
 from tests.v2.regression.probe_pi_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as PI,
 )
+from tests.v2.regression.probe_dcode_llm.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as DCODE,
+)
 from tests.v2.regression.probe_qodercli_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as QODERCLI,
 )
@@ -109,6 +112,7 @@ DEFAULT_TESTS = [
     CLAUDE_MCP,
     CODEX,
     CODEX_MCP,
+    DCODE,
     PI,
     QODERCLI,
     XIAOO,
