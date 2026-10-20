@@ -50,61 +50,15 @@ impl PayloadTransactionContext<'_> {
         }
     }
 
-    pub(super) fn prepare_incomplete_http1_response(
-        &mut self,
-        segment: &PayloadSegment,
-        sequence: u64,
-        header_projected: bool,
-    ) -> SemanticActionBatch {
-        let mut output = self.semantic_actions.prepare_incomplete_http1_response(
-            segment,
-            sequence,
-            header_projected,
-        );
-        self.llm_pipeline_diagnostics
-            .append(&mut output.llm_pipeline_diagnostics);
-        SemanticActionBatch::from_action_output(
-            output.actions,
-            output.updates,
-            output.updated_actions,
-            output.links,
-            output.file_observation_paths,
-            output.file_path_sets,
-            output.llm_request_contents,
-            output.llm_request_lineages,
-            output.mcp_jsonrpc_contents,
-            output.payload_segments,
-        )
-    }
-
     pub(super) fn finish_incomplete_payload(
         &mut self,
         segment: &PayloadSegment,
     ) -> SemanticActionBatch {
         let mut output = self.semantic_actions.finish_incomplete_payload(segment);
-        self.llm_pipeline_diagnostics
-            .append(&mut output.llm_pipeline_diagnostics);
-        SemanticActionBatch::from_action_output(
-            output.actions,
-            output.updates,
-            output.updated_actions,
-            output.links,
-            output.file_observation_paths,
-            output.file_path_sets,
-            output.llm_request_contents,
-            output.llm_request_lineages,
-            output.mcp_jsonrpc_contents,
-            output.payload_segments,
-        )
-    }
-
-    pub(super) fn finish_incomplete_http1_response(
-        &mut self,
-        segment: &PayloadSegment,
-    ) -> SemanticActionBatch {
-        let mut output = self
-            .semantic_actions
-            .finish_incomplete_http1_response(segment);
+        self.http1_handled |= output.http1_handled;
+        self.http1_messages.append(&mut output.http1_messages);
+        self.http2_frames.append(&mut output.http2_frames);
+        self.http2_handled |= output.http2_handled;
         self.llm_pipeline_diagnostics
             .append(&mut output.llm_pipeline_diagnostics);
         SemanticActionBatch::from_action_output(
@@ -126,6 +80,10 @@ impl PayloadTransactionContext<'_> {
         segment: &PayloadSegment,
     ) -> SemanticActionBatch {
         let mut output = self.semantic_actions.finish_payload_transaction(segment);
+        self.http1_handled |= output.http1_handled;
+        self.http1_messages.append(&mut output.http1_messages);
+        self.http2_frames.append(&mut output.http2_frames);
+        self.http2_handled |= output.http2_handled;
         self.llm_pipeline_diagnostics
             .append(&mut output.llm_pipeline_diagnostics);
         SemanticActionBatch::from_action_output(
@@ -147,6 +105,10 @@ impl PayloadTransactionContext<'_> {
         self.mcp_stdio_diagnostics
             .extend(observation.mcp_stdio_diagnostics);
         let mut output = observation.output;
+        self.http1_handled |= output.http1_handled;
+        self.http1_messages.append(&mut output.http1_messages);
+        self.http2_frames.append(&mut output.http2_frames);
+        self.http2_handled |= output.http2_handled;
         self.llm_pipeline_diagnostics
             .append(&mut output.llm_pipeline_diagnostics);
         SemanticActionBatch::from_action_output(
@@ -171,6 +133,10 @@ impl PayloadTransactionContext<'_> {
         self.mcp_stdio_diagnostics
             .extend(observation.mcp_stdio_diagnostics);
         let mut output = observation.output;
+        self.http1_handled |= output.http1_handled;
+        self.http1_messages.append(&mut output.http1_messages);
+        self.http2_frames.append(&mut output.http2_frames);
+        self.http2_handled |= output.http2_handled;
         self.llm_pipeline_diagnostics
             .append(&mut output.llm_pipeline_diagnostics);
         SemanticActionBatch::from_action_output(
@@ -279,6 +245,12 @@ impl PayloadTransactionContext<'_> {
         self.mcp_stdio_diagnostics
             .extend(observation.mcp_stdio_diagnostics);
         let mut output = observation.output;
+        self.http1_handled = output.http1_handled;
+        self.payload_consumed_by_http = output.payload_consumed_by_http;
+        self.payload_consumed_by_llm = output.payload_consumed_by_llm;
+        self.http1_messages.append(&mut output.http1_messages);
+        self.http2_frames.append(&mut output.http2_frames);
+        self.http2_handled |= output.http2_handled;
         self.llm_pipeline_diagnostics
             .append(&mut output.llm_pipeline_diagnostics);
         let mut batch = SemanticActionBatch::from_action_output(
@@ -293,7 +265,9 @@ impl PayloadTransactionContext<'_> {
             output.mcp_jsonrpc_contents,
             output.payload_segments,
         );
-        if !retain_evidence {
+        if !retain_evidence
+            && segment.source_boundary == model_core::payload::PayloadSourceBoundary::Stdio
+        {
             batch.retain_evidence(|evidence| evidence.kind == SemanticEvidenceKind::Event);
         }
         batch

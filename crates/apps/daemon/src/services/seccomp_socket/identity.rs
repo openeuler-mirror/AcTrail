@@ -11,7 +11,7 @@ use super::request::SocketReadRequest;
 pub(super) struct SocketCaptureKey {
     pub(super) trace_id: TraceId,
     pub(super) pid_generation: u64,
-    pub(super) fd_generation: u32,
+    pub(super) socket_generation: u32,
     pub(super) kernel_tgid: u32,
     pub(super) observer_tid: u32,
     pub(super) fd: u32,
@@ -24,7 +24,7 @@ impl SocketCaptureKey {
     pub(super) fn from_request(
         trace_id: TraceId,
         pid_generation: u64,
-        fd_generation: u32,
+        socket_generation: u32,
         kernel_tgid: u32,
         observer_tid: u32,
         request: &SocketReadRequest,
@@ -32,7 +32,7 @@ impl SocketCaptureKey {
         Self {
             trace_id,
             pid_generation,
-            fd_generation,
+            socket_generation,
             kernel_tgid,
             observer_tid,
             fd: request.fd,
@@ -46,7 +46,7 @@ impl SocketCaptureKey {
         Self {
             trace_id: completion.trace_id,
             pid_generation: completion.pid_generation,
-            fd_generation: completion.fd_generation,
+            socket_generation: completion.socket_generation,
             kernel_tgid: completion.kernel_tgid,
             observer_tid: completion.observer_tid,
             fd: completion.fd,

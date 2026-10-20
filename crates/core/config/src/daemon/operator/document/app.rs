@@ -36,8 +36,6 @@ impl ApplicationDocument {
                 sse_max_data_bytes: config.sse_max_data_bytes,
             },
             http2: Http2ApplicationDocument {
-                max_frame_bytes: config.http2_max_frame_bytes,
-                max_connection_buffer_bytes: config.http2_max_connection_buffer_bytes,
                 emit_data_preview: config.http2_emit_data_preview,
                 max_data_preview_bytes: config.http2_max_data_preview_bytes,
             },
@@ -62,14 +60,6 @@ impl ApplicationDocument {
             sse_max_data_bytes: require_positive_u64(
                 "application.http.sse_max_data_bytes",
                 self.http.sse_max_data_bytes,
-            )?,
-            http2_max_frame_bytes: require_positive_u64(
-                "application.http2.max_frame_bytes",
-                self.http2.max_frame_bytes,
-            )?,
-            http2_max_connection_buffer_bytes: require_positive_u64(
-                "application.http2.max_connection_buffer_bytes",
-                self.http2.max_connection_buffer_bytes,
             )?,
             http2_emit_data_preview: self.http2.emit_data_preview,
             http2_max_data_preview_bytes: require_positive_u64(
@@ -105,8 +95,6 @@ impl Default for HttpApplicationDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Http2ApplicationDocument {
-    pub max_frame_bytes: u64,
-    pub max_connection_buffer_bytes: u64,
     pub emit_data_preview: bool,
     pub max_data_preview_bytes: u64,
 }
@@ -114,8 +102,6 @@ pub(super) struct Http2ApplicationDocument {
 impl Default for Http2ApplicationDocument {
     fn default() -> Self {
         Self {
-            max_frame_bytes: 65536,
-            max_connection_buffer_bytes: 4194304,
             emit_data_preview: true,
             max_data_preview_bytes: 65536,
         }

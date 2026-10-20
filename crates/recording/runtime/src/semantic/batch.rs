@@ -94,6 +94,9 @@ impl SemanticActionBatch {
         for update in &mut self.updates {
             update.evidence.retain(&retain);
         }
+        for link in &mut self.links {
+            link.evidence.retain(&retain);
+        }
     }
 
     pub(super) fn take_persistence_updates(&mut self) -> Vec<SemanticActionUpdate> {

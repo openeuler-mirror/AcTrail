@@ -114,6 +114,27 @@ struct {
     __type(value, struct actrail_pending_tls_payload_op);
 } pending_tls_payload_ops SEC(".maps");
 
+struct actrail_rustls_connection_key {
+    __u64 pid;
+    __u64 certificates;
+};
+
+/* Capacity follows tls.pending_operation_max_entries. Eviction is fail-local:
+ * plaintext never recreates an identity that was lost from this map. */
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 1);
+    __type(key, struct actrail_rustls_connection_key);
+    __type(value, __u64);
+} rustls_connections SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} rustls_connection_sequence SEC(".maps");
+
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1);

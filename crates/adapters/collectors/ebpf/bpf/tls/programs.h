@@ -109,6 +109,11 @@ int handle_rustls_write_vectored_exit(struct pt_regs *ctx) {
 }
 
 SEC("uprobe")
+int handle_rustls_start_outgoing_traffic(struct pt_regs *ctx) {
+    return register_rustls_connection(ctx, ACTRAIL_UPROBE_ARG1(ctx));
+}
+
+SEC("uprobe")
 int handle_rustls_buffer_plaintext(struct pt_regs *ctx) {
     return emit_rustls_internal_payload(
         ctx,

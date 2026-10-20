@@ -471,7 +471,10 @@ impl TlsSyncPlanWorker {
             .plans
             .into_iter()
             .map(|plan| {
-                if consumer != ProbeConsumer::Direct {
+                // Daemon discovery already validates the actual backend selected by
+                // the target ELF. Static targets use uprobes, whose lifecycle points
+                // are not inline hooks. Each installer revalidates binary identity.
+                if consumer == ProbeConsumer::Sync {
                     validate_native_backend_plan(&plan)
                         .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
                 }

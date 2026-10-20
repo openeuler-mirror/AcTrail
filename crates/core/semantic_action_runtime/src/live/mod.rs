@@ -18,3 +18,5 @@ pub use runtime::{LiveMcpStdioMetrics, LiveSemanticActionOutput, LiveSemanticAct
 pub(crate) use actions::ActionUpdateFactory;
 pub(crate) use actions::{action_for_live_state, llm_call_action_id_from_request_action_id};
 pub(crate) use http_exchange::{HttpResponseMatch, MatchedHttpRequest};
+
+pub(crate) use http_exchange::HttpExchangeTracker;

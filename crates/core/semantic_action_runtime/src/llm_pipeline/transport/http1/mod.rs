@@ -1,9 +1,9 @@
 mod content_decoder;
 mod decoder;
-mod resynchronizer;
+mod session;
+
+pub(in crate::llm_pipeline) use session::{Http1Session, Http1Update, Http1Upgrade};
 
 pub(in crate::llm_pipeline) use decoder::{
-    DecodedHttp1Message, Http1DecodeFailure, Http1Decoder, Http1Direction, raw_chunked_candidate,
-    response_candidate_starts_at,
+    DecodedHttp1Message, Http1DecodeFailure, Http1Decoder, Http1Direction,
 };
-pub(in crate::llm_pipeline) use resynchronizer::{RequestBoundary, RequestResynchronizer};

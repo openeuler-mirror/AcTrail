@@ -26,7 +26,7 @@
     <ProgressiveDisclosure
       v-else
       v-model:expanded="showAllDetails"
-      :enabled="progressiveDetails"
+      :enabled="progressiveDetails || isLlmCall"
     >
       <template #primary>
         <dl v-if="detailRows.length" class="detail-rows">
@@ -41,11 +41,13 @@
           <p class="detail-error">{{ panelError }}</p>
         </section>
 
+        <LlmCallPanel v-if="isLlmCall" :trace-id="traceId" :call="detail.raw" />
         <LlmInsightPanel
+          v-else
           :detail="detail"
           :trace-id="traceId"
         />
-        <HttpInsightPanel :detail="detail" />
+        <HttpInsightPanel v-if="!isLlmCall" :detail="detail" />
         <CommandInsightPanel :detail="detail" />
         <McpInsightPanel
           :detail="detail"
@@ -131,6 +133,7 @@ import LlmInsightPanel from './LlmInsightPanel.vue';
 import LlmResponseContent from './llm/LlmResponseContent.vue';
 import McpInsightPanel from './McpInsightPanel.vue';
 import ProgressiveDisclosure from './ProgressiveDisclosure.vue';
+import LlmCallPanel from './llm/LlmCallPanel.vue';
 import { useModuleLocale } from '../locale';
 import strings from './locale';
 import { deriveMcpJsonRpcView, mcpJsonRpcContentSource } from '../mcp/jsonRpcContent';
@@ -193,9 +196,11 @@ let activeFilePathSetLoad = null;
 
 const detailTitle = computed(() => props.detail?.title ?? t('detail.noSelection'));
 const detailKind = computed(() => props.detail?.kind ?? 'detail');
+const isLlmCall = computed(() => props.detail?.raw?.kind === 'llm.call');
 // Focus on the selected action; retain association metadata in the expanded view.
 const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}).filter(([key, value]) => (
-  !props.progressiveDetails || (FOCUSED_ROW_KEYS.has(key)
+  isLlmCall.value ? ['status', 'completeness', 'ttft'].includes(key)
+    : !props.progressiveDetails || (FOCUSED_ROW_KEYS.has(key)
     && !(key === 'completeness' && value === 'complete'))
 )).map(([key, value]) => [key,
   props.progressiveDetails && (key === 'started' || key === 'ended') ? formatTime(value) : value,
@@ -206,6 +211,7 @@ const secondaryRows = computed(() => props.progressiveDetails
   )) : []);
 const detailAttributes = computed(() => props.detail?.attributes ?? {});
 const detailRawValue = computed(() => props.detail?.raw ?? null);
+watch(() => [props.traceId, props.detail?.selectionId], () => { showAllDetails.value = false; });
 const MCP_PAYLOAD_DETAIL_KINDS = new Set([
   'mcp.request',
   'mcp.response',

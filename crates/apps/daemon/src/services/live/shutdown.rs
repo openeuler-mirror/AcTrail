@@ -447,7 +447,6 @@ impl StorageAttachService {
             self.application_protocol.forget_trace(trace_id);
             self.semantic_actions.forget_trace(trace_id);
             self.socket_payload_gate.forget_trace(trace_id);
-            self.payload_body_retention_gate.forget_trace(trace_id);
             self.finalized_terminal_traces.insert(trace_id);
             self.pending_terminal_finalizations.remove(&trace_id);
             self.terminal_finalization_queued_at.remove(&trace_id);

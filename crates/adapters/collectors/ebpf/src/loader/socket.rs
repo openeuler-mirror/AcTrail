@@ -24,13 +24,13 @@ const SOCKET_PAYLOAD_FD_KNOWN_FLAGS: u32 = SOCKET_PAYLOAD_FD_TLS_OWNED;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SocketPayloadFdState {
-    generation: u32,
+    socket_generation: u32,
     flags: u32,
 }
 
 impl SocketPayloadFdState {
-    pub fn generation(self) -> u32 {
-        self.generation
+    pub fn socket_generation(self) -> u32 {
+        self.socket_generation
     }
 
     pub fn tls_owned(self) -> bool {
@@ -126,13 +126,13 @@ pub(crate) fn mark_fd_tls_owned(
     map: &MapHandle,
     pid: u32,
     fd: u32,
-    expected_generation: u32,
+    expected_socket_generation: u32,
 ) -> Result<bool, LoaderError> {
     let key = socket_fd_key(pid, fd);
     let Some(mut state) = lookup_fd_state(map, pid, fd)? else {
         return Ok(false);
     };
-    if state.generation != expected_generation {
+    if state.socket_generation != expected_socket_generation {
         return Ok(false);
     }
     if state.tls_owned() {
@@ -160,22 +160,23 @@ impl SocketPayloadFdState {
             ));
         }
         let field_size = std::mem::size_of::<u32>();
-        let generation = u32::from_ne_bytes(value[..field_size].try_into().map_err(|_| {
-            LoaderError::new(
-                "lookup_socket_fd_state",
-                "socket fd generation field is malformed",
-            )
-        })?);
+        let socket_generation =
+            u32::from_ne_bytes(value[..field_size].try_into().map_err(|_| {
+                LoaderError::new(
+                    "lookup_socket_fd_state",
+                    "socket_generation field is malformed",
+                )
+            })?);
         let flags = u32::from_ne_bytes(value[field_size..].try_into().map_err(|_| {
             LoaderError::new(
                 "lookup_socket_fd_state",
                 "socket fd flags field is malformed",
             )
         })?);
-        if generation == 0 {
+        if socket_generation == 0 {
             return Err(LoaderError::new(
                 "lookup_socket_fd_state",
-                "socket fd generation must be non-zero",
+                "socket_generation must be non-zero",
             ));
         }
         if flags & !SOCKET_PAYLOAD_FD_KNOWN_FLAGS != 0 {
@@ -184,13 +185,16 @@ impl SocketPayloadFdState {
                 format!("socket fd state contains unknown flags 0x{flags:x}"),
             ));
         }
-        Ok(Self { generation, flags })
+        Ok(Self {
+            socket_generation,
+            flags,
+        })
     }
 
     fn encode(self) -> [u8; SOCKET_PAYLOAD_FD_STATE_SIZE] {
         let mut value = [0_u8; SOCKET_PAYLOAD_FD_STATE_SIZE];
         let field_size = std::mem::size_of::<u32>();
-        value[..field_size].copy_from_slice(&self.generation.to_ne_bytes());
+        value[..field_size].copy_from_slice(&self.socket_generation.to_ne_bytes());
         value[field_size..].copy_from_slice(&self.flags.to_ne_bytes());
         value
     }

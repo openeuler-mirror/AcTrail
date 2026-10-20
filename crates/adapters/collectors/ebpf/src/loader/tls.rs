@@ -97,6 +97,7 @@ impl DirectTlsBackend {
             .chain(BORINGSSL_UPROBE_TARGETS.iter())
             .map(|target| target.program)
             .chain([
+                "handle_rustls_start_outgoing_traffic",
                 "handle_rustls_buffer_plaintext",
                 "handle_rustls_take_received_plaintext",
             ])
@@ -313,7 +314,9 @@ pub fn is_dynamic_tls_program(program_name: &str) -> bool {
             .any(|target| target.program == program_name)
         || matches!(
             program_name,
-            "handle_rustls_buffer_plaintext" | "handle_rustls_take_received_plaintext"
+            "handle_rustls_start_outgoing_traffic"
+                | "handle_rustls_buffer_plaintext"
+                | "handle_rustls_take_received_plaintext"
         )
 }
 

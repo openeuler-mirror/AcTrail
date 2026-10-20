@@ -324,17 +324,6 @@ fn truncate_to_http_prefix(
     Ok(())
 }
 
-pub(in crate::services) fn socket_payload_prefix_is_http_candidate(
-    bytes: &[u8],
-    reached_sniff_limit: bool,
-) -> bool {
-    match sniff_http_protocol(bytes) {
-        SocketSniffOutcome::Accept(_) => true,
-        SocketSniffOutcome::NeedMore => !reached_sniff_limit,
-        SocketSniffOutcome::Reject => false,
-    }
-}
-
 pub(in crate::services) fn socket_payload_prefix_is_tls_hello(bytes: &[u8]) -> bool {
     if bytes.len() < TLS_HELLO_PREFIX_SIZE
         || bytes[0] != TLS_HANDSHAKE_CONTENT_TYPE

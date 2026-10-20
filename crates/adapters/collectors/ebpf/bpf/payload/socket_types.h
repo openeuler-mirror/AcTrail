@@ -45,7 +45,8 @@ struct actrail_socket_payload_fd_key {
 };
 
 struct actrail_socket_payload_fd_state {
-    __u32 generation;
+    /* Per-process payload stream generation; not the FD object's ktime identity. */
+    __u32 socket_generation;
     __u32 flags;
 };
 
@@ -53,7 +54,7 @@ struct actrail_socket_payload_sequence_key {
     __u32 pid;
     __u32 direction;
     __u32 fd;
-    __u32 fd_generation;
+    __u32 socket_generation;
 };
 
 struct actrail_pending_socket_payload_op {
@@ -66,7 +67,7 @@ struct actrail_pending_socket_payload_op {
     __u64 pid_generation;
     __u64 started_ktime_ns;
     __u32 fd;
-    __u32 fd_generation;
+    __u32 socket_generation;
     __u32 direction;
     __u32 syscall;
     __u32 delegated;
@@ -76,8 +77,8 @@ struct actrail_pending_socket_payload_op {
 struct actrail_pending_socket_dup_op {
     __u32 source_fd;
     __u32 target_fd;
-    __u32 source_generation;
-    __u32 target_generation;
+    __u32 source_socket_generation;
+    __u32 target_socket_generation;
     __u32 source_flags;
     __u32 mode;
 };

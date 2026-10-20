@@ -44,6 +44,8 @@ pub struct ProbeBinary {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProbePoint {
+    /// Provider-specific, verified layout metadata for the attachment. Zero means absent.
+    pub cookie: u64,
     pub symbol: String,
     pub direction: PayloadDirection,
     pub attach: AttachPoint,

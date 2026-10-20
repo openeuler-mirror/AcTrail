@@ -194,8 +194,6 @@ impl StorageAttachService {
                 self.payload_reorderer.forget_trace(trace.trace_id);
                 self.seccomp_socket.forget_trace(trace.trace_id);
                 self.socket_payload_gate.forget_trace(trace.trace_id);
-                self.payload_body_retention_gate
-                    .forget_trace(trace.trace_id);
             }
         }
     }

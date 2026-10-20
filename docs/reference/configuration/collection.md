@@ -58,7 +58,7 @@ TLS-sync 任务进程内的动态探针计划查询通过环境变量 `TLS_PAYLO
 - `max_segment_bytes`：单个 inline segment 上限；
 - `max_operation_bytes`：一次 operation 可读取上限；
 - `sync_max_frame_bytes`：TLS sync IPC 单帧上限，默认 `33554432`（32 MiB，包含 8 字节帧头）；必须容纳 operation 内容及事件元数据，也约束运行时 plan 响应。接收端在读取帧头后检查长度，异常帧只关闭对应连接；
-- `ring_buffer_bytes`、`pending_operation_max_entries`：运行中容量；
+- `ring_buffer_bytes`、`pending_operation_max_entries`：运行中容量；后者同时限制 Rustls 握手连接编号表的条目数，该表采用 LRU 淘汰，淘汰后的连接停止关联明文，直到该连接重新完成握手；
 - `dynamic_discovery_capacity`：`bpf-copy` resolver 中待分析对象和已完成结果的单表总容量，同时限制 direct 分析任务队列，默认 `128`，必须大于 `0`；相同文件版本的待分析请求合并，容量耗尽影响本次发现；
 - `direct_startup_discovery_enabled`：默认 `true`，仅作用于 `bpf-copy`；控制 `actrailctl launch` 放行前对启动命令和已配置 agent 命令的探针发现与挂载。关闭后允许启动时没有探针，运行中发现仍由下一项独立控制；
 - `direct_dynamic_discovery_enabled`：默认 `true`，仅作用于 `bpf-copy`；控制运行中 exec 和可执行文件映射触发的对象发现与补挂。关闭时在打开 procfs 对象前跳过发现，不创建动态分析队列；已安装探针仍可采集，映射事实仍会被消费。这不是关闭所有 TLS 事件采集的开关；
@@ -67,6 +67,10 @@ TLS-sync 任务进程内的动态探针计划查询通过环境变量 `TLS_PAYLO
 - `java_agent_enabled`：仅 Java JSSE workload 需要，默认 `false`。
 
 TLS sync 必须使用 `actrailctl launch`。resolver 无法为实际 binary 生成完整 plan 时不能回退为“已捕获 TLS 明文”。
+
+原生 aarch64 Rustls direct 采集在验证明文入口、握手完成入口及证书链布局后，按每次客户端握手分配连接编号。证书链的独占堆分配作为采集侧查找键，编号跨 `CommonState` 搬移保持不变；新握手覆盖同地址的旧记录，隔离分配地址复用。连接编号同时用于 `bpf-copy` 和 seccomp 完整正文读取路径。探测计划携带经机器码验证的布局，不依赖版本字符串或固定函数地址。当前已验证 Codex 0.151.0 的 Rustls 0.23.36 编译形状；其他形状沿用各自已有探测路径。
+
+该连接编号路径要求内核支持 uprobe attach cookie。证书链为空、字段读取失败或连接编号缺失时，仅跳过对应明文；不使用对象地址替代已启用的连接编号。该路径覆盖握手完成后的客户端流量，握手前缓冲明文、0-RTT 和无客户端证书的服务端连接不在此身份方案的覆盖范围内。
 
 `capture_backend = "bpf-copy"` 使用 uprobe/uretprobe 直接采集，无 TLS runtime 注入，不要求 TLS seccomp notify。通过 `actrailctl launch` 在放行程序前解析并挂载已知目标及可解析依赖，支持 direct OpenSSL/Rustls/BoringSSL 点位；运行中可根据 exec 和文件映射事实发现新 executable/共享库。上述两个发现开关相互独立，关闭任一项都可能减少覆盖；短进程可能在动态挂载前退出。同 trace 后代命中已挂文件探针时仍可采集。
 
@@ -78,12 +82,14 @@ TLS sync IPC 使用二进制长度帧：`AT` 魔数、版本 `1`、消息类型�
 
 ## `[payload.socket]`、`[payload.stdio]` 与 `[payload.mcp]`
 
-本节帮助部署者选择 socket 明文采集后端，并理解两种模式的完整性保证。Socket 监听 `write`、`writev`、`sendto`、`sendmsg`，由 `payload.socket.capture_backend` 选择采集路径：
+本节帮助部署者选择 socket 明文采集后端，并理解两种模式的完整性保证。Socket 出站监听 `write`、`writev`、`sendto`、`sendmsg`，由 `payload.socket.capture_backend` 选择采集路径：
 
 - `bpf-copy`（默认，性能/证据模式）：仅依赖 eBPF，不要求 seccomp notify 或 `actrailctl launch`。每次 operation 最多抓取前导的一个 `max_segment_bytes` segment（默认 4095 字节；`writev`/`sendmsg` 取第一个非空 iovec 的头部）。超出部分标记为 payload `PolicyLimited`；可信 HTTP 路由仍可生成不伪造正文的 `llm.request`，其 status 为 `success`、completeness 为 `capture_limited`，并可与完整 response 关联用于性能剖析。这是该模式的预期结果，不产生截断错误 diagnostic。
 - `bpf-copy-seccomp-fallback`（完整采集，需显式启用）：要求 `[seccomp_notify] enabled = true`，workload 必须通过能安装 seccomp listener 的路径启动（例如 `actrailctl launch` 或容器 seccomp profile）。该模式下 BPF 只产生 operation 完成元数据（completion/sequence）；需要内容字节的 operation 由 daemon 在 seccomp notify 上读取并切分，完整上限为 `max_operation_bytes`，适合需要完整 HTTP/LLM 消息的观测。读取失败、缺口或不完整 operation 标记为 payload `Truncated` 和 semantic `partial`，属于异常并产生 diagnostic。未启用 seccomp notify 时配置校验会直接失败，不会静默降级。
 
 `actrailctl init --mode complete`（默认模式）显式选择 `bpf-copy-seccomp-fallback` 与 `[seccomp_notify] enabled = true`；`--mode profile` 显式选择 `bpf-copy` 与 `[seccomp_notify] enabled = false`。两种模式之外的配置文件沿用字段默认值（`bpf-copy`、关闭 seccomp notify）。
+
+Socket 入站 `read`、`recvfrom` 在 syscall 返回时由 BPF 分段读取，两种后端均使用此路径。每片最多 `min(max_segment_bytes, 4095)` 字节，每次 operation 最多 `max_operation_bytes` 字节；各片共享 operation ID，携带连续 offset、chunk index 和各自的 stream sequence。达到操作预算时标记 `PolicyLimited`；读取失败或事件缓冲区耗尽时停止当前操作，缺失的 sequence 由后续片段暴露，连接关闭时未完成消息保持不完整。只有最后一片到达计划捕获总长时才报告 operation 捕获结束。分段数必须不超过 Linux `bpf_loop` 的 8388608 次调用上限，超出配置在启动时拒绝。默认 4 MiB 操作预算与 4095 字节分段最多产生 1025 个事件；ring buffer 容量与消费速度仍限制实际可送达的证据。
 
 三类 payload 的 ring buffer、pending state、每 trace retention 与 redaction 均独立。调高其中一层不会自动扩大其他层。
 
@@ -115,13 +121,42 @@ HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: b
 
 `semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 分别限制原始 HTTP 流缓冲和解码后的正文大小。内容编码损坏、无法解码或超出容量时，仅隔离当前流并记录诊断。
 
+`semantic_retention.l2_http.max_active_directions` 限制共享协议路由同时持有的连接方向数，默认 `4096`，必须大于零。一个双向连接最多占两个方向；关闭连接或 trace 后释放。达到上限时拒绝新方向并记录告警，已接纳方向继续处理。该容量独立于 LLM 开关，防止普通 HTTP 观测绕过连接状态限制。
+
+`semantic_retention.l2_http.exchange.max_message_facts_per_trace` 限制每个 trace 同时等待协议与语义汇合的 HTTP 消息事实，默认 `4096`，必须大于零。一次完整请求/响应通常占两条消息；已完成 exchange 在当前 payload transaction 的观测补充完成后释放。达到容量时局部结束受影响事实并记录不完整原因，禁止借用其他请求补齐关联。
+
+`semantic_retention.l0_llm_call.projection_state` 限制 action 版本、待归属轨迹 action 和 tool entry 数量。HTTP 请求响应配对预算位于 `l2_http.exchange`，WebSocket 业务 lane 与待响应请求预算位于 `l0_llm_call.websocket`。
+
+`semantic_retention.l2_http.http1.max_buffer_bytes` 限制 HTTP/1 wire 缓冲，默认 `8388608` 字节；`max_evidence_ranges` 限制其采集证据范围数，默认 `8192`。两者必须大于零。内容解码失败或正文组装超限只终止该消息的正文消费，HTTP framing 继续根据真实消息边界完成；协议缓冲或证据容量超限才中止协议消息。
+
+`semantic_retention.l2_http.http2.max_frame_bytes` 限制 HTTP/2 单帧大小，默认 `65536` 字节；`max_connection_buffer_bytes` 限制共享 HTTP/2 协议缓冲，默认 `4194304` 字节。两者必须大于零，作用于唯一 frame decoder，独立于 LLM 正文组装预算。frame 内容预览仍由 application HTTP/2 观测配置控制。捕获缺口或 framing 完整性丢失后，受影响连接停止解析至连接关闭，防止把帧中间的字节当作新消息。
+
+`semantic_retention.l2_http.http2.max_active_streams_per_trace` 限制每个 trace 的活动 HTTP/2 stream 数，默认 `4096`，必须大于零。每个 stream 的两个方向共用一个名额，结束后释放；该上限限制协议生命周期状态，消息事实容量另由 `exchange.max_message_facts_per_trace` 控制。
+
+`semantic_retention.l2_http.http2.max_evidence_ranges` 限制 HTTP/2 协议缓冲中的采集证据范围数，默认 `4096`，必须大于零。它与字节上限共同限制大量细小片段的元数据内存，独立于 LLM 正文证据预算。
+
+`semantic_retention.l2_websocket` 控制 WebSocket 消息来源观测和协议预算。`enabled` 与 `message_summary` 默认均为 `true`，保留 `websocket.message` 的身份、方向、opcode、时间、完整性及 evidence，不复制消息正文。关闭来源留存不会停止已启用的 LLM 内容解析；关闭 LLM 不停止 WebSocket 协议观测。所有容量值必须大于零。
+
+| `l2_websocket` 字段 | 默认值 | 作用域 |
+| --- | --- | --- |
+| `max_active_connections` | `4096` | 运行时全局活动连接数 |
+| `max_frame_buffer_bytes` | `8388608` | 每个连接方向的 frame 缓冲字节 |
+| `max_message_bytes` | `16777216` | 单条消息组装字节 |
+| `max_decoded_message_bytes` | `33554432` | 单条消息解压后字节 |
+| `max_evidence_ranges` | `4096` | 协议状态保留的采集证据范围数 |
+| `compact_threshold_bytes` | `65536` | 已消费 frame 缓冲触发压缩整理的字节阈值 |
+
+`semantic_retention.l0_llm_call.websocket.max_lanes_per_connection` 和 `max_pending_requests_per_connection` 默认均为 `32`，必须大于零，分别限制每连接的 provider 响应关联状态与待处理请求。这些内容关联预算独立于协议连接、frame 和消息预算。内容容量耗尽仅结束受影响的 LLM 消费，不改变 WebSocket 来源消息的真实传输终态。
+
 NoOp 存储不准备纯落盘事件字段，也不执行记录批次的持久化事务和存储克隆。已配置的语义分析与有效在线导出继续运行；不能以不落盘代替关闭分析。文件事件被摘要接管后，不再预先构造不会输出的独立修改动作。
 
-`projection_enabled` 默认 `true`。设为 `false` 时，停止进程、命令、文件、HTTP、LLM、MCP、工具和治理事件的语义动作及关联投影，同时关闭相应正文组装、投影诊断和结束时输出。进程身份注册、trace 生命周期及原始事件记录继续运行；payload 采集、应用协议事件解析和原始 payload 保留由各自配置控制。该开关在 daemon 启动时生效。
+`projection_enabled` 默认 `true`。设为 `false` 时，停止进程、命令、文件、HTTP、LLM、MCP、工具和治理事件的语义动作及关联投影，以及这些语义投影的正文处理和结束输出。进程身份注册、trace 生命周期及原始事件记录继续运行；共享 HTTP 消息解析、协议诊断及原始结束观测仍按应用协议配置运行。payload 采集和原始 payload 保留由各自配置控制。该开关在 daemon 启动时生效。
 
 关闭投影要求 `capture.agent_descendant_observation_depth = -1`。其他深度值依赖语义 agent 识别来设置采集范围，两者冲突时 daemon 启动失败。
 
 当前默认 `content_owner = "highest_consumed"`：内容被更高语义层消费后，低层只保留摘要、计数、transport metadata 与 evidence reference，避免重复持有同一 body。
+
+消费归属由共享协议与语义解析结果提供。留存 gate 不重新解析 HTTP 消息或 HTTP/2 frame，也不按连接缓存 LLM 分类。只有当前片段的内容归属可完整确定时才省略低层正文；混合消息、尚未确认的内容或不完整边界按原始留存配置保留，不对历史片段回填分类。
 
 | 层 | 当前默认重点 |
 | --- | --- |
@@ -129,6 +164,7 @@ NoOp 存储不准备纯落盘事件字段，也不执行记录批次的持久化
 | `l0_mcp_call` | request/response `canonical_json` |
 | `l1_sse` | 保留 stream summary，不保留 event content |
 | `l2_http` | 保留 message summary、header metadata 和 body text |
+| `l2_websocket` | 保留原生消息 summary 和 evidence，不重复正文 |
 | `l3_http2_frame` | 保留 frame summary，不保留 DATA content |
 | `l4_payload` | 当前关闭 body retention，只保留 stats |
 

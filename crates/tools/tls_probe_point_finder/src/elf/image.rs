@@ -54,6 +54,7 @@ pub(crate) struct ElfImage {
     pub(super) analysis_cache: Option<Rc<BinaryAnalysisCache>>,
     pub(super) scan_cache: RefCell<PatternScanCache>,
     pub(super) symbol_cache: RefCell<SymbolScanCache>,
+    named_address_cache: RefCell<BTreeMap<String, Option<BTreeMap<String, u64>>>>,
 }
 
 impl ElfImage {
@@ -118,6 +119,7 @@ impl ElfImage {
             analysis_cache,
             scan_cache: RefCell::new(PatternScanCache::default()),
             symbol_cache: RefCell::new(SymbolScanCache::new()),
+            named_address_cache: RefCell::new(BTreeMap::new()),
         })
     }
 
@@ -217,11 +219,28 @@ impl ElfImage {
         self.scan_chunk_bytes
     }
 
+    pub(crate) fn release_scan_range(&self, offset: usize, length: usize) {
+        if self.scan_mode == ScanMode::LowMemory && length > 0 {
+            let _ = self
+                .data
+                .advise_range(memmap2::Advice::DontNeed, offset, length);
+        }
+    }
+
+    pub(crate) fn release_scan_window(&self, offset: usize) {
+        let chunk = self.scan_chunk_bytes.max(1);
+        let begin = offset / chunk * chunk;
+        let end = begin.saturating_add(chunk).min(self.data.len());
+        self.release_scan_range(begin, end - begin);
+    }
+
     pub(crate) fn cached_named_addresses(
         &self,
         key: &str,
     ) -> Option<Option<BTreeMap<String, u64>>> {
-        let cache = self.analysis_cache.as_ref()?;
+        let Some(cache) = self.analysis_cache.as_ref() else {
+            return self.named_address_cache.borrow().get(key).cloned();
+        };
         let cached =
             cache.with_named_addresses(&self.analysis_key, |addresses| addresses.get(key).cloned());
         cache.record_analysis(cached.is_some());
@@ -237,6 +256,8 @@ impl ElfImage {
             cache.with_named_addresses(&self.analysis_key, |cached| {
                 cached.insert(key, addresses);
             });
+        } else {
+            self.named_address_cache.borrow_mut().insert(key, addresses);
         }
     }
 

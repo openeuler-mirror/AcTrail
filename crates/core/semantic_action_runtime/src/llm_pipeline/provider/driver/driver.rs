@@ -525,12 +525,14 @@ pub(in crate::llm_pipeline) struct ParsedSseResponseAccumulator {
     tool_calls: ToolCallAssembler,
     chunk_count: usize,
     termination: Option<LlmResponseTermination>,
+    finish_reason_observed: bool,
     response_observed: bool,
 }
 
 impl ParsedSseResponseAccumulator {
     pub(in crate::llm_pipeline) fn observe(&mut self, event: &LlmParsedSseEvent) {
         self.response_observed |= event.response_observed;
+        self.finish_reason_observed |= event.finish_reason.is_some();
         self.chunk_count += event.text_chunk_count;
         if self.model.is_none() {
             self.model = event.model.clone();
@@ -554,7 +556,11 @@ impl ParsedSseResponseAccumulator {
         stream: bool,
     ) -> Option<LlmParsedResponse> {
         let tool_calls = self.tool_calls.clone().into_calls();
-        if !self.response_observed && tool_calls.is_empty() && self.termination.is_none() {
+        let termination = self.termination.or_else(|| {
+            self.finish_reason_observed
+                .then_some(LlmResponseTermination::Completed)
+        });
+        if !self.response_observed && tool_calls.is_empty() && termination.is_none() {
             return None;
         }
         Some(LlmParsedResponse {
@@ -565,7 +571,9 @@ impl ParsedSseResponseAccumulator {
             tool_calls,
             token_usage,
             chunk_count: self.chunk_count,
-            termination: self.termination,
+            // Only materialization uses the finish reason. observe_event keeps
+            // accepting usage and other trailing events until an explicit end.
+            termination,
             stream,
         })
     }

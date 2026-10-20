@@ -2,6 +2,7 @@ target/
 *.log 
 # Local config
 config.toml 
+develop/
 
 logs/* 
 .DS_Store 

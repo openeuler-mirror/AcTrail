@@ -1,5 +1,6 @@
 //! Explicit changes to an action's runtime-owned state.
 
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use model_core::{ids::TraceId, process::ProcessIdentity};
@@ -20,6 +21,12 @@ pub struct SemanticActionUpdate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SemanticActionChange {
+    /// Replace the producer-owned title and complete attributes, including removals.
+    /// Lifecycle facts are assigned independently through `Lifecycle`.
+    ActionSnapshot {
+        title: String,
+        attributes: BTreeMap<String, String>,
+    },
     Lifecycle {
         end_time: Option<SystemTime>,
         status: SemanticActionStatus,

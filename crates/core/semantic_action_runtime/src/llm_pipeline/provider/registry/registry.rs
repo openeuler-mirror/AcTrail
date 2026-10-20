@@ -21,8 +21,10 @@ static PARSERS: &[&dyn LlmProviderResponseParser] = &[
     &OPENAI_COMPATIBLE,
 ];
 
-pub(in crate::llm_pipeline) struct ParsedSseResponse {
-    pub(in crate::llm_pipeline) response: LlmParsedResponse,
+pub(in crate::llm_pipeline) fn new_responses_stream_parser(
+    retention: LlmResponseRetention,
+) -> Box<dyn LlmProviderResponseStreamParser + Send> {
+    OPENAI_RESPONSES.new_stream_parser(retention)
 }
 
 pub(in crate::llm_pipeline) fn parse_json_response(
@@ -32,21 +34,11 @@ pub(in crate::llm_pipeline) fn parse_json_response(
     select_json_parser(input)?.parse_json_response(input, retention)
 }
 
-pub(in crate::llm_pipeline) fn parse_sse_response(
-    input: LlmSseResponseInput<'_>,
-    retention: LlmResponseRetention,
-) -> Option<ParsedSseResponse> {
-    let parser = select_sse_parser(input)?;
-    let response = parser.parse_sse_response(input, retention)?;
-    Some(ParsedSseResponse { response })
-}
-
 /// Create a stateful incremental SSE stream parser for the provider selected
 /// by the given events.
 ///
-/// The incremental parser mirrors the batch `parse_sse_response` aggregation
-/// but consumes one event at a time, so a growing SSE body only needs its
-/// newly-appended events parsed instead of re-parsing the entire stream.
+/// Both incremental consumption and batch recovery use this parser so they
+/// share the same provider final boundary.
 pub(in crate::llm_pipeline) fn new_sse_stream_parser(
     input: LlmSseResponseInput<'_>,
     retention: LlmResponseRetention,

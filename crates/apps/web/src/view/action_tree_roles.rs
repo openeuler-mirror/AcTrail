@@ -22,6 +22,8 @@ pub(super) const DISPLAY_PARENT_ROLES: &[SemanticActionLinkRole] = &[
     SemanticActionLinkRole::LlmResponseToolCall,
     SemanticActionLinkRole::LlmRequestToolResult,
     SemanticActionLinkRole::LlmRequestHttpMessage,
+    SemanticActionLinkRole::LlmRequestWebSocketMessage,
+    SemanticActionLinkRole::LlmResponseWebSocketMessage,
     SemanticActionLinkRole::LlmResponseHttpMessage,
     SemanticActionLinkRole::LlmResponseSseStream,
     SemanticActionLinkRole::SseStreamEvent,

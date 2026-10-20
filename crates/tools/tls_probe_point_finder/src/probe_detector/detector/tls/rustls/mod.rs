@@ -4,7 +4,11 @@ pub(crate) use probe_detector::{
     RUNTIME_TAKE_RECEIVED_PLAINTEXT_SYMBOL, RustlsProbeDetector,
 };
 
+pub(super) use connection_layout::RustlsConnectionLayout;
+
 mod config;
+mod connection_layout;
+mod handshake_locator;
 mod probe_detector;
 mod static_pattern;
 mod symbol;

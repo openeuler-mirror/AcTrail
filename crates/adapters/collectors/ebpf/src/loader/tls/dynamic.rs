@@ -76,6 +76,7 @@ impl DynamicTlsProbePlan {
                     offset,
                     UprobeOpts {
                         retprobe: point.retprobe,
+                        cookie: point.cookie,
                         ..Default::default()
                     },
                 )

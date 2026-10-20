@@ -1,8 +1,10 @@
 mod adapter;
 mod connection;
+mod deflate;
 mod framing;
 mod handshake;
-
-pub(in crate::llm_pipeline) use adapter::{
-    WebSocketExchangeStreamPrefix, WebSocketLlmAdapter, WebSocketLlmObservation,
+mod model;
+pub(in crate::llm_pipeline) use adapter::WebSocketTransport;
+pub(in crate::llm_pipeline) use model::{
+    WebSocketAbortReason, WebSocketConnectionKey, WebSocketMessageEvent, WebSocketMessageHead,
 };

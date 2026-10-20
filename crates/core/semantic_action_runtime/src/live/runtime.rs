@@ -18,7 +18,6 @@ use super::actions::{
 use super::agent::AgentProjector;
 use super::command::CommandProjector;
 use super::file::FileAccessProjector;
-use super::http_exchange::HttpExchangeTracker;
 use super::links::ActionLinkProjector;
 use super::mcp::{LiveMcpProjector, LiveMcpStdioDiagnostic};
 use super::tool::{ToolInteractionProjector, ToolProjectionBatch};
@@ -28,7 +27,6 @@ pub struct LiveSemanticActionRuntime {
     agent: AgentProjector,
     command: CommandProjector,
     file_access: FileAccessProjector,
-    http_exchange: HttpExchangeTracker,
     llm: LlmActionPipeline,
     mcp: LiveMcpProjector,
     tool: ToolInteractionProjector,
@@ -60,14 +58,15 @@ impl LiveSemanticActionRuntime {
             .projection_state
             .max_tool_entries_per_trace;
         let mcp_content_retention = semantic_retention.l0_mcp_call.clone();
-        let http_exchange_config = semantic_retention.l2_http.exchange;
+        let projection_enabled = semantic_retention.projection_enabled;
+        let mut pipeline_config = semantic_retention;
+        pipeline_config.l0_llm_call.enabled &= projection_enabled;
         Self {
-            projection_enabled: semantic_retention.projection_enabled,
+            projection_enabled,
             agent: AgentProjector::new(enabled, pending_exec_max_entries),
             command: CommandProjector::new(),
             file_access: FileAccessProjector::new(file_observation),
-            http_exchange: HttpExchangeTracker::new(http_exchange_config),
-            llm: LlmActionPipeline::new(semantic_retention),
+            llm: LlmActionPipeline::new(pipeline_config),
             mcp: LiveMcpProjector::new(mcp, mcp_content_retention),
             tool: ToolInteractionProjector::new(config, max_tool_entries_per_trace),
             links: ActionLinkProjector::new(),
@@ -190,41 +189,46 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Application(payload) if is_http_protocol(&payload.protocol) => {
-                let observation = self
-                    .http_exchange
-                    .observe_http_message(http_message_action(event));
-                let mut projected_llm = LiveSemanticActionOutput::default();
-                for matched in &observation.matches {
-                    if matched.reconciled_late {
-                        output.updated_actions.push(matched.response.clone());
+                if let Some(message_id) = payload.metadata.get("http.message_id") {
+                    let mut observation = http_message_action(event);
+                    observation.action_id = message_id.clone();
+                    if let Some(body) = &payload.body {
+                        use model_core::event::ApplicationBody;
+                        let response = payload.operation == "response";
+                        let attribute = match body {
+                            ApplicationBody::Text(value) => Some((
+                                if response {
+                                    attrs::http_response::BODY_TEXT
+                                } else {
+                                    attrs::http_request::BODY_TEXT
+                                },
+                                value,
+                            )),
+                            ApplicationBody::Json(value) => Some((
+                                if response {
+                                    attrs::http_response::BODY_JSON
+                                } else {
+                                    attrs::http_request::BODY_JSON
+                                },
+                                value,
+                            )),
+                            // Raw binary remains in the application event referenced by evidence.
+                            ApplicationBody::Base64(_) => None,
+                        };
+                        if let Some((key, value)) = attribute {
+                            observation.attributes.insert(key.into(), value.clone());
+                        }
                     }
-                    output
-                        .links
-                        .push(self.links.observe_exact_http_exchange_link(matched));
-                    let llm_output = self
+                    // The protocol owner keeps identity and lifecycle. This event only adds
+                    // configured observation content and event evidence to that same action.
+                    let batch = self
                         .llm
-                        .advance(PipelineEvent::HttpExchange(matched))
+                        .advance(PipelineEvent::HttpObservation(&observation))
                         .output;
-                    projected_llm.extend(self.observe_llm_batch(llm_output));
+                    output.extend(self.observe_llm_batch(batch));
+                    return output;
                 }
-                for response in &observation.damaged_responses {
-                    let llm_output = self
-                        .llm
-                        .advance(PipelineEvent::DamagedHttpResponse(response))
-                        .output;
-                    projected_llm.extend(self.observe_llm_batch(llm_output));
-                }
-                for response in &observation.unmatched_responses {
-                    let llm_output = self
-                        .llm
-                        .advance(PipelineEvent::UnmatchedHttpResponse(response))
-                        .output;
-                    projected_llm.extend(self.observe_llm_batch(llm_output));
-                }
-                let llm_actions = std::mem::take(&mut projected_llm.actions);
-                output.actions.extend(observation.actions);
-                output.actions.extend(llm_actions);
-                output.extend(projected_llm);
+                output.actions.push(http_message_action(event));
                 output.links.extend(
                     self.links.observe_actions(
                         output.actions.iter().chain(output.updated_actions.iter()),
@@ -268,6 +272,20 @@ impl LiveSemanticActionRuntime {
     }
 
     fn observe_llm_batch(&mut self, llm_output: ActionBatch) -> LiveSemanticActionOutput {
+        if !self.projection_enabled {
+            return LiveSemanticActionOutput {
+                http1_messages: llm_output.http1_messages,
+                http1_handled: llm_output.http1_handled,
+                http2_frames: llm_output.http2_frames,
+                http2_handled: llm_output.http2_handled,
+                // Semantic consumers are disabled; transport observations alone
+                // do not prove that a configured application consumer retained them.
+                payload_consumed_by_http: false,
+                payload_consumed_by_llm: false,
+                llm_pipeline_diagnostics: llm_output.diagnostics,
+                ..LiveSemanticActionOutput::default()
+            };
+        }
         let tool_output = self.tool.project(ToolProjectionBatch {
             actions: &llm_output.actions,
             updated_actions: &llm_output.updated_actions,
@@ -275,6 +293,12 @@ impl LiveSemanticActionRuntime {
             request_lineages: &llm_output.llm_request_lineages,
         });
         let mut output = LiveSemanticActionOutput {
+            http1_messages: llm_output.http1_messages,
+            http1_handled: llm_output.http1_handled,
+            http2_frames: llm_output.http2_frames,
+            http2_handled: llm_output.http2_handled,
+            payload_consumed_by_http: llm_output.payload_consumed_by_http,
+            payload_consumed_by_llm: llm_output.payload_consumed_by_llm,
             payload_segments: llm_output.payload_segments,
             updates: llm_output.updates,
             updated_actions: llm_output.updated_actions,
@@ -360,7 +384,6 @@ impl LiveSemanticActionRuntime {
         self.agent.forget_trace(trace_id);
         self.command.forget_trace(trace_id);
         self.file_access.forget_trace(trace_id);
-        self.http_exchange.forget_trace(trace_id);
         self.llm.advance(PipelineEvent::ForgetTrace(trace_id));
         self.mcp.forget_trace(trace_id);
         self.tool.forget_trace(trace_id);
@@ -372,9 +395,6 @@ impl LiveSemanticActionRuntime {
         trace_id: TraceId,
         finished_at: SystemTime,
     ) -> LiveSemanticActionOutput {
-        if !self.projection_enabled {
-            return LiveSemanticActionOutput::default();
-        }
         let llm_output = self
             .llm
             .advance(PipelineEvent::FinalizeTrace {
@@ -383,6 +403,9 @@ impl LiveSemanticActionRuntime {
             })
             .output;
         let mut output = self.observe_llm_batch(llm_output);
+        if !self.projection_enabled {
+            return output;
+        }
         let finalized_tool_output = self.tool.finish_trace(trace_id, finished_at);
         output.actions.extend(finalized_tool_output.actions);
         output.updates.extend(finalized_tool_output.updates);

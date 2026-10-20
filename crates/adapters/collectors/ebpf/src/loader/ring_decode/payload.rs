@@ -137,7 +137,7 @@ pub struct KernelSocketPayloadEvent {
     pub captured_size: u32,
     pub flags: u32,
     pub syscall: u32,
-    pub fd_generation: u32,
+    pub socket_generation: u32,
     pub pid_generation: u64,
     pub bytes: Vec<u8>,
 }
@@ -162,7 +162,7 @@ pub struct KernelSocketPayloadCompletionEvent {
     pub fd: u32,
     pub flags: u32,
     pub syscall: u32,
-    pub fd_generation: u32,
+    pub socket_generation: u32,
 }
 
 pub(super) fn decode_tls_capture_request_event(
@@ -424,7 +424,7 @@ pub(super) fn decode_socket_payload_event(
         captured_size,
         flags: read_u32(raw, 84).expect("event length checked"),
         syscall: read_u32(raw, 88).expect("event length checked"),
-        fd_generation: read_u32(raw, 92).expect("event length checked"),
+        socket_generation: read_u32(raw, 92).expect("event length checked"),
         pid_generation: read_u64(raw, 96).expect("event length checked"),
         host_pid: read_u32(raw, 104).expect("event length checked"),
         host_tid: read_u32(raw, 108).expect("event length checked"),
@@ -463,7 +463,7 @@ pub(super) fn decode_socket_payload_completion_event(
         fd: read_u32(raw, 80).expect("event length checked"),
         flags: read_u32(raw, 84).expect("event length checked"),
         syscall: read_u32(raw, 88).expect("event length checked"),
-        fd_generation: read_u32(raw, 92).expect("event length checked"),
+        socket_generation: read_u32(raw, 92).expect("event length checked"),
         kernel_tgid: read_u32(raw, 96).expect("event length checked"),
         kernel_tid: read_u32(raw, 100).expect("event length checked"),
     })

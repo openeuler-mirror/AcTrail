@@ -332,9 +332,7 @@ fn content_block_delta_event(value: &Value, retention: LlmResponseRetention) -> 
 fn message_delta_event(value: &Value) -> LlmParsedSseEvent {
     let finish_reason = value.get("delta").and_then(extract_finish_reason);
     LlmParsedSseEvent {
-        termination: finish_reason
-            .is_some()
-            .then_some(LlmResponseTermination::Completed),
+        // message_stop closes the stream; message_delta can still carry usage.
         finish_reason,
         ..LlmParsedSseEvent::default()
     }

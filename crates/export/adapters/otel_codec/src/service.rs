@@ -145,6 +145,7 @@ fn render_span(trace_id: &str, action: &SemanticAction, links: &[SemanticActionL
 fn span_kind(kind: SemanticActionKind) -> &'static str {
     match kind {
         SemanticActionKind::HttpMessage
+        | SemanticActionKind::WebSocketMessage
         | SemanticActionKind::LlmCall
         | SemanticActionKind::LlmRequest
         | SemanticActionKind::LlmResponse => "SPAN_KIND_CLIENT",
@@ -270,8 +271,10 @@ enum ParentRolePriority {
     LlmResponseSseStream,
     SseStreamEvent,
     LlmRequestHttpMessage,
+    LlmRequestWebSocketMessage,
     LlmRequestLlmResponse,
     LlmResponseHttpMessage,
+    LlmResponseWebSocketMessage,
     HttpRequestHttpResponse,
     LlmCallHttpResponse,
     LlmRequestToolResult,
@@ -279,6 +282,12 @@ enum ParentRolePriority {
 
 fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
     match role {
+        SemanticActionLinkRole::LlmResponseWebSocketMessage => {
+            ParentRolePriority::LlmResponseWebSocketMessage
+        }
+        SemanticActionLinkRole::LlmRequestWebSocketMessage => {
+            ParentRolePriority::LlmRequestWebSocketMessage
+        }
         SemanticActionLinkRole::AgentInvocationExec => ParentRolePriority::AgentInvocationExec,
         SemanticActionLinkRole::LlmToolCallAgentInvocation => {
             ParentRolePriority::LlmToolCallAgentInvocation

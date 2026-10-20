@@ -19,19 +19,19 @@ static __always_inline struct actrail_socket_payload_fd_state *socket_payload_fd
     return bpf_map_lookup_elem(&payload_socket_fds, &key);
 }
 
-static __always_inline __u32 socket_payload_fd_generation(__u32 pid, __u32 fd) {
+static __always_inline __u32 socket_payload_generation(__u32 pid, __u32 fd) {
     struct actrail_socket_payload_fd_state *state = socket_payload_fd_state(pid, fd);
-    return state ? state->generation : 0;
+    return state ? state->socket_generation : 0;
 }
 
 static __always_inline int socket_payload_mark_fd_tls_owned(
     __u32 pid,
     __u32 fd,
-    __u32 expected_generation
+    __u32 expected_socket_generation
 ) {
     struct actrail_socket_payload_fd_state *state = socket_payload_fd_state(pid, fd);
 
-    if (!state || !expected_generation || state->generation != expected_generation) {
+    if (!state || !expected_socket_generation || state->socket_generation != expected_socket_generation) {
         return 0;
     }
     state->flags |= ACTRAIL_SOCKET_FD_TLS_OWNED;
@@ -84,17 +84,17 @@ static __always_inline __u32 socket_payload_next_generation(__u32 pid) {
 static __always_inline int socket_payload_set_fd_state(
     __u32 pid,
     __u32 fd,
-    __u32 generation,
+    __u32 socket_generation,
     __u32 flags
 ) {
     struct actrail_socket_payload_fd_key key;
     struct actrail_socket_payload_fd_state state = {};
 
-    if (!generation) {
+    if (!socket_generation) {
         return 0;
     }
     key = socket_payload_fd_key(pid, fd);
-    state.generation = generation;
+    state.socket_generation = socket_generation;
     state.flags = flags;
     if (bpf_map_update_elem(&payload_socket_fds, &key, &state, BPF_ANY) != 0) {
         event_transport_diag_inc(ACTRAIL_SOCKET_STATE_UPDATE_FAIL);
@@ -106,36 +106,38 @@ static __always_inline int socket_payload_set_fd_state(
 static __always_inline void socket_payload_delete_sequences(
     __u32 pid,
     __u32 fd,
-    __u32 generation
+    __u32 socket_generation
 ) {
     struct actrail_socket_payload_sequence_key key = {};
 
     key.pid = pid;
     key.fd = fd;
-    key.fd_generation = generation;
+    key.socket_generation = socket_generation;
     key.direction = ACTRAIL_SOCKET_PAYLOAD_INBOUND;
     bpf_map_delete_elem(&payload_socket_stream_sequences, &key);
     key.direction = ACTRAIL_SOCKET_PAYLOAD_OUTBOUND;
     bpf_map_delete_elem(&payload_socket_stream_sequences, &key);
 }
 
-static __always_inline void socket_payload_release_fd(__u32 pid, __u32 fd) {
+/* Return the removed socket generation, independently of the FD object identity. */
+static __always_inline __u32 socket_payload_release_fd(__u32 pid, __u32 fd) {
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_socket_payload_fd_key key;
     struct actrail_socket_payload_fd_state *state;
-    __u32 generation;
+    __u32 socket_generation;
 
     if (!config || !config->enabled) {
-        return;
+        return 0;
     }
     key = socket_payload_fd_key(pid, fd);
     state = bpf_map_lookup_elem(&payload_socket_fds, &key);
-    generation = state ? state->generation : 0;
-    if (generation) {
-        socket_payload_delete_sequences(pid, fd, generation);
+    socket_generation = state ? state->socket_generation : 0;
+    if (socket_generation) {
+        socket_payload_delete_sequences(pid, fd, socket_generation);
     }
     socket_payload_delete_sequences(pid, fd, 0);
     bpf_map_delete_elem(&payload_socket_fds, &key);
+    return socket_generation;
 }
 
 static __always_inline void socket_payload_release_process(__u32 pid) {
@@ -150,14 +152,14 @@ static __always_inline void socket_payload_release_process(__u32 pid) {
 static __always_inline void socket_payload_track_fd(__u32 pid, __u32 fd) {
     struct actrail_socket_payload_config *config = socket_payload_config();
     __u64 *trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
-    __u32 generation;
+    __u32 socket_generation;
 
     if (!config || !config->enabled || !trace_id || !process_observation_is_detailed(pid)) {
         return;
     }
     socket_payload_release_fd(pid, fd);
-    generation = socket_payload_next_generation(pid);
-    socket_payload_set_fd_state(pid, fd, generation, 0);
+    socket_generation = socket_payload_next_generation(pid);
+    socket_payload_set_fd_state(pid, fd, socket_generation, 0);
 }
 
 static __always_inline void socket_payload_track_connect_exit(
@@ -204,13 +206,13 @@ static __always_inline void socket_payload_dup_enter(
     op.source_fd = source_fd;
     op.target_fd = target_fd;
     source_state = socket_payload_fd_state(tgid, source_fd);
-    op.source_generation = source_state ? source_state->generation : 0;
+    op.source_socket_generation = source_state ? source_state->socket_generation : 0;
     op.source_flags = source_state ? source_state->flags : 0;
-    op.target_generation = mode == ACTRAIL_SOCKET_DUP_TARGET_FD
-        ? socket_payload_fd_generation(tgid, target_fd)
+    op.target_socket_generation = mode == ACTRAIL_SOCKET_DUP_TARGET_FD
+        ? socket_payload_generation(tgid, target_fd)
         : 0;
     op.mode = mode;
-    if (!op.source_generation && !op.target_generation) {
+    if (!op.source_socket_generation && !op.target_socket_generation) {
         return;
     }
     bpf_map_update_elem(&pending_socket_dup_ops, &pid_tgid, &op, BPF_ANY);
@@ -248,17 +250,17 @@ static __always_inline void socket_payload_dup_exit(
         return;
     }
     new_fd = op->mode == ACTRAIL_SOCKET_DUP_RET_FD ? (__u32)ctx->ret : op->target_fd;
-    if (op->source_generation) {
+    if (op->source_socket_generation) {
         if (new_fd != op->source_fd) {
             socket_payload_release_fd(tgid, new_fd);
         }
         socket_payload_set_fd_state(
             tgid,
             new_fd,
-            op->source_generation,
+            op->source_socket_generation,
             op->source_flags
         );
-    } else if (op->target_generation) {
+    } else if (op->target_socket_generation) {
         socket_payload_release_fd(tgid, new_fd);
     }
     bpf_map_delete_elem(&pending_socket_dup_ops, &pid_tgid);

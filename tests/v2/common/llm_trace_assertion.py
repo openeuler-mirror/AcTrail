@@ -98,7 +98,7 @@ class LLMTraceAssertion:
             )
         )
         actions = self._llm_actions(document)
-        self._require_terminal_actions(actions)
+        self._require_terminal_actions(document, actions)
         return self._require_paired_exchange(document, actions)
 
     def _read_json(self, command: list[Path | str]) -> dict:
@@ -166,9 +166,14 @@ class LLMTraceAssertion:
             if action.get("kind") in self._LLM_ACTION_KINDS
         ]
 
-    def _require_terminal_actions(self, actions: list[dict]) -> None:
+    def _require_terminal_actions(self, document: dict, actions: list[dict]) -> None:
         if not actions:
             raise AssertionError("trace has no LLM actions")
+        http_actions = {
+            action["action_id"]: action
+            for action in document.get("actions", [])
+            if action.get("kind") == "http.message"
+        }
         for action in actions:
             kind = action.get("kind")
             status = action.get("status")
@@ -202,7 +207,10 @@ class LLMTraceAssertion:
                 kind in {"llm.call", "llm.response", "sse.stream"}
                 and status == "error"
                 and completeness == "partial"
-                and finalized_on_close
+                and (
+                    finalized_on_close
+                    or self._is_peer_closed_response(action, http_actions)
+                )
             ):
                 continue
             if (
@@ -219,6 +227,30 @@ class LLMTraceAssertion:
                 f"status={status} completeness={completeness} "
                 f"finalized_on_trace_close={finalized_on_close}"
             )
+
+    def _is_peer_closed_response(self, action: dict, http_actions: dict) -> bool:
+        attributes = action.get("attributes", {})
+        source = http_actions.get(attributes.get("http.message_id"))
+        if (
+            action.get("kind") != "llm.response"
+            or attributes.get("http.message.incomplete_reason") != "PeerClosed"
+            or action.get("end_time_unix_nanos") is None
+            or source is None
+        ):
+            return False
+        source_attributes = source.get("attributes", {})
+        return (
+            source.get("status") == "error"
+            and source.get("completeness") == "partial"
+            and source.get("end_time_unix_nanos") is not None
+            and source_attributes.get("direction") == "inbound"
+            and action.get("trace_id_raw") is not None
+            and source.get("trace_id_raw") == action["trace_id_raw"]
+            and action.get("process") is not None
+            and source.get("process") == action["process"]
+            and bool(attributes.get("payload.stream_key"))
+            and source_attributes.get("stream_key") == attributes["payload.stream_key"]
+        )
 
     def _require_capture_limited_request_metadata(self, action: dict) -> None:
         attributes = action.get("attributes", {})
@@ -357,11 +389,15 @@ class LLMTraceAssertion:
             if (
                 request_has_canonical_content
                 or request_has_capture_limited_metadata
-            ) and response_contains_marker:
+            ) and (
+                response_contains_marker
+                and response.get("status") == "success"
+                and response.get("completeness") == "complete"
+            ):
                 return
         raise AssertionError(
             "no LLM call links a canonical or capture-limited metadata request "
-            f"to a normalized response containing {self._marker}"
+            f"to a successful complete normalized response containing {self._marker}"
         )
 
     def _require_successful_exchange(self, pairs: list[tuple[dict, dict]]) -> None:

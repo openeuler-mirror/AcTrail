@@ -128,13 +128,16 @@ fn decode_binary_identity<'a>(
 pub fn encode_points(plan: &ProbePointPlan) -> SyncResult<String> {
     let mut values = Vec::new();
     for point in &plan.points {
-        let Some(direction) = direction_to_core(point.direction) else {
-            continue;
+        let direction = match direction_to_core(point.direction) {
+            Some(direction) => direction,
+            None if point.symbol == "rustls_start_outgoing_traffic" => "control",
+            None => continue,
         };
-        values.push(format!(
-            "{}:{}:{}",
-            point.symbol, direction, point.file_offset
-        ));
+        let mut encoded = format!("{}:{}:{}", point.symbol, direction, point.file_offset);
+        if point.cookie != 0 {
+            encoded.push_str(&format!(":{}", point.cookie));
+        }
+        values.push(encoded);
     }
     if values.is_empty() {
         return Err(SyncError::new("probe plan has no payload hook points"));

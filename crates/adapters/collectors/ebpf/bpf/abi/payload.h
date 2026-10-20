@@ -47,7 +47,7 @@ struct actrail_socket_payload_event {
     __u32 captured_size;
     __u32 flags;
     __u32 syscall;
-    __u32 fd_generation;
+    __u32 socket_generation;
     __u64 pid_generation;
     __u32 host_pid;
     __u32 host_tid;
@@ -72,7 +72,7 @@ struct actrail_socket_payload_completion_event {
     __u32 fd;
     __u32 flags;
     __u32 syscall;
-    __u32 fd_generation;
+    __u32 socket_generation;
     __u32 kernel_tgid;
     __u32 kernel_tid;
 };

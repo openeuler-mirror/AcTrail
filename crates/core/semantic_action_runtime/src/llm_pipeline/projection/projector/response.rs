@@ -2,9 +2,7 @@
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{
-    LlmResponseRetention, SemanticAction, SemanticActionKind, SemanticActionStatus,
-};
+use semantic_action::{LlmResponseRetention, SemanticAction, SemanticActionKind};
 
 use crate::llm_pipeline::config::StreamClassifierConfig;
 use crate::llm_pipeline::transport::HttpResponseParts;
@@ -19,18 +17,11 @@ use crate::llm_pipeline::transport::evidence::EvidenceSnapshot;
 
 use super::super::retention::semantic_payload_draft;
 use super::support::{
-    http_response_can_evict, llm_raw_stream_action_id, llm_response_attributes,
-    llm_response_completeness, llm_response_status_from_progress, llm_response_title,
-    llm_stream_action_id, payload_evidence, plaintext_transport_scheme,
-    raw_llm_response_attributes,
+    llm_response_attributes, llm_response_completeness, llm_response_status, llm_response_title,
+    payload_evidence, plaintext_transport_scheme,
 };
 
-/// Identity of one in-flight LLM response message held by a stream state.
-///
-/// Recorded when the incremental SSE cache is first seeded (first chunk of the
-/// message) and cleared when the message terminates. Used only to materialize
-/// the full response action on trace close; the terminal chunk materializes
-/// through the normal projection path.
+/// Identifies an unfinished LLM response for completion or stream teardown.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct InFlightResponse {
     pub(crate) message_start: usize,
@@ -64,13 +55,14 @@ fn in_flight_projection(encoded_len: usize, message_start: usize) -> LlmResponse
 pub(super) fn project_stream_llm_response_message_actions(
     config: &SemanticRetentionConfig,
     codecs: &LlmCodecRegistry,
-    key: &PayloadStreamGroupKey,
+    _key: &PayloadStreamGroupKey,
     message_start: usize,
     raw_bytes: &[u8],
     mut http: HttpResponseParts,
     evidence: &EvidenceSnapshot,
     sse_cache: &mut Option<IncrementalSseCache>,
     force_terminal: bool,
+    body_decoding_failed: bool,
 ) -> Option<LlmResponseProjection> {
     let classifier_config = StreamClassifierConfig::from_semantic_retention(config);
     let retention = LlmResponseRetention {
@@ -78,35 +70,43 @@ pub(super) fn project_stream_llm_response_message_actions(
         tool_calls: config.llm_response_tool_calls_enabled(),
         usage: config.llm_response_usage_enabled(),
     };
-    let progress = parse_llm_response_progress(
-        SseBodySource::SplitHttp,
-        &http.body,
-        codecs,
-        classifier_config,
-        retention,
-        sse_cache,
-        http.complete || force_terminal,
-    )?;
+    let mut body = if body_decoding_failed {
+        // The decoder may no longer expose the consumed body. Finish the
+        // existing parser without replacing its state with an empty body.
+        sse_cache.as_mut()?.body()?
+    } else {
+        let progress = parse_llm_response_progress(
+            SseBodySource::SplitHttp,
+            &http.body,
+            codecs,
+            classifier_config,
+            retention,
+            sse_cache,
+            http.complete || force_terminal,
+        )?;
+        // A finish reason does not stop consumption of trailing provider events.
+        // Transport teardown asks the parser to finish with its available evidence.
+        if !force_terminal && progress.termination.is_none() && !http.complete {
+            return Some(in_flight_projection(http.encoded_len, message_start));
+        }
+        parse_llm_response_body_incremental(
+            SseBodySource::SplitHttp,
+            &http.body,
+            codecs,
+            classifier_config,
+            retention,
+            sse_cache,
+        )?
+    };
     let first = evidence.first.as_ref()?;
     http.scheme = plaintext_transport_scheme(first.source_boundary);
-    let status = llm_response_status_from_progress(evidence, http.complete, &progress);
-    let terminal = http_response_can_evict(&http) && status != SemanticActionStatus::InProgress;
-    if !force_terminal && !terminal {
-        return Some(in_flight_projection(http.encoded_len, message_start));
-    }
-    let mut body = parse_llm_response_body_incremental(
-        SseBodySource::SplitHttp,
-        &http.body,
-        codecs,
-        classifier_config,
-        retention,
-        sse_cache,
-    )?;
+    let status = llm_response_status(evidence, http.complete, &body);
+    let terminal = body.termination.is_some() || http.complete;
     let attributes = llm_response_attributes(config, evidence, raw_bytes, &http, &body);
     let semantic_evidence = payload_evidence(evidence);
     let payload_segments = semantic_response_payloads(config, first, raw_bytes);
     let response = SemanticAction {
-        action_id: llm_stream_action_id(key, message_start, first, http.stream_id),
+        action_id: format!("{}:llm.response", http.message_id),
         trace_id: first.trace_id,
         kind: SemanticActionKind::LlmResponse,
         title: llm_response_title(&attributes),
@@ -127,71 +127,6 @@ pub(super) fn project_stream_llm_response_message_actions(
         in_flight: (!terminal).then_some(InFlightResponse { message_start }),
         encoded_len: http.encoded_len,
         terminal,
-    })
-}
-
-pub(super) fn project_raw_stream_llm_response_actions(
-    config: &SemanticRetentionConfig,
-    codecs: &LlmCodecRegistry,
-    key: &PayloadStreamGroupKey,
-    message_start: usize,
-    bytes: &[u8],
-    evidence: &EvidenceSnapshot,
-    sse_cache: &mut Option<IncrementalSseCache>,
-    force_terminal: bool,
-) -> Option<LlmResponseProjection> {
-    let classifier_config = StreamClassifierConfig::from_semantic_retention(config);
-    let retention = LlmResponseRetention {
-        content: config.llm_response_assembled_provider_enabled(),
-        tool_calls: config.llm_response_tool_calls_enabled(),
-        usage: config.llm_response_usage_enabled(),
-    };
-    let progress = parse_llm_response_progress(
-        SseBodySource::RawBytes,
-        bytes,
-        codecs,
-        classifier_config,
-        retention,
-        sse_cache,
-        force_terminal,
-    )?;
-    let first = evidence.first.as_ref()?;
-    let status = llm_response_status_from_progress(evidence, false, &progress);
-    if !force_terminal && status == SemanticActionStatus::InProgress {
-        return Some(in_flight_projection(bytes.len(), message_start));
-    }
-    let mut body = parse_llm_response_body_incremental(
-        SseBodySource::RawBytes,
-        bytes,
-        codecs,
-        classifier_config,
-        retention,
-        sse_cache,
-    )?;
-    let attributes = raw_llm_response_attributes(config, evidence, bytes, &body);
-    let payload_segments = semantic_response_payloads(config, first, bytes);
-    let response = SemanticAction {
-        action_id: llm_raw_stream_action_id(key, message_start, first),
-        trace_id: first.trace_id,
-        kind: SemanticActionKind::LlmResponse,
-        title: llm_response_title(&attributes),
-        start_time: first.observed_at,
-        end_time: evidence.last.as_ref().map(|segment| segment.observed_at),
-        process: first.process.clone(),
-        status,
-        completeness: llm_response_completeness(evidence, false, &body),
-        attributes,
-        evidence: payload_evidence(evidence),
-    };
-    let provider_response_ids =
-        projected_provider_response_ids(&response, body.provider_response_id.take());
-    Some(LlmResponseProjection {
-        actions: vec![response],
-        provider_response_ids,
-        payload_segments,
-        in_flight: None,
-        encoded_len: bytes.len(),
-        terminal: true,
     })
 }
 

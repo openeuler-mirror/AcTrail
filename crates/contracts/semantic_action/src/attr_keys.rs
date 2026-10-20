@@ -118,6 +118,7 @@ pub mod file_tty {
 }
 
 pub mod http {
+    pub const MESSAGE_ID: &str = "http.message_id";
     pub const OPERATION: &str = "http.operation";
 }
 
@@ -318,4 +319,11 @@ pub mod syscall {
 pub mod url {
     pub const PATH: &str = "url.path";
     pub const SCHEME: &str = "url.scheme";
+}
+
+/// Native WebSocket application-message identity.
+pub mod websocket {
+    pub const MESSAGE_ID: &str = "websocket.message_id";
+    pub const CONNECTION_ID: &str = "websocket.connection_id";
+    pub const OPCODE: &str = "websocket.opcode";
 }

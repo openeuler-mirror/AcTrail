@@ -25,6 +25,12 @@ pub struct LiveSemanticActionObservation {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LiveSemanticActionOutput {
+    pub http1_messages: Vec<crate::Http1MessageEvent>,
+    pub http1_handled: bool,
+    pub http2_frames: Vec<crate::Http2FrameObservation>,
+    pub http2_handled: bool,
+    pub payload_consumed_by_http: bool,
+    pub payload_consumed_by_llm: bool,
     pub actions: Vec<SemanticAction>,
     pub updates: Vec<semantic_action::SemanticActionUpdate>,
     pub updated_actions: Vec<SemanticAction>,
@@ -44,6 +50,12 @@ pub struct LiveSemanticActionOutput {
 impl Default for LiveSemanticActionOutput {
     fn default() -> Self {
         Self {
+            http1_messages: Vec::new(),
+            http1_handled: false,
+            http2_frames: Vec::new(),
+            http2_handled: false,
+            payload_consumed_by_http: false,
+            payload_consumed_by_llm: false,
             actions: Vec::new(),
             updates: Vec::new(),
             updated_actions: Vec::new(),
@@ -64,6 +76,10 @@ impl Default for LiveSemanticActionOutput {
 
 impl LiveSemanticActionOutput {
     pub(super) fn extend(&mut self, other: Self) {
+        self.http1_messages.extend(other.http1_messages);
+        self.http1_handled |= other.http1_handled;
+        self.http2_frames.extend(other.http2_frames);
+        self.http2_handled |= other.http2_handled;
         self.actions.extend(other.actions);
         self.updates.extend(other.updates);
         self.updated_actions.extend(other.updated_actions);

@@ -111,7 +111,10 @@ struct ReorderStreamKey {
     process: ProcessObservation,
     source_boundary: ReorderBoundary,
     stream_key: PayloadStreamKey,
-    direction: ReorderDirection,
+    // Native TLS uses a shared capture clock across both directions. Keeping
+    // separate lanes can deliver a WebSocket frame before its HTTP 101.
+    // Socket sequences are direction-local and retain separate lanes.
+    direction: Option<ReorderDirection>,
 }
 
 struct ReorderStreamState {
@@ -218,7 +221,8 @@ fn reorder_stream_key(segment: &RawPayloadSegment) -> ReorderStreamKey {
         process: segment.process.clone(),
         source_boundary: segment.source_boundary.into(),
         stream_key: segment.stream_key.clone(),
-        direction: segment.direction.into(),
+        direction: (segment.source_boundary != PayloadSourceBoundary::TlsUserSpace)
+            .then(|| segment.direction.into()),
     }
 }
 

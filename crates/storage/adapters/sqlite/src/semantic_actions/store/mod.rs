@@ -106,7 +106,7 @@ impl SemanticActionWriteStore for SqliteStorage {
         &mut self,
         update: SemanticActionUpdate,
     ) -> Result<(), SemanticActionStoreError> {
-        ActionStateWriter::new(&self.connection().borrow()).update(update)
+        ActionStateWriter::new(&self.connection().borrow()).update(update, &self.cold_field_encoder)
     }
 
     fn upsert_semantic_action_link(

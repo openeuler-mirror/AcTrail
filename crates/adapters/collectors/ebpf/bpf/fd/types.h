@@ -157,7 +157,7 @@ struct actrail_pending_ipc_fd_pair_op {
 };
 
 /* Implemented by the socket payload module later in the translation unit. */
-static __always_inline void socket_payload_release_fd(__u32 pid, __u32 fd);
+static __always_inline __u32 socket_payload_release_fd(__u32 pid, __u32 fd);
 static __always_inline void socket_payload_release_process(__u32 pid);
 
 #endif

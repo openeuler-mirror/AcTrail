@@ -37,7 +37,7 @@ static __always_inline int emit_socket_payload_completion(
     event->direction = op->direction;
     event->trace_id = op->trace_id;
     event->observed_ktime_ns = op->started_ktime_ns;
-    sequence = next_socket_payload_sequence(tgid, op->direction, op->fd, op->fd_generation);
+    sequence = next_socket_payload_sequence(tgid, op->direction, op->fd, op->socket_generation);
     if (!sequence) {
         actrail_event_discard(event);
         return 0;
@@ -51,7 +51,7 @@ static __always_inline int emit_socket_payload_completion(
     event->fd = op->fd;
     event->flags = 0;
     event->syscall = op->syscall;
-    event->fd_generation = op->fd_generation;
+    event->socket_generation = op->socket_generation;
     event->kernel_tgid = kernel_pid_tgid >> 32;
     event->kernel_tid = (__u32)kernel_pid_tgid;
 
@@ -86,6 +86,15 @@ static __noinline int emit_socket_payload_direct_chunk(
         return 0;
     }
 
+    /* Reserve the sequence even when capture fails: the next delivered chunk
+     * must expose the missing bytes to the existing stream gap handling. */
+    sequence = next_socket_payload_sequence(
+        chunk->tgid, op->direction, op->fd, op->socket_generation
+    );
+    if (!sequence) {
+        return 1;
+    }
+
     event = actrail_event_reserve(sizeof(*event));
     if (!event) {
         event_transport_diag_inc(ACTRAIL_SOCKET_RESERVE_FAIL);
@@ -109,7 +118,7 @@ static __noinline int emit_socket_payload_direct_chunk(
     event->captured_size = capture_size;
     event->flags = chunk->flags;
     event->syscall = op->syscall;
-    event->fd_generation = op->fd_generation;
+    event->socket_generation = op->socket_generation;
     event->pid_generation = op->pid_generation;
     event->host_pid = kernel_pid_tgid >> 32;
     event->host_tid = (__u32)kernel_pid_tgid;
@@ -122,25 +131,15 @@ static __noinline int emit_socket_payload_direct_chunk(
         ) != 0) {
         event_transport_diag_inc(ACTRAIL_SOCKET_READ_USER_FAIL);
         actrail_event_discard(event);
-        return 0;
+        return 1;
     }
     if (!chunk->offset
         && socket_payload_prefix_is_tls_hello(event->bytes, capture_size)
         && socket_payload_mark_fd_tls_owned(
             chunk->tgid,
             op->fd,
-            op->fd_generation
+            op->socket_generation
         )) {
-        actrail_event_discard(event);
-        return 1;
-    }
-    sequence = next_socket_payload_sequence(
-        chunk->tgid,
-        op->direction,
-        op->fd,
-        op->fd_generation
-    );
-    if (!sequence) {
         actrail_event_discard(event);
         return 1;
     }
@@ -195,6 +194,87 @@ static __always_inline int emit_socket_payload_prefix_chunk(
     return 0;
 }
 
+struct actrail_socket_payload_loop {
+    void *program_ctx;
+    struct actrail_pending_socket_payload_op *op;
+    struct actrail_socket_payload_chunk chunk;
+    __u32 segment_limit;
+};
+
+static long socket_payload_chunk_step(__u32 index, void *opaque) {
+    struct actrail_socket_payload_loop *state = opaque;
+    struct actrail_socket_payload_chunk *chunk = &state->chunk;
+    __u64 remaining;
+
+    /* Derive each coordinate from the callback index. A mutable offset carried
+     * across callbacks makes verifier state grow with the captured byte count. */
+    chunk->offset = (__u64)index * state->segment_limit;
+    if (chunk->offset >= chunk->operation_captured_size) {
+        return 1;
+    }
+    chunk->buffer_ptr = state->op->buffer_ptr + chunk->offset;
+    remaining = chunk->operation_captured_size - chunk->offset;
+    chunk->capture_size = remaining > state->segment_limit
+        ? state->segment_limit : (__u32)remaining;
+    chunk->index = index;
+    chunk->original_size = chunk->capture_size;
+    if (emit_socket_payload_direct_chunk(state->program_ctx, state->op, chunk)) {
+        return 1;
+    }
+    return 0;
+}
+
+static __always_inline void emit_socket_payload_inbound(
+    void *ctx,
+    struct actrail_pending_socket_payload_op *op,
+    __u64 pid_tgid,
+    __u64 original_size,
+    __u32 segment_limit
+) {
+    struct actrail_socket_payload_config *config = socket_payload_config();
+    struct actrail_socket_payload_loop state = {
+        .program_ctx = ctx,
+        .op = op,
+        .segment_limit = segment_limit,
+    };
+    __u64 captured = original_size;
+    __u32 count;
+
+    if (!config || !config->max_operation_bytes || !segment_limit) {
+        return;
+    }
+    if (captured > op->requested_size) {
+        captured = op->requested_size;
+    }
+    if (captured > config->max_operation_bytes) {
+        captured = config->max_operation_bytes;
+    }
+    count = (__u32)((captured + segment_limit - 1) / segment_limit);
+    if (!count || count > ACTRAIL_SOCKET_PAYLOAD_MAX_CHUNKS) {
+        return;
+    }
+    state.chunk.buffer_ptr = op->buffer_ptr;
+    state.chunk.operation_original_size = original_size;
+    state.chunk.operation_captured_size = captured;
+    state.chunk.tgid = pid_tgid >> 32;
+    state.chunk.tid = (__u32)pid_tgid;
+    if (captured < original_size) {
+        state.chunk.flags = ACTRAIL_SOCKET_PAYLOAD_TRUNCATED |
+            ACTRAIL_SOCKET_PAYLOAD_TOTAL_LIMIT |
+            ACTRAIL_SOCKET_PAYLOAD_POLICY_LIMITED;
+    }
+#ifdef ACTRAIL_BPF_LOOP
+    bpf_loop(count, socket_payload_chunk_step, &state, 0);
+#else
+#pragma clang loop unroll(disable)
+    for (__u32 index = 0; index < ACTRAIL_SOCKET_PAYLOAD_MAX_CHUNKS; index++) {
+        if (index >= count || socket_payload_chunk_step(index, &state)) {
+            break;
+        }
+    }
+#endif
+}
+
 static __always_inline int emit_socket_payload_op(
     struct trace_event_raw_sys_exit *ctx,
     __u32 iovec_payload
@@ -238,6 +318,11 @@ static __always_inline int emit_socket_payload_op(
         && op->delegated
         && original_size > limit) {
         emit_socket_payload_completion(ctx, op, tgid, tid, original_size);
+        bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
+        return 0;
+    }
+    if (op->direction == ACTRAIL_SOCKET_PAYLOAD_INBOUND) {
+        emit_socket_payload_inbound(ctx, op, pid_tgid, original_size, limit);
         bpf_map_delete_elem(&pending_socket_payload_ops, &pid_tgid);
         return 0;
     }

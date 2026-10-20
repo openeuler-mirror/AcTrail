@@ -49,7 +49,6 @@ pub(in crate::llm_pipeline) enum PendingTrajectoryAdmission {
 
 pub(in crate::llm_pipeline) struct ResolvedTrajectoryBatch {
     pub(in crate::llm_pipeline) actions: Vec<SemanticAction>,
-    pub(in crate::llm_pipeline) request_updates: Vec<SemanticAction>,
     pub(in crate::llm_pipeline) contents: Vec<LlmRequestContentWrite>,
     pub(in crate::llm_pipeline) lineages: Vec<LlmRequestLineageWrite>,
     pub(in crate::llm_pipeline) tool_results: Vec<ProjectedLlmToolResult>,
@@ -218,7 +217,6 @@ impl ActionProjector {
     ) -> ResolvedTrajectoryBatch {
         let mut batch = ResolvedTrajectoryBatch {
             actions: Vec::new(),
-            request_updates: Vec::new(),
             contents: Vec::new(),
             lineages: Vec::new(),
             tool_results: Vec::new(),
@@ -247,7 +245,6 @@ impl ActionProjector {
                 batch.contents.push(content);
             }
             batch.tool_results.extend(pending.tool_results);
-            batch.request_updates.push(action.clone());
             let record = self.record_action(&action);
             batch.diagnostics.extend(record.diagnostic);
             if record.changed {

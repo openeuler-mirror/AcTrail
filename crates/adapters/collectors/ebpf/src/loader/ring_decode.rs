@@ -246,7 +246,10 @@ pub struct KernelFdIoPayload {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelSocketFdReleasePayload {
     pub fd: u32,
+    /// FD object lifetime; independent from the payload stream generation.
     pub fd_object_generation: u64,
+    /// Matches the generation carried by socket payload events.
+    pub socket_generation: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -528,6 +531,7 @@ fn decode_socket_release_event(raw: &[u8]) -> Result<KernelObservationEvent, Loa
             fd: read_u32(raw, EVENT_HEADER_SIZE).expect("event length checked"),
             fd_object_generation: read_u64(raw, EVENT_HEADER_SIZE + 4)
                 .expect("event length checked"),
+            socket_generation: read_u32(raw, EVENT_HEADER_SIZE + 12).expect("event length checked"),
         }),
     })
 }

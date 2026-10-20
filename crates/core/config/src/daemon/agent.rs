@@ -1,7 +1,13 @@
 //! Agent semantic-action configuration.
 
+#[path = "agent/http1.rs"]
+mod http1;
 #[path = "agent/retention.rs"]
 mod retention;
+#[path = "agent/websocket.rs"]
+mod websocket;
+pub use http1::Http1ProtocolConfig;
+pub use websocket::{L2WebSocketRetention, LlmWebSocketConfig};
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -13,18 +19,12 @@ pub const DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST: u32 = 4_096;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM: u32 = 64;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM: u32 = 4_096;
 pub const DEFAULT_LLM_TRAJECTORY_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
-pub const DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS: u32 = 8;
 pub const DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES: u32 = 8_192;
 pub const DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES: u64 = 16 * 1024;
-pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
-pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 64;
 pub const DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE: u32 = 4_096;
 pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE: u32 = 1_024;
 pub const DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE: u32 = 4_096;
-pub const DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE: u32 = 4_096;
-pub const DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE: u32 = 1_024;
-pub const DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE: u32 = 1_024;
 pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
 pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 32;
 pub const DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS: Duration = Duration::from_secs(1);
@@ -68,6 +68,7 @@ pub struct SemanticRetentionConfig {
     pub l0_mcp_call: L0McpCallRetention,
     pub l1_sse: L1SseRetention,
     pub l2_http: L2HttpRetention,
+    pub l2_websocket: L2WebSocketRetention,
     pub l3_http2_frame: L3Http2FrameRetention,
     pub l4_payload: L4PayloadRetention,
 }
@@ -81,6 +82,7 @@ impl Default for SemanticRetentionConfig {
             l0_mcp_call: L0McpCallRetention::default(),
             l1_sse: L1SseRetention::default(),
             l2_http: L2HttpRetention::default(),
+            l2_websocket: L2WebSocketRetention::default(),
             l3_http2_frame: L3Http2FrameRetention::default(),
             l4_payload: L4PayloadRetention::default(),
         }
@@ -124,7 +126,7 @@ pub struct L0LlmCallRetention {
     pub tool_result_content_export_max_bytes: u64,
     pub usage: LlmUsageRetention,
     pub retain_assembled_payload: bool,
-    pub websocket_max_connections_per_process: u32,
+    pub websocket: LlmWebSocketConfig,
     pub assembly: LlmAssemblyConfig,
     pub stream_classifier: LlmStreamClassifierConfig,
     pub projection_state: LlmProjectionStateConfig,
@@ -161,32 +163,18 @@ impl Default for LlmStreamClassifierConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LlmProjectionStateConfig {
-    pub max_pending_requests_per_stream: u32,
-    pub max_pending_responses_per_stream: u32,
     pub max_action_versions_per_trace: u32,
     pub max_pending_trajectory_actions_per_trace: u32,
     pub max_tool_entries_per_trace: u32,
-    pub max_active_response_bindings_per_trace: u32,
-    pub max_damaged_response_bindings_per_trace: u32,
-    pub max_correlation_streams_per_trace: u32,
 }
 
 impl Default for LlmProjectionStateConfig {
     fn default() -> Self {
         Self {
-            max_pending_requests_per_stream: DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
-            max_pending_responses_per_stream:
-                DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
             max_action_versions_per_trace: DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
             max_pending_trajectory_actions_per_trace:
                 DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
             max_tool_entries_per_trace: DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE,
-            max_active_response_bindings_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
-            max_damaged_response_bindings_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
-            max_correlation_streams_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
         }
     }
 }
@@ -270,8 +258,7 @@ impl Default for L0LlmCallRetention {
             tool_result_content_export_max_bytes: DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
             usage: LlmUsageRetention::Summary,
             retain_assembled_payload: false,
-            websocket_max_connections_per_process:
-                DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            websocket: LlmWebSocketConfig::default(),
             assembly: LlmAssemblyConfig::default(),
             stream_classifier: LlmStreamClassifierConfig::default(),
             projection_state: LlmProjectionStateConfig::default(),
@@ -459,14 +446,18 @@ impl FromStr for SseEventContentRetention {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct L2HttpRetention {
     pub enabled: bool,
+    pub max_active_directions: u32,
     pub message_summary: bool,
     pub headers: HttpHeadersRetention,
     pub body_content: HttpBodyRetention,
     pub exchange: HttpExchangeConfig,
+    pub http1: Http1ProtocolConfig,
+    pub http2: Http2ProtocolConfig,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HttpExchangeConfig {
+    pub max_message_facts_per_trace: u32,
     pub max_pending_requests_per_stream: u32,
     pub max_pending_responses_per_stream: u32,
     pub response_lateness: Duration,
@@ -475,6 +466,7 @@ pub struct HttpExchangeConfig {
 impl Default for HttpExchangeConfig {
     fn default() -> Self {
         Self {
+            max_message_facts_per_trace: 4096,
             max_pending_requests_per_stream: DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
             max_pending_responses_per_stream:
                 DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
@@ -487,10 +479,13 @@ impl Default for L2HttpRetention {
     fn default() -> Self {
         Self {
             enabled: true,
+            max_active_directions: 4096,
             message_summary: true,
             headers: HttpHeadersRetention::Metadata,
             body_content: HttpBodyRetention::Text,
             exchange: HttpExchangeConfig::default(),
+            http1: Http1ProtocolConfig::default(),
+            http2: Http2ProtocolConfig::default(),
         }
     }
 }
@@ -609,6 +604,25 @@ impl FromStr for PayloadBodyContentRetention {
             "none" => Ok(Self::None),
             "retained" => Ok(Self::Retained),
             other => Err(format!("unsupported payload body retention {other}")),
+        }
+    }
+}
+
+/// Transport framing budgets, independent of LLM content assembly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Http2ProtocolConfig {
+    pub max_active_streams_per_trace: u32,
+    pub max_evidence_ranges: u32,
+    pub max_frame_bytes: u64,
+    pub max_connection_buffer_bytes: u64,
+}
+impl Default for Http2ProtocolConfig {
+    fn default() -> Self {
+        Self {
+            max_active_streams_per_trace: 4096,
+            max_evidence_ranges: 4096,
+            max_frame_bytes: 65_536,
+            max_connection_buffer_bytes: 4_194_304,
         }
     }
 }

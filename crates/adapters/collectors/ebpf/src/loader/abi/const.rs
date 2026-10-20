@@ -16,7 +16,7 @@ pub(super) const PROCESS_EXIT_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 8;
 pub(super) const PROCESS_SIGNAL_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 16;
 pub(super) const NETWORK_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 52;
 pub(super) const FD_IO_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 60;
-pub(super) const SOCKET_RELEASE_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 12;
+pub(super) const SOCKET_RELEASE_EVENT_SIZE: usize = EVENT_HEADER_SIZE + 16;
 
 // Should be same with struct actrail_endpoint in bpf/abi/observation.h.
 pub(super) const KERNEL_ENDPOINT_SIZE: usize = 24;

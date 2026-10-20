@@ -34,3 +34,7 @@ pub const MCP_RESPONSE_STDIN: &str = SemanticActionLinkRole::McpResponseStdin.as
 pub const MCP_TOOL_CALL_REQUEST: &str = SemanticActionLinkRole::McpToolCallRequest.as_str();
 pub const MCP_TOOL_CALL_RESPONSE: &str = SemanticActionLinkRole::McpToolCallResponse.as_str();
 pub const SSE_STREAM_EVENT: &str = SemanticActionLinkRole::SseStreamEvent.as_str();
+pub const LLM_REQUEST_WEBSOCKET_MESSAGE: &str =
+    SemanticActionLinkRole::LlmRequestWebSocketMessage.as_str();
+pub const LLM_RESPONSE_WEBSOCKET_MESSAGE: &str =
+    SemanticActionLinkRole::LlmResponseWebSocketMessage.as_str();

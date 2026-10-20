@@ -12,31 +12,17 @@ use semantic_action::{
 pub(crate) struct ActionUpdateFactory;
 
 impl ActionUpdateFactory {
-    pub(crate) fn response_failure(
-        action: &SemanticAction,
-    ) -> Option<semantic_action::SemanticActionUpdate> {
-        let body_format = action
-            .attributes
-            .get(attrs::llm_response::BODY_FORMAT)?
-            .clone();
-        Some(Self::update(
-            action,
-            semantic_action::SemanticActionChange::LlmResponseFailure {
-                title: action.title.clone(),
-                end_time: action.end_time,
-                body_format,
-                http_status_code: action
-                    .attributes
-                    .get(attrs::http_response::STATUS_CODE)
-                    .and_then(|value| value.parse().ok()),
-                http_reason: action.attributes.get(attrs::http_response::REASON).cloned(),
-            },
-        ))
-    }
     pub(crate) fn lifecycle(
         action: &SemanticAction,
         finalization_reason: Option<semantic_action::SemanticActionFinalizationReason>,
     ) -> semantic_action::SemanticActionUpdate {
+        let finalization_reason = finalization_reason.or_else(|| {
+            action
+                .attributes
+                .get(attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE)
+                .is_some_and(|value| value == "true")
+                .then_some(semantic_action::SemanticActionFinalizationReason::TraceClosed)
+        });
         Self::update(
             action,
             semantic_action::SemanticActionChange::Lifecycle {
@@ -73,11 +59,24 @@ pub(super) const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 pub(super) const PROCESS_PARENT_IDENTITY_STATE_OBSERVED: &str = "observed";
 
 pub(crate) fn action_for_live_state(action: &SemanticAction) -> SemanticAction {
-    let mut state_action = action.clone();
-    for key in LIVE_STATE_OMITTED_ATTRIBUTES {
-        state_action.attributes.remove(*key);
+    SemanticAction {
+        action_id: action.action_id.clone(),
+        trace_id: action.trace_id,
+        kind: action.kind,
+        title: action.title.clone(),
+        start_time: action.start_time,
+        end_time: action.end_time,
+        process: action.process,
+        status: action.status,
+        completeness: action.completeness,
+        attributes: action
+            .attributes
+            .iter()
+            .filter(|(key, _)| !LIVE_STATE_OMITTED_ATTRIBUTES.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        evidence: action.evidence.clone(),
     }
-    state_action
 }
 
 const LIVE_STATE_OMITTED_ATTRIBUTES: &[&str] = &[
