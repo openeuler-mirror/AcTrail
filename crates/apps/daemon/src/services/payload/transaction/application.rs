@@ -25,7 +25,7 @@ impl PayloadTransactionContext<'_> {
                 EventEnvelope {
                     event_id: self.next_event_id()?,
                     trace_id,
-                    observed_at,
+                    observed_at: draft.observed_at.unwrap_or(observed_at),
                     process: process.clone(),
                     collector: CollectorName::new(APPLICATION_PROTOCOL_COLLECTOR_NAME),
                     kind: EventKind::Application,
@@ -33,6 +33,8 @@ impl PayloadTransactionContext<'_> {
                 },
                 EventPayload::Application(draft.payload),
             );
+            // Shared HTTP message IDs update the existing projection with retained body and
+            // event evidence. The semantic runtime must not allocate or pair another message.
             let event_actions = self.observe_semantic_actions_for_event(&event);
             self.record_semantic_output(export_batch, &event_actions);
             prepared.push(PreparedApplicationEvent {

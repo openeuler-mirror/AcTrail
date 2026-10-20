@@ -10,8 +10,7 @@ use crate::llm_pipeline::config::StreamClassifierConfig;
 
 use crate::llm_pipeline::provider::codec::{LlmCodecRegistry, NormalizedSseEvent, SseCodecEvent};
 use crate::llm_pipeline::provider::{
-    extract_token_usage, new_sse_stream_parser, parse_json_response, parse_sse_response,
-    tool_calls_json,
+    extract_token_usage, new_sse_stream_parser, parse_json_response, tool_calls_json,
 };
 use crate::llm_pipeline::stream::classifier::StreamClassifier;
 use crate::llm_pipeline::stream::sse_framer::{CompleteSseEvent, IncrementalSseFramer};
@@ -56,7 +55,6 @@ pub(in crate::llm_pipeline) fn parse_llm_response_body(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::llm_pipeline) enum SseBodySource {
     SplitHttp,
-    RawBytes,
 }
 
 /// Incremental SSE parse state for one in-flight response message.
@@ -96,10 +94,15 @@ impl IncrementalSseCache {
         if complete_events.is_empty() && !looks_like_sse_prefix(body) {
             return None;
         }
+        let mut normalization_failed = false;
         let normalized = complete_events
             .into_iter()
             .map(|event| normalized_event(codecs, event))
-            .collect::<Option<Vec<_>>>()?;
+            .map_while(|event| {
+                normalization_failed = event.is_none();
+                event
+            })
+            .collect::<Vec<_>>();
         let mut classifier = StreamClassifier::new(classifier_config);
         let initial_window = normalized
             .iter()
@@ -131,13 +134,22 @@ impl IncrementalSseCache {
         if cache.classifier.is_confirmed_llm() {
             for event in normalized {
                 cache.apply_event(event)?;
+                if cache.termination.is_some() {
+                    break;
+                }
             }
+        }
+        if normalization_failed && cache.termination.is_none() {
+            return None;
         }
         let progress = cache.progress();
         Some((cache, progress))
     }
 
     fn apply_event(&mut self, event: IncrementalNormalizedEvent) -> Option<()> {
+        if self.termination.is_some() {
+            return Some(());
+        }
         let parsed = self
             .stream_parser
             .as_mut()?
@@ -172,25 +184,27 @@ impl IncrementalSseCache {
         body: &[u8],
         codecs: &LlmCodecRegistry,
     ) -> Result<Option<ProviderStreamUpdate>, ()> {
+        if self.termination.is_some() {
+            return Ok(self.progress());
+        }
         if self.codec_revision != codecs.revision() {
             return Err(());
         }
-        let events = self
-            .framer
-            .advance(body)
-            .map_err(|_| ())?
-            .into_iter()
-            .map(|event| normalized_event(codecs, event).ok_or(()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let events = self.framer.advance(body).map_err(|_| ())?;
         if self.classifier.is_confirmed_llm() {
             for event in events {
+                let event = normalized_event(codecs, event).ok_or(())?;
                 self.apply_event(event).ok_or(())?;
+                if self.termination.is_some() {
+                    break;
+                }
             }
             return Ok(self.progress());
         }
-        for event in &events {
+        for event in events {
+            let event = normalized_event(codecs, event).ok_or(())?;
             self.classifier.belongs_to_initial_window(event.end_offset);
-            if let Some(parser) = select_stream_parser(&[event], self.retention) {
+            if let Some(parser) = select_stream_parser(&[&event], self.retention) {
                 self.stream_parser = Some(parser);
                 self.classifier.confirm_llm();
                 self.replay_retained_body(body, codecs)?;
@@ -210,11 +224,14 @@ impl IncrementalSseCache {
         for event in replay.advance(body).map_err(|_| ())? {
             let event = normalized_event(codecs, event).ok_or(())?;
             self.apply_event(event).ok_or(())?;
+            if self.termination.is_some() {
+                break;
+            }
         }
         Ok(())
     }
 
-    fn body(&mut self) -> Option<LlmResponseBody> {
+    pub(in crate::llm_pipeline) fn body(&mut self) -> Option<LlmResponseBody> {
         let mut parsed = self.stream_parser.as_mut()?.finish()?;
         if let Some(usage) = self.token_usage.clone() {
             parsed.token_usage = Some(usage);
@@ -443,20 +460,6 @@ pub(in crate::llm_pipeline) fn parse_llm_response_body_incremental(
     }
 }
 
-/// Split SSE text into events like `parse_sse_events`, additionally reporting
-/// whether the text ended mid-event (the last block had no trailing blank line).
-fn parse_sse_events_with_trailing(text: &str) -> (Vec<SseCodecEvent>, bool) {
-    let mut framer = IncrementalSseFramer::default();
-    let events = framer
-        .advance(text.as_bytes())
-        .unwrap_or_default()
-        .into_iter()
-        .map(sse_codec_event)
-        .collect::<Vec<_>>();
-    let trailing_partial = framer.safe_consumed() < text.len();
-    (events, trailing_partial)
-}
-
 struct LlmResponseBodyParser<'a> {
     codecs: &'a LlmCodecRegistry,
     retention: LlmResponseRetention,
@@ -486,85 +489,62 @@ impl LlmResponseBodyParser<'_> {
     }
 
     fn parse_sse_response_body(&self, text: &str) -> Option<LlmResponseBody> {
-        let raw_events = parse_sse_events(text);
-        if raw_events.is_empty() {
-            return None;
-        }
-        if let Some((provider_id, normalized)) = self.normalized_sse_events(&raw_events) {
-            return decoded_sse_response(text, raw_events, provider_id, normalized, self.retention);
-        }
-        let provider_events = raw_events
-            .iter()
-            .map(provider_sse_event)
+        let mut framer = IncrementalSseFramer::default();
+        let mut normalization_failed = false;
+        let events = framer
+            .advance(text.as_bytes())
+            .ok()?
+            .into_iter()
+            .map(|event| normalized_event(self.codecs, event))
+            .map_while(|event| {
+                normalization_failed = event.is_none();
+                event
+            })
             .collect::<Vec<_>>();
-        let parsed = parse_sse_response(
-            LlmSseResponseInput {
-                text,
-                events: &provider_events,
-            },
-            self.retention,
-        )?;
-        Some(response_body(
-            false,
-            parsed.response,
-            provider_response_id_from_events(&raw_events),
-            self.retention,
-        ))
-    }
-
-    fn normalized_sse_events(
-        &self,
-        raw_events: &[SseCodecEvent],
-    ) -> Option<(Option<String>, Vec<NormalizedSseEvent>)> {
-        let mut decoded_any = false;
-        let mut provider_id = None;
-        let mut normalized = Vec::with_capacity(raw_events.len());
-        for event in raw_events {
-            if let Some(decoded) = self.codecs.decode_sse_event(event) {
-                let data = String::from_utf8(decoded.body).ok()?;
-                let trimmed = data.trim();
-                provider_id = provider_id.or(decoded.provider_id);
-                normalized.push(NormalizedSseEvent {
-                    index: event.index,
-                    event_type: event.event_type.clone(),
-                    id: event.id.clone(),
-                    json: serde_json::from_str::<Value>(trimmed).ok(),
-                    done_marker: trimmed == SSE_DONE_MARKER,
-                    data,
-                });
-                decoded_any = true;
-            } else {
-                normalized.push(normalized_event_from_raw(event));
+        let mut parser = select_stream_parser(&events.iter().collect::<Vec<_>>(), self.retention)?;
+        let mut consumed = 0;
+        let mut terminated = false;
+        for event in &events {
+            consumed += 1;
+            if parser
+                .observe_event(provider_normalized_sse_event(&event.event))
+                .termination
+                .is_some()
+            {
+                terminated = true;
+                break;
             }
         }
-        decoded_any.then_some((provider_id, normalized))
+        if normalization_failed && !terminated {
+            return None;
+        }
+        // Batch recovery obeys the same provider boundary as incremental parsing.
+        // Metadata must come from that consumed prefix too.
+        let events = &events[..consumed];
+        let mut parsed = parser.finish()?;
+        let response_id = events.iter().rev().find_map(|event| {
+            event.event.json.as_ref().and_then(|value| {
+                value
+                    .get("response")
+                    .and_then(provider_response_id)
+                    .or_else(|| provider_response_id(value))
+            })
+        });
+        if self.retention.usage {
+            if let Some(usage) = events
+                .iter()
+                .rev()
+                .find_map(|event| event.event.json.as_ref().and_then(extract_token_usage))
+            {
+                parsed.token_usage = Some(usage);
+            }
+        }
+        let mut body = response_body(false, parsed, response_id, self.retention);
+        if let Some(provider_id) = events.iter().find_map(|event| event.provider_id.as_ref()) {
+            body.provider_id = provider_id.clone();
+        }
+        Some(body)
     }
-}
-
-fn decoded_sse_response(
-    text: &str,
-    _raw_events: Vec<SseCodecEvent>,
-    provider_id: Option<String>,
-    normalized: Vec<NormalizedSseEvent>,
-    retention: LlmResponseRetention,
-) -> Option<LlmResponseBody> {
-    let provider_events = normalized
-        .iter()
-        .map(provider_normalized_sse_event)
-        .collect::<Vec<_>>();
-    let parsed = parse_sse_response(
-        LlmSseResponseInput {
-            text,
-            events: &provider_events,
-        },
-        retention,
-    )?;
-    let response_id = provider_response_id_from_normalized_events(&normalized);
-    let mut body = response_body(false, parsed.response, response_id, retention);
-    if let Some(provider_id) = provider_id {
-        body.provider_id = provider_id;
-    }
-    Some(body)
 }
 
 fn response_body(
@@ -600,30 +580,6 @@ fn provider_response_id(value: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn provider_response_id_from_events(events: &[SseCodecEvent]) -> Option<String> {
-    events.iter().rev().find_map(|event| {
-        event
-            .json
-            .as_ref()
-            .and_then(|value| value.get("response"))
-            .and_then(provider_response_id)
-    })
-}
-
-fn provider_response_id_from_normalized_events(events: &[NormalizedSseEvent]) -> Option<String> {
-    events.iter().rev().find_map(|event| {
-        event
-            .json
-            .as_ref()
-            .and_then(|value| value.get("response"))
-            .and_then(provider_response_id)
-    })
-}
-
-fn parse_sse_events(text: &str) -> Vec<SseCodecEvent> {
-    parse_sse_events_with_trailing(text).0
-}
-
 fn sse_codec_event(event: CompleteSseEvent) -> SseCodecEvent {
     raw_sse_event(event.index, event.event_type, event.id, event.data)
 }
@@ -645,17 +601,6 @@ fn raw_sse_event(
     }
 }
 
-fn provider_sse_event(event: &SseCodecEvent) -> ProviderSseEvent<'_> {
-    ProviderSseEvent {
-        index: event.index,
-        event_type: event.event_type.as_deref(),
-        id: event.id.as_deref(),
-        data: &event.data,
-        json: event.json.as_ref(),
-        done_marker: event.done_marker,
-    }
-}
-
 fn provider_normalized_sse_event(event: &NormalizedSseEvent) -> ProviderSseEvent<'_> {
     ProviderSseEvent {
         index: event.index,
@@ -663,17 +608,6 @@ fn provider_normalized_sse_event(event: &NormalizedSseEvent) -> ProviderSseEvent
         id: event.id.as_deref(),
         data: &event.data,
         json: event.json.as_ref(),
-        done_marker: event.done_marker,
-    }
-}
-
-fn normalized_event_from_raw(event: &SseCodecEvent) -> NormalizedSseEvent {
-    NormalizedSseEvent {
-        index: event.index,
-        event_type: event.event_type.clone(),
-        id: event.id.clone(),
-        data: event.data.clone(),
-        json: event.json.clone(),
         done_marker: event.done_marker,
     }
 }

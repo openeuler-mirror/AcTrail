@@ -52,6 +52,7 @@ impl<'a, 'context> TlsProbeCandidateFactory<'a, 'context> {
             })
             .map(|(symbol, virtual_address)| {
                 Ok(ProbePoint {
+                    cookie: 0,
                     symbol: symbol.clone(),
                     direction: Self::direction(symbol),
                     attach: Self::attach(symbol),
@@ -76,6 +77,7 @@ impl<'a, 'context> TlsProbeCandidateFactory<'a, 'context> {
         let points = offsets
             .into_iter()
             .map(|(symbol, virtual_address, file_offset)| ProbePoint {
+                cookie: 0,
                 direction: Self::direction(&symbol),
                 attach: Self::attach(&symbol),
                 capture: Self::capture(&symbol),

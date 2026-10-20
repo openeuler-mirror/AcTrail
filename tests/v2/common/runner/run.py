@@ -179,7 +179,7 @@ def run_selected(
         )
         return 1
     try:
-        EnvironmentProbe(console).print_summary()
+        EnvironmentProbe(console, repo).print_summary()
     except Exception as error:
         console.line(f"environment_probe=failed: {error}")
     try:

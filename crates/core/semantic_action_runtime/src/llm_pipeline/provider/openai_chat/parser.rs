@@ -166,9 +166,8 @@ impl LlmProviderResponseParser for OpenAiCompatibleResponseParser {
             termination: if Self::has_error(value) {
                 Some(LlmResponseTermination::Failed)
             } else {
-                finish_reason
-                    .is_some()
-                    .then_some(LlmResponseTermination::Completed)
+                // finish_reason closes a choice; usage may follow before [DONE].
+                None
             },
             finish_reason,
         }

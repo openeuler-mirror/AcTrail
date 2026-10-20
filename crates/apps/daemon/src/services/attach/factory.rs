@@ -173,8 +173,7 @@ impl StorageAttachService {
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
         );
-        let payload_body_retention_gate =
-            PayloadBodyRetentionGate::new(&application_protocol, semantic_retention.clone());
+        let payload_body_retention_gate = PayloadBodyRetentionGate::new(semantic_retention.clone());
         let finalization_traces_per_cycle = usize::try_from(trace_finalization.traces_per_cycle)
             .map_err(|error| {
                 control_contract::reply::ControlError::new(

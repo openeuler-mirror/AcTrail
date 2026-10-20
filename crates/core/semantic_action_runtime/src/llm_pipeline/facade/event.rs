@@ -1,124 +1,73 @@
-//! Unified data and lifecycle boundary accepted by the LLM pipeline.
-
-use std::time::SystemTime;
-
-use model_core::ids::TraceId;
-use model_core::payload::{PayloadSegment, PayloadStreamIdentity};
-use semantic_action::SemanticAction;
-
-use crate::live::{HttpResponseMatch, MatchedHttpRequest};
-
+//! Unified native payload and lifecycle boundary.
 use super::output::ActionBatch;
 use super::pipeline::LiveLlmProjector;
-
+use model_core::ids::TraceId;
+use model_core::payload::{PayloadSegment, PayloadStreamIdentity};
+use semantic_action::{SemanticAction, SemanticEvidenceKind};
+use std::time::SystemTime;
 pub(crate) enum PipelineEvent<'a> {
     PayloadSegment(&'a PayloadSegment),
     PayloadGap(&'a PayloadSegment),
     FinishIncompletePayload(&'a PayloadSegment),
     FinishPayloadTransaction(&'a PayloadSegment),
-    ForgetPayloadAssociations(&'a PayloadSegment),
     ForgetPayloadStream(&'a PayloadStreamIdentity),
     FinalizePayloadStream {
         identity: &'a PayloadStreamIdentity,
         finished_at: SystemTime,
     },
-    HttpExchange(&'a HttpResponseMatch),
-    DamagedHttpResponse(&'a SemanticAction),
-    UnmatchedHttpResponse(&'a SemanticAction),
-    PrepareIncompleteHttp1Response {
-        segment: &'a PayloadSegment,
-        sequence: u64,
-        request: Option<MatchedHttpRequest>,
-    },
-    LocalizeIncompleteHttp1Request {
-        segment: &'a PayloadSegment,
-        sequence: u64,
-    },
-    FinishIncompleteHttp1Response(&'a PayloadSegment),
+    HttpObservation(&'a SemanticAction),
     ForgetTrace(TraceId),
     FinalizeTrace {
         trace_id: TraceId,
         finished_at: SystemTime,
     },
 }
-
 #[derive(Default)]
 pub(crate) struct PipelineAdvance {
     pub(crate) output: ActionBatch,
-    pub(crate) localized: bool,
 }
-
 impl LiveLlmProjector {
     pub(crate) fn advance(&mut self, event: PipelineEvent<'_>) -> PipelineAdvance {
-        match event {
-            PipelineEvent::PayloadSegment(segment) => self.observe_payload_segment(segment).into(),
-            PipelineEvent::PayloadGap(segment) => self.observe_payload_gap(segment).into(),
+        let mut output = match event {
+            PipelineEvent::PayloadSegment(segment) => self.observe_payload_segment(segment),
+            PipelineEvent::PayloadGap(segment) => self.observe_payload_gap(segment),
             PipelineEvent::FinishIncompletePayload(segment) => {
-                self.finish_incomplete_payload(segment).into()
+                self.finish_incomplete_payload(segment)
             }
             PipelineEvent::FinishPayloadTransaction(segment) => {
-                self.finish_payload_transaction(segment).into()
-            }
-            PipelineEvent::ForgetPayloadAssociations(segment) => {
-                self.forget_payload_associations(segment);
-                PipelineAdvance::default()
+                self.finish_payload_transaction(segment)
             }
             PipelineEvent::ForgetPayloadStream(identity) => {
                 self.forget_payload_stream(identity);
-                PipelineAdvance::default()
+                ActionBatch::default()
             }
             PipelineEvent::FinalizePayloadStream {
                 identity,
                 finished_at,
-            } => self.finalize_payload_stream(identity, finished_at).into(),
-            PipelineEvent::HttpExchange(exchange) => {
-                self.projection.observe_http_exchange(exchange).into()
+            } => self.finalize_payload_stream(identity, finished_at),
+            PipelineEvent::HttpObservation(action) => {
+                let mut output = self.http1.merge_http_observation(action);
+                output.extend(self.http2.merge_http_observation(action));
+                output
             }
-            PipelineEvent::DamagedHttpResponse(response) => self
-                .projection
-                .observe_damaged_http_response(response)
-                .into(),
-            PipelineEvent::UnmatchedHttpResponse(response) => self
-                .projection
-                .observe_unmatched_http_response(response)
-                .into(),
-            PipelineEvent::PrepareIncompleteHttp1Response {
-                segment,
-                sequence,
-                request,
-            } => self
-                .projection
-                .prepare_incomplete_http1_response(segment, sequence, request)
-                .into(),
-            PipelineEvent::LocalizeIncompleteHttp1Request { segment, sequence } => {
-                PipelineAdvance {
-                    localized: self
-                        .projection
-                        .localize_incomplete_http1_request(segment, sequence),
-                    ..PipelineAdvance::default()
-                }
-            }
-            PipelineEvent::FinishIncompleteHttp1Response(segment) => self
-                .projection
-                .finish_incomplete_http1_response(segment)
-                .into(),
             PipelineEvent::ForgetTrace(trace_id) => {
                 self.forget_trace(trace_id);
-                PipelineAdvance::default()
+                ActionBatch::default()
             }
             PipelineEvent::FinalizeTrace {
                 trace_id,
                 finished_at,
-            } => self.finalize_trace(trace_id, finished_at).into(),
-        }
-    }
-}
-
-impl From<ActionBatch> for PipelineAdvance {
-    fn from(output: ActionBatch) -> Self {
-        Self {
-            output,
-            localized: false,
-        }
+            } => self.finalize_trace(trace_id, finished_at),
+        };
+        // Apply the same durable-evidence policy to payloads, later observations,
+        // and every finalization path, including cached association proposals.
+        let raw_payload = self.config.l4_payload.enabled;
+        let assembled_payload = raw_payload || self.config.l0_llm_call.retain_assembled_payload();
+        output.retain_evidence(|evidence| match evidence.kind {
+            SemanticEvidenceKind::Event => true,
+            SemanticEvidenceKind::PayloadSegment => raw_payload,
+            SemanticEvidenceKind::PayloadAggregate => assembled_payload,
+        });
+        PipelineAdvance { output }
     }
 }

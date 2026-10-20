@@ -21,12 +21,6 @@ use crate::llm_pipeline::projection::projector::{
 use crate::llm_pipeline::provider::codec::LlmCodecRegistry;
 use crate::llm_pipeline::stream::finalizer::ResponseFinalizer;
 use crate::llm_pipeline::stream::finalizer::StreamFinalizationReason;
-use crate::llm_pipeline::{
-    LlmPipelineDiagnostic, LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSeverity,
-    LlmPipelineDiagnosticStage,
-};
-
-use crate::llm_pipeline::transport::http2::{Http2DataEvent, Http2Decoder};
 
 /// One sequential plaintext byte stream to assemble and project: a whole
 /// HTTP/1 (or raw) connection body, or one de-multiplexed HTTP/2 stream's
@@ -34,6 +28,9 @@ use crate::llm_pipeline::transport::http2::{Http2DataEvent, Http2Decoder};
 /// One HTTP/2 stream's de-multiplexed plaintext plus its end-of-stream flag.
 #[derive(Default)]
 pub(in crate::llm_pipeline) struct Http2StreamAssembly {
+    discarded: bool,
+    semantic_terminal: bool,
+    pub(in crate::llm_pipeline) message_id: Option<String>,
     pub(in crate::llm_pipeline) plain: PlainStreamAssembly,
     body: Arc<Vec<u8>>,
     pub(in crate::llm_pipeline) end_stream: bool,
@@ -65,6 +62,9 @@ impl Http2StreamAssembly {
         stream_id: u32,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
+        let Some(message_id) = self.message_id.as_deref() else {
+            return output;
+        };
         if self.plain.buffer.is_empty() {
             return output;
         }
@@ -80,6 +80,7 @@ impl Http2StreamAssembly {
             codecs,
             key,
             stream_id,
+            message_id,
             message_start,
             &self.plain.buffer,
             Arc::clone(&self.body),
@@ -92,9 +93,6 @@ impl Http2StreamAssembly {
             return output;
         };
         self.plain.sse_parse_cache = sse_parse_cache;
-        if projection.terminal {
-            output.mark_closed_response_actions(&projection.actions);
-        }
         output.actions.extend(projection.actions);
         output
             .provider_response_ids
@@ -131,6 +129,7 @@ impl Http2StreamAssembly {
                 codecs,
                 key,
                 stream_id,
+                self.message_id.as_deref()?,
                 message_start,
                 &self.plain.buffer,
                 Arc::clone(&self.body),
@@ -149,392 +148,142 @@ impl Http2StreamAssembly {
     }
 }
 
-/// A whole HTTP/2 connection in one direction: the raw frame byte stream,
-/// decomposed into per-stream plaintext assemblies.
-pub(in crate::llm_pipeline) struct Http2ConnectionAssembly {
-    pub(in crate::llm_pipeline) decoder: Http2Decoder,
-    pub(in crate::llm_pipeline) streams: BTreeMap<u32, Http2StreamAssembly>,
-    // A stream is scheduled only after DATA mutates its assembly or
-    // END_STREAM changes its terminal state. This keeps per-input projection
-    // proportional to the streams affected by the decoded frame batch.
-    dirty_streams: BTreeSet<u32>,
-    discarded_streams: BTreeSet<u32>,
-    discard_connection_streams: bool,
-    pending_finalizations: Vec<PendingHttp2Finalization>,
-    retained_streams: RetainedStreamBudget,
-}
-
-#[derive(Clone, Copy, Default)]
-struct RetentionFootprint {
-    bytes: usize,
-    ranges: usize,
-}
-
-/// Incremental accounting for plaintext retained by active HTTP/2 streams and
-/// streams waiting for fail-local finalization. Decoder retention is accounted
-/// separately because frames enter and leave that buffer as one batch.
+/// Directional semantic DATA state; framing and stream lifecycle belong to Http2Protocol.
 #[derive(Default)]
-struct RetainedStreamBudget {
-    bytes: usize,
-    ranges: usize,
+pub(in crate::llm_pipeline) struct Http2BodyAssembly {
+    streams: BTreeMap<u32, Http2StreamAssembly>,
+    dirty: BTreeSet<u32>,
+    retained_bytes: usize,
+    retained_ranges: usize,
 }
-
-impl RetainedStreamBudget {
-    fn admission_failure(
-        &self,
-        decoder_bytes: usize,
-        decoder_ranges: usize,
-        appended_bytes: usize,
-        appended_ranges: usize,
+impl Http2BodyAssembly {
+    pub(in crate::llm_pipeline) fn append_data(
+        &mut self,
+        stream_id: u32,
+        message_id: &str,
+        data: &[u8],
+        evidence: &[PayloadSegment],
         limits: AssemblyLimits,
     ) -> Option<AssemblyResetReason> {
         if self
-            .bytes
-            .checked_add(decoder_bytes)
-            .and_then(|bytes| bytes.checked_add(appended_bytes))
-            .is_none_or(|bytes| bytes > limits.max_buffer_bytes)
+            .streams
+            .get(&stream_id)
+            .is_some_and(|stream| stream.discarded || stream.semantic_terminal)
+        {
+            return None;
+        }
+        if self
+            .retained_bytes
+            .checked_add(data.len())
+            .is_none_or(|size| size > limits.max_buffer_bytes)
         {
             return Some(AssemblyResetReason::BufferBytesExceeded);
         }
-        self.ranges
-            .checked_add(decoder_ranges)
-            .and_then(|ranges| ranges.checked_add(appended_ranges))
-            .is_none_or(|ranges| ranges > limits.max_segment_ranges)
-            .then_some(AssemblyResetReason::SegmentRangesExceeded)
-    }
-
-    fn replace(&mut self, before: RetentionFootprint, after: RetentionFootprint) {
-        self.release(before);
-        let Some(bytes) = self.bytes.checked_add(after.bytes) else {
-            self.fail_closed("byte", self.bytes, after.bytes);
-            return;
-        };
-        let Some(ranges) = self.ranges.checked_add(after.ranges) else {
-            self.fail_closed("range", self.ranges, after.ranges);
-            return;
-        };
-        self.bytes = bytes;
-        self.ranges = ranges;
-    }
-
-    fn release(&mut self, footprint: RetentionFootprint) {
-        let Some(bytes) = self.bytes.checked_sub(footprint.bytes) else {
-            tracing::error!(
-                retained_bytes = self.bytes,
-                released_bytes = footprint.bytes,
-                "HTTP/2 retained-byte accounting underflow"
-            );
-            self.bytes = usize::MAX;
-            self.ranges = usize::MAX;
-            return;
-        };
-        let Some(ranges) = self.ranges.checked_sub(footprint.ranges) else {
-            tracing::error!(
-                retained_ranges = self.ranges,
-                released_ranges = footprint.ranges,
-                "HTTP/2 retained-range accounting underflow"
-            );
-            self.bytes = usize::MAX;
-            self.ranges = usize::MAX;
-            return;
-        };
-        self.bytes = bytes;
-        self.ranges = ranges;
-    }
-
-    fn fail_closed(&mut self, dimension: &'static str, retained: usize, added: usize) {
-        tracing::error!(
-            dimension,
-            retained,
-            added,
-            "HTTP/2 retained-stream accounting overflow"
-        );
-        // Preserve runtime fail-local behavior without weakening the capacity
-        // guard: the next admission rejects and resets this connection state.
-        self.bytes = usize::MAX;
-        self.ranges = usize::MAX;
-    }
-}
-
-struct PendingHttp2Finalization {
-    stream_id: u32,
-    stream: Http2StreamAssembly,
-    reason: AssemblyResetReason,
-    observed_at: SystemTime,
-}
-
-impl Default for Http2ConnectionAssembly {
-    fn default() -> Self {
-        Self {
-            decoder: Http2Decoder::default(),
-            streams: BTreeMap::new(),
-            dirty_streams: BTreeSet::new(),
-            discarded_streams: BTreeSet::new(),
-            discard_connection_streams: false,
-            pending_finalizations: Vec::new(),
-            retained_streams: RetainedStreamBudget::default(),
-        }
-    }
-}
-
-impl Http2ConnectionAssembly {
-    pub(in crate::llm_pipeline) fn from_plain(
-        plain: &mut PlainStreamAssembly,
-        limits: AssemblyLimits,
-    ) -> (Self, Vec<AssemblyResetReason>) {
-        let mut connection = Self {
-            decoder: Http2Decoder::from_buffer(
-                plain.buffer.take_remaining(),
-                plain.base_offset,
-                plain.segments.take(),
-            ),
-            ..Self::default()
-        };
-        let resets = connection.parse_frames(limits);
-        (connection, resets)
-    }
-
-    pub(in crate::llm_pipeline) fn end_offset(&self) -> usize {
-        self.decoder.end_offset()
-    }
-
-    pub(in crate::llm_pipeline) fn buffered_bytes(&self) -> usize {
-        self.decoder
-            .buffered_bytes()
-            .saturating_add(self.retained_streams.bytes)
-    }
-
-    pub(in crate::llm_pipeline) fn materialize_in_flight_responses(
-        &mut self,
-        config: &SemanticRetentionConfig,
-        codecs: &LlmCodecRegistry,
-        key: &PayloadStreamGroupKey,
-    ) -> Vec<(
-        Vec<SemanticAction>,
-        Vec<PayloadSegment>,
-        Vec<ProjectedProviderResponseId>,
-    )> {
-        self.streams
-            .iter_mut()
-            .filter_map(|(stream_id, stream)| {
-                let in_flight = stream.plain.in_flight_response.take()?;
-                stream.materialize_response(
-                    config,
-                    codecs,
-                    key,
-                    *stream_id,
-                    in_flight.message_start,
-                )
-            })
-            .collect()
-    }
-
-    pub(in crate::llm_pipeline) fn materialize_incomplete_requests(
-        &mut self,
-        config: &SemanticRetentionConfig,
-        codecs: &LlmCodecRegistry,
-        key: &PayloadStreamGroupKey,
-        reason: StreamFinalizationReason,
-        finished_at: SystemTime,
-    ) -> LiveLlmOutput {
-        let mut output = LiveLlmOutput::default();
-        for (stream_id, stream) in &mut self.streams {
-            output.extend(stream.materialize_incomplete_request(
-                config,
-                codecs,
-                key,
-                *stream_id,
-                reason,
-                finished_at,
-            ));
-        }
-        for pending in &mut self.pending_finalizations {
-            output.extend(pending.stream.materialize_incomplete_request(
-                config,
-                codecs,
-                key,
-                pending.stream_id,
-                reason,
-                finished_at,
-            ));
-        }
-        output
-    }
-
-    pub(in crate::llm_pipeline) fn admission_failure(
-        &self,
-        segment: &PayloadSegment,
-        limits: AssemblyLimits,
-    ) -> Option<AssemblyResetReason> {
-        let decoder_ranges = self
-            .decoder
-            .evidence_ranges()
-            .checked_add(self.discarded_streams.len())
-            .unwrap_or(usize::MAX);
-        self.retained_streams.admission_failure(
-            self.decoder.buffered_bytes(),
-            decoder_ranges,
-            segment.bytes.len(),
-            1,
-            limits,
-        )
-    }
-
-    pub(in crate::llm_pipeline) fn append_segment(
-        &mut self,
-        segment: &PayloadSegment,
-        limits: AssemblyLimits,
-    ) -> Vec<AssemblyResetReason> {
-        self.decoder.append(segment);
-        self.parse_frames(limits)
-    }
-
-    pub(in crate::llm_pipeline) fn parse_frames(
-        &mut self,
-        limits: AssemblyLimits,
-    ) -> Vec<AssemblyResetReason> {
-        let mut resets = Vec::new();
-        let batch = self.decoder.advance();
-        for event in batch.data {
-            let end_stream = event.end_stream;
-            let stream_id = event.stream_id;
-            let observed_at = event.evidence.last().map(|segment| segment.observed_at);
-            if let Some(reason) = self.route_stream_data(event, limits) {
-                resets.push(reason);
-            }
-            if end_stream {
-                self.mark_end_stream(stream_id, observed_at);
-            }
-        }
-        for event in batch.ended {
-            self.mark_end_stream(event.stream_id, event.observed_at);
-        }
-        for event in batch.failures {
-            let reason = if event.reset_by_peer {
-                AssemblyResetReason::Http2StreamReset
-            } else {
-                AssemblyResetReason::ProtocolDecodeFailed
-            };
-            if let Some(stream) = self.streams.remove(&event.stream_id) {
-                if let Some(observed_at) = event.observed_at {
-                    self.pending_finalizations.push(PendingHttp2Finalization {
-                        stream_id: event.stream_id,
-                        stream,
-                        reason,
-                        observed_at,
-                    });
-                } else {
-                    self.retained_streams.release(stream.retention_footprint());
-                }
-                resets.push(reason);
-            }
-            self.dirty_streams.remove(&event.stream_id);
-            self.discarded_streams.remove(&event.stream_id);
-        }
-        resets.extend(std::iter::repeat_n(
-            AssemblyResetReason::ProtocolDecodeFailed,
-            batch.connection_failures,
-        ));
-        resets
-    }
-
-    fn route_stream_data(
-        &mut self,
-        event: Http2DataEvent,
-        limits: AssemblyLimits,
-    ) -> Option<AssemblyResetReason> {
-        let Http2DataEvent {
-            stream_id,
-            data,
-            evidence: segments,
-            ..
-        } = event;
-        if self.discard_connection_streams {
-            return None;
-        }
-        if self.discarded_streams.contains(&stream_id) {
-            return None;
-        }
-        let Some(observed_at) = segments.last().map(|segment| segment.observed_at) else {
-            return None;
-        };
-        let decoder_ranges = self
-            .decoder
-            .evidence_ranges()
-            .checked_add(self.discarded_streams.len())
-            .unwrap_or(usize::MAX);
-        let global_failure = self.retained_streams.admission_failure(
-            self.decoder.buffered_bytes(),
-            decoder_ranges,
-            data.len(),
-            segments.len(),
-            limits,
-        );
-        if let Some(reason) = global_failure {
-            self.dirty_streams.remove(&stream_id);
-            if let Some(stream) = self.streams.remove(&stream_id) {
-                self.pending_finalizations.push(PendingHttp2Finalization {
-                    stream_id,
-                    stream,
-                    reason,
-                    observed_at,
-                });
-            }
-            self.remember_discarded_stream(stream_id, limits);
-            return Some(reason);
+        if self
+            .retained_ranges
+            .checked_add(evidence.len())
+            .is_none_or(|size| size > limits.max_segment_ranges)
+        {
+            return Some(AssemblyResetReason::SegmentRangesExceeded);
         }
         let stream = self.streams.entry(stream_id).or_default();
-        if let Some(reason) = stream
-            .plain
-            .admission_failure(data.len(), segments.len(), limits)
-        {
-            self.dirty_streams.remove(&stream_id);
-            if let Some(stream) = self.streams.remove(&stream_id) {
-                self.pending_finalizations.push(PendingHttp2Finalization {
-                    stream_id,
-                    stream,
-                    reason,
-                    observed_at,
-                });
-            }
-            self.remember_discarded_stream(stream_id, limits);
-            return Some(reason);
+        stream.message_id = Some(message_id.to_owned());
+        if stream.semantic_terminal {
+            return None;
         }
         let before = stream.retention_footprint();
-        stream.plain.append_plaintext(&data, &segments);
-        Arc::make_mut(&mut stream.body).extend_from_slice(&data);
-        self.retained_streams
-            .replace(before, stream.retention_footprint());
-        self.dirty_streams.insert(stream_id);
+        stream.plain.append_plaintext(data, evidence);
+        Arc::make_mut(&mut stream.body).extend_from_slice(data);
+        let after = stream.retention_footprint();
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_sub(before.bytes)
+            .saturating_add(after.bytes);
+        self.retained_ranges = self
+            .retained_ranges
+            .saturating_sub(before.ranges)
+            .saturating_add(after.ranges);
+        self.dirty.insert(stream_id);
         None
     }
-
-    fn remember_discarded_stream(&mut self, stream_id: u32, limits: AssemblyLimits) {
-        if self.discarded_streams.len() < limits.max_segment_ranges {
-            self.discarded_streams.insert(stream_id);
-            return;
-        }
-        // Tombstones prevent later DATA for a rejected stream from reopening
-        // assembly state. Once their configured bound is exhausted, fail this
-        // connection locally instead of retaining attacker-controlled stream
-        // identifiers without limit.
-        self.discarded_streams.clear();
-        self.dirty_streams.clear();
-        self.discard_connection_streams = true;
-    }
-
-    fn mark_end_stream(&mut self, stream_id: u32, observed_at: Option<SystemTime>) {
-        if self.discarded_streams.remove(&stream_id) {
-            self.dirty_streams.remove(&stream_id);
-            return;
-        }
+    pub(in crate::llm_pipeline) fn end_stream(&mut self, stream_id: u32, at: SystemTime) {
         if let Some(stream) = self.streams.get_mut(&stream_id) {
             stream.end_stream = true;
-            stream.end_stream_observed_at = observed_at.or(stream.end_stream_observed_at);
-            self.dirty_streams.insert(stream_id);
+            stream.end_stream_observed_at = Some(at);
+            self.dirty.insert(stream_id);
         }
     }
-
+    fn remove(&mut self, stream_id: u32) -> Option<Http2StreamAssembly> {
+        self.dirty.remove(&stream_id);
+        let stream = self.streams.remove(&stream_id)?;
+        let footprint = stream.retention_footprint();
+        self.retained_bytes = self.retained_bytes.saturating_sub(footprint.bytes);
+        self.retained_ranges = self.retained_ranges.saturating_sub(footprint.ranges);
+        Some(stream)
+    }
+    pub(in crate::llm_pipeline) fn discard_stream(&mut self, stream_id: u32) {
+        self.remove(stream_id);
+    }
+    pub(in crate::llm_pipeline) fn consumer_discarded(&self, stream_id: u32) -> bool {
+        self.streams
+            .get(&stream_id)
+            .is_some_and(|stream| stream.discarded)
+    }
+    pub(in crate::llm_pipeline) fn discard_consumer(
+        &mut self,
+        stream_id: u32,
+        message_id: &str,
+        reason: StreamFinalizationReason,
+        at: SystemTime,
+        direction: LiveStreamDirection,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+    ) -> LiveLlmOutput {
+        let output = self.abort_stream(stream_id, reason, at, direction, config, codecs, key);
+        self.streams.insert(
+            stream_id,
+            Http2StreamAssembly {
+                discarded: true,
+                message_id: Some(message_id.to_owned()),
+                ..Http2StreamAssembly::default()
+            },
+        );
+        output
+    }
+    pub(in crate::llm_pipeline) fn abort_stream(
+        &mut self,
+        stream_id: u32,
+        reason: StreamFinalizationReason,
+        at: SystemTime,
+        direction: LiveStreamDirection,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        key: &PayloadStreamGroupKey,
+    ) -> LiveLlmOutput {
+        let Some(mut stream) = self.remove(stream_id) else {
+            return LiveLlmOutput::default();
+        };
+        if direction == LiveStreamDirection::Outbound {
+            return stream
+                .materialize_incomplete_request(config, codecs, key, stream_id, reason, at);
+        }
+        let start = stream.plain.base_offset;
+        let Some((mut actions, payload_segments, provider_response_ids)) =
+            stream.materialize_response(config, codecs, key, stream_id, start)
+        else {
+            return LiveLlmOutput::default();
+        };
+        for action in &mut actions {
+            ResponseFinalizer::finalize_incomplete(action, reason, at);
+        }
+        LiveLlmOutput {
+            actions,
+            payload_segments,
+            provider_response_ids,
+            ..LiveLlmOutput::default()
+        }
+    }
     pub(in crate::llm_pipeline) fn project(
         &mut self,
         config: &SemanticRetentionConfig,
@@ -543,51 +292,18 @@ impl Http2ConnectionAssembly {
         direction: LiveStreamDirection,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
-        for mut pending in std::mem::take(&mut self.pending_finalizations) {
-            let finalization_reason = pending.reason.finalization_reason();
-            let retained = pending.stream.retention_footprint();
-            // DATA and RST_STREAM can arrive in the same decoder batch, before
-            // any progress projection. Let the provider inspect the retained
-            // bytes even when no in-flight response has been created yet.
-            let message_start = pending
-                .stream
-                .plain
-                .in_flight_response
-                .take()
-                .map_or(pending.stream.plain.base_offset, |response| {
-                    response.message_start
-                });
-            if direction == LiveStreamDirection::Inbound
-                && let Some((mut actions, drafts, provider_response_ids)) = pending
-                    .stream
-                    .materialize_response(config, codecs, key, pending.stream_id, message_start)
-            {
-                output.payload_segments.extend(drafts);
-                output.provider_response_ids.extend(provider_response_ids);
-                for action in &mut actions {
-                    if action.kind == SemanticActionKind::LlmResponse {
-                        ResponseFinalizer::finalize_incomplete(
-                            action,
-                            finalization_reason,
-                            pending.observed_at,
-                        );
-                    }
-                }
-                if finalization_reason.response_reusable() {
-                    output.mark_closed_response_actions(&actions);
-                } else {
-                    output.mark_non_reusable_response_actions(&actions);
-                }
-                output.actions.extend(actions);
-            }
-            self.retained_streams.release(retained);
-        }
-        while let Some(stream_id) = self.dirty_streams.pop_first() {
+        while let Some(stream_id) = self.dirty.pop_first() {
             let Some(stream) = self.streams.get_mut(&stream_id) else {
                 continue;
             };
+            if stream.discarded {
+                if stream.end_stream {
+                    self.remove(stream_id);
+                }
+                continue;
+            }
             let before = stream.retention_footprint();
-            let was_confirmed_llm_response =
+            let was_confirmed =
                 direction == LiveStreamDirection::Inbound && stream.has_confirmed_llm_response();
             let projected = match direction {
                 LiveStreamDirection::Outbound => {
@@ -597,47 +313,48 @@ impl Http2ConnectionAssembly {
                     stream.project_response(config, codecs, key, stream_id)
                 }
             };
-            let confirmed_llm_response = direction == LiveStreamDirection::Inbound
-                && (was_confirmed_llm_response || stream.has_confirmed_llm_response());
-            if stream.end_stream && confirmed_llm_response && projection_is_empty(&projected) {
-                let observed_at = stream
-                    .end_stream_observed_at
-                    .unwrap_or_else(SystemTime::now);
-                let diagnostic_stream_key = format!("{}#h2:{}", key.stream_key, stream_id);
-                output.diagnostics.push(
-                    LlmPipelineDiagnostic::new(
-                        key.trace_id,
-                        &key.process,
-                        observed_at,
-                        LlmPipelineDiagnosticCode::Http2ConfirmedResponseUnprojectableAtEndStream,
-                        LlmPipelineDiagnosticSeverity::Warning,
-                        LlmPipelineDiagnosticStage::Http2,
-                    )
-                    .with_stream_key(&diagnostic_stream_key)
-                    .with_discarded_bytes(u64::try_from(before.bytes).unwrap_or(u64::MAX))
-                    .with_discarded_entries(u64::try_from(before.ranges).unwrap_or(u64::MAX)),
-                );
+            stream.semantic_terminal |= projected.actions.iter().any(|action| {
+                action.kind == SemanticActionKind::LlmResponse
+                    && action.status != semantic_action::SemanticActionStatus::InProgress
+            });
+            if stream.semantic_terminal {
+                // Keep this stream's transport marker until END_STREAM, but release
+                // consumed content before subtracting its retention footprint.
+                stream.plain = PlainStreamAssembly::default();
+                stream.body = Arc::default();
             }
+            if stream.end_stream
+                && was_confirmed
+                && !stream.semantic_terminal
+                && projected.actions.is_empty()
+                && let Some(observed_at) = stream.end_stream_observed_at
+            {
+                output.diagnostics.push(model_core::diagnostics::LlmPipelineDiagnostic::new(
+                    key.trace_id, &key.process, observed_at,
+                    model_core::diagnostics::LlmPipelineDiagnosticCode::Http2ConfirmedResponseUnprojectableAtEndStream,
+                    model_core::diagnostics::LlmPipelineDiagnosticSeverity::Warning, model_core::diagnostics::LlmPipelineDiagnosticStage::Http2,
+                ).with_stream_key(&format!("{}#h2:{}", key.stream_key, stream_id)));
+            }
+            let ended = stream.end_stream;
+            let after = stream.retention_footprint();
+            self.retained_bytes = self
+                .retained_bytes
+                .saturating_sub(before.bytes)
+                .saturating_add(after.bytes);
+            self.retained_ranges = self
+                .retained_ranges
+                .saturating_sub(before.ranges)
+                .saturating_add(after.ranges);
             output.extend(projected);
-            self.retained_streams
-                .replace(before, stream.retention_footprint());
-            if stream.plain.buffer.is_empty() || stream.end_stream {
-                if let Some(stream) = self.streams.remove(&stream_id) {
-                    self.retained_streams.release(stream.retention_footprint());
-                }
+            if ended {
+                self.remove(stream_id);
             }
         }
         output
     }
 }
 
-fn projection_is_empty(output: &LiveLlmOutput) -> bool {
-    output.actions.is_empty()
-        && output.llm_request_contents.is_empty()
-        && output.llm_request_histories.is_empty()
-        && output.llm_tool_results.is_empty()
-        && output.provider_response_ids.is_empty()
-        && output.payload_segments.is_empty()
-        && output.http_request_links.is_empty()
-        && output.http_response_links.is_empty()
+struct RetentionFootprint {
+    bytes: usize,
+    ranges: usize,
 }

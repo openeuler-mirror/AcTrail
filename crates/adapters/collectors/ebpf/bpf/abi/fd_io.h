@@ -18,7 +18,9 @@ struct actrail_fd_io_event {
 struct actrail_socket_release_event {
     struct actrail_event_header header;
     __u32 fd;
+    /* FD object identity and payload stream identity are separate domains. */
     __u64 fd_object_generation;
+    __u32 socket_generation;
 } __attribute__((packed));
 
 #endif

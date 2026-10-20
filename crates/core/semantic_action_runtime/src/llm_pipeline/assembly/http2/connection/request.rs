@@ -22,6 +22,9 @@ impl Http2StreamAssembly {
         stream_id: u32,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
+        let Some(message_id) = self.message_id.as_deref() else {
+            return output;
+        };
         if !self.end_stream || self.plain.buffer.is_empty() {
             return output;
         }
@@ -33,6 +36,7 @@ impl Http2StreamAssembly {
             codecs,
             key,
             stream_id,
+            message_id,
             message_start,
             &self.plain.buffer,
             Arc::clone(&self.body),
@@ -64,6 +68,9 @@ impl Http2StreamAssembly {
         finished_at: SystemTime,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
+        let Some(message_id) = self.message_id.as_deref() else {
+            return output;
+        };
         if self.plain.buffer.is_empty() {
             return output;
         }
@@ -77,6 +84,7 @@ impl Http2StreamAssembly {
             codecs,
             key,
             stream_id,
+            message_id,
             message_start,
             &self.plain.buffer,
             Arc::clone(&self.body),

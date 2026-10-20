@@ -120,6 +120,16 @@ impl EvidenceSnapshot {
 }
 
 impl EvidenceTracker {
+    pub(in crate::llm_pipeline) fn capture_tail_complete(&self) -> bool {
+        self.ranges.back().is_none_or(|range| {
+            let segment = &range.segment;
+            segment
+                .operation_offset
+                .saturating_add(segment.captured_size)
+                >= segment.operation_captured_size
+        })
+    }
+
     fn segment_metadata(segment: &PayloadSegment) -> PayloadSegment {
         PayloadSegment {
             segment_id: segment.segment_id,
@@ -215,24 +225,30 @@ impl EvidenceTracker {
             .collect()
     }
 
-    pub(in crate::llm_pipeline) fn discarded_prefix_stats(&self, end: usize) -> (u64, u64) {
-        let mut discarded_bytes = 0_u64;
-        let mut discarded_entries = 0_u64;
-        for range in self.ranges.iter().take_while(|range| range.start < end) {
-            let overlap_end = range.end.min(end);
-            let overlap = overlap_end.saturating_sub(range.start);
-            if overlap == 0 {
-                continue;
-            }
-            let range_bytes = range.end.saturating_sub(range.start);
-            discarded_bytes = discarded_bytes.saturating_add(if overlap == range_bytes {
-                range.segment.original_size
-            } else {
-                u64::try_from(overlap).unwrap_or(u64::MAX)
-            });
-            discarded_entries = discarded_entries.saturating_add(1);
-        }
-        (discarded_bytes, discarded_entries)
+    /// Transfers a framed suffix with each original capture coordinate intact.
+    pub(in crate::llm_pipeline) fn slice_payloads(
+        &self,
+        start: usize,
+        bytes: &[u8],
+    ) -> Vec<PayloadSegment> {
+        let end = start.saturating_add(bytes.len());
+        self.ranges
+            .iter()
+            .filter_map(|range| {
+                let left = range.start.max(start);
+                let right = range.end.min(end);
+                if left >= right {
+                    return None;
+                }
+                let mut segment = range.segment.clone();
+                segment.operation_offset = segment
+                    .operation_offset
+                    .saturating_add((left - range.start) as u64);
+                segment.bytes = bytes[left - start..right - start].to_vec();
+                segment.captured_size = segment.bytes.len() as u64;
+                Some(segment)
+            })
+            .collect()
     }
 
     pub(in crate::llm_pipeline) fn evict_before(&mut self, global_offset: usize) {
@@ -256,9 +272,5 @@ impl EvidenceTracker {
 
     pub(in crate::llm_pipeline) fn reset(&mut self) {
         self.ranges = VecDeque::new();
-    }
-
-    pub(in crate::llm_pipeline) fn take(&mut self) -> Self {
-        std::mem::take(self)
     }
 }

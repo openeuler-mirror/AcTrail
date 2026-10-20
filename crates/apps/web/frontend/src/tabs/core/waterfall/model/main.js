@@ -47,6 +47,7 @@ const KIND_GROUPS = Object.freeze({
   'sse.stream': 'sse',
   'sse.event': 'sse',
   'http.message': 'http',
+  'websocket.message': 'websocket',
   'command.invocation': 'command',
   'agent.invocation': 'command',
   'process.exec': 'process',

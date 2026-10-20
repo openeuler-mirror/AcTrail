@@ -100,8 +100,28 @@ impl LlmCodecRegistry {
         None
     }
 
-    pub(in crate::llm_pipeline) fn take_failed_plugin_decodes(&self) -> u64 {
-        self.failed_plugin_decodes.replace(0)
+    pub(in crate::llm_pipeline) fn take_decode_diagnostic(
+        &self,
+        identity: &model_core::payload::PayloadStreamIdentity,
+        observed_at: std::time::SystemTime,
+    ) -> Option<model_core::diagnostics::LlmPipelineDiagnostic> {
+        use model_core::diagnostics::{
+            LlmPipelineDiagnostic, LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSeverity,
+            LlmPipelineDiagnosticStage,
+        };
+        let failures = self.failed_plugin_decodes.replace(0);
+        (failures > 0).then(|| {
+            LlmPipelineDiagnostic::new(
+                identity.trace_id,
+                &identity.process,
+                observed_at,
+                LlmPipelineDiagnosticCode::ProviderCodecDecodeFailed,
+                LlmPipelineDiagnosticSeverity::Warning,
+                LlmPipelineDiagnosticStage::ProviderCodec,
+            )
+            .with_stream_key(identity.stream_key.as_str())
+            .with_discarded_entries(failures)
+        })
     }
 
     fn record_failed_plugin_decode(&self) {

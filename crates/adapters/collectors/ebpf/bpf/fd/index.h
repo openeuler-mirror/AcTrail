@@ -28,7 +28,7 @@ static __always_inline int fd_object_snapshot(
     return 1;
 }
 
-static __always_inline __u64 fd_generation_next(void) {
+static __always_inline __u64 fd_object_generation_next(void) {
     __u64 generation = bpf_ktime_get_ns();
     return generation ? generation : 1;
 }
@@ -220,6 +220,7 @@ static __noinline int fd_release(
     struct actrail_fd_state state = {};
     struct actrail_fd_object_snapshot object = {};
     __u32 remaining;
+    __u32 socket_generation = 0;
     __u64 event_trace_id;
 
     if (!fd_claim(pid, fd, expected_generation, &state)) {
@@ -227,7 +228,7 @@ static __noinline int fd_release(
     }
     if (state.category == ACTRAIL_FD_CATEGORY_NET
         || state.category == ACTRAIL_FD_CATEGORY_IPC_UNIX_SOCKET) {
-        socket_payload_release_fd(pid, fd);
+        socket_generation = socket_payload_release_fd(pid, fd);
     }
     remaining = ACTRAIL_FD_REFCOUNT_NOT_LAST;
     if (state.category == ACTRAIL_FD_CATEGORY_NET) {
@@ -250,6 +251,7 @@ static __noinline int fd_release(
             );
             event->fd = fd;
             event->fd_object_generation = state.generation;
+            event->socket_generation = socket_generation;
             actrail_event_submit(ctx, event);
         }
     }
@@ -415,7 +417,7 @@ static __always_inline int fd_register(const struct actrail_fd_registration *reg
     if (category == ACTRAIL_FD_CATEGORY_NONE || !fd_category_enabled(category)) {
         return 0;
     }
-    generation = fd_generation_next();
+    generation = fd_object_generation_next();
     state.category = category;
     state.generation = generation;
     state.file_identity = file_identity;

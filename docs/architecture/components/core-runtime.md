@@ -26,6 +26,10 @@
 
 实时语义运行时根据事件种类调用对应的有状态 projector。LLM pipeline 的输出还会进入 [Live Tool Projector](live-tool-projector.md)，形成工具与 Agent 调用关系。所有 action、link、content write、lineage 和诊断在服务边界合并后进入 recording runtime。
 
+HTTP/1 明文由共享消息解析器分配来源身份并恢复协议边界。HTTP exchange 拥有唯一请求—响应关系，LLM 内容解析消费已确认来源的正文。daemon application-protocol 层消费消息生命周期事件，负责 HTTP/SSE 观测与留存；通过 `http.message_id` 补充相同 HTTP action 的正文和 event evidence。HTTP 观测不依赖 LLM 内容识别成功，LLM 关闭时仍可运行 HTTP 解析。
+
+HTTP/2 由共享 frame decoder 按连接、stream ID 和方向建立正文来源，daemon 消费相同的 typed frame 生成观测。LLM Call 沿 stream 的请求—响应关系派生。正文留存 gate 消费本批覆盖事实，不维护独立 HTTP parser 或连接级 LLM 分类。尚未确认的片段按配置保留；语义正文预算失败仅终止对应内容消费者，协议观测继续运行。
+
 ## 控制与插件路径
 
 Governance 从 seccomp、fanotify 或网络控制边界取得待裁决操作。内置规则和已加载的 control-decider 插件在各自能力范围内返回决策；插件不能直接取得 daemon 内部状态或存储句柄。

@@ -129,6 +129,7 @@ const SYNC_SYMBOLS: &[&str] = &[
 ];
 
 const DAEMON_DIRECT_SYMBOLS: &[&str] = &[
+    "rustls_start_outgoing_traffic",
     "SSL_write",
     "SSL_write_ex",
     "SSL_read",

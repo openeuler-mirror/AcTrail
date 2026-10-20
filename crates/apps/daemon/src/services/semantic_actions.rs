@@ -5,8 +5,8 @@ use std::time::SystemTime;
 use control_contract::reply::ControlError;
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::diagnostics::LlmPipelineDiagnostic;
-use model_core::event::DomainEvent;
-use model_core::ids::TraceId;
+use model_core::event::{DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload};
+use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::TraceRecord;
 use recording_runtime::{
@@ -158,9 +158,27 @@ impl StorageAttachService {
         &mut self,
         trace_id: TraceId,
         finished_at: std::time::SystemTime,
-    ) -> (SemanticActionBatch, Vec<LlmPipelineDiagnostic>) {
+    ) -> (
+        SemanticActionBatch,
+        Vec<LlmPipelineDiagnostic>,
+        Vec<crate::services::application_protocol::ApplicationEventDraft>,
+    ) {
         let mut output = self.semantic_actions.finalize_trace(trace_id, finished_at);
         let diagnostics = std::mem::take(&mut output.llm_pipeline_diagnostics);
+        let mut observations = self
+            .application_protocol
+            .observe_http1(std::mem::take(&mut output.http1_messages), false);
+        // Completed frames are projected as they arrive; finalization normally emits none.
+        // A local retention projection failure cannot prevent semantic finalization.
+        match self
+            .application_protocol
+            .observe_http2(std::mem::take(&mut output.http2_frames), false)
+        {
+            Ok(frames) => observations.extend(frames),
+            Err(error) => {
+                tracing::warn!(message = %error, "HTTP/2 finalization observation failed")
+            }
+        }
         (
             SemanticActionBatch::from_action_output(
                 output.actions,
@@ -175,6 +193,7 @@ impl StorageAttachService {
                 output.payload_segments,
             ),
             diagnostics,
+            observations,
         )
     }
 
@@ -184,7 +203,7 @@ impl StorageAttachService {
         trace_id: TraceId,
         finished_at: std::time::SystemTime,
     ) -> Result<(), ControlError> {
-        let (semantic_actions, llm_pipeline_diagnostics) =
+        let (semantic_actions, llm_pipeline_diagnostics, observations) =
             self.finalize_semantic_actions_for_trace(trace_id, finished_at);
         let export_batch = self
             .export_runtime
@@ -197,8 +216,37 @@ impl StorageAttachService {
         };
 
         self.persist_llm_pipeline_diagnostics_fail_local(trace_runtime, llm_pipeline_diagnostics);
-
-        result
+        let mut events = Vec::with_capacity(observations.len());
+        for draft in observations {
+            let (Some(process), Some(observed_at)) = (draft.process, draft.observed_at) else {
+                tracing::warn!(
+                    trace_id = trace_id.get(),
+                    "discarded HTTP finalization observation without source identity or time"
+                );
+                continue;
+            };
+            events.push(DomainEvent::new(
+                EventEnvelope {
+                    event_id: self.next_event_id()?,
+                    trace_id,
+                    observed_at,
+                    process,
+                    collector: CollectorName::new(
+                        crate::services::application_protocol::COLLECTOR_NAME,
+                    ),
+                    kind: EventKind::Application,
+                    flags: EventFlags {
+                        metadata_partial: draft.metadata_partial,
+                        ..EventFlags::clean()
+                    },
+                },
+                EventPayload::Application(draft.payload),
+            ));
+        }
+        // The existing message facts remain available until forget_trace, so these
+        // final observations enrich the same actions without a second finalization.
+        let observation_result = self.persist_observed_event_batch(trace_runtime, events);
+        result.and(observation_result)
     }
 
     pub(super) fn publish_live_export_actions(

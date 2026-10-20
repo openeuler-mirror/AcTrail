@@ -62,6 +62,7 @@ static struct task_struct *(*actrail_bpf_get_current_task)(void) =
 static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) =
     (void *)BPF_FUNC_get_current_comm;
 static __u64 (*bpf_ktime_get_ns)(void) = (void *)BPF_FUNC_ktime_get_ns;
+static __u64 (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_cookie;
 #ifndef ACTRAIL_EVENT_TRANSPORT_PERF
 static long (*bpf_ringbuf_output)(void *ringbuf, void *data, __u64 size, __u64 flags) =
     (void *)ACTRAIL_BPF_FUNC_RINGBUF_OUTPUT;

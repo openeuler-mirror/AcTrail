@@ -7,6 +7,8 @@
 
 #define ACTRAIL_LINUX_EINPROGRESS 115
 #define ACTRAIL_SOCKET_PAYLOAD_IOVEC_SCAN_MAX 4
+/* Linux bpf_loop helper ABI: include/uapi/linux/bpf.h. */
+#define ACTRAIL_SOCKET_PAYLOAD_MAX_CHUNKS (1U << 23)
 
 static __always_inline struct actrail_socket_payload_config *socket_payload_config(void) {
     __u32 key = 0;
@@ -80,7 +82,7 @@ static __always_inline __u64 next_socket_payload_sequence(
     __u32 pid,
     __u32 direction,
     __u32 fd,
-    __u32 fd_generation
+    __u32 socket_generation
 ) {
     struct actrail_socket_payload_sequence_key key = {};
     __u64 initial = 1;
@@ -88,9 +90,9 @@ static __always_inline __u64 next_socket_payload_sequence(
     __u64 *current;
     struct actrail_socket_payload_fd_state *fd_state;
 
-    if (fd_generation) {
+    if (socket_generation) {
         fd_state = socket_payload_fd_state(pid, fd);
-        if (!fd_state || fd_state->generation != fd_generation) {
+        if (!fd_state || fd_state->socket_generation != socket_generation) {
             event_transport_diag_inc(ACTRAIL_SOCKET_STATE_UPDATE_FAIL);
             return 0;
         }
@@ -99,7 +101,7 @@ static __always_inline __u64 next_socket_payload_sequence(
     key.pid = pid;
     key.direction = direction;
     key.fd = fd;
-    key.fd_generation = fd_generation;
+    key.socket_generation = socket_generation;
     current = bpf_map_lookup_elem(&payload_socket_stream_sequences, &key);
     if (!current) {
         if (bpf_map_update_elem(
@@ -147,7 +149,7 @@ static __always_inline int store_socket_payload_op(
     struct actrail_socket_payload_config *config = socket_payload_config();
     struct actrail_pending_socket_payload_op *op;
     struct actrail_socket_payload_fd_state *fd_state;
-    __u32 fd_generation = 0;
+    __u32 socket_generation = 0;
 
     if (!tgid || !trace_id || !process_observation_is_detailed(tgid) ||
         !config || !config->enabled || !buffer_ptr || !requested_size) {
@@ -160,8 +162,8 @@ static __always_inline int store_socket_payload_op(
     if (fd_state && (fd_state->flags & ACTRAIL_SOCKET_FD_TLS_OWNED)) {
         return 0;
     }
-    fd_generation = fd_state ? fd_state->generation : 0;
-    if (require_tracked_fd && !fd_generation) {
+    socket_generation = fd_state ? fd_state->socket_generation : 0;
+    if (require_tracked_fd && !socket_generation) {
         return 0;
     }
     if (fd_state
@@ -187,7 +189,7 @@ static __always_inline int store_socket_payload_op(
     op->pid_generation = current_process_start_time(tgid);
     op->started_ktime_ns = bpf_ktime_get_ns();
     op->fd = fd;
-    op->fd_generation = fd_generation;
+    op->socket_generation = socket_generation;
     op->direction = direction;
     op->syscall = syscall;
     op->copy_base = buffer_ptr;
@@ -291,7 +293,7 @@ static __always_inline int store_socket_payload_writev_op(
     op->pid_generation = current_process_start_time(tgid);
     op->started_ktime_ns = bpf_ktime_get_ns();
     op->fd = fd;
-    op->fd_generation = fd_state->generation;
+    op->socket_generation = fd_state->socket_generation;
     op->direction = ACTRAIL_SOCKET_PAYLOAD_OUTBOUND;
     op->syscall = ACTRAIL_SOCKET_SYSCALL_WRITEV;
     op->delegated = config->user_read_enabled;
@@ -357,7 +359,7 @@ static __always_inline int store_socket_payload_sendmsg_op(
     op->pid_generation = current_process_start_time(tgid);
     op->started_ktime_ns = bpf_ktime_get_ns();
     op->fd = fd;
-    op->fd_generation = fd_state ? fd_state->generation : 0;
+    op->socket_generation = fd_state ? fd_state->socket_generation : 0;
     op->direction = ACTRAIL_SOCKET_PAYLOAD_OUTBOUND;
     op->syscall = ACTRAIL_SOCKET_SYSCALL_SENDMSG;
     op->delegated = config->user_read_enabled;

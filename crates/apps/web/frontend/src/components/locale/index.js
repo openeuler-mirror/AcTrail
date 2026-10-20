@@ -5,6 +5,21 @@
  */
 export default {
   'en-US': {
+    llmCall: {
+      request: 'Request',
+      response: 'Response',
+      loading: 'Loading linked message…',
+      unlinked: 'No linked message was recorded.',
+      retry: 'Retry',
+      noContent: 'No message text is available in this action.',
+      technicalDetails: 'Technical details',
+      started: 'Started',
+      ended: 'Ended',
+      status: 'Status',
+      completeness: 'Completeness',
+      invalidAction: 'The linked action does not match the requested message.',
+      contentMissing: 'The request body is unavailable.',
+    },
     actionNode: {
       jumpControls: 'Jump between sibling LLM calls',
       previousSibling: 'Previous sibling LLM call',
@@ -61,6 +76,21 @@ export default {
     },
   },
   'zh-CN': {
+    llmCall: {
+      request: 'Request · 请求',
+      response: 'Response · 响应',
+      loading: '正在加载关联消息…',
+      unlinked: '未记录关联消息。',
+      retry: '重试',
+      noContent: '此动作中没有可展示的消息正文。',
+      technicalDetails: '技术详情',
+      started: '开始时间',
+      ended: '结束时间',
+      status: '状态',
+      completeness: '完整性',
+      invalidAction: '关联动作与请求的消息不匹配。',
+      contentMissing: '请求正文不可用。',
+    },
     actionNode: {
       jumpControls: '在同级LLM调用之间跳转',
       previousSibling: '上一个同级LLM调用',

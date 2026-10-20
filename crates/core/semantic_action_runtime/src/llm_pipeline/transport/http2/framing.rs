@@ -1,11 +1,6 @@
 //! HTTP/2 frame-boundary decoding used before logical-stream demultiplexing.
 
 pub(crate) const HTTP2_CONNECTION_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-pub(crate) const HTTP2_DATA_FRAME_TYPE: u8 = 0x0;
-pub(crate) const HTTP2_HEADERS_FRAME_TYPE: u8 = 0x1;
-pub(crate) const HTTP2_RST_STREAM_FRAME_TYPE: u8 = 0x3;
-pub(crate) const HTTP2_CONTINUATION_FRAME_TYPE: u8 = 0x9;
-pub(crate) const HTTP2_FLAG_END_STREAM: u8 = 0x1;
 pub(crate) const HTTP2_FLAG_PADDED: u8 = 0x8;
 pub(crate) const HTTP2_FRAME_HEADER_BYTES: usize = 9;
 
@@ -22,13 +17,6 @@ pub(in crate::llm_pipeline) enum Http2FrameDecode<'a> {
     NeedMore,
     Invalid { encoded_len: usize, stream_id: u32 },
     Frame(Http2Frame<'a>),
-}
-
-pub(crate) fn decode_http2_frame(bytes: &[u8]) -> Option<Http2Frame<'_>> {
-    match decode_http2_frame_state(bytes) {
-        Http2FrameDecode::Frame(frame) => Some(frame),
-        Http2FrameDecode::NeedMore | Http2FrameDecode::Invalid { .. } => None,
-    }
 }
 
 pub(in crate::llm_pipeline) fn decode_http2_frame_state(bytes: &[u8]) -> Http2FrameDecode<'_> {

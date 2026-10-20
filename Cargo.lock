@@ -3227,6 +3227,7 @@ version = "0.8.0"
 dependencies = [
  "anstyle",
  "clap",
+ "gimli",
  "memchr",
  "memmap2",
  "model_core",

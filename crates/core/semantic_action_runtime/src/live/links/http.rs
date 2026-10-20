@@ -6,7 +6,7 @@ use semantic_action::{
 };
 
 use crate::live::actions::append_missing_evidence;
-use crate::live::http_exchange::{HttpResponseMatch, MatchedHttpRequest};
+use crate::live::http_exchange::MatchedHttpRequest;
 
 /// Converts exact correlation proposals into links without retaining actions.
 ///
@@ -17,22 +17,6 @@ use crate::live::http_exchange::{HttpResponseMatch, MatchedHttpRequest};
 pub(super) struct HttpMessageLinkProjector;
 
 impl HttpMessageLinkProjector {
-    pub(super) fn observe_exact_exchange_link(
-        &self,
-        exchange: &HttpResponseMatch,
-    ) -> SemanticActionLink {
-        SemanticActionLink {
-            trace_id: exchange.response.trace_id,
-            parent_action_id: exchange.request.action_id.clone(),
-            child_action_id: exchange.response.action_id.clone(),
-            role: SemanticActionLinkRole::HttpRequestHttpResponse,
-            origin: SemanticActionLinkOrigin::Observed,
-            valid: true,
-            evidence: Vec::new(),
-            attributes: BTreeMap::new(),
-        }
-    }
-
     pub(super) fn observe_exact_request_link(
         &self,
         llm_request: &SemanticAction,

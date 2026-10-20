@@ -497,6 +497,13 @@ impl PayloadSocketDocument {
     }
 
     pub(super) fn to_config(&self) -> Result<PayloadSocketConfig, String> {
+        let segment_bytes =
+            require_positive_u32("payload.socket.max_segment_bytes", self.max_segment_bytes)?
+                .min(4095);
+        // Linux bpf_loop permits at most 1 << 23 callback invocations.
+        if u64::from(self.max_operation_bytes).div_ceil(u64::from(segment_bytes)) > (1 << 23) {
+            return Err("payload.socket.max_operation_bytes requires more than the kernel bpf_loop limit of 8388608 segments".to_owned());
+        }
         Ok(PayloadSocketConfig {
             enabled: self.enabled,
             capture_backend: parse_value("payload.socket.capture_backend", &self.capture_backend)?,

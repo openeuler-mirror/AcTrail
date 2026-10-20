@@ -42,6 +42,7 @@ impl SslPlan {
                     program: target.program,
                     symbol: point.symbol.to_string(),
                     offset: point.offset,
+                    cookie: 0,
                     retprobe: target.retprobe,
                 });
             }

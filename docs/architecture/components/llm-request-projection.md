@@ -10,6 +10,8 @@
 
 HTTP、WebSocket 和 payload transport 组件负责帧、分片与消息边界。它们把完整 request body 交给 LLM request projector；request parser 每次只识别一份完整 JSON，不维护网络帧状态。
 
+HTTP/1 在消息头确认时分配稳定来源身份，随后把带该身份的解码正文交给 request projector。正文完成和 LLM 分类只决定何时生成语义投影，不改变消息归属。HTTP 观测与 LLM 请求投影消费同一次消息解析结果，HTTP application event 后续补充正文与证据。Call 的请求—响应关系由 HTTP exchange 决定。
+
 Request Parser Registry 目前注册结构化 JSON/SSE parser 和通用 JSON parser。每个 parser 对当前 JSON 返回 `NoMatch`、`Plausible` 或 `Strong`。Registry 选择唯一的最高强度候选；最高强度并列时不选择 parser。
 
 被选中的 parser 当前只返回：

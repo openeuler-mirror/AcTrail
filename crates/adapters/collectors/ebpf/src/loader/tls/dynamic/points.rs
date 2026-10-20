@@ -8,6 +8,7 @@ pub(super) struct AttachPoint {
     pub(super) program: &'static str,
     pub(super) symbol: String,
     pub(super) offset: u64,
+    pub(super) cookie: u64,
     pub(super) retprobe: bool,
 }
 
@@ -38,6 +39,7 @@ pub(super) struct WirePoint<'a> {
     pub(super) symbol: &'a str,
     pub(super) direction: &'a str,
     pub(super) offset: u64,
+    pub(super) cookie: u64,
 }
 
 impl<'a> WirePoint<'a> {
@@ -50,6 +52,12 @@ impl<'a> WirePoint<'a> {
             .ok_or_else(|| Self::invalid(encoded, "missing offset"))?
             .parse::<u64>()
             .map_err(|error| Self::invalid(encoded, &format!("invalid offset: {error}")))?;
+        let cookie = fields
+            .next()
+            .map(|field| field.parse::<u64>())
+            .transpose()
+            .map_err(|error| Self::invalid(encoded, &format!("invalid cookie: {error}")))?
+            .unwrap_or(0);
         if fields.next().is_some() {
             return Err(Self::invalid(encoded, "unexpected field"));
         }
@@ -57,6 +65,7 @@ impl<'a> WirePoint<'a> {
             symbol,
             direction,
             offset,
+            cookie,
         })
     }
 

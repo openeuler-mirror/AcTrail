@@ -363,9 +363,14 @@ impl EbpfRuntime {
         &self,
         pid: u32,
         fd: u32,
-        expected_generation: u32,
+        expected_socket_generation: u32,
     ) -> Result<bool, LoaderError> {
-        socket::mark_fd_tls_owned(&self.payload_socket_fds, pid, fd, expected_generation)
+        socket::mark_fd_tls_owned(
+            &self.payload_socket_fds,
+            pid,
+            fd,
+            expected_socket_generation,
+        )
     }
 
     pub fn attached_programs(&self) -> &[String] {

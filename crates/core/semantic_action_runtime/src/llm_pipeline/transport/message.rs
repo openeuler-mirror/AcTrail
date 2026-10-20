@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HttpRequestParts<'a> {
+    pub(crate) message_id: String,
     pub(crate) protocol: &'static str,
     pub(crate) scheme: &'static str,
     pub(crate) method: Option<String>,
@@ -20,6 +21,7 @@ pub(crate) struct HttpRequestParts<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HttpResponseParts {
+    pub(crate) message_id: String,
     pub(crate) protocol: &'static str,
     pub(crate) scheme: &'static str,
     pub(crate) status_code: Option<String>,

@@ -122,7 +122,14 @@ impl LlmProviderResponseParser for OpenAiResponsesResponseParser {
                 {
                     Some(LlmResponseTermination::Incomplete)
                 }
-                Some("error") if value.get("message").and_then(Value::as_str).is_some() => {
+                Some("error")
+                    if value.get("message").and_then(Value::as_str).is_some()
+                        || value
+                            .get("error")
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                            .is_some() =>
+                {
                     Some(LlmResponseTermination::Failed)
                 }
                 Some("response.completed") => Some(LlmResponseTermination::Completed),

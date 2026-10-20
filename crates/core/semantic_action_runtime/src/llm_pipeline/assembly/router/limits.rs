@@ -24,34 +24,12 @@ impl From<LlmAssemblyConfig> for AssemblyLimits {
 #[derive(Clone, Copy, Debug)]
 pub(in crate::llm_pipeline) enum AssemblyResetReason {
     BufferBytesExceeded,
-    CapturePolicyLimited,
-    ConfirmedGap,
-    OperationIncomplete,
-    ProtocolDecodeFailed,
-    Http2StreamReset,
     SegmentRangesExceeded,
 }
 
 impl AssemblyResetReason {
-    pub(in crate::llm_pipeline) fn as_str(self) -> &'static str {
-        match self {
-            Self::BufferBytesExceeded => "buffer_bytes_exceeded",
-            Self::CapturePolicyLimited => "capture_policy_limited",
-            Self::ConfirmedGap => "confirmed_gap",
-            Self::OperationIncomplete => "operation_incomplete",
-            Self::ProtocolDecodeFailed => "protocol_decode_failed",
-            Self::Http2StreamReset => "http2_stream_reset",
-            Self::SegmentRangesExceeded => "segment_ranges_exceeded",
-        }
-    }
-
     pub(in crate::llm_pipeline) fn finalization_reason(self) -> StreamFinalizationReason {
         match self {
-            Self::CapturePolicyLimited => StreamFinalizationReason::CapturePolicyLimited,
-            Self::ConfirmedGap => StreamFinalizationReason::ConfirmedGap,
-            Self::OperationIncomplete => StreamFinalizationReason::OperationIncomplete,
-            Self::ProtocolDecodeFailed => StreamFinalizationReason::ProtocolDecodeFailed,
-            Self::Http2StreamReset => StreamFinalizationReason::Http2StreamReset,
             Self::BufferBytesExceeded => StreamFinalizationReason::BufferBytesExceeded,
             Self::SegmentRangesExceeded => StreamFinalizationReason::SegmentRangesExceeded,
         }

@@ -51,6 +51,15 @@ class AgentBinaryDiscovery:
             environment["HOME"] = str(home)
         return environment
 
+    def codex_environment(self, binary: Path) -> dict[str, str]:
+        environment = self.environment(binary)
+        for parent in binary.resolve().parents:
+            if parent.name == ".codex":
+                environment["HOME"] = str(parent.parent)
+                environment["CODEX_HOME"] = str(parent)
+                break
+        return environment
+
     def default_codex_model(self) -> str | None:
         binary = self.resolve("CODEX_E2E_BINARY", "codex")
         if binary is None:
@@ -58,7 +67,7 @@ class AgentBinaryDiscovery:
         return self.default_codex_model_for_binary(binary)
 
     def default_codex_model_for_binary(self, binary: Path) -> str | None:
-        environment = self.environment(binary)
+        environment = self.codex_environment(binary)
         try:
             completed = subprocess.run(
                 [str(binary), "debug", "models"],
@@ -91,8 +100,10 @@ class AgentBinaryDiscovery:
                 return slug
         return None
 
-    def codex_native_binary_for(self, binary: Path) -> Path | None:
-        configured = os.environ.get("CODEX_E2E_NATIVE_BINARY")
+    def codex_native_binary_for(
+        self, binary: Path, *, use_override: bool = True
+    ) -> Path | None:
+        configured = os.environ.get("CODEX_E2E_NATIVE_BINARY") if use_override else None
         if configured:
             candidate = Path(configured)
             return candidate if self.is_executable(candidate) else None

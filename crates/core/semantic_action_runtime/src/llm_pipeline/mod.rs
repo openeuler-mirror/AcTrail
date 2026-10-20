@@ -7,10 +7,15 @@
 mod assembly;
 pub(crate) mod config;
 mod facade;
+mod http;
+mod http1;
+mod http2;
 mod projection;
 mod provider;
 mod stream;
 mod transport;
+mod websocket;
+mod websocket_source;
 
 pub(crate) use model_core::diagnostics::{
     LlmPipelineDiagnostic, LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSeverity,

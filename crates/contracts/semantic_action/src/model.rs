@@ -6,103 +6,8 @@ use std::time::SystemTime;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum SemanticActionKind {
-    ProcessExec,
-    ProcessExit,
-    AgentIdentity,
-    AgentExit,
-    FileModify,
-    FileRead,
-    FileWrite,
-    FileTtyIo,
-    FileBulkRead,
-    FsEnumerate,
-    HttpMessage,
-    LlmCall,
-    LlmRequest,
-    LlmResponse,
-    LlmToolCall,
-    LlmToolResult,
-    McpToolCall,
-    McpRequest,
-    McpResponse,
-    McpStdin,
-    McpStdout,
-    SseStream,
-    SseEvent,
-    EnforcementDecision,
-    ProcessForkAttempt,
-    AgentInvocation,
-    CommandInvocation,
-}
-
-impl SemanticActionKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ProcessExec => "process.exec",
-            Self::ProcessExit => "process.exit",
-            Self::AgentIdentity => "agent.identity",
-            Self::AgentExit => "agent.exit",
-            Self::FileModify => "file.modify",
-            Self::FileRead => "file.read",
-            Self::FileWrite => "file.write",
-            Self::FileTtyIo => "file.tty_io",
-            Self::FileBulkRead => "file.bulk_read",
-            Self::FsEnumerate => "fs.enumerate",
-            Self::HttpMessage => "http.message",
-            Self::LlmCall => "llm.call",
-            Self::LlmRequest => "llm.request",
-            Self::LlmResponse => "llm.response",
-            Self::LlmToolCall => "llm.tool_call",
-            Self::LlmToolResult => "llm.tool_result",
-            Self::McpToolCall => "mcp.tool_call",
-            Self::McpRequest => "mcp.request",
-            Self::McpResponse => "mcp.response",
-            Self::McpStdin => "mcp.stdin",
-            Self::McpStdout => "mcp.stdout",
-            Self::SseStream => "sse.stream",
-            Self::SseEvent => "sse.event",
-            Self::EnforcementDecision => "enforcement.decision",
-            Self::ProcessForkAttempt => "process.fork_attempt",
-            Self::AgentInvocation => "agent.invocation",
-            Self::CommandInvocation => "command.invocation",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "process.exec" => Some(Self::ProcessExec),
-            "process.exit" => Some(Self::ProcessExit),
-            "agent.identity" => Some(Self::AgentIdentity),
-            "agent.exit" => Some(Self::AgentExit),
-            "file.modify" => Some(Self::FileModify),
-            "file.read" => Some(Self::FileRead),
-            "file.write" => Some(Self::FileWrite),
-            "file.tty_io" => Some(Self::FileTtyIo),
-            "file.bulk_read" => Some(Self::FileBulkRead),
-            "fs.enumerate" => Some(Self::FsEnumerate),
-            "http.message" => Some(Self::HttpMessage),
-            "llm.call" => Some(Self::LlmCall),
-            "llm.request" => Some(Self::LlmRequest),
-            "llm.response" => Some(Self::LlmResponse),
-            "llm.tool_call" => Some(Self::LlmToolCall),
-            "llm.tool_result" => Some(Self::LlmToolResult),
-            "mcp.tool_call" => Some(Self::McpToolCall),
-            "mcp.request" => Some(Self::McpRequest),
-            "mcp.response" => Some(Self::McpResponse),
-            "mcp.stdin" => Some(Self::McpStdin),
-            "mcp.stdout" => Some(Self::McpStdout),
-            "sse.stream" => Some(Self::SseStream),
-            "sse.event" => Some(Self::SseEvent),
-            "enforcement.decision" => Some(Self::EnforcementDecision),
-            "process.fork_attempt" => Some(Self::ProcessForkAttempt),
-            "agent.invocation" => Some(Self::AgentInvocation),
-            "command.invocation" => Some(Self::CommandInvocation),
-            _ => None,
-        }
-    }
-}
+mod kind;
+pub use kind::SemanticActionKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SemanticActionStatus {
@@ -572,8 +477,10 @@ pub enum SemanticActionLinkRole {
     LlmToolCallAgentInvocation,
     HttpRequestHttpResponse,
     LlmRequestHttpMessage,
+    LlmRequestWebSocketMessage,
     LlmRequestLlmResponse,
     LlmResponseHttpMessage,
+    LlmResponseWebSocketMessage,
     LlmResponseSseStream,
     SseStreamEvent,
     McpToolCallRequest,
@@ -606,8 +513,10 @@ impl SemanticActionLinkRole {
             Self::LlmToolCallAgentInvocation => "llm.tool_call.agent_invocation",
             Self::HttpRequestHttpResponse => "http.request.http_response",
             Self::LlmRequestHttpMessage => "llm.request.http_message",
+            Self::LlmRequestWebSocketMessage => "llm.request.websocket_message",
             Self::LlmRequestLlmResponse => "llm.request.llm_response",
             Self::LlmResponseHttpMessage => "llm.response.http_message",
+            Self::LlmResponseWebSocketMessage => "llm.response.websocket_message",
             Self::LlmResponseSseStream => "llm.response.sse_stream",
             Self::SseStreamEvent => "sse.stream.event",
             Self::McpToolCallRequest => "mcp.tool_call.request",
@@ -642,8 +551,10 @@ impl SemanticActionLinkRole {
             "llm.tool_call.agent_invocation" => Some(Self::LlmToolCallAgentInvocation),
             "http.request.http_response" => Some(Self::HttpRequestHttpResponse),
             "llm.request.http_message" => Some(Self::LlmRequestHttpMessage),
+            "llm.request.websocket_message" => Some(Self::LlmRequestWebSocketMessage),
             "llm.request.llm_response" => Some(Self::LlmRequestLlmResponse),
             "llm.response.http_message" => Some(Self::LlmResponseHttpMessage),
+            "llm.response.websocket_message" => Some(Self::LlmResponseWebSocketMessage),
             "llm.response.sse_stream" => Some(Self::LlmResponseSseStream),
             "sse.stream.event" => Some(Self::SseStreamEvent),
             "mcp.tool_call.request" => Some(Self::McpToolCallRequest),

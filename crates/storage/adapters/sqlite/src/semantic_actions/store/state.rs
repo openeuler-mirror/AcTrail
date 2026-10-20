@@ -15,6 +15,7 @@ use crate::semantic_actions::codebook::sqlite::{
     action_completeness_code, action_kind_code, action_status_code, decode_status,
     evidence_kind_code,
 };
+use crate::semantic_actions::cold_fields::{ColdFieldEncoder, upsert_action_attributes};
 
 macro_rules! assignment_sql {
     ($assignment:literal) => {
@@ -120,9 +121,34 @@ impl<'a> ActionStateWriter<'a> {
     pub(super) fn update(
         &self,
         update: SemanticActionUpdate,
+        encoder: &ColdFieldEncoder,
     ) -> Result<(), SemanticActionStoreError> {
         let kind = action_kind_code(update.kind);
         let key = match &update.change {
+            SemanticActionChange::ActionSnapshot { title, attributes } => {
+                let key = self.assigned(
+                    assignment_sql!("UPDATE semantic_actions SET title = ?5"),
+                    params![
+                        update.action_id,
+                        update.trace_id.get(),
+                        kind,
+                        update.process.get(),
+                        title
+                    ],
+                )?;
+                if attributes.is_empty() {
+                    self.connection
+                        .execute(
+                            "DELETE FROM semantic_action_cold_fields WHERE owner_key = ?1",
+                            [key],
+                        )
+                        .map_err(|e| Self::error("replace_semantic_action_attributes", e))?;
+                } else {
+                    upsert_action_attributes(self.connection, key, attributes, encoder)
+                        .map_err(|e| Self::error("replace_semantic_action_attributes", e))?;
+                }
+                key
+            }
             SemanticActionChange::Lifecycle {
                 end_time,
                 status,

@@ -21,8 +21,14 @@ sudo -E python3 tests/v2/regression/probe_claude_llm/run_e2e.py
 4. 验证 Claude 标准输出包含 marker，并提取唯一 trace id。
 5. 安全停止 daemon，等待 trace 和 post-trace 数据排空。
 6. 验证 trace 为 `Exited/Clean`。
-7. 验证终态 `llm.call/request/response` 完整配对，response 包含 marker，
+7. 验证终态 `llm.call/request/response` 完整配对，主 response 为
+   `success/complete` 且包含 marker，
    request 具有 canonical content 证据。
+
+后台标题等辅助请求允许在响应未完成时关闭。其 LLM response 保留
+`PeerClosed`、`error/partial`，并须关联到同一 trace、process 和 stream 中
+已经结束的 `error/partial` 入站 HTTP action。辅助请求仍参与配对校验；
+包含主任务 marker 的响应必须完整成功。
 
 # 手动测试
 
@@ -198,8 +204,11 @@ jq --arg marker "$CASE_MARKER" '
       marker_responses: [
         $responses[]
         | select(
-            ((.attributes["llm.response.content_text"] // "") | contains($marker))
-            or ((.attributes["llm.response.output_text"] // "") | contains($marker))
+            .status == "success" and .completeness == "complete"
+            and (
+              ((.attributes["llm.response.content_text"] // "") | contains($marker))
+              or ((.attributes["llm.response.output_text"] // "") | contains($marker))
+            )
           )
         | .action_id
       ]

@@ -1,43 +1,32 @@
 //! Projection/correlation lifecycle operations exposed to the facade.
 
 use model_core::ids::TraceId;
-use model_core::payload::PayloadStreamIdentity;
 use semantic_action::SemanticAction;
 
 use super::super::ProjectionBatch;
-use super::super::correlation::LlmStreamKey;
 use super::ProjectionCoordinator;
 
 impl ProjectionCoordinator {
-    pub(in crate::llm_pipeline) fn take_localized_output(
+    pub(in crate::llm_pipeline) fn observe_response_trajectory(
         &mut self,
-        stream_key: &LlmStreamKey,
+        request: &SemanticAction,
+        provider_response_id: Option<&str>,
+        observed_at: std::time::SystemTime,
+        failed: bool,
     ) -> ProjectionBatch {
-        self.correlation
-            .localized_http1_request_outputs
-            .remove(stream_key)
-            .unwrap_or_default()
+        let mut output = ProjectionBatch::default();
+        if failed {
+            self.projector.reject_trajectory_parent(request);
+        } else {
+            let assignments = self.projector.register_provider_response(
+                request,
+                provider_response_id,
+                observed_at,
+            );
+            self.apply_resolved_trajectory_assignments(request.trace_id, assignments, &mut output);
+        }
+        output
     }
-
-    pub(in crate::llm_pipeline) fn open_requests_for_identity(
-        &self,
-        identity: &PayloadStreamIdentity,
-    ) -> Vec<SemanticAction> {
-        self.correlation
-            .unconfirmed_streams_for_identity(identity)
-            .into_iter()
-            .filter_map(|key| self.correlation.open_requests.get(&key))
-            .flat_map(|requests| requests.iter().map(|request| request.action.clone()))
-            .collect()
-    }
-
-    pub(in crate::llm_pipeline) fn open_requests_for_trace(
-        &self,
-        trace_id: TraceId,
-    ) -> Vec<SemanticAction> {
-        self.correlation.open_requests_for_trace(trace_id)
-    }
-
     pub(in crate::llm_pipeline) fn finalize_trajectory(
         &mut self,
         trace_id: TraceId,
@@ -50,55 +39,10 @@ impl ProjectionCoordinator {
         self.apply_resolved_trajectory_assignments(trace_id, assignments, output);
     }
 
-    pub(in crate::llm_pipeline) fn forget_identity(&mut self, identity: &PayloadStreamIdentity) {
-        self.correlation.forget_stream_identity(identity);
-    }
-
     pub(in crate::llm_pipeline) fn forget_trace_state(&mut self, trace_id: TraceId) {
         if let Some(trajectory) = self.projector.trajectory.as_mut() {
             trajectory.forget_trace(trace_id);
         }
-        self.correlation
-            .open_requests
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .pending_responses
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .confirmed_http_exchanges
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .closed_llm_exchanges
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .incomplete_http1_responses
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .damaged_http_responses
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .damaged_response_bindings
-            .retain(|(candidate, _), _| *candidate != trace_id);
-        self.correlation
-            .damaged_binding_owners
-            .forget_trace(trace_id);
-        self.correlation
-            .late_http_failure_bindings
-            .retain(|(candidate, _), _| *candidate != trace_id);
-        self.correlation
-            .late_failure_binding_owners
-            .forget_trace(trace_id);
-        self.correlation
-            .localized_http1_request_outputs
-            .retain(|key, _| key.trace_id != trace_id);
-        self.correlation
-            .active_response_requests
-            .retain(|(candidate, _), _| *candidate != trace_id);
-        self.correlation
-            .active_binding_owners
-            .forget_trace(trace_id);
-        self.correlation.forget_closed_pending_trace(trace_id);
-        self.correlation.stream_owners.forget_trace(trace_id);
         self.projector.forget_trace(trace_id);
     }
 }

@@ -170,10 +170,10 @@ impl EbpfCollector {
         &self,
         kernel_pid: u32,
         fd: u32,
-        expected_generation: u32,
+        expected_socket_generation: u32,
     ) -> Result<bool, CollectorError> {
         self.runtime_ref()?
-            .mark_socket_fd_tls_owned(kernel_pid, fd, expected_generation)
+            .mark_socket_fd_tls_owned(kernel_pid, fd, expected_socket_generation)
             .map_err(loader_error)
     }
 

@@ -235,6 +235,11 @@ impl EbpfProgramLoader {
         )?;
         resize_map(
             &mut open_object,
+            "rustls_connections",
+            effective_payload.tls.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
             "tls_pending_ns",
             effective_payload.tls.pending_operation_max_entries,
         )?;

@@ -206,6 +206,7 @@ fn int_kv(key: &str, value: i64) -> KeyValue {
 fn span_kind(kind: SemanticActionKind) -> span::SpanKind {
     match kind {
         SemanticActionKind::HttpMessage
+        | SemanticActionKind::WebSocketMessage
         | SemanticActionKind::LlmCall
         | SemanticActionKind::LlmRequest
         | SemanticActionKind::LlmResponse => span::SpanKind::Client,

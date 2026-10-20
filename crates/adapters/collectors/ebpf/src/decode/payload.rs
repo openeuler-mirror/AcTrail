@@ -133,7 +133,7 @@ pub struct SocketPayloadCompletion {
     pub direction: u32,
     pub fd: u32,
     pub syscall: u32,
-    pub fd_generation: u32,
+    pub socket_generation: u32,
     pub pid_generation: u64,
     pub completed_size: u64,
     pub requested_size: u64,
@@ -199,7 +199,7 @@ pub fn decode_socket_payload(
         direction: socket_direction(event.direction)?,
         stream_key: PayloadStreamKey::new(format!(
             "socket:{}:{}:{}",
-            event.pid, event.fd, event.fd_generation
+            event.pid, event.fd, event.socket_generation
         )),
         sequence: event.sequence,
         original_size: u64::from(event.original_size),
@@ -232,7 +232,7 @@ pub fn decode_socket_fd_release(
         source_boundary: PayloadSourceBoundary::Syscall,
         stream_key: PayloadStreamKey::new(format!(
             "socket:{}:{}:{}",
-            common.subject.observer_namespace_tgid, event.fd, event.fd_object_generation
+            common.subject.observer_namespace_tgid, event.fd, event.socket_generation
         )),
     })
 }
@@ -252,7 +252,7 @@ pub fn decode_socket_payload_completion(
         direction: event.direction,
         fd: event.fd,
         syscall: event.syscall,
-        fd_generation: event.fd_generation,
+        socket_generation: event.socket_generation,
         pid_generation: event.pid_generation,
         completed_size: event.completed_size,
         requested_size: event.requested_size,

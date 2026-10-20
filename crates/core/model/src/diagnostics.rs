@@ -64,6 +64,7 @@ pub enum LlmPipelineDiagnosticCode {
     Http1ConfirmedGap,
     Http1OperationIncomplete,
     Http1TransportReset,
+    Http1MessageFactsCapacityEvicted,
     Http1IncompleteRequestUnprojectableAtClose,
     Http1UnclassifiedBytesDiscardedAtClose,
     Http2ProtocolDecodeFailed,
@@ -72,6 +73,7 @@ pub enum LlmPipelineDiagnosticCode {
     Http2AssemblySegmentCapacityExceeded,
     Http2ConfirmedGap,
     Http2OperationIncomplete,
+    Http2ActiveStreamsCapacityExceeded,
     Http2IncompleteRequestUnprojectableAtClose,
     Http2ConfirmedResponseUnprojectableAtEndStream,
     DesynchronizedBytesDiscarded,
@@ -118,6 +120,7 @@ impl LlmPipelineDiagnosticCode {
             Self::Http1ConfirmedGap => 3012,
             Self::Http1OperationIncomplete => 3013,
             Self::Http1TransportReset => 3014,
+            Self::Http1MessageFactsCapacityEvicted => 3015,
             Self::Http1IncompleteRequestUnprojectableAtClose => 3020,
             Self::Http1UnclassifiedBytesDiscardedAtClose => 3021,
             Self::Http2ProtocolDecodeFailed => 4001,
@@ -126,6 +129,7 @@ impl LlmPipelineDiagnosticCode {
             Self::Http2AssemblySegmentCapacityExceeded => 4011,
             Self::Http2ConfirmedGap => 4012,
             Self::Http2OperationIncomplete => 4013,
+            Self::Http2ActiveStreamsCapacityExceeded => 4014,
             Self::Http2IncompleteRequestUnprojectableAtClose => 4020,
             Self::Http2ConfirmedResponseUnprojectableAtEndStream => 4021,
             Self::DesynchronizedBytesDiscarded => 5001,
@@ -172,6 +176,7 @@ impl LlmPipelineDiagnosticCode {
             3012 => Self::Http1ConfirmedGap,
             3013 => Self::Http1OperationIncomplete,
             3014 => Self::Http1TransportReset,
+            3015 => Self::Http1MessageFactsCapacityEvicted,
             3020 => Self::Http1IncompleteRequestUnprojectableAtClose,
             3021 => Self::Http1UnclassifiedBytesDiscardedAtClose,
             4001 => Self::Http2ProtocolDecodeFailed,
@@ -180,6 +185,7 @@ impl LlmPipelineDiagnosticCode {
             4011 => Self::Http2AssemblySegmentCapacityExceeded,
             4012 => Self::Http2ConfirmedGap,
             4013 => Self::Http2OperationIncomplete,
+            4014 => Self::Http2ActiveStreamsCapacityExceeded,
             4020 => Self::Http2IncompleteRequestUnprojectableAtClose,
             4021 => Self::Http2ConfirmedResponseUnprojectableAtEndStream,
             5001 => Self::DesynchronizedBytesDiscarded,
@@ -237,6 +243,7 @@ impl LlmPipelineDiagnosticCode {
             Self::Http1ConfirmedGap => "http1_confirmed_gap",
             Self::Http1OperationIncomplete => "http1_operation_incomplete",
             Self::Http1TransportReset => "http1_transport_reset",
+            Self::Http1MessageFactsCapacityEvicted => "http1_message_facts_capacity_evicted",
             Self::Http1IncompleteRequestUnprojectableAtClose => {
                 "http1_incomplete_request_unprojectable_at_close"
             }
@@ -251,6 +258,7 @@ impl LlmPipelineDiagnosticCode {
             }
             Self::Http2ConfirmedGap => "http2_confirmed_gap",
             Self::Http2OperationIncomplete => "http2_operation_incomplete",
+            Self::Http2ActiveStreamsCapacityExceeded => "http2_active_streams_capacity_exceeded",
             Self::Http2IncompleteRequestUnprojectableAtClose => {
                 "http2_incomplete_request_unprojectable_at_close"
             }

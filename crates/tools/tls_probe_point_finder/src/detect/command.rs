@@ -192,6 +192,19 @@ impl<'a> OutcomeProjector<'a> {
                 consumer.validation_status.clone(),
             ),
         ];
+        report.runtime_config.extend(
+            candidate
+                .evidence
+                .facts
+                .iter()
+                .filter(|fact| {
+                    matches!(
+                        fact.key.as_str(),
+                        "rustls_handshake_structure" | "rustls_connection_identity"
+                    )
+                })
+                .map(|fact| (fact.key.clone(), fact.value.clone())),
+        );
         report.symbol_map = Some(SymbolMapReport {
             resolver: candidate.resolver.clone(),
             library: candidate.provider.as_str().to_string(),

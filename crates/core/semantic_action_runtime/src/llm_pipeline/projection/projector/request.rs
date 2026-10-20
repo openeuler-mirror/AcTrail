@@ -23,6 +23,9 @@ use super::super::retention::{BackgroundRequestKind, TrajectoryHistoryProjection
 use super::super::retention::{insert_payload_span_attributes, payload_aggregate_evidence};
 
 mod content;
+mod parsed;
+
+pub(super) use parsed::project_parsed_request;
 mod selective;
 mod strict;
 mod tool_results;
@@ -58,8 +61,8 @@ pub(crate) enum ProviderContextReference {
 pub(super) fn project_stream_llm_request_action(
     config: &SemanticRetentionConfig,
     codecs: &LlmCodecRegistry,
-    key: &PayloadStreamGroupKey,
-    message_start: usize,
+    _key: &PayloadStreamGroupKey,
+    _message_start: usize,
     raw_bytes: &[u8],
     mut http: HttpRequestParts<'_>,
     segments: &[&PayloadSegment],
@@ -71,7 +74,7 @@ pub(super) fn project_stream_llm_request_action(
         parse_llm_request_body(&http, codecs, config)
     }?;
     let first = *segments.first()?;
-    let action_id = llm_stream_action_id(key, message_start, first, http.stream_id);
+    let action_id = format!("{}:llm.request", http.message_id);
     http.scheme = plaintext_transport_scheme(first.source_boundary);
     let content_projection = project_request_content(config, first.trace_id, &action_id, &body)
         .expect("projecting canonical LLM request content should not fail for parsed JSON");
@@ -251,6 +254,35 @@ fn llm_attributes(
             "hpack".to_string(),
         );
     }
+    insert_content_attributes(config, body, content, &mut attributes);
+    attributes.insert(
+        attrs::payload::STREAM_KEY.to_string(),
+        first.stream_key.to_string(),
+    );
+    attributes.insert(
+        attrs::payload::OPERATION_ID.to_string(),
+        first.operation_id.to_string(),
+    );
+    attributes.insert(
+        attrs::payload::SEQUENCE.to_string(),
+        first.sequence.to_string(),
+    );
+    insert_payload_span_attributes(&mut attributes, segments);
+    attributes.insert(
+        attrs::payload::SOURCE_BOUNDARY.to_string(),
+        format!("{:?}", first.source_boundary),
+    );
+    attributes.insert(attrs::payload::LIBRARY.to_string(), first.library.clone());
+    attributes.insert(attrs::payload::SYMBOL.to_string(), first.symbol.clone());
+    attributes
+}
+
+fn insert_content_attributes(
+    config: &SemanticRetentionConfig,
+    body: &LlmRequestBody,
+    content: Option<RequestContentMetadata>,
+    attributes: &mut BTreeMap<String, String>,
+) {
     if let Some(model) = body.model.as_deref().and_then(validated_model_identifier) {
         attributes.insert(attrs::llm_request::MODEL.to_string(), model.to_string());
     }
@@ -320,26 +352,6 @@ fn llm_attributes(
             "unavailable".to_string(),
         );
     }
-    attributes.insert(
-        attrs::payload::STREAM_KEY.to_string(),
-        first.stream_key.to_string(),
-    );
-    attributes.insert(
-        attrs::payload::OPERATION_ID.to_string(),
-        first.operation_id.to_string(),
-    );
-    attributes.insert(
-        attrs::payload::SEQUENCE.to_string(),
-        first.sequence.to_string(),
-    );
-    insert_payload_span_attributes(&mut attributes, segments);
-    attributes.insert(
-        attrs::payload::SOURCE_BOUNDARY.to_string(),
-        format!("{:?}", first.source_boundary),
-    );
-    attributes.insert(attrs::payload::LIBRARY.to_string(), first.library.clone());
-    attributes.insert(attrs::payload::SYMBOL.to_string(), first.symbol.clone());
-    attributes
 }
 
 fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'static str {
@@ -623,29 +635,4 @@ fn llm_title(attributes: &BTreeMap<String, String>) -> String {
         .get(attrs::llm_request::MODEL)
         .map(|model| format!("LLM request {}", model))
         .unwrap_or_else(|| "LLM request".to_string())
-}
-
-fn llm_stream_action_id(
-    key: &PayloadStreamGroupKey,
-    message_start: usize,
-    segment: &PayloadSegment,
-    http_stream_id: Option<u32>,
-) -> String {
-    match http_stream_id {
-        Some(stream_id) => format!(
-            "trace:{}:payload-stream:{}:{}:{}:h2:{}:llm.request",
-            segment.trace_id.get(),
-            key.process.get(),
-            key.stream_key,
-            message_start,
-            stream_id
-        ),
-        None => format!(
-            "trace:{}:payload-stream:{}:{}:{}:llm.request",
-            segment.trace_id.get(),
-            key.process.get(),
-            key.stream_key,
-            message_start
-        ),
-    }
 }

@@ -73,10 +73,4 @@ class ProbeCodexLLMTask:
         return binary
 
     def environment(self) -> dict[str, str]:
-        environment = self._discovery.environment(self._codex)
-        for parent in self._codex.resolve().parents:
-            if parent.name == ".codex":
-                environment["HOME"] = str(parent.parent)
-                environment["CODEX_HOME"] = str(parent)
-                break
-        return environment
+        return self._discovery.codex_environment(self._codex)

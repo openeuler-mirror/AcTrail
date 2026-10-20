@@ -42,7 +42,7 @@ pub(in crate::semantic_actions) fn decode_attributes_from_row_with_prefix(
 }
 
 pub(in crate::semantic_actions) fn upsert_action_attributes(
-    connection: &mut rusqlite::Connection,
+    connection: &rusqlite::Connection,
     action_key: i64,
     attributes: &BTreeMap<String, String>,
     encoder: &ColdFieldEncoder,

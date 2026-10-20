@@ -3,7 +3,8 @@
 use std::time::SystemTime;
 
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionStatus, attr_keys as attrs,
+    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionStatus,
+    attr_keys as attrs,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,15 +16,12 @@ pub(in crate::llm_pipeline) enum StreamFinalizationReason {
     OperationIncomplete,
     ProtocolDecodeFailed,
     Http2StreamReset,
+    Http2ActiveStreamCapacity,
     BufferBytesExceeded,
     SegmentRangesExceeded,
 }
 
 impl StreamFinalizationReason {
-    pub(in crate::llm_pipeline) const fn response_reusable(self) -> bool {
-        matches!(self, Self::CapturePolicyLimited)
-    }
-
     const fn terminal_state(self) -> (SemanticActionStatus, SemanticActionCompleteness) {
         match self {
             Self::CapturePolicyLimited => (
@@ -38,8 +36,7 @@ impl StreamFinalizationReason {
     }
 }
 
-/// Applies terminal status consistently after a stream component has
-/// materialized a partial LLM request or response from retained bytes.
+/// Finalizes incomplete LLM results while preserving complete successful responses.
 pub(in crate::llm_pipeline) struct ResponseFinalizer;
 
 impl ResponseFinalizer {
@@ -69,6 +66,12 @@ impl ResponseFinalizer {
         reason: StreamFinalizationReason,
         observed_at: SystemTime,
     ) {
+        if action.kind == SemanticActionKind::LlmResponse
+            && action.status == SemanticActionStatus::Success
+            && action.completeness == SemanticActionCompleteness::Complete
+        {
+            return;
+        }
         action.end_time = Some(observed_at);
         let (status, completeness) = reason.terminal_state();
         action.status = status;
