@@ -1,6 +1,6 @@
 //! Stateful HTTP/1 wire decoder.
 
-use super::content_decoder::Http1ContentDecoder;
+use super::content_decoder::{DecoderFactory, DecoderHandle};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -96,7 +96,7 @@ struct ActiveMessage {
     status_code: Option<String>,
     reason: Option<String>,
     headers_text: String,
-    body: Option<Http1ContentDecoder>,
+    body: Option<DecoderHandle>,
     content_failure: Option<Http1DecodeFailure>,
     max_decoded_bytes: usize,
     body_start: usize,
@@ -221,7 +221,7 @@ impl Http1Decoder {
             .map_err(|_| Http1DecodeFailure::InvalidHead)?
             .to_string();
         let parsed = ParsedHead::parse(self.direction, &headers_text)?;
-        let content = Http1ContentDecoder::new(
+        let content = DecoderFactory::create(
             if parsed.framing == BodyFraming::None {
                 ""
             } else {
@@ -244,9 +244,7 @@ impl Http1Decoder {
             // need separate owned storage.
             body: if self.direction == Http1Direction::Request
                 && matches!(parsed.framing, BodyFraming::Fixed(_))
-                && content
-                    .as_ref()
-                    .is_some_and(Http1ContentDecoder::is_identity)
+                && content.as_ref().is_some_and(DecoderHandle::is_identity)
             {
                 None
             } else {
@@ -318,10 +316,7 @@ impl Http1Decoder {
                     let size = match usize::from_str_radix(size_text, 16) {
                         Ok(size) => size,
                         Err(_)
-                            if active
-                                .body
-                                .as_ref()
-                                .is_none_or(Http1ContentDecoder::is_identity)
+                            if active.body.as_ref().is_none_or(DecoderHandle::is_identity)
                                 && sse_field_line(&wire[active.wire_cursor..line_end]) =>
                         {
                             // Some L0 sources expose a de-chunked body while

@@ -6,3 +6,4 @@
 
 - [当前仓库布局](current.md)
 - [执行隔离代码布局](execution-isolation.md)
+- [HTTP 内容解码代码布局](http-content-decoder.md)
