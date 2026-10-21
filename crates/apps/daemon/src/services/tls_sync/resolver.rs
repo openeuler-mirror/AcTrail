@@ -22,8 +22,8 @@ use tls_probe_point_finder::fast::{
     ArchFilter, FastProbeRequest, ProbeConsumer, ProviderFilter, SourceFilter,
 };
 use tls_probe_point_finder::{
-    BinaryAnalysisCache, BinaryAnalysisCacheStats, BinaryIdentity, ResolveMode,
-    resolve_plans_with_analysis_cache,
+    BinaryAnalysisCache, BinaryAnalysisCacheStats, BinaryIdentity, ProbeFileSource, ResolveMode,
+    resolve_plans_with_analysis_cache, resolve_plans_with_file_source,
 };
 
 pub(super) struct TlsSyncPlanResolver {
@@ -31,6 +31,7 @@ pub(super) struct TlsSyncPlanResolver {
     direct: Option<DirectDiscovery>,
     dynamic_exec_plan_timeout: Duration,
     launch_consumer: ProbeConsumer,
+    startup_discovery_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +87,10 @@ struct LaunchPlanLookupOutcome {
 }
 
 impl TlsSyncPlanResolver {
+    pub(super) fn startup_discovery_enabled(&self) -> bool {
+        self.startup_discovery_enabled
+    }
+
     pub(super) fn new(config: &PayloadTlsConfig) -> Result<Self, ControlError> {
         let match_limit = match_limit(config)?;
         let cache_capacity = binary_analysis_cache_capacity(config)?;
@@ -118,6 +123,9 @@ impl TlsSyncPlanResolver {
             })
             .map_err(|error| ControlError::new("tls_sync_plan_worker", error.to_string()))?;
         Ok(Self {
+            startup_discovery_enabled: config.enabled
+                && config.capture_backend == PayloadTlsCaptureBackend::BpfCopy
+                && config.direct_startup_discovery_enabled,
             requests,
             direct,
             dynamic_exec_plan_timeout: Duration::from_millis(config.dynamic_exec_plan_timeout_ms),
@@ -297,7 +305,13 @@ impl TlsSyncPlanWorker {
             .map_err(|error| ControlError::new("tls_sync_plan_root", error))?;
         let startup_object = DirectObject::open_startup(&pinned.path());
         let before = self.analysis_cache.stats();
-        let resolved = self.resolve_plans(&pinned.path(), runtime_binary, ProbeConsumer::Direct);
+        let probe_binary = pinned.path();
+        let resolved = self.resolve_plans(
+            &probe_binary,
+            runtime_binary,
+            ProbeConsumer::Direct,
+            Some(root.into_file_source(runtime_binary, Some(pinned))),
+        );
         if let (Some(worker), Some(object), Ok(plans)) = (&self.direct, startup_object, &resolved) {
             // A successful Auto/All pass completed the executable branches.
             // Only the pinned root's facts belong in its single-object cache entry.
@@ -400,21 +414,15 @@ impl TlsSyncPlanWorker {
         };
         let probe_binary = match pinned_probe.as_ref() {
             Some(path) => path.path(),
-            None => match probe_binary_path(runtime_binary, peer_root.as_ref()) {
-                Ok(path) => path,
-                Err(reason) => {
-                    tracing::warn!(
-                        target: "actrail::tls_sync",
-                        runtime_binary = %runtime_binary.display(),
-                        reason = %reason,
-                        "TLS sync plan lookup path resolution failed"
-                    );
-                    return unsupported_outcome(reason, started);
-                }
-            },
+            None => runtime_binary.to_path_buf(),
         };
         let cache_before = self.analysis_cache.stats();
-        let record = match self.resolve_plans(&probe_binary, runtime_binary, consumer) {
+        let record = match self.resolve_plans(
+            &probe_binary,
+            runtime_binary,
+            consumer,
+            peer_root.map(|root| root.into_file_source(runtime_binary, pinned_probe)),
+        ) {
             Ok(plans) => BinaryPlanRecord { plans },
             Err(error) => {
                 tracing::warn!(
@@ -445,21 +453,37 @@ impl TlsSyncPlanWorker {
         probe_binary: &Path,
         runtime_binary: &Path,
         consumer: ProbeConsumer,
+        source: Option<Rc<dyn ProbeFileSource>>,
     ) -> Result<Vec<BinaryPlanDescriptor>, ControlError> {
-        let resolution = resolve_plans_with_analysis_cache(
-            FastProbeRequest {
-                binary: probe_binary.to_path_buf(),
-                arch: ArchFilter::Auto,
-                provider: ProviderFilter::Auto,
-                source: SourceFilter::Auto,
-                match_limit: self.match_limit,
-                libraries: library_candidates(&self.config),
-                library_search_dirs: Vec::new(),
-            },
-            consumer,
-            ResolveMode::All,
-            Rc::clone(&self.analysis_cache),
-        )
+        let request = FastProbeRequest {
+            binary: if source.is_some() {
+                runtime_binary
+            } else {
+                probe_binary
+            }
+            .to_path_buf(),
+            arch: ArchFilter::Auto,
+            provider: ProviderFilter::Auto,
+            source: SourceFilter::Auto,
+            match_limit: self.match_limit,
+            libraries: library_candidates(&self.config),
+            library_search_dirs: Vec::new(),
+        };
+        let resolution = match source {
+            Some(source) => resolve_plans_with_file_source(
+                request,
+                consumer,
+                ResolveMode::All,
+                Rc::clone(&self.analysis_cache),
+                source,
+            ),
+            None => resolve_plans_with_analysis_cache(
+                request,
+                consumer,
+                ResolveMode::All,
+                Rc::clone(&self.analysis_cache),
+            ),
+        }
         .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
         if resolution.plans.is_empty() && consumer != ProbeConsumer::Direct {
             return Err(ControlError::new(
@@ -513,16 +537,6 @@ impl TlsSyncPlanWorker {
             cache_evictions = stats.evictions,
             "TLS binary analysis cache lookup"
         );
-    }
-}
-
-fn probe_binary_path(
-    runtime_binary: &Path,
-    peer_root: Option<&PeerRootHandle>,
-) -> Result<PathBuf, String> {
-    match peer_root {
-        Some(root) => root.probe_path_for(runtime_binary),
-        None => Ok(runtime_binary.to_path_buf()),
     }
 }
 

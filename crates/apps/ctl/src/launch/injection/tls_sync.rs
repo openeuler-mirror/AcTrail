@@ -1,35 +1,31 @@
-//! Launch-time TLS sync runtime injection.
+//! TLS sync injection preparation.
+
+#[path = "tls_sync/env.rs"]
+mod env;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use config_core::daemon::{
-    DisabledOrPath, PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibraryPath,
-    PayloadTlsSyncRuntimeLibraryPath,
+    DisabledOrPath, PayloadTlsConfig, PayloadTlsLibraryPath, PayloadTlsSyncRuntimeLibraryPath,
 };
-use control_contract::reply::LaunchTlsPlanStatus;
+use control_contract::command::LaunchTlsProbePlan;
 use model_core::ids::RequestId;
-use model_core::ids::TraceId;
+use model_core::process::SuppressedFdPurpose;
 use tls_payload_sync::{
-    EventFilter, LibcFamily, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig,
-    RuntimeLibraryPath, RuntimeLibrarySet, RuntimePlanDescriptor, TargetRuntime,
-    audit_bind_now_env, audit_env_value_for_libraries, launch_command_for_plan_descriptor,
-    preload_env_value_for_libraries, resolve_program_path, resolve_target_runtime,
-    runtime_env_for_plan_descriptors, runtime_library_envs, runtime_library_set,
-    target_runtime_for_path,
+    LibcFamily, RuntimeLibraryPath, RuntimeLibrarySet, RuntimePlanDescriptor, TargetRuntime,
+    launch_command_for_plan_descriptor, resolve_program_path, resolve_target_runtime,
+    runtime_library_set, target_runtime_for_path,
 };
 
-use super::java_agent::{java_agent_env_required, maybe_append_java_agent_env};
-use super::suppress::InheritableSuppressedFd;
-use super::timing::LaunchTiming;
-use crate::tls_plan::{
-    QueriedLaunchTlsPlan, queried_plan_from_reply, query_launch_tls_plan,
-    query_launch_tls_plan_reply,
-};
+use super::super::java_agent::java_agent_env_required;
+use super::super::suppress::InheritableSuppressedFd;
+use super::super::timing::LaunchTiming;
+use crate::tls_plan::{QueriedLaunchTlsPlan, query_launch_tls_plan};
 use crate::transport::ControlClientPort;
 
-pub(super) struct SyncLaunch {
-    pub(super) command: Vec<OsString>,
+struct SyncLaunch {
+    command: Vec<OsString>,
     plans: Vec<RuntimePlanDescriptor>,
     sync_runtime_required: bool,
     runtime_libraries: Option<RuntimeLibrarySet>,
@@ -53,69 +49,6 @@ impl SyncLaunch {
             direct_probe_plans,
             java_agent_env_required: false,
         }
-    }
-
-    fn prepare_direct(
-        client: &mut impl ControlClientPort,
-        request_id: RequestId,
-        command: Vec<OsString>,
-        agent_commands: &[String],
-        timing: &mut LaunchTiming,
-    ) -> Result<Self, String> {
-        let binary = resolve_command_binary(&command)?;
-        let primary = Self::query_direct(client, request_id, &binary, timing)?;
-        let command = match primary.first() {
-            Some(plan) => launch_command_for_plan_descriptor(&command, plan)
-                .map_err(|error| error.to_string())?,
-            None => command,
-        };
-        let mut launch = Self::direct(command, primary);
-        for candidate in agent_commands {
-            let Ok(binary) = resolve_command_binary(&[OsString::from(candidate)]) else {
-                continue;
-            };
-            for plan in Self::query_direct(client, request_id, &binary, timing)? {
-                if !launch
-                    .direct_probe_plans
-                    .iter()
-                    .any(|existing| same_plan(existing, &plan))
-                {
-                    launch.direct_probe_plans.push(plan);
-                }
-            }
-        }
-        Ok(launch)
-    }
-
-    fn query_direct(
-        client: &mut impl ControlClientPort,
-        request_id: RequestId,
-        binary: &Path,
-        timing: &mut LaunchTiming,
-    ) -> Result<Vec<RuntimePlanDescriptor>, String> {
-        let reply = query_launch_tls_plan_reply(client, request_id, binary)
-            .map_err(|error| format!("{}: {}", error.code, error.message))?;
-        if let LaunchTlsPlanStatus::Unsupported { reason } = &reply.status {
-            timing.mark_detail(
-                "direct.resolve_launch_plan",
-                format_args!("binary={} reason_code={}", binary.display(), reason.code()),
-            );
-            return Ok(Vec::new());
-        }
-        queried_plan_from_reply(reply)
-            .map(|plan| plan.map(|plan| plan.descriptors).unwrap_or_default())
-    }
-
-    pub(super) const fn requires_sync_runtime(&self) -> bool {
-        self.sync_runtime_required
-    }
-
-    pub(super) fn direct_probe_plans(&self) -> &[RuntimePlanDescriptor] {
-        &self.direct_probe_plans
-    }
-
-    pub(super) fn has_direct_probe_plans(&self) -> bool {
-        !self.direct_probe_plans.is_empty()
     }
 }
 
@@ -164,26 +97,20 @@ impl LaunchPlanSet {
     }
 }
 
-pub(super) fn sync_launch(
-    client: &mut impl ControlClientPort,
+fn sync_launch(
+    client: &mut (impl ControlClientPort + ?Sized),
     request_id: RequestId,
-    argv: Vec<String>,
+    command: Vec<OsString>,
     config: &PayloadTlsConfig,
     agent_commands: &[String],
     timing: &mut LaunchTiming,
 ) -> Result<SyncLaunch, String> {
-    if argv.is_empty() {
+    if command.is_empty() {
         return Err("launch requires a command after --".to_string());
     }
     validate_resolver_inputs(config)?;
     timing.mark("sync.validate_resolver_inputs");
-    let raw_command = argv.into_iter().map(OsString::from).collect::<Vec<_>>();
-    if config.capture_backend == PayloadTlsCaptureBackend::BpfCopy {
-        if !config.direct_startup_discovery_enabled {
-            return Ok(SyncLaunch::direct(raw_command, Vec::new()));
-        }
-        return SyncLaunch::prepare_direct(client, request_id, raw_command, agent_commands, timing);
-    }
+    let raw_command = command;
     let (command, launch_plan) = match resolve_daemon_plan(client, request_id, &raw_command, config)
     {
         Ok(plan) => {
@@ -322,129 +249,8 @@ pub(super) fn sync_launch(
     })
 }
 
-pub(super) fn sync_launch_envs(
-    trace_id: TraceId,
-    config: &PayloadTlsConfig,
-    socket_max_segment_bytes: u32,
-    launch: &SyncLaunch,
-    sync_event_fd: Option<&InheritableSuppressedFd>,
-    timing: &mut LaunchTiming,
-) -> Result<Vec<(OsString, OsString)>, String> {
-    if !launch.requires_sync_runtime() {
-        return Ok(Vec::new());
-    }
-    let sync_event_fd = sync_event_fd
-        .ok_or_else(|| "TLS sync launch requires an inherited event fd".to_string())?;
-    timing.mark("sync_env.require_event_fd");
-    let mut envs = runtime_env_for_plan_descriptors(
-        &RuntimeEnvConfig {
-            rules: Vec::new(),
-            max_payload_bytes: usize::try_from(config.max_operation_bytes)
-                .map_err(|error| format!("payload_tls_max_operation_bytes overflow: {error}"))?,
-            max_frame_bytes: usize::try_from(config.sync_max_frame_bytes)
-                .map_err(|error| format!("payload_tls_sync_max_frame_bytes overflow: {error}"))?,
-            flow_control: RuntimeFlowControlConfig {
-                enabled: config.sync_flow_control_enabled,
-                sniff_bytes: usize::try_from(config.sync_flow_sniff_bytes).map_err(|error| {
-                    format!("payload_tls_sync_flow_sniff_bytes overflow: {error}")
-                })?,
-                max_header_bytes: usize::try_from(config.sync_flow_max_header_bytes).map_err(
-                    |error| format!("payload_tls_sync_flow_max_header_bytes overflow: {error}"),
-                )?,
-                large_transfer_bytes: config.sync_flow_large_transfer_bytes,
-                unknown_stream_bytes: config.sync_flow_unknown_stream_bytes,
-                h2_data_probe_bytes: config.sync_flow_h2_data_probe_bytes,
-                max_streams: 4096,
-            },
-            redaction: RedactionMode::Redact,
-            events: EventFilter::none(),
-            trace_id: Some(trace_id.get()),
-            event_socket_path: Some(config.sync_event_socket_path.clone()),
-            event_fd: Some(sync_event_fd.raw_fd()),
-            event_write_buffer_bytes: Some(
-                usize::try_from(socket_max_segment_bytes).map_err(|error| {
-                    format!("payload_socket_max_segment_bytes overflow: {error}")
-                })?,
-            ),
-        },
-        &launch.plans,
-    )
-    .map_err(|error| error.to_string())?;
-    timing.mark_detail(
-        "sync_env.runtime_env_for_plans",
-        format_args!("plan_count={} env_count={}", launch.plans.len(), envs.len()),
-    );
-    let runtime_libraries = launch
-        .runtime_libraries
-        .as_ref()
-        .ok_or_else(|| "TLS sync launch has no runtime library set".to_string())?;
-    let initial_runtime_family = launch
-        .initial_runtime_family
-        .ok_or_else(|| "TLS sync launch has no runtime family".to_string())?;
-    envs.extend(runtime_library_envs(runtime_libraries));
-    timing.mark_detail(
-        "sync_env.runtime_library_envs",
-        format_args!("env_count={}", envs.len()),
-    );
-    envs.push((
-        OsString::from("LD_PRELOAD"),
-        preload_env_value_for_libraries(&launch.preload_libraries)
-            .map_err(|error| error.to_string())?,
-    ));
-    timing.mark_detail(
-        "sync_env.ld_preload",
-        format_args!("env_count={}", envs.len()),
-    );
-    let glibc_preload = vec![runtime_libraries.glibc.clone()];
-    if initial_runtime_family == LibcFamily::Glibc {
-        if let Some(env) =
-            tls_payload_sync::runtime_dependency_library_path_env(&launch.preload_libraries)
-                .map_err(|error| error.to_string())?
-        {
-            envs.push(env);
-        }
-        if let Some(env) =
-            tls_payload_sync::runtime_dependency_library_path_prefix_env(&launch.preload_libraries)
-                .map_err(|error| error.to_string())?
-        {
-            envs.push(env);
-        }
-    }
-    timing.mark_detail(
-        "sync_env.runtime_dependency_paths",
-        format_args!("env_count={}", envs.len()),
-    );
-    if let Some(env) =
-        tls_payload_sync::runtime_dependency_library_path_prefix_glibc_env(&glibc_preload)
-            .map_err(|error| error.to_string())?
-    {
-        envs.push(env);
-    }
-    timing.mark_detail(
-        "sync_env.runtime_dependency_paths_glibc",
-        format_args!("env_count={}", envs.len()),
-    );
-    if !launch.audit_libraries.is_empty() {
-        envs.push((
-            OsString::from("LD_AUDIT"),
-            audit_env_value_for_libraries(&launch.audit_libraries)
-                .map_err(|error| error.to_string())?,
-        ));
-        if let Some(env) = audit_bind_now_env(&launch.audit_libraries) {
-            envs.push(env);
-        }
-    }
-    timing.mark_detail("sync_env.audit", format_args!("env_count={}", envs.len()));
-    maybe_append_java_agent_env(launch.java_agent_env_required, &mut envs)?;
-    timing.mark_detail(
-        "sync_env.java_agent",
-        format_args!("env_count={}", envs.len()),
-    );
-    Ok(envs)
-}
-
 fn launch_plans(
-    client: &mut impl ControlClientPort,
+    client: &mut (impl ControlClientPort + ?Sized),
     request_id: RequestId,
     launch_plan: Option<&QueriedLaunchTlsPlan>,
     config: &PayloadTlsConfig,
@@ -466,7 +272,7 @@ fn launch_plans(
 }
 
 fn resolve_daemon_plan(
-    client: &mut impl ControlClientPort,
+    client: &mut (impl ControlClientPort + ?Sized),
     request_id: RequestId,
     command: &[OsString],
     config: &PayloadTlsConfig,
@@ -476,7 +282,7 @@ fn resolve_daemon_plan(
 }
 
 fn resolve_daemon_plan_for_binary(
-    client: &mut impl ControlClientPort,
+    client: &mut (impl ControlClientPort + ?Sized),
     request_id: RequestId,
     binary: &Path,
     config: &PayloadTlsConfig,
@@ -511,8 +317,9 @@ fn resolve_command_binary(command: &[OsString]) -> Result<PathBuf, String> {
         return Err("launch requires a command after --".to_string());
     };
     let path = std::env::var_os("PATH");
-    resolve_program_path(program, path.as_ref().map(|value| value.as_os_str()))
-        .map_err(|error| error.to_string())
+    let binary =
+        resolve_program_path(program, path.as_deref()).map_err(|error| error.to_string())?;
+    tls_probe_point_finder::EntryElfResolver::resolve(&binary).map_err(|error| error.to_string())
 }
 
 fn same_plan(plan: &RuntimePlanDescriptor, candidate: &RuntimePlanDescriptor) -> bool {
@@ -587,4 +394,69 @@ fn validate_resolver_inputs(config: &PayloadTlsConfig) -> Result<(), String> {
 fn match_limit(config: &PayloadTlsConfig) -> Result<usize, String> {
     usize::try_from(config.sync_match_limit)
         .map_err(|error| format!("payload_tls_sync_match_limit overflow: {error}"))
+}
+
+#[derive(Default)]
+pub(super) struct TlsSyncInjection {
+    launch: Option<SyncLaunch>,
+}
+
+impl super::LaunchInjection for TlsSyncInjection {
+    fn prepare(
+        &mut self,
+        command: &mut Vec<OsString>,
+        context: super::PreparationContext<'_>,
+    ) -> Result<super::InjectionResources, String> {
+        let mut launch = sync_launch(
+            context.client,
+            context.request_id,
+            command.clone(),
+            context.config,
+            context.agent_commands,
+            context.timing,
+        )?;
+        let event_fd = if launch.sync_runtime_required {
+            Some(InheritableSuppressedFd::connect_unix_socket(
+                &context.config.sync_event_socket_path,
+                SuppressedFdPurpose::TlsSyncEvent,
+            )?)
+        } else {
+            None
+        };
+        *command = std::mem::take(&mut launch.command);
+        let direct_probe_plans = std::mem::take(&mut launch.direct_probe_plans)
+            .into_iter()
+            .map(|plan| LaunchTlsProbePlan {
+                target: plan.target,
+                target_identity: plan.target_identity,
+                binary: plan.binary,
+                binary_identity: plan.binary_identity,
+                provider: plan.provider,
+                points: plan.points,
+            })
+            .collect();
+        self.launch = Some(launch);
+        Ok(super::InjectionResources {
+            event_fd,
+            direct_probe_plans,
+        })
+    }
+
+    fn envs(
+        &self,
+        context: super::EnvironmentContext<'_>,
+    ) -> Result<Vec<(OsString, OsString)>, String> {
+        let launch = self
+            .launch
+            .as_ref()
+            .ok_or_else(|| "TLS sync injection has not been prepared".to_string())?;
+        env::sync_launch_envs(
+            context.trace_id,
+            context.config,
+            context.socket_max_segment_bytes,
+            launch,
+            context.event_fd,
+            context.timing,
+        )
+    }
 }

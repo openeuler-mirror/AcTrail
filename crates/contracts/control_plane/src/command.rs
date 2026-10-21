@@ -70,6 +70,14 @@ pub struct LaunchTlsProbePlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchTarget {
+    /// Executable path in the stopped child's filesystem.
+    pub executable: PathBuf,
+    /// Additional executables to prepare before the child starts.
+    pub candidates: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackAddCommand {
     pub request_id: RequestId,
     pub root: ProcessRef,
@@ -77,6 +85,7 @@ pub struct TrackAddCommand {
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
     pub launch_mode: bool,
+    pub launch_target: Option<LaunchTarget>,
     pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
     pub tls_probe_plans: Vec<LaunchTlsProbePlan>,
 }

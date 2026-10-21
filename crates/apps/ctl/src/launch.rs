@@ -2,6 +2,8 @@
 
 #[path = "launch/controlled.rs"]
 pub(crate) mod controlled;
+#[path = "launch/injection.rs"]
+mod injection;
 #[path = "launch/java_agent.rs"]
 mod java_agent;
 #[path = "launch/permission_policy.rs"]
@@ -10,8 +12,8 @@ pub(crate) mod permission_policy;
 pub(crate) mod seccomp;
 #[path = "launch/suppress.rs"]
 mod suppress;
-#[path = "launch/sync.rs"]
-mod sync;
+#[path = "launch/target.rs"]
+mod target;
 #[path = "launch/timing.rs"]
 mod timing;
 
@@ -27,25 +29,24 @@ use config_core::daemon::{
     PayloadTlsConfig, PayloadTlsSeccompSyscall, ProcessSeccompSyscall,
 };
 use control_contract::command::{
-    ControlCommand, LaunchTlsProbePlan, ResolveLaunchPermissionsCommand, TrackAddCommand,
-    TrackRemoveCommand,
+    ControlCommand, ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
 };
 use control_contract::reply::{ControlError, ControlReply};
 use control_contract::selector::TraceSelector;
 use model_core::ids::{RequestId, TraceId, TraceName};
-use model_core::process::SuppressedFdPurpose;
 
 use crate::output::format_reply;
 use crate::process_ref::process_ref;
 use crate::transport::ControlClientPort;
 use controlled::{ChildSetup, ControlledChild};
+use injection::{EnvironmentContext, InjectionFactory, LaunchInjection, PreparationContext};
 use permission_policy::{
     DeploymentPermissionPolicy, FileEnforcementSeccompRequirements, LaunchSeccompRequirements,
     contract_permission_mode, permission_decision_from_reply,
 };
 use seccomp::{SeccompSetup, register_listener};
 use suppress::InheritableSuppressedFd;
-use sync::{SyncLaunch, sync_launch, sync_launch_envs};
+use target::LaunchTargetResolver;
 use timing::LaunchTiming;
 
 use crate::platform_probe::{
@@ -163,54 +164,30 @@ pub(crate) fn run_launch(
     };
     timing.mark("build_child_setup");
 
-    let raw_argv = request.argv;
-    let sync_launch = if request.payload_tls_config.enabled
-        && request
-            .payload_tls_config
-            .capture_backend
-            .uses_probe_plans()
-    {
-        Some(sync_launch(
+    let mut command = request
+        .argv
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    let mut injection = InjectionFactory::create(&request.payload_tls_config);
+    let mut resources = injection.prepare(
+        &mut command,
+        PreparationContext {
             client,
             request_id,
-            raw_argv.clone(),
-            &request.payload_tls_config,
-            &request.agent_invocation_commands,
-            &mut timing,
-        )?)
-    } else {
-        None
-    };
-    if sync_launch
-        .as_ref()
-        .is_some_and(SyncLaunch::has_direct_probe_plans)
-        && !permission_reply.selected_host_ebpf
-    {
+            config: &request.payload_tls_config,
+            agent_commands: &request.agent_invocation_commands,
+            timing: &mut timing,
+        },
+    )?;
+    if !resources.direct_probe_plans.is_empty() && !permission_reply.selected_host_ebpf {
         return Err("direct TLS plans require Host eBPF for launch-time attachment".to_string());
     }
-    timing.mark_detail("sync_launch", format_args!("enabled={tls_sync_enabled}"));
-    let command = sync_launch
-        .as_ref()
-        .map(|launch| launch.command.clone())
-        .unwrap_or_else(|| raw_argv.into_iter().map(OsString::from).collect());
+    let launch_target =
+        LaunchTargetResolver::resolve(&command, &request.agent_invocation_commands)?;
     timing.mark_detail(
-        "resolve_launch_command",
-        format_args!("argc={}", command.len()),
-    );
-    let sync_runtime_required = sync_launch
-        .as_ref()
-        .is_some_and(SyncLaunch::requires_sync_runtime);
-    let mut sync_event_fd = if sync_runtime_required {
-        Some(InheritableSuppressedFd::connect_unix_socket(
-            &request.payload_tls_config.sync_event_socket_path,
-            SuppressedFdPurpose::TlsSyncEvent,
-        )?)
-    } else {
-        None
-    };
-    timing.mark_detail(
-        "connect_sync_event_socket",
-        format_args!("enabled={sync_runtime_required}"),
+        "prepare_injection",
+        format_args!("tls_sync_enabled={tls_sync_enabled}"),
     );
     let mut child = ControlledChild::spawn(command, child_setup)?;
     timing.mark_detail("spawn_stopped_child", format_args!("pid={}", child.pid()));
@@ -225,28 +202,14 @@ pub(crate) fn run_launch(
         profile_name: permission_reply.selected_profile_name,
         tags: request.tags,
         launch_mode: true,
-        initial_suppressed_fds: sync_event_fd
+        launch_target: Some(launch_target),
+        initial_suppressed_fds: resources
+            .event_fd
             .as_ref()
             .map(InheritableSuppressedFd::initial_suppressed_fd)
             .into_iter()
             .collect(),
-        tls_probe_plans: sync_launch
-            .as_ref()
-            .map(|launch| {
-                launch
-                    .direct_probe_plans()
-                    .iter()
-                    .map(|plan| LaunchTlsProbePlan {
-                        target: plan.target.clone(),
-                        target_identity: plan.target_identity.clone(),
-                        binary: plan.binary.clone(),
-                        binary_identity: plan.binary_identity.clone(),
-                        provider: plan.provider.clone(),
-                        points: plan.points.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
+        tls_probe_plans: std::mem::take(&mut resources.direct_probe_plans),
     };
     let reply = match client.send_launch_track_add(track_add, child.pidfd()) {
         Ok(reply) => reply,
@@ -299,8 +262,8 @@ pub(crate) fn run_launch(
         &request.agent_integration,
         &request.payload_tls_config,
         request.payload_socket_max_segment_bytes,
-        sync_launch.as_ref(),
-        sync_event_fd.as_ref(),
+        injection.as_ref(),
+        resources.event_fd.as_ref(),
         &mut timing,
     ) {
         Ok(envs) => envs,
@@ -315,11 +278,8 @@ pub(crate) fn run_launch(
         }
     };
     timing.mark_detail("launch_envs", format_args!("count={}", envs.len()));
-    drop(sync_event_fd.take());
-    timing.mark_detail(
-        "drop_sync_event_fd_parent_copy",
-        format_args!("enabled={sync_runtime_required}"),
-    );
+    drop(resources.event_fd.take());
+    timing.mark("release_injection_resources");
     if let Err(error) = child.continue_with_envs(envs) {
         child.terminate();
         remove_launch_root_best_effort(
@@ -469,21 +429,17 @@ fn launch_envs(
     agent_integration: &AgentLaunchIntegration,
     payload_tls_config: &PayloadTlsConfig,
     payload_socket_max_segment_bytes: u32,
-    sync_launch: Option<&SyncLaunch>,
+    injection: &dyn LaunchInjection,
     sync_event_fd: Option<&InheritableSuppressedFd>,
     timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
-    let mut envs = match sync_launch {
-        Some(sync_launch) => sync_launch_envs(
-            trace_id,
-            payload_tls_config,
-            payload_socket_max_segment_bytes,
-            sync_launch,
-            sync_event_fd,
-            timing,
-        ),
-        None => Ok(Vec::new()),
-    }?;
+    let mut envs = injection.envs(EnvironmentContext {
+        trace_id,
+        config: payload_tls_config,
+        socket_max_segment_bytes: payload_socket_max_segment_bytes,
+        event_fd: sync_event_fd,
+        timing,
+    })?;
     agent_integration.append_env(trace_id, control_socket_path, &mut envs)?;
     Ok(envs)
 }

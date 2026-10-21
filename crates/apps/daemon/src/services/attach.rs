@@ -10,6 +10,8 @@ mod debug;
 mod factory;
 #[path = "attach/helpers.rs"]
 mod helpers;
+#[path = "attach/launch/preparation.rs"]
+mod launch;
 #[path = "attach/logging.rs"]
 mod logging;
 #[path = "attach/plugin_config.rs"]
@@ -35,14 +37,13 @@ use config_core::daemon::{
 };
 use config_core::trace_snapshot::CaptureProfileSnapshot;
 use control_contract::command::{
-    DeploymentPermissionMode, LaunchTlsProbePlan, ProcessRef, ResolveLaunchPermissionsCommand,
+    DeploymentPermissionMode, ProcessRef, ResolveLaunchPermissionsCommand,
     ResolveLaunchTlsPlanCommand, TrackAddCommand,
 };
 use control_contract::reply::{
     ControlError, LaunchPermissionsReply, LaunchTlsPlanReply, PluginCommandReply, TrackAddReply,
 };
 use ebpf_collector::EbpfCollector;
-use ebpf_collector::loader::DynamicTlsProbePlan;
 use ebpf_collector::procfs::{
     ProcfsIdentityReader, ProcfsTreeSnapshotter, read_container_identity, resolve_namespaced_pid,
 };
@@ -79,7 +80,7 @@ use crate::services::retention::StorageRetentionService;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
 use crate::services::seccomp_tls::SeccompTlsService;
-use crate::services::tls_sync::{PinnedRuntimePath, RuntimeRootPathMapper, TlsSyncService};
+use crate::services::tls_sync::TlsSyncService;
 use crate::services::workload_diagnostics::WorkloadDiagnostics;
 
 use self::helpers::{capability_requested, collector_capability_requests};
@@ -312,7 +313,6 @@ impl StorageAttachService {
             trace_id,
             root_identity,
             root_observation,
-            root_host_pid,
             process_records: process_records.into_values().collect(),
             diagnostic_kind: if bootstrap_partial {
                 DiagnosticKind::BootstrapPartial
@@ -363,20 +363,14 @@ impl StorageAttachService {
                 "static TLS plans require the Host eBPF collector",
             ));
         }
+        let pinned_tls_plans =
+            self.prepare_launch_tls(trace_runtime, command, uses_ebpf_collector)?;
         let bootstrap = self.bootstrap_snapshot(
             trace_runtime,
             command,
             profile_snapshot.clone(),
             sensor_plan,
         )?;
-        let pinned_tls_plans =
-            match self.pin_direct_tls_plans(bootstrap.root_host_pid, &command.tls_probe_plans) {
-                Ok(plans) => plans,
-                Err(error) => {
-                    let _ = trace_runtime.fail_trace(bootstrap.trace_id, SystemTime::now());
-                    return Err(error);
-                }
-            };
 
         let pending_resource_scope = {
             let entry = trace_runtime.get_trace(bootstrap.trace_id).ok_or_else(|| {
@@ -529,27 +523,18 @@ impl StorageAttachService {
         self.resource_metrics.activate_scope(scope)
     }
 
-    fn pin_direct_tls_plans(
-        &self,
-        root_host_pid: u32,
-        plans: &[LaunchTlsProbePlan],
-    ) -> Result<Vec<PinnedDirectTlsPlan>, ControlError> {
-        if plans.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mapper = self.tls_sync.runtime_root_path_mapper(root_host_pid)?;
-        plans
-            .iter()
-            .map(|plan| PinnedDirectTlsPlan::new(&mapper, plan))
-            .collect()
-    }
-
     fn attach_command(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
         command: &TrackAddCommand,
         launch_pidfd: Option<OwnedFd>,
     ) -> Result<TrackAddReply, ControlError> {
+        if command.launch_mode != command.launch_target.is_some() {
+            return Err(ControlError::new(
+                "launch_target",
+                "a launch target is required for launch registration and must be absent for attach",
+            ));
+        }
         if !command.launch_mode && self.profiles.is_launch_only_profile(&command.profile_name) {
             return Err(ControlError::new(
                 "launch_admission",
@@ -646,37 +631,6 @@ struct BootstrapSnapshot {
     trace_id: model_core::ids::TraceId,
     root_identity: ProcessIdentity,
     root_observation: ProcessObservation,
-    root_host_pid: u32,
     process_records: Vec<ProcessRecord>,
     diagnostic_kind: DiagnosticKind,
-}
-
-struct PinnedDirectTlsPlan {
-    descriptor: LaunchTlsProbePlan,
-    target: PinnedRuntimePath,
-    binary: PinnedRuntimePath,
-}
-
-impl PinnedDirectTlsPlan {
-    fn new(
-        mapper: &RuntimeRootPathMapper,
-        descriptor: &LaunchTlsProbePlan,
-    ) -> Result<Self, ControlError> {
-        Ok(Self {
-            descriptor: descriptor.clone(),
-            target: mapper.pin(&descriptor.target)?,
-            binary: mapper.pin(&descriptor.binary)?,
-        })
-    }
-
-    fn dynamic_plan(&self) -> DynamicTlsProbePlan {
-        DynamicTlsProbePlan {
-            target: self.target.path().to_path_buf(),
-            target_identity: self.descriptor.target_identity.clone(),
-            binary: self.binary.path().to_path_buf(),
-            binary_identity: self.descriptor.binary_identity.clone(),
-            provider: self.descriptor.provider.clone(),
-            points: self.descriptor.points.clone(),
-        }
-    }
 }

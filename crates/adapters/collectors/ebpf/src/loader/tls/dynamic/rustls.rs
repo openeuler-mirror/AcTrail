@@ -1,4 +1,4 @@
-//! Rustls internal plaintext points emit immediately and have no return probe.
+//! Rustls outbound capture follows the accepted length returned by buffer_plaintext.
 
 use super::points::{AttachPoint, WirePoint};
 use crate::loader::LoaderError;
@@ -53,6 +53,15 @@ impl RustlsPlan {
                 cookie: point.cookie,
                 retprobe: false,
             });
+            if point.direction == "outbound" {
+                points.push(AttachPoint {
+                    program: "handle_rustls_buffer_plaintext_exit",
+                    symbol: point.symbol.to_string(),
+                    offset: point.offset,
+                    cookie: point.cookie,
+                    retprobe: true,
+                });
+            }
         }
         if payload_cookies
             .iter()

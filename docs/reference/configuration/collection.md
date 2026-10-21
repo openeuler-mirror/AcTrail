@@ -126,7 +126,8 @@ flowchart LR
 - `max_segment_bytes`：单个 inline segment 上限。
 - `max_operation_bytes`：一次 operation 可读取上限。
 - `sync_max_frame_bytes`：TLS sync IPC 单帧上限，默认 `33554432`（32 MiB，包含 8 字节帧头）。必须容纳 operation 内容及事件元数据，也约束运行时 plan 响应。接收端在读取帧头后检查长度，异常帧只关闭对应连接。
-- `ring_buffer_bytes`、`pending_operation_max_entries`：运行中容量。后者同时限制 Rustls 握手连接编号表的条目数，该表采用 LRU 淘汰，淘汰后的连接停止关联明文，直到该连接重新完成握手。
+- `ring_buffer_bytes`：事件环形缓冲区容量。
+- `pending_operation_max_entries`：待完成操作表容量，同时限制 Rustls 握手连接编号表和出站调用参数表各自的条目数。Rustls 两张表采用 LRU 淘汰。连接编号被淘汰后，该连接重新完成握手时恢复明文关联。出站调用参数被淘汰后，跳过该次调用的采集。
 - `dynamic_discovery_capacity`：`bpf-copy` 探针解析器中待分析对象和已完成结果的单表总容量，同时限制探针分析任务队列，默认 `128`，必须大于 `0`。相同文件版本的待分析请求合并，容量耗尽影响本次发现。
 - `direct_startup_discovery_enabled`：默认 `true`，仅作用于 `bpf-copy`。控制 `actrailctl launch` 放行前对启动命令和已配置 agent 命令的探针发现与挂载。关闭后允许启动时没有探针，运行中发现仍由下一项独立控制。
 - `direct_dynamic_discovery_enabled`：默认 `true`，仅作用于 `bpf-copy`。控制运行中 exec 和可执行文件映射触发的对象发现与补挂。关闭时跳过动态探针发现。已安装探针仍可采集，文件映射事件继续处理。TLS 采集总开关为 `payload.tls.enabled`。
@@ -136,14 +137,15 @@ flowchart LR
 
 ### TLS sync 启动
 
-- **运行库安装**：TLS sync 通过 `actrailctl launch` 安装运行库。
-- **探针计划**：探针解析器根据目标二进制生成探针计划，明文采集范围取决于成功识别并安装的探针。
+- **运行库安装**：`actrailctl launch` 的 TLS sync 注入模块准备运行库和注入环境。
+- **探针计划**：注入模块向 daemon 查询计划，校验目标程序及探针文件的身份，再将计划传给进程内运行库。明文采集范围取决于成功识别并安装的探针。
 
 ### Rustls 连接编号
 
 - **编号分配**：在 aarch64 平台上，Rustls 的 eBPF 直接采集会验证明文入口、握手完成入口及证书链内存布局，然后按每次客户端握手分配连接编号。
 - **编号关联**：证书链的独占堆分配作为采集侧查找键，编号在 `CommonState` 对象移动后保持不变。新握手覆盖同地址的旧记录。
 - **适用后端**：连接编号同时用于 `bpf-copy` 和 seccomp 完整正文读取路径。
+- **出站长度**：`buffer_plaintext` 入口保存输入视图，返回探针按函数实际接受的长度采集前缀。部分写入的剩余数据在后续调用接受时采集。
 - **布局验证**：探针计划携带经机器码验证的布局。当前已验证 Codex 0.151.0 所用 Rustls 0.23.36 二进制的机器指令与证书链内存布局。
 
 - **内核要求**：该连接编号路径要求内核支持 uprobe attach cookie（挂载探针时附带的标识值）。
@@ -153,14 +155,15 @@ flowchart LR
 ### eBPF 直接采集
 
 - **采集方式**：`capture_backend = "bpf-copy"` 使用用户态函数入口和返回探针（uprobe/uretprobe）直接采集，运行依赖为主机 eBPF。
-- **启动发现**：通过 `actrailctl launch` 在放行程序前解析并挂载已知目标及可解析依赖，支持 OpenSSL、Rustls 和 BoringSSL 探针。
+- **启动发现**：`actrailctl launch` 向 daemon 提供待执行目标及 agent 候选路径。daemon 在目标进程的文件系统中解析程序及依赖库，校验并挂载探针后，ctl 放行程序。支持 OpenSSL、Rustls 和 BoringSSL 探针。
+- **客户端准备**：eBPF 使用空注入实现，ctl 的注入接口返回空资源和空环境。探针计划由 daemon 持有。
 - **动态发现**：运行中可根据 exec 和文件映射事件发现新的可执行文件与共享库。
 - **覆盖条件**：启动发现和动态发现开关相互独立，关闭任一项都可能减少覆盖。短进程可能在动态挂载前退出。
 - **后代采集**：同 trace 后代命中已挂文件探针时仍可采集。
 
 - **构建与主机要求**：该后端要求 ring-buffer 制品及主机 eBPF 可用。
 - **能力就绪**：TLS 能力就绪表示实际 ring map、必要 BPF 程序与配置 map 已准备好。具体文件覆盖由成功挂载决定。
-- **无初始探针**：无法生成适用 plan 的对象允许无初始探针启动，原因使用控制协议枚举码，由 ctl 展示。
+- **无初始探针**：无法生成适用计划的对象允许无初始探针启动，daemon 在调试日志中记录原因。
 
 - **分块长度**：TLS 的 `bpf-copy` 后端通过 eBPF 直接采集明文，按实际长度分块，每块最多 65,535 字节。
 - **操作上限**：单次操作上限为 `max_operation_bytes` 与构建配置 `ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS × 65535` 中的较小值。块数在 `.cargo/config.toml` 中默认配置为 100。

@@ -9,7 +9,9 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::binary::resolve_entry_elf;
-use crate::elf::{BinaryAnalysisCache, DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage, ScanMode};
+use crate::elf::{
+    BinaryAnalysisCache, DEFAULT_LOW_MEMORY_CHUNK_BYTES, ElfImage, ProbeFileSource, ScanMode,
+};
 use crate::fast::{FastProbeRequest, ProbeConsumer, require_arch};
 use crate::plan::{ProbePointPlan, ProbeSource, TargetIdentity, TlsProvider};
 use crate::probe_detector::contract::detection::{
@@ -97,7 +99,7 @@ pub fn resolve_plans_with_scan(
     scan: ScanMode,
     mode: ResolveMode,
 ) -> ToolResult<ProbeResolution> {
-    resolve_plans_with_optional_cache(request, consumer, scan, mode, None)
+    resolve_plans_with_optional_cache(request, consumer, scan, mode, None, None)
 }
 
 pub fn resolve_plans_with_analysis_cache(
@@ -106,7 +108,25 @@ pub fn resolve_plans_with_analysis_cache(
     mode: ResolveMode,
     cache: Rc<BinaryAnalysisCache>,
 ) -> ToolResult<ProbeResolution> {
-    resolve_plans_with_optional_cache(request, consumer, ScanMode::Full, mode, Some(cache))
+    resolve_plans_with_optional_cache(request, consumer, ScanMode::Full, mode, Some(cache), None)
+}
+
+/// Resolve a target and its dependencies using the caller's runtime filesystem.
+pub fn resolve_plans_with_file_source(
+    request: FastProbeRequest,
+    consumer: ProbeConsumer,
+    mode: ResolveMode,
+    cache: Rc<BinaryAnalysisCache>,
+    source: Rc<dyn ProbeFileSource>,
+) -> ToolResult<ProbeResolution> {
+    resolve_plans_with_optional_cache(
+        request,
+        consumer,
+        ScanMode::Full,
+        mode,
+        Some(cache),
+        Some(source),
+    )
 }
 
 fn resolve_plans_with_optional_cache(
@@ -115,9 +135,16 @@ fn resolve_plans_with_optional_cache(
     scan: ScanMode,
     mode: ResolveMode,
     cache: Option<Rc<BinaryAnalysisCache>>,
+    source: Option<Rc<dyn ProbeFileSource>>,
 ) -> ToolResult<ProbeResolution> {
-    let outcome =
-        detect_outcome_with_cache(&request, consumer, scan, mode == ResolveMode::All, cache)?;
+    let outcome = detect_outcome_with_cache(
+        &request,
+        consumer,
+        scan,
+        mode == ResolveMode::All,
+        cache,
+        source,
+    )?;
     let plans = match outcome {
         DetectionOutcome::Collected(evidence) => {
             let mut plans = Vec::new();
@@ -183,7 +210,7 @@ pub(crate) fn detect_outcome(
     scan: ScanMode,
     collect_all: bool,
 ) -> ToolResult<DetectionOutcome> {
-    detect_outcome_with_cache(request, consumer, scan, collect_all, None)
+    detect_outcome_with_cache(request, consumer, scan, collect_all, None, None)
 }
 
 fn detect_outcome_with_cache(
@@ -192,16 +219,21 @@ fn detect_outcome_with_cache(
     scan: ScanMode,
     collect_all: bool,
     cache: Option<Rc<BinaryAnalysisCache>>,
+    source: Option<Rc<dyn ProbeFileSource>>,
 ) -> ToolResult<DetectionOutcome> {
-    let binary = resolve_entry_elf(&request.binary)?;
-    let image = match cache {
-        Some(cache) => ElfImage::parse_with_analysis_cache(
-            &binary,
-            scan,
-            DEFAULT_LOW_MEMORY_CHUNK_BYTES,
-            cache,
-        )?,
-        None => ElfImage::parse_with_mode(&binary, scan, DEFAULT_LOW_MEMORY_CHUNK_BYTES)?,
+    let image = if let Some(source) = source {
+        ElfImage::parse_with_file_source(&request.binary, scan, cache, source)?
+    } else {
+        let binary = resolve_entry_elf(&request.binary)?;
+        match cache {
+            Some(cache) => ElfImage::parse_with_analysis_cache(
+                &binary,
+                scan,
+                DEFAULT_LOW_MEMORY_CHUNK_BYTES,
+                cache,
+            )?,
+            None => ElfImage::parse_with_mode(&binary, scan, DEFAULT_LOW_MEMORY_CHUNK_BYTES)?,
+        }
     };
     require_arch(image.arch(), request.arch, image.path())?;
     let target = TargetIdentity {
