@@ -6,7 +6,6 @@
 #include "../runtime/fetch_add_compat.h"
 
 #define ACTRAIL_LINUX_EINPROGRESS 115
-#define ACTRAIL_SOCKET_PAYLOAD_IOVEC_SCAN_MAX 4
 /* Linux bpf_loop helper ABI: include/uapi/linux/bpf.h. */
 #define ACTRAIL_SOCKET_PAYLOAD_MAX_CHUNKS (1U << 23)
 
@@ -192,56 +191,11 @@ static __always_inline int store_socket_payload_op(
     op->socket_generation = socket_generation;
     op->direction = direction;
     op->syscall = syscall;
-    op->copy_base = buffer_ptr;
-    op->copy_capacity = requested_size;
+    op->iov_ptr = 0;
+    op->iov_count = 0;
     op->delegated = config->user_read_enabled;
     op->truncation_flags = config->truncation_flags;
     bpf_map_update_elem(&pending_socket_payload_ops, &pid_tgid, op, BPF_ANY);
-    return 0;
-}
-
-/*
- * Locate the first non-empty iovec of a writev/sendmsg scatter-gather buffer.
- * Pure bpf-copy mode captures at most one segment from this range, so the
- * search is a small compile-time-unrolled scan instead of a verifier loop.
- */
-static __always_inline int socket_payload_first_iovec_range(
-    __u64 iov_ptr,
-    __u64 iov_count,
-    __u64 *copy_base,
-    __u64 *copy_capacity
-) {
-    __u64 bound = iov_count;
-    struct actrail_user_iovec iov = {};
-
-    *copy_base = 0;
-    *copy_capacity = 0;
-    if (bound > ACTRAIL_SOCKET_PAYLOAD_IOVEC_SCAN_MAX) {
-        bound = ACTRAIL_SOCKET_PAYLOAD_IOVEC_SCAN_MAX;
-    }
-#pragma unroll
-    for (__u32 index = 0;
-         index < ACTRAIL_SOCKET_PAYLOAD_IOVEC_SCAN_MAX;
-         index++) {
-        if ((__u64)index >= bound) {
-            break;
-        }
-        if (bpf_probe_read_user(
-                &iov,
-                sizeof(iov),
-                (void *)(unsigned long)(
-                    iov_ptr + ((__u64)index * sizeof(iov))
-                )
-            ) != 0) {
-            event_transport_diag_inc(ACTRAIL_SOCKET_READ_USER_FAIL);
-            return 0;
-        }
-        if (iov.base && iov.len) {
-            *copy_base = iov.base;
-            *copy_capacity = iov.len;
-            return 1;
-        }
-    }
     return 0;
 }
 
@@ -298,19 +252,8 @@ static __always_inline int store_socket_payload_writev_op(
     op->syscall = ACTRAIL_SOCKET_SYSCALL_WRITEV;
     op->delegated = config->user_read_enabled;
     op->truncation_flags = config->truncation_flags;
-    if (!op->delegated &&
-        !socket_payload_first_iovec_range(
-            op->buffer_ptr,
-            op->requested_size,
-            &op->copy_base,
-            &op->copy_capacity
-        )) {
-        return 0;
-    }
-    if (op->delegated) {
-        op->copy_base = 0;
-        op->copy_capacity = 0;
-    }
+    op->iov_ptr = op->buffer_ptr;
+    op->iov_count = op->requested_size;
     bpf_map_update_elem(&pending_socket_payload_ops, &pid_tgid, op, BPF_ANY);
     return 0;
 }
@@ -364,19 +307,8 @@ static __always_inline int store_socket_payload_sendmsg_op(
     op->syscall = ACTRAIL_SOCKET_SYSCALL_SENDMSG;
     op->delegated = config->user_read_enabled;
     op->truncation_flags = config->truncation_flags;
-    if (!op->delegated &&
-        !socket_payload_first_iovec_range(
-            message.iov,
-            message.iov_len,
-            &op->copy_base,
-            &op->copy_capacity
-        )) {
-        return 0;
-    }
-    if (op->delegated) {
-        op->copy_base = 0;
-        op->copy_capacity = 0;
-    }
+    op->iov_ptr = message.iov;
+    op->iov_count = message.iov_len;
     bpf_map_update_elem(&pending_socket_payload_ops, &pid_tgid, op, BPF_ANY);
     return 0;
 }

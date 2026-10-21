@@ -11,6 +11,12 @@ import argparse
 import sys
 from pathlib import Path
 
+if __package__:
+    from .constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from tests.v2.regression.lsm_access_control_xiaoo.performance.benchmark import Benchmark
@@ -27,24 +33,24 @@ class CommandLine:
         benchmark = modes.add_parser("run", help="run both backends with existing release binaries")
         worker = modes.add_parser("worker", help=argparse.SUPPRESS)
         report = modes.add_parser("report", help="summarize existing measurements")
-        report.add_argument("--input", type=Path, default=OUTPUT_DIR.joinpath("wasm-performance.json"))
-        report.add_argument("--output", type=Path, default=OUTPUT_DIR.joinpath("wasm-performance.md"))
+        report.add_argument("--input", type=Path, default=OUTPUT_DIR.joinpath(CASE_CONSTANTS.report_input_filename))
+        report.add_argument("--output", type=Path, default=OUTPUT_DIR.joinpath(CASE_CONSTANTS.report_output_filename))
         for mode in (benchmark, worker):
-            mode.add_argument("--count", type=int, default=300)
-            mode.add_argument("--rounds", type=int, default=3)
-            mode.add_argument("--warmup", type=int, default=50)
-            mode.add_argument("--timeout", type=float, default=15)
+            mode.add_argument("--count", type=int, default=CASE_CONSTANTS.count)
+            mode.add_argument("--rounds", type=int, default=CASE_CONSTANTS.rounds)
+            mode.add_argument("--warmup", type=int, default=CASE_CONSTANTS.warmup)
+            mode.add_argument("--timeout", type=float, default=CASE_CONSTANTS.timeout)
             mode.add_argument("--xiaoo", type=Path)
-        benchmark.add_argument("--bin-dir", type=Path, default=REPO / "target/release")
-        benchmark.add_argument("--policy-source", choices=("static", "wasm"), default="wasm")
+        benchmark.add_argument("--bin-dir", type=Path, default=REPO / CASE_CONSTANTS.bin_dir)
+        benchmark.add_argument("--policy-source", choices=("static", "wasm"), default=CASE_CONSTANTS.policy_source)
         benchmark.add_argument("--output", type=Path)
-        benchmark.add_argument("--backends", nargs=2, choices=("seccomp", "lsm"), default=["seccomp", "lsm"])
-        benchmark.add_argument("--command-timeout", type=int, default=60)
-        benchmark.add_argument("--launch-timeout", type=int, default=240)
-        benchmark.add_argument("--lock-timeout", type=float, default=60)
-        benchmark.add_argument("--peer-poll-seconds", type=float, default=0.05)
-        benchmark.add_argument("--backlog", type=int, default=4096)
-        benchmark.add_argument("--keep-work", action="store_true")
+        benchmark.add_argument("--backends", nargs=2, choices=("seccomp", "lsm"), default=CASE_CONSTANTS.backends.copy())
+        benchmark.add_argument("--command-timeout", type=int, default=CASE_CONSTANTS.command_timeout)
+        benchmark.add_argument("--launch-timeout", type=int, default=CASE_CONSTANTS.launch_timeout)
+        benchmark.add_argument("--lock-timeout", type=float, default=CASE_CONSTANTS.lock_timeout)
+        benchmark.add_argument("--peer-poll-seconds", type=float, default=CASE_CONSTANTS.peer_poll_seconds)
+        benchmark.add_argument("--backlog", type=int, default=CASE_CONSTANTS.backlog)
+        benchmark.add_argument("--keep-work", action="store_true", default=CASE_CONSTANTS.keep_work)
         worker.add_argument("--backend", choices=("seccomp", "lsm"), required=True)
         worker.add_argument("--allow-port", type=int, required=True)
         worker.add_argument("--deny-port", type=int, required=True)
@@ -58,7 +64,7 @@ class CommandLine:
             parser.error("count/warmup/timeout must be positive and rounds must be at least 3")
         if args.mode == "run":
             if args.output is None:
-                args.output = OUTPUT_DIR.joinpath("wasm-performance.json" if args.policy_source == "wasm" else "performance.json")
+                args.output = OUTPUT_DIR.joinpath(CASE_CONSTANTS.report_input_filename if args.policy_source == "wasm" else CASE_CONSTANTS.static_report_filename)
             if set(args.backends) != {"seccomp", "lsm"}:
                 parser.error("--backends must contain seccomp and lsm exactly once")
             if min(args.command_timeout, args.launch_timeout, args.lock_timeout,

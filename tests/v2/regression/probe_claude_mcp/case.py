@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from tests.v2.common.actrail_runtime import ActrailRuntime
 from tests.v2.common.core import AgentBinaryNotFoundError, TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
@@ -7,6 +9,8 @@ from tests.v2.common.mcp_test_support import McpTraceAssertion
 
 from .config import ProbeClaudeMcpConfig
 from .task import ProbeClaudeMcpTask
+
+from .constants import CASE_CONSTANTS
 
 
 class ProbeClaudeMcpCase(TestCase):
@@ -24,10 +28,8 @@ class ProbeClaudeMcpCase(TestCase):
                 self._config.command_timeout_seconds,
                 test_context.output,
                 self._config.work_dir,
+                operator_config_patch=Path(__file__).with_name("patch_config.toml"),
             )
-            patch_path = self._config.work_dir / "actraild.patch.toml"
-            with patch_path.open("a", encoding="utf-8") as patch:
-                patch.write("\n[payload.mcp]\nenabled = true\n")
             try:
                 task = ProbeClaudeMcpTask(self._config, runtime)
             except AgentBinaryNotFoundError as error:
@@ -51,7 +53,7 @@ class ProbeClaudeMcpCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,

@@ -12,10 +12,10 @@ set -eu
 : "${ACTRAIL_XIAOO_COORD_DIR:?}"
 : "${ACTRAIL_XIAOO_PROVIDER_SCRIPT:?}"
 
-PROVIDER_PORT="${ACTRAIL_XIAOO_PROVIDER_PORT:-18098}"
-PROVIDER_DELAY="${ACTRAIL_XIAOO_PROVIDER_DELAY_SECONDS:-1.0}"
-READY_TIMEOUT="${ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS:-60}"
-LOCAL_API_KEY="${ACTRAIL_VIRTUAL_XIAOO_API_KEY:-actrail-kata-local-key}"
+PROVIDER_PORT="${ACTRAIL_XIAOO_PROVIDER_PORT:?}"
+PROVIDER_DELAY="${ACTRAIL_XIAOO_PROVIDER_DELAY_SECONDS:?}"
+READY_TIMEOUT="${ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS:?}"
+LOCAL_API_KEY="${ACTRAIL_VIRTUAL_XIAOO_API_KEY:?}"
 PROVIDER_PID=""
 XIAOO_PID=""
 OPENCODE_BRIDGE_PID=""
@@ -94,8 +94,8 @@ while ! grep -q '^proxy_base_url=' "$PROVIDER_STDOUT" 2>/dev/null; do
     fail "local OpenAI-compatible provider exited before readiness"
   }
   [ "$remaining" -gt 0 ] || fail "local provider readiness timed out"
-  remaining=$((remaining - 1))
-  sleep 1
+  remaining=$((remaining - ACTRAIL_XIAOO_POLL_SECONDS))
+  sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
 done
 touch "$PROVIDER_READY"
 echo "KATA_XIAOO_PROVIDER_READY instance=$ACTRAIL_XIAOO_INSTANCE"
@@ -105,8 +105,8 @@ while [ ! -f "$RELEASE_FILE" ]; do
   kill -0 "$PROVIDER_PID" >/dev/null 2>&1 \
     || fail "local provider exited while waiting at the concurrency barrier"
   [ "$remaining" -gt 0 ] || fail "concurrency barrier release timed out"
-  remaining=$((remaining - 1))
-  sleep 1
+  remaining=$((remaining - ACTRAIL_XIAOO_POLL_SECONDS))
+  sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
 done
 
 ACTRAIL_VIRTUAL_XIAOO_API_KEY="$LOCAL_API_KEY" \
@@ -136,8 +136,8 @@ while ! grep -q '^proxy_local_stream ' "$PROVIDER_STDOUT" 2>/dev/null; do
     cat "$PROVIDER_STDOUT" >&2 || true
     fail "provider did not record the xiaoO streaming request"
   }
-  remaining=$((remaining - 1))
-  sleep 1
+  remaining=$((remaining - ACTRAIL_XIAOO_POLL_SECONDS))
+  sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
 done
 
 if [ -n "${ACTRAIL_OPENCODE_FREE_MODEL:-}" ]; then
@@ -160,7 +160,7 @@ if [ -n "${ACTRAIL_OPENCODE_FREE_MODEL:-}" ]; then
     >"$ACTRAIL_XIAOO_COORD_DIR/opencode-bridge.stdout" \
     2>"$ACTRAIL_XIAOO_COORD_DIR/opencode-bridge.stderr" &
   OPENCODE_BRIDGE_PID=$!
-  sleep 1
+  sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
   kill -0 "$OPENCODE_BRIDGE_PID" >/dev/null 2>&1 \
     || fail "OpenCode Guest VSOCK bridge exited before readiness"
   OPENCODE_HOME="$ACTRAIL_XIAOO_COORD_DIR/opencode-home"
@@ -187,7 +187,7 @@ if [ -n "${ACTRAIL_OPENCODE_FREE_MODEL:-}" ]; then
     http_proxy="http://127.0.0.1:$ACTRAIL_OPENCODE_PROXY_PORT" \
     https_proxy="http://127.0.0.1:$ACTRAIL_OPENCODE_PROXY_PORT" \
     NO_COLOR=1 \
-    timeout 180 opencode run --pure \
+    timeout "$ACTRAIL_OPENCODE_TIMEOUT_SECONDS" opencode run --pure \
       --model "$ACTRAIL_OPENCODE_FREE_MODEL" \
       "$ACTRAIL_OPENCODE_PROMPT" \
       </dev/null \

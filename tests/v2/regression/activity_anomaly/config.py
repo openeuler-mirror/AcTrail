@@ -8,6 +8,8 @@ from pathlib import Path
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.core.loopback_port import resolve_test_port
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ActivityAnomalyConfig(CommonTestConfig):
@@ -31,17 +33,17 @@ class ActivityAnomalyConfig(CommonTestConfig):
             raise RuntimeError("real Xiaoo executable is not available")
         provider_timeout = float(
             os.environ.get(
-                "ACTIVITY_ANOMALY_E2E_PROVIDER_READY_TIMEOUT_SECONDS", "15"
+                "ACTIVITY_ANOMALY_E2E_PROVIDER_READY_TIMEOUT_SECONDS", str(CASE_CONSTANTS.provider_ready_timeout_seconds)
             )
         )
         alert_timeout = float(
-            os.environ.get("ACTIVITY_ANOMALY_E2E_ALERT_TIMEOUT_SECONDS", "20")
+            os.environ.get("ACTIVITY_ANOMALY_E2E_ALERT_TIMEOUT_SECONDS", str(CASE_CONSTANTS.alert_timeout_seconds))
         )
         command_threshold = int(
-            os.environ.get("ACTIVITY_ANOMALY_E2E_COMMAND_THRESHOLD_MS", "500")
+            os.environ.get("ACTIVITY_ANOMALY_E2E_COMMAND_THRESHOLD_MS", str(CASE_CONSTANTS.command_threshold_ms))
         )
         long_command_seconds = int(
-            os.environ.get("ACTIVITY_ANOMALY_E2E_LONG_COMMAND_SECONDS", "2")
+            os.environ.get("ACTIVITY_ANOMALY_E2E_LONG_COMMAND_SECONDS", str(CASE_CONSTANTS.long_command_seconds))
         )
         if provider_timeout <= 0 or alert_timeout <= 0:
             raise RuntimeError("activity-anomaly E2E timeouts must be positive")
@@ -56,7 +58,7 @@ class ActivityAnomalyConfig(CommonTestConfig):
             operator_config=inputs.work_dir / "actraild.conf",
             operator_config_patch=inputs.work_dir / "actraild.patch.toml",
             xiaoo_binary=Path(xiaoo).resolve(),
-            web_host=os.environ.get("ACTIVITY_ANOMALY_E2E_WEB_HOST", "127.0.0.1"),
+            web_host=os.environ.get("ACTIVITY_ANOMALY_E2E_WEB_HOST", CASE_CONSTANTS.web_host),
             web_port=resolve_test_port(
                 "ACTIVITY_ANOMALY_E2E_WEB_PORT",
                 attempts=common.drain_attempts,

@@ -8,6 +8,15 @@ fi
 oom_trigger="${1:?OOM_TRIGGER is required}"
 coord_dir="${2:?COORD_DIR is required}"
 
+command -v python3 >/dev/null 2>&1 || {
+  echo "missing command: python3" >&2
+  exit 1
+}
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+oom_defaults="$(python3 "$script_dir/constants.py")"
+eval "$oom_defaults"
+unset oom_defaults
+
 start_file="$coord_dir/oom.start"
 pid_file="$coord_dir/oom.pid"
 group_file="$coord_dir/oom.cgroup"
@@ -52,7 +61,7 @@ if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
   group="/sys/fs/cgroup/actrail-host-oom-$$"
   mkdir "$group"
   printf '%s\n' "$group" > "$group_file"
-  echo 33554432 > "$group/memory.max"
+  printf '%s\n' "$ACTRAIL_OOM_MEMORY_LIMIT_BYTES" > "$group/memory.max"
   if [ -f "$group/memory.swap.max" ]; then
     echo 0 > "$group/memory.swap.max"
   elif [ "$active_swap" -eq 1 ]; then
@@ -64,9 +73,9 @@ elif [ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
   group="/sys/fs/cgroup/memory/actrail-host-oom-$$"
   mkdir "$group"
   printf '%s\n' "$group" > "$group_file"
-  echo 33554432 > "$group/memory.limit_in_bytes"
+  printf '%s\n' "$ACTRAIL_OOM_MEMORY_LIMIT_BYTES" > "$group/memory.limit_in_bytes"
   if [ -f "$group/memory.memsw.limit_in_bytes" ]; then
-    echo 33554432 > "$group/memory.memsw.limit_in_bytes"
+    printf '%s\n' "$ACTRAIL_OOM_MEMORY_LIMIT_BYTES" > "$group/memory.memsw.limit_in_bytes"
   elif [ "$active_swap" -eq 1 ]; then
     echo "active host swap cannot be bounded by the test cgroup" >&2
     exit 79
@@ -101,21 +110,21 @@ case "$released_at_ms" in
 esac
 touch "$start_file"
 
-remaining=300
+remaining="$ACTRAIL_OOM_TRIGGER_POLL_ATTEMPTS"
 while kill -0 "$trigger_pid" 2>/dev/null; do
   [ "$remaining" -gt 0 ] || {
-    echo "OOM trigger was not killed within 30 seconds" >&2
+    echo "OOM trigger was not killed after $ACTRAIL_OOM_TRIGGER_POLL_ATTEMPTS polls at $ACTRAIL_OOM_POLL_SECONDS seconds" >&2
     exit 72
   }
   remaining=$((remaining - 1))
-  sleep 0.1
+  sleep "$ACTRAIL_OOM_POLL_SECONDS"
 done
 set +e
 wait "$trigger_pid" 2>/dev/null
 wait_status=$?
 set -e
 trigger_pid=""
-if [ "$wait_status" -ne 137 ]; then
+if [ "$wait_status" -ne "$ACTRAIL_OOM_SIGKILL_EXIT_STATUS" ]; then
   echo "OOM trigger exited with status $wait_status instead of SIGKILL" >&2
   exit 75
 fi
@@ -133,7 +142,7 @@ if [ "$cgroup_oom_after" -le "$cgroup_oom_before" ]; then
   exit 77
 fi
 
-remaining=50
+remaining="$ACTRAIL_OOM_VMSTAT_POLL_ATTEMPTS"
 while [ "$remaining" -gt 0 ]; do
   after="$(awk '$1 == "oom_kill" { print $2 }' /proc/vmstat)"
   if [ "$after" -gt "$before" ]; then
@@ -142,7 +151,7 @@ while [ "$remaining" -gt 0 ]; do
     exit 0
   fi
   remaining=$((remaining - 1))
-  sleep 0.1
+  sleep "$ACTRAIL_OOM_POLL_SECONDS"
 done
 
 echo "vmstat oom_kill did not increase" >&2

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from tests.v2.common.testing_env import AgentBinaryDiscovery, default_claude_model
 
+from .constants import CASE_CONSTANTS
+
 
 class ProjectSubagentAgent(ABC):
     DEFAULT_CANDIDATES = ("opencode", "claude", "xiaoo")
@@ -102,7 +104,7 @@ class OpenCodeProjectSubagentAgent(ProjectSubagentAgent):
             "--dir",
             repository,
         ]
-        model = os.environ.get("OPENCODE_E2E_MODEL", "").strip()
+        model = os.environ.get("OPENCODE_E2E_MODEL", CASE_CONSTANTS.model).strip()
         if model:
             argv.extend(("--model", model))
         argv.append(prompt)
@@ -168,7 +170,7 @@ class XiaooProjectSubagentAgent(ProjectSubagentAgent):
     def launch_argv(self, repository: Path, prompt: str) -> list[Path | str]:
         max_turns = os.environ.get(
             "PROJECT_SUBAGENT_TRAJECTORY_E2E_XIAOO_MAX_TURNS",
-            "20",
+            str(CASE_CONSTANTS.xiaoo_max_turns),
         ).strip()
         if not max_turns.isdecimal() or int(max_turns) < 1:
             raise ValueError(

@@ -1,4 +1,5 @@
 // Check continuous navigation using real stored actions and delayed real network requests.
+import { C } from '../constants.mjs';
 import assert from 'node:assert/strict';
 import { TimelineBrowser } from './timeline.mjs';
 
@@ -9,18 +10,18 @@ export class ContinuousAcceptance extends TimelineBrowser {
     this.report = report;
   }
 
-  async verify(actions, { requireCancellation = false } = {}) {
+  async verify(actions, { requireCancellation = C.require_cancellation } = structuredClone(C.navigation_options)) {
     const initialRequests = this.report.requests.filter(url => new URL(url).pathname === this.path);
     assert(initialRequests.length, 'visible timeline was never loaded');
     assert(initialRequests.every(url => {
       const query = new URL(url).searchParams;
-      return query.has('from') && query.has('to') && Number(query.get('limit')) <= 250;
+      return query.has('from') && query.has('to') && Number(query.get('limit')) <= C.visible_page_limit;
     }), 'timeline performed an unbounded initial request');
     assert.equal(await this.page.locator('.timeline-page-actions').count(), 0, 'manual page controls remain');
     const axis = this.page.locator('.flame-panel .timeline-overview-time');
     const labels = await axis.allTextContents();
     const initial = await this.viewport();
-    assert(initial.spanMs <= 30001, 'first visible window exceeded 30 seconds');
+    assert(initial.spanMs <= C.initial_window_max_ms, 'first visible window exceeded 30 seconds');
     const startIndex = this.report.requests.length;
     await this.kinds(['llm.request']);
     const request = actions.find(action => action.kind === 'llm.request');
@@ -47,7 +48,7 @@ export class ContinuousAcceptance extends TimelineBrowser {
     assert(zoomed.spanMs < initial.spanMs, 'zoom did not change the visible interval');
     await this.cachedZoomRoundTrip();
     const counts = [];
-    for (const fraction of [0.75, 0.25, 0.9, 0.1]) {
+    for (const fraction of C.pan_fractions) {
       await this.jump(this.timeAt(fraction));
       assert.deepEqual(await axis.allTextContents(), labels, 'global axis changed with loaded data');
       assert.equal(await detail.locator('h2').innerText(), title, 'window replacement cleared selected action');
@@ -55,7 +56,7 @@ export class ContinuousAcceptance extends TimelineBrowser {
       if (expandable) assert.equal(await messageRow.getAttribute('aria-expanded'), 'true',
         'window replacement collapsed the message tree');
       const count = await this.activityCount();
-      assert(count <= 4000, 'retained actions exceeded the four-window cache budget');
+      assert(count <= C.retained_action_budget, 'retained actions exceeded the four-window cache budget');
       counts.push(count);
     }
     assert.equal(this.report.requests.filter(url => url.includes('/content/llm-request')).length, contentCount,
@@ -82,14 +83,14 @@ export class ContinuousAcceptance extends TimelineBrowser {
       'quick jumps reloaded selected request blocks');
     for (const { url, data } of this.responses) {
       const limit = Number(new URL(url).searchParams.get('limit'));
-      assert(data.actions.length <= limit && data.scanned <= 2000, 'window response exceeded server budget');
+      assert(data.actions.length <= limit && data.scanned <= C.timeline_candidate_budget, 'window response exceeded server budget');
     }
     await this.kinds('default');
   }
 
   async cachedZoomRoundTrip() {
     const narrow = await this.viewport();
-    const center = String(narrow.origin + BigInt(Math.round((narrow.startMs + narrow.spanMs / 2) * 1e6)));
+    const center = String(narrow.origin + BigInt(Math.round((narrow.startMs + narrow.spanMs / 2) * C.nanoseconds_per_ms)));
     await this.page.locator('.flame-zoom-controls button').first().click();
     await this.settle();
     const before = this.report.requests.filter(url => new URL(url).pathname === this.path).length;
@@ -97,7 +98,7 @@ export class ContinuousAcceptance extends TimelineBrowser {
     await this.jump(center);
     assert.equal(this.report.requests.filter(url => new URL(url).pathname === this.path).length, before,
       'returning to a complete loaded window fetched timeline data again');
-    assert(await this.activityCount() <= 4000, 'zoom retained more actions than the cache budget');
+    assert(await this.activityCount() <= C.retained_action_budget, 'zoom retained more actions than the cache budget');
   }
 
   timeAt(fraction) {
@@ -115,7 +116,7 @@ export class ContinuousAcceptance extends TimelineBrowser {
   async cancelQuickJump() {
     // B is already cached. Leaving a pending A for B and returning to A must
     // issue a fresh request, even though A matches the previous attempt.
-    await this.jump(this.timeAt(0.5));
+    await this.jump(this.timeAt(C.center_fraction));
     const top = await this.page.locator('.flame-panel').evaluate(element => element.offsetTop);
     const failures = [];
     const onFailed = request => {
@@ -133,20 +134,20 @@ export class ContinuousAcceptance extends TimelineBrowser {
       try { await route.continue(); } catch { /* A cancelled real request may already be detached. */ }
     });
     try {
-      await this.jump(this.timeAt(0.05), { settle: false });
-      const requested = await Promise.race([held, new Promise(resolve => setTimeout(() => resolve(false), 1500))]);
+      await this.jump(this.timeAt(C.quick_jump_fraction), { settle: false });
+      const requested = await Promise.race([held, new Promise(resolve => setTimeout(() => resolve(false), C.request_gate_timeout_ms))]);
       if (!requested) return false; // A short trace can already be fully present in the bounded cache.
       assert.equal(await this.page.locator('.flame-panel').evaluate(element => element.offsetTop), top,
         'loading status moved the graph vertically');
-      await this.jump(this.timeAt(0.5), { settle: false });
-      await new Promise(resolve => setTimeout(resolve, 250));
-      const restarted = this.page.waitForResponse(response => response.url() === requested && response.status() === 200);
-      await this.jump(this.timeAt(0.05), { settle: false });
+      await this.jump(this.timeAt(C.center_fraction), { settle: false });
+      await new Promise(resolve => setTimeout(resolve, C.quick_jump_delay_ms));
+      const restarted = this.page.waitForResponse(response => response.url() === requested && response.status() === C.http_ok);
+      await this.jump(this.timeAt(C.quick_jump_fraction), { settle: false });
       await restarted;
       release();
       await this.settle();
       const final = await this.viewport();
-      assert(final.left <= 0.06, 'late response moved viewport away from the returned range');
+      assert(final.left <= C.quick_jump_max_left, 'late response moved viewport away from the returned range');
       assert.equal(await this.page.locator('.flame-panel').evaluate(element => element.offsetTop), top,
         'completed loading changed graph position');
       assert(failures.length > 0, 'abandoned real timeline request was not cancelled');

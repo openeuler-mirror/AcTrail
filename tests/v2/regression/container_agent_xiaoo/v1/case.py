@@ -12,6 +12,8 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAgentXiaooConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ContainerAgentXiaooCase(TestCase):
     def __init__(self, config: ContainerAgentXiaooConfig):
@@ -108,7 +110,7 @@ class ContainerAgentXiaooCase(TestCase):
                 ["docker", "info", "--format", "{{.ServerVersion}}"],
                 text=True,
                 capture_output=True,
-                timeout=15,
+                timeout=CASE_CONSTANTS.docker_info_timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired:

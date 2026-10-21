@@ -13,6 +13,8 @@ from .actrail_runtime import ActrailRuntime
 from .plugin_web_api import PluginWebApi
 from tests.v2.common.core import CommonTestConfig, TestOutput, TestResult, TestStatus
 
+from .constants import WEB_DEFAULTS as DEFAULTS
+
 
 @dataclass(frozen=True)
 class PluginRuntimeSpec:
@@ -33,6 +35,7 @@ class PluginTestEnvironment:
         *,
         operator_config: Path,
         operator_config_patch: Path | None = None,
+        operator_config_patches: list[Path] | None = None,
         web_host: str,
         web_port: int,
         plugin: PluginRuntimeSpec,
@@ -47,6 +50,7 @@ class PluginTestEnvironment:
             output,
             operator_config,
             operator_config_patch,
+            operator_config_patches=operator_config_patches,
         )
         bin_dir = (
             config.bin_dir
@@ -273,10 +277,10 @@ class PluginTestEnvironment:
             if self._web_process.poll() is None:
                 self._web_process.terminate()
                 try:
-                    self._web_process.wait(timeout=10)
+                    self._web_process.wait(timeout=DEFAULTS.plugin_web_stop_timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self._web_process.kill()
-                    self._web_process.wait(timeout=10)
+                    self._web_process.wait(timeout=DEFAULTS.plugin_web_stop_timeout_seconds)
             if self._web_process.returncode not in (0, -15):
                 failures.append(
                     f"actrailweb exited with {self._web_process.returncode}"

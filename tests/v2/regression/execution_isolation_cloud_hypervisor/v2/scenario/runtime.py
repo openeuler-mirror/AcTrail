@@ -31,6 +31,8 @@ from .system_observer import GuestSystemSandboxObserver
 from .transport import CoordinationDirectory
 from .verifier import CloudHypervisorAlertVerifier
 
+from ..constants import CASE_CONSTANTS
+
 
 class CloudHypervisorExecutionIsolationScenario:
     _ALERT_CATEGORIES = (
@@ -290,7 +292,7 @@ class CloudHypervisorExecutionIsolationScenario:
             self._observer.connect(vm)
         except BaseException as error:
             try:
-                gateway.terminate(grace_seconds=3)
+                gateway.terminate(grace_seconds=CASE_CONSTANTS.start_vm_gateway_and_connect_grace_seconds)
             except Exception as cleanup_error:
                 error.add_note(
                     "gateway cleanup after startup failure also failed: "
@@ -383,7 +385,7 @@ class CloudHypervisorExecutionIsolationScenario:
     def _complete_workload(self, workload: ManagedProcess) -> None:
         result = workload.wait(
             timeout=self._config.runtime_timeout_seconds,
-            terminate_grace_seconds=5,
+            terminate_grace_seconds=CASE_CONSTANTS.complete_workload_terminate_grace_seconds,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -410,7 +412,7 @@ class CloudHypervisorExecutionIsolationScenario:
             if process is None:
                 continue
             try:
-                stopped = process.terminate(grace_seconds=3)
+                stopped = process.terminate(grace_seconds=CASE_CONSTANTS.stop_processes_grace_seconds)
                 if "failure" in results and stopped.diagnostic:
                     results["failure"].message += (
                         f"\n{name} diagnostics:\n" + stopped.diagnostic[-4000:]

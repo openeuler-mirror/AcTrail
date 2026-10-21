@@ -26,7 +26,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from constants import DEFAULTS as SERVER_DEFAULTS
+from test.constants import DEFAULTS
 
 from test.e2e_support import (  # noqa: E402
     MaaSServerProcess,
@@ -150,7 +154,7 @@ class RecordE2E:
         session = json.loads(body)
         expected_base = os.environ.get(
             "LOCAL_MAAS_UPSTREAM_URL"
-        ) or "https://api.deepseek.com"
+        ) or SERVER_DEFAULTS.default_upstream_url
         assert session["upstream"]["base_url"] == expected_base, session
         if not os.environ.get("LOCAL_MAAS_UPSTREAM_URL"):
             assert session["upstream"].get("model"), session
@@ -287,10 +291,10 @@ class RecordE2E:
             return
         expected_base = os.environ.get(
             "LOCAL_MAAS_UPSTREAM_URL"
-        ) or "https://api.deepseek.com"
+        ) or SERVER_DEFAULTS.default_upstream_url
         request_model = os.environ.get("LOCAL_MAAS_UPSTREAM_MODEL")
         if not request_model:
-            request_model = "deepseek-chat"
+            request_model = DEFAULTS.request_model
         server = MaaSServerProcess(
             [
                 "transport",
@@ -301,7 +305,7 @@ class RecordE2E:
             workdir=REPO,
         )
         try:
-            server.wait_ready(timeout_seconds=60.0)
+            server.wait_ready(timeout_seconds=DEFAULTS.upstream_ready_timeout_seconds)
             status, body = server.request("GET", "/healthz")
             assert status == 200, (status, body)
             health = json.loads(body)
@@ -322,11 +326,11 @@ class RecordE2E:
                             ),
                         }
                     ],
-                    "stream": False,
-                    "max_tokens": 2048,
-                    "temperature": 0,
+                    "stream": DEFAULTS.upstream_stream,
+                    "max_tokens": DEFAULTS.upstream_max_tokens,
+                    "temperature": DEFAULTS.upstream_temperature,
                 },
-                timeout=60.0,
+                timeout=DEFAULTS.upstream_timeout_seconds,
             )
             assert status == 200, (status, body[:500])
             parsed = json.loads(body)

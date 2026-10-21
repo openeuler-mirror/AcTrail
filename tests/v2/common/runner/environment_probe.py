@@ -12,6 +12,8 @@ from pathlib import Path
 from ..core import TestOutput
 from ..testing_env import AgentBinaryDiscovery, default_claude_model
 
+from .constants import DEFAULTS
+
 
 class EnvironmentProbe:
     """Collect and print host characteristics once per regression run.
@@ -31,13 +33,13 @@ class EnvironmentProbe:
         "hostname",
         "python",
     )
-    _AGENTS = ("codex", "claude", "xiaoo")
+    _AGENTS = DEFAULTS.environment_probe_agents
 
     def __init__(self, output: TestOutput, repo: Path) -> None:
         self._output = output
         self._discovery = AgentBinaryDiscovery(repo)
         self._timeout_seconds = float(
-            os.environ.get("ACTRAIL_TEST_ENV_PROBE_TIMEOUT_SECONDS", "10")
+            os.environ.get("ACTRAIL_TEST_ENV_PROBE_TIMEOUT_SECONDS", str(DEFAULTS.environment_probe_timeout_seconds))
         )
 
     def print_summary(self) -> None:

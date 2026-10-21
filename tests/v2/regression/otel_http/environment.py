@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from typing import Any
 
-from tests.v2.common.actrail_runtime import ActrailRuntime
 from tests.v2.common.core import TestOutput
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.plugin_test_environment import (
     PluginRuntimeSpec,
     PluginTestEnvironment,
@@ -12,6 +13,8 @@ from tests.v2.common.plugin_test_environment import (
 
 from .config import OtelHttpConfig
 from .receiver import OtlpHttpReceiver
+
+from .constants import CASE_CONSTANTS
 
 
 class OtelHttpEnvironment(PluginTestEnvironment):
@@ -48,13 +51,16 @@ class OtelHttpEnvironment(PluginTestEnvironment):
     }
 
     def __init__(self, config: OtelHttpConfig, output: TestOutput):
-        self._operator_config_patch = config.work_dir / "actraild.patch.toml"
+        self._operator_config_patch = config.work_dir / "runtime_patch.toml"
         self._receiver = OtlpHttpReceiver()
         super().__init__(
             config,
             output,
             operator_config=config.operator_config,
-            operator_config_patch=self._operator_config_patch,
+            operator_config_patches=[
+                self._operator_config_patch,
+                Path(__file__).with_name("patch_config.toml"),
+            ],
             web_host=config.web_host,
             web_port=config.web_port,
             plugin=PluginRuntimeSpec(
@@ -66,7 +72,15 @@ class OtelHttpEnvironment(PluginTestEnvironment):
         )
 
     def prepare(self) -> None:
-        self._write_operator_config_patch()
+        (
+            PatchBuilder()
+            .with_work_dir(self.config.work_dir)
+            .with_runtime_timing()
+            .with_values({"storage": {"retention": {"enabled": False}}})
+            .with_plugin_directory(self.config.repo / "examples" / "plugins" / "builtin")
+            .build()
+            .save(self._operator_config_patch)
+        )
         self._receiver.start()
         document = super().prepare()
         self._require_safe_schema(document)
@@ -81,7 +95,7 @@ class OtelHttpEnvironment(PluginTestEnvironment):
         self,
         enabled_action_kinds: set[str] | None = None,
         *,
-        attribute_mode: str = "metadata-only",
+        attribute_mode: str = CASE_CONSTANTS.configure_buffered_export_attribute_mode,
     ) -> dict[str, Any]:
         if attribute_mode not in {"metadata-only", "full"}:
             raise ValueError(
@@ -117,15 +131,15 @@ class OtelHttpEnvironment(PluginTestEnvironment):
                 "encoding": "json",
                 "compression": "none",
                 "attribute_mode": attribute_mode,
-                "queue_capacity": 128,
+                "queue_capacity": CASE_CONSTANTS.queue_capacity,
                 # Keep the tail buffered until lifecycle replacement calls finish.
-                "batch_max_spans": 4096,
-                "batch_timeout_ms": 60000,
-                "connect_timeout_ms": 250,
-                "request_timeout_ms": 500,
-                "retry_max_attempts": 1,
-                "retry_backoff_ms": 1,
-                "shutdown_flush_deadline_ms": 3000,
+                "batch_max_spans": CASE_CONSTANTS.batch_max_spans,
+                "batch_timeout_ms": CASE_CONSTANTS.batch_timeout_ms,
+                "connect_timeout_ms": CASE_CONSTANTS.connect_timeout_ms,
+                "request_timeout_ms": CASE_CONSTANTS.request_timeout_ms,
+                "retry_max_attempts": CASE_CONSTANTS.retry_max_attempts,
+                "retry_backoff_ms": CASE_CONSTANTS.retry_backoff_ms,
+                "shutdown_flush_deadline_ms": CASE_CONSTANTS.shutdown_flush_deadline_ms,
                 # Ingest endpoints that attribute a trace to an account read the
                 # sender identity from a request header, never from span content.
                 "headers": [
@@ -163,11 +177,11 @@ class OtelHttpEnvironment(PluginTestEnvironment):
         """Replace the live config, which finishes the previous consumer."""
 
         candidate = self.current_config()
-        if candidate.get("batch_timeout_ms") != 60000:
+        if candidate.get("batch_timeout_ms") != CASE_CONSTANTS.batch_timeout_ms:
             raise AssertionError("OTEL/HTTP buffered config is not active")
-        candidate["batch_timeout_ms"] = 59000
+        candidate["batch_timeout_ms"] = CASE_CONSTANTS.replacement_batch_timeout_ms
         returned = self.update_config(candidate)
-        if returned.get("batch_timeout_ms") != 59000:
+        if returned.get("batch_timeout_ms") != CASE_CONSTANTS.replacement_batch_timeout_ms:
             raise AssertionError("OTEL/HTTP lifecycle replacement was not applied")
 
     def documents(self) -> list[dict[str, Any]]:
@@ -175,29 +189,6 @@ class OtelHttpEnvironment(PluginTestEnvironment):
 
     def credentials(self) -> list[str | None]:
         return self._receiver.credentials()
-
-    def _write_operator_config_patch(self) -> None:
-        plugin_root = (
-            self.config.repo / "examples" / "plugins" / "builtin"
-        ).resolve()
-        manifest = plugin_root / "otel-http" / "otel-http.plugin.toml"
-        if not manifest.is_file():
-            raise RuntimeError(f"official otel-http manifest not found: {manifest}")
-        ActrailRuntime.write_isolated_operator_config_patch(
-            self._operator_config_patch,
-            self.config.work_dir,
-            plugin_directory=plugin_root,
-        )
-        with self._operator_config_patch.open("a", encoding="utf-8") as patch:
-            patch.write(
-                "\n[semantic_retention.l0_llm_call]\n"
-                'request_content = "canonical_blocks"\n'
-                'request_body_export = "canonical_json"\n'
-                "\n[payload.socket]\n"
-                'capture_backend = "bpf-copy-seccomp-fallback"\n'
-                "\n[seccomp_notify]\n"
-                "enabled = true\n"
-            )
 
     @staticmethod
     def _require_safe_schema(document: dict[str, Any]) -> None:

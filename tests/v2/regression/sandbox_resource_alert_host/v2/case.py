@@ -10,6 +10,8 @@ from tests.v2.common.runner import TestingContextSingleton
 from .config import SandboxResourceAlertHostConfig
 from .scenario import SandboxResourceAlertHostScenario
 
+from .constants import CASE_CONSTANTS
+
 
 class SandboxResourceAlertHostCase(TestCase):
     def __init__(self, config: SandboxResourceAlertHostConfig) -> None:
@@ -104,7 +106,7 @@ class SandboxResourceAlertHostCase(TestCase):
             limit = probe / limit_name
             if not limit.is_file():
                 return f"memory controller is not enabled below {parent}"
-            limit.write_text("33554432\n", encoding="ascii")
+            limit.write_text(f"{CASE_CONSTANTS.oom_memory_limit_bytes}\n", encoding="ascii")
         except OSError as error:
             return f"memory cgroup is not delegated for the regression: {error}"
         finally:

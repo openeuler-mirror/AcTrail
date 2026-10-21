@@ -123,11 +123,12 @@ esac
 
 [ -d "$SOCKET_DIR" ] || fail "socket directory is not mounted: $SOCKET_DIR"
 [ -S "$SOCKET_DIR/control.sock" ] || fail "control socket is missing"
-[ -S "$SOCKET_DIR/tls-sync.sock" ] || fail "TLS sync socket is missing"
 
 [ "$(stat -c '%a' "$SOCKET_DIR")" = "750" ] \
   || fail "socket directory mode is not 0750"
 for socket in "$SOCKET_DIR/control.sock" "$SOCKET_DIR/tls-sync.sock"; do
+  [ -e "$socket" ] || continue
+  [ -S "$socket" ] || fail "interface entry is not a socket: $socket"
   [ "$(stat -c '%a' "$socket")" = "660" ] \
     || fail "socket mode is not 0660: $socket"
   [ "$(stat -c '%g' "$socket")" = "$EXPECTED_GID" ] \

@@ -8,6 +8,8 @@ from pathlib import Path
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.core.loopback_port import resolve_test_port
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class CommandPolicyXiaooConfig(CommonTestConfig):
@@ -32,13 +34,13 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
         if xiaoo is None:
             raise RuntimeError("real Xiaoo executable is not available")
         bash = Path(
-            os.environ.get("COMMAND_POLICY_XIAOO_E2E_BASH", "/usr/bin/bash")
+            os.environ.get("COMMAND_POLICY_XIAOO_E2E_BASH", CASE_CONSTANTS.bash)
         ).resolve()
         ready_timeout = float(
-            os.environ.get("COMMAND_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS", "15")
+            os.environ.get("COMMAND_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS", str(CASE_CONSTANTS.ready_timeout_seconds))
         )
         evidence_timeout = float(
-            os.environ.get("COMMAND_POLICY_XIAOO_E2E_EVIDENCE_TIMEOUT_SECONDS", "15")
+            os.environ.get("COMMAND_POLICY_XIAOO_E2E_EVIDENCE_TIMEOUT_SECONDS", str(CASE_CONSTANTS.evidence_timeout_seconds))
         )
         if ready_timeout <= 0 or evidence_timeout <= 0:
             raise RuntimeError("command-policy Xiaoo timeouts must be positive")
@@ -51,7 +53,7 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
             xiaoo_binary=Path(xiaoo).resolve(),
             bash_executable=bash,
             web_host=os.environ.get(
-                "COMMAND_POLICY_XIAOO_E2E_WEB_HOST", "127.0.0.1"
+                "COMMAND_POLICY_XIAOO_E2E_WEB_HOST", CASE_CONSTANTS.web_host
             ),
             web_port=resolve_test_port(
                 "COMMAND_POLICY_XIAOO_E2E_WEB_PORT",

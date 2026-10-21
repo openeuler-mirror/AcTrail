@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Shared Kata runtime configuration resolution for the V2 virtual-container case.
 
+command -v python3 >/dev/null 2>&1 || {
+  echo "FAIL: missing command: python3" >&2
+  return 1
+}
+HOST_DEFAULTS="$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/constants.py")" || return 1
+eval "$HOST_DEFAULTS"
+unset HOST_DEFAULTS
+
 kata_shim_binary_for_runtime() {
   local runtime="$1"
   local runtime_name=""
@@ -23,20 +31,17 @@ kata_shim_binary_for_runtime() {
 }
 
 default_kata_ctr_runtime() {
-  # A versioned shim name avoids an older distro-owned
-  # /usr/bin/containerd-shim-kata-v2 winning containerd's PATH lookup. Keep
-  # the standard name as a compatibility fallback for existing test hosts.
-  if command -v containerd-shim-kata332-v2 >/dev/null 2>&1; then
-    printf '%s\n' 'io.containerd.kata332.v2'
+  if command -v "$KATA_PREFERRED_SHIM_BINARY" >/dev/null 2>&1; then
+    printf '%s\n' "$KATA_PREFERRED_CTR_RUNTIME"
   else
-    printf '%s\n' 'io.containerd.kata.v2'
+    printf '%s\n' "$KATA_DEFAULT_CTR_RUNTIME"
   fi
 }
 
 kata_runtime_config_name() {
   case "$1" in
-    stratovirt) printf '%s\n' "configuration-stratovirt.toml" ;;
-    cloud-hypervisor) printf '%s\n' "configuration-clh.toml" ;;
+    stratovirt) printf '%s\n' "$KATA_STRATOVIRT_CONFIG_NAME" ;;
+    cloud-hypervisor) printf '%s\n' "$KATA_CLOUD_HYPERVISOR_CONFIG_NAME" ;;
     default) return 0 ;;
     *)
       echo "unsupported BACKEND=$1 (expected stratovirt, cloud-hypervisor or default)" >&2
@@ -55,7 +60,7 @@ find_kata_runtime_config() {
   name="$(kata_runtime_config_name "$backend")" || return 1
   [[ -n "$name" ]] || return 0
 
-  config_dirs="${KATA_CONFIG_DIRS:-/opt/kata/share/defaults/kata-containers:/usr/share/defaults/kata-containers:/etc/kata-containers}"
+  config_dirs="$KATA_CONFIG_DIRS"
   IFS=: read -r -a dirs <<<"$config_dirs"
   for config_dir in "${dirs[@]}"; do
     [[ -n "$config_dir" ]] || continue

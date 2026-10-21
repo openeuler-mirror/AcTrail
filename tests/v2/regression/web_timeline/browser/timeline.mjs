@@ -1,4 +1,5 @@
 // Drive real timeline controls and locate canvas actions from their persisted times.
+import { C } from '../constants.mjs';
 import assert from 'node:assert/strict';
 
 export class TimelineBrowser {
@@ -8,7 +9,7 @@ export class TimelineBrowser {
     this.responses = [];
     this.pending = new Set();
     page.on('response', response => {
-      if (new URL(response.url()).pathname !== this.path || response.status() !== 200) return;
+      if (new URL(response.url()).pathname !== this.path || response.status() !== C.http_ok) return;
       const task = response.json().then(data => this.responses.push({
         url: response.url(), data,
       })).catch(() => {}).finally(() => this.pending.delete(task));
@@ -16,9 +17,9 @@ export class TimelineBrowser {
     });
   }
 
-  async open(tab = 'flame_graph') {
+  async open(tab = C.default_tab) {
     const response = await fetch(`${this.base}/api/traces/${encodeURIComponent(this.trace)}/metadata`);
-    assert.equal(response.status, 200);
+    assert.equal(response.status, C.http_ok);
     this.metadata = await response.json();
     this.setMetadata(this.metadata);
     await this.page.goto(this.base, { waitUntil: 'networkidle' });
@@ -44,9 +45,8 @@ export class TimelineBrowser {
   }
 
   async settle() {
-    // Navigation schedules its fetch after 120 ms; an already-idle document
-    // otherwise reports networkidle before that real request has started.
-    await this.page.waitForTimeout(200);
+    // Wait for navigation to schedule its request before checking network idle.
+    await this.page.waitForTimeout(C.navigation_settle_ms);
     await this.page.waitForLoadState('networkidle');
     await Promise.all([...this.pending]);
     await this.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -73,26 +73,26 @@ export class TimelineBrowser {
   async viewport() {
     const window = this.page.locator('.flame-panel .timeline-overview-window');
     await window.waitFor();
-    const ratio = await window.evaluate(element => ({
-      left: parseFloat(element.style.left) / 100, width: parseFloat(element.style.width) / 100,
-    }));
+    const ratio = await window.evaluate((element, constants) => ({
+      left: parseFloat(element.style.left) / constants.percent_scale, width: parseFloat(element.style.width) / constants.percent_scale,
+    }), C);
     const start = BigInt(this.bounds.start_time_unix_nanos);
-    const span = Math.max(Number(BigInt(this.bounds.end_time_unix_nanos) - start) / 1e6, 1);
+    const span = Math.max(Number(BigInt(this.bounds.end_time_unix_nanos) - start) / C.nanoseconds_per_ms, 1);
     return { origin: start, startMs: ratio.left * span, spanMs: ratio.width * span, totalMs: span, ...ratio };
   }
 
-  async jump(time, { settle = true } = {}) {
+  async jump(time, { settle = C.default_settle } = structuredClone(C.navigation_options)) {
     const track = this.page.locator('.flame-panel .timeline-overview-track');
     await track.scrollIntoViewIfNeeded();
     const box = await track.boundingBox();
     const start = BigInt(this.bounds.start_time_unix_nanos);
     const span = BigInt(this.bounds.end_time_unix_nanos) - start;
     const ratio = span > 0n ? Number(BigInt(time) - start) / Number(span) : 0;
-    await track.click({ position: { x: Math.max(1, Math.min(box.width - 1, ratio * box.width)), y: 12 } });
+    await track.click({ position: { x: Math.max(1, Math.min(box.width - 1, ratio * box.width)), y: C.overview_click_y } });
     if (settle) await this.settle();
   }
 
-  async select(action, group = 'Messages', zoomAttempt = 0) {
+  async select(action, group = C.default_action_group, zoomAttempt = C.initial_zoom_attempt) {
     await this.jump(action.start_time_unix_nanos);
     const titles = group === 'Messages' ? ['Messages:', '消息：'] : ['Network / protocol:', '网络 / 协议：'];
     const canvases = this.page.locator(titles.map(title => `.flame-track-canvas[aria-label^="${title}"]`).join(','));
@@ -103,9 +103,9 @@ export class TimelineBrowser {
       await canvas.scrollIntoViewIfNeeded();
       await this.settle();
       const box = await canvas.boundingBox();
-      const offset = Number(BigInt(action.start_time_unix_nanos) - viewport.origin) / 1e6;
-      const x = Math.min(box.width - 1, Math.max(1, (offset - viewport.startMs) / viewport.spanMs * box.width + 1.5));
-      for (let y = 17; y < box.height; y += 28) {
+      const offset = Number(BigInt(action.start_time_unix_nanos) - viewport.origin) / C.nanoseconds_per_ms;
+      const x = Math.min(box.width - 1, Math.max(1, (offset - viewport.startMs) / viewport.spanMs * box.width + C.canvas_hit_offset_x));
+      for (let y = C.canvas_first_row_y; y < box.height; y += C.canvas_row_height) {
         await canvas.hover({ position: { x, y } });
         const title = await canvas.getAttribute('title');
         attempts.push({ label: await canvas.getAttribute('aria-label'), x, y, title,
@@ -114,13 +114,13 @@ export class TimelineBrowser {
         const response = this.page.waitForResponse(response => new URL(response.url()).pathname
           === `/api/traces/${encodeURIComponent(this.trace)}/actions/${encodeURIComponent(action.id)}`);
         await canvas.click({ position: { x, y } });
-        assert.equal((await response).status(), 200);
+        assert.equal((await response).status(), C.http_ok);
         await this.page.locator('.detail-panel').waitFor();
         await this.settle();
         return { title, x, y };
       }
     }
-    if (zoomAttempt < 12 && attempts.some(attempt => /activities share|Zoom in|活动|放大/i.test(attempt.title ?? ''))) {
+    if (zoomAttempt < C.max_zoom_attempts && attempts.some(attempt => /activities share|Zoom in|活动|放大/i.test(attempt.title ?? ''))) {
       await this.page.locator('.flame-zoom-controls button').last().click();
       await this.settle();
       return this.select(action, group, zoomAttempt + 1);

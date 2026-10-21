@@ -9,8 +9,6 @@ from .errors import AgentBinaryNotFoundError
 from .output import (
     CaseProgressReporter,
     TestOutput,
-    effective_status,
-    has_failure,
 )
 from .test_case import TestCase, TestResult, TestStatus
 
@@ -23,6 +21,4 @@ __all__ = [
     "TestOutput",
     "TestResult",
     "TestStatus",
-    "effective_status",
-    "has_failure",
 ]

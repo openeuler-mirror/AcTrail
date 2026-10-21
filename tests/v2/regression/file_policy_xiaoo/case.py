@@ -11,6 +11,7 @@ from contextlib import closing
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.core import (
     CommonTestConfig,
     TestCase,
@@ -20,6 +21,8 @@ from tests.v2.common.core import (
 )
 from tests.v2.common.runner import TestingContextSingleton
 from tests.v2.regression.command_policy_xiaoo.provider import LocalXiaooProvider
+
+from .constants import CASE_CONSTANTS
 
 
 class FilePolicyXiaooCase(TestCase):
@@ -31,7 +34,7 @@ class FilePolicyXiaooCase(TestCase):
         if executable is None:
             raise RuntimeError("real Xiaoo executable is not available")
         self._xiaoo = Path(executable).resolve()
-        self._timeout = float(os.environ.get("FILE_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS", "15"))
+        self._timeout = float(os.environ.get("FILE_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS", str(CASE_CONSTANTS.ready_timeout_seconds)))
         if self._timeout <= 0:
             raise ValueError("file-policy readiness timeout must be positive")
         self._variant = "default_complete"
@@ -50,23 +53,23 @@ class FilePolicyXiaooCase(TestCase):
             self._marker.write_text("", encoding="utf-8")
             provider_url = self._provider.start()
             self._xiaoo_config.write_text(
-                '[llm]\nprovider = "deepseek"\nmodel = "deepseek-chat"\n'
+                f'[llm]\nprovider = "{CASE_CONSTANTS.llm_provider}"\nmodel = "{CASE_CONSTANTS.llm_model}"\n'
                 'api_key_env = "ACTRAIL_XIAOO_COMMAND_POLICY_KEY"\n'
                 f"api_base = {json.dumps(provider_url)}\n"
-                'max_tokens = 128\ncontext_window = 32768\nreasoning_effort = "off"\n',
+                f'max_tokens = {CASE_CONSTANTS.llm_max_tokens}\ncontext_window = {CASE_CONSTANTS.llm_context_window}\nreasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"\n',
                 encoding="utf-8",
-            )
-            self._runtime = ActrailRuntime(
-                self._config.repo,
-                self._config.bin_dir,
-                self._config.command_timeout_seconds,
-                context.output,
-                self._config.work_dir / "actraild.conf",
-                self._patch,
             )
             for variant in ("default_complete", "fanotify", "fanotify_shared_storage"):
                 self._variant = variant
                 self._write_patch()
+                self._runtime = ActrailRuntime(
+                    self._config.repo,
+                    self._config.bin_dir,
+                    self._config.command_timeout_seconds,
+                    context.output,
+                    self._config.work_dir / "actraild.conf",
+                    operator_config_patches=self._patches(),
+                )
                 for decision in ("deny", "allow"):
                     self._marker.write_text("", encoding="utf-8")
                     context.report_progress(
@@ -100,8 +103,8 @@ class FilePolicyXiaooCase(TestCase):
         for name in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"):
             environment.pop(name, None)
         environment.update(
-            NO_PROXY="127.0.0.1,localhost",
-            no_proxy="127.0.0.1,localhost",
+            NO_PROXY=CASE_CONSTANTS.no_proxy_hosts,
+            no_proxy=CASE_CONSTANTS.no_proxy_hosts,
             ACTRAIL_XIAOO_COMMAND_POLICY_KEY="local-test-key",
             PATH="/usr/bin",
         )
@@ -110,23 +113,23 @@ class FilePolicyXiaooCase(TestCase):
                 "launch", "--seccomp-notify", "auto" if self._variant == "default_complete" else "disabled",
                 "--name", f"v2-file-policy-xiaoo-{decision}", "--",
                 self._xiaoo, "--cli", "run", "--config", self._xiaoo_config,
-                "--tools", "bash", "--max-turns", "3", "--debug",
+                "--tools", "bash", "--max-turns", str(CASE_CONSTANTS.agent_max_turns), "--debug",
                 "--prompt", "Use the Bash tool exactly once, then report its operating-system result.",
             ),
             timeout_seconds=self._config.launch_timeout_seconds,
             environment=environment,
         )
         if result.returncode != 0:
-            raise AssertionError(f"Xiaoo failed: {result.output[-4000:]}")
+            raise AssertionError(f"Xiaoo failed: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}")
         content = self._marker.read_text(encoding="utf-8")
         permission_error = any(
             message in result.output.lower()
             for message in ("permission denied", "operation not permitted")
         )
         if decision == "deny" and (content or not permission_error):
-            raise AssertionError(f"denied open was not enforced: {result.output[-4000:]}")
+            raise AssertionError(f"denied open was not enforced: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}")
         if decision == "allow" and (content != "ACTRAIL_XIAOO_COMMAND_OK" or permission_error):
-            raise AssertionError(f"allowed open did not write its marker: {result.output[-4000:]}")
+            raise AssertionError(f"allowed open did not write its marker: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}")
         match = re.search(r"trace trace-(\d+) entered Active", result.output)
         if match is None:
             raise AssertionError("Xiaoo launch omitted trace ID")
@@ -190,51 +193,33 @@ class FilePolicyXiaooCase(TestCase):
                 if connection.execute("SELECT count(*) FROM events").fetchone()[0] == 0:
                     raise AssertionError("shared storage received no trace events")
 
+    def _patches(self) -> list[Path]:
+        patches = [self._patch]
+        if self._variant != "default_complete":
+            patches.append(Path(__file__).parent / "fanotify" / "patch_config.toml")
+        return patches
+
     def _write_patch(self) -> None:
-        if self._variant == "default_complete":
-            ActrailRuntime.write_isolated_operator_config_patch(self._patch, self._config.work_dir)
-            with self._patch.open("a", encoding="utf-8") as patch:
-                patch.write(f'\n[enforcement]\nrules_path = {json.dumps(str(self._rules))}\n')
-            return
-        ActrailRuntime.write_isolated_operator_config_patch(
-            self._patch,
-            self._config.work_dir,
-            payload_tls_enabled=False,
-            payload_stdio_enabled=False,
+        builder = (
+            PatchBuilder().with_work_dir(self._config.work_dir).with_runtime_timing()
+            .with_values({
+                "storage": {"retention": {"enabled": False}},
+                "enforcement": {"rules_path": str(self._rules)},
+            })
         )
-        with self._patch.open("a", encoding="utf-8") as patch:
-            patch.write(
-                '\n[payload.socket]\nenabled = false\n'
-                '\n[capture]\nprofile_name = "file-policy-xiaoo-regression"\n'
-                'capabilities = ["proc-lifecycle", "enforcement-file-permission-fanotify"]\n'
-                'opportunistic_capabilities = []\n'
-                '\n[ebpf]\nenabled = true\n'
-                '\n[seccomp_notify]\nenabled = false\n'
-                '\n[process_seccomp]\nenabled = false\n'
-                '\n[command_control]\nenabled = false\n'
-                '\n[network_control]\nenabled = false\n'
-                '\n[access_control.file.open]\nbackend = "fanotify"\n'
-                '\n[enforcement]\nenabled = true\nscope = "trace"\n'
-                f'rules_path = {json.dumps(str(self._rules))}\n'
-                'default_decision = "allow"\nmark_strategy = "parent-directories"\n'
-                'audit_enabled = true\n'
-                '\n[plugins.startup]\nenabled = false\n'
+        if self._variant != "default_complete":
+            shared = self._variant == "fanotify_shared_storage"
+            resource_path = self._config.work_dir / (
+                "shared.sqlite" if shared else f"resources-{time.time_ns()}.sqlite"
             )
-            # Both layouts live beside the governed marker. A fresh resource file
-            # exercises opening SQLite before permission interception starts.
-            if self._variant == "fanotify_shared_storage":
-                resource_path = self._config.work_dir / "shared.sqlite"
-            else:
-                resource_path = self._config.work_dir / f"resources-{time.time_ns()}.sqlite"
-            patch.write(
-                '\n[resource_profiling.storage.database.sqlite]\n'
-                f'path = {json.dumps(str(resource_path))}\n'
-            )
-        if self._variant == "fanotify_shared_storage":
-            contents = self._patch.read_text(encoding="utf-8")
-            contents = re.sub(r'(\[storage\.sqlite\]\npath = )[^\n]+',
-                              lambda match: match[1] + json.dumps(str(resource_path)), contents)
-            self._patch.write_text(contents, encoding="utf-8")
+            builder.with_values({
+                "resource_profiling": {"storage": {"database": {"sqlite": {
+                    "path": str(resource_path),
+                }}}},
+            })
+            if shared:
+                builder.with_values({"storage": {"sqlite": {"path": str(resource_path)}}})
+        builder.build().save(self._patch)
 
     def cleanup(self, context: TestingContextSingleton) -> TestResult:
         del context

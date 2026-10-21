@@ -11,6 +11,8 @@ from .interface import (
     ScenarioGenerator,
 )
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 
 @dataclass(frozen=True, slots=True)
 class RoundStats:
@@ -28,7 +30,7 @@ class _AcceptAll:
 def scenario_round_stats(
     generator: ScenarioGenerator,
     *,
-    cap: int = 100_000,
+    cap: int = DEFAULTS.statistics_round_cap,
 ) -> RoundStats:
     """Count tool/message rounds by bounded dry-run with all tools accepted.
 

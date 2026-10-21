@@ -351,9 +351,13 @@ grep -E \
 
 runner 使用开启 debug console、BTF/eBPF 和至少 2 vCPU 的 data Profile，顺序执行：
 
-1. `tls-only`：`SSL_write/SSL_read` 双向明文 payload 完整；
-2. `ebpf-only`：文件行为产生非零 eBPF event；
+1. `tls-only`：`SSL_write/SSL_read` 双向明文 payload 完整。
+2. `ebpf-only`：文件行为产生非零 eBPF event。
 3. `combo`：同一 trace 同时包含 TLS、eBPF 和 network event。
+
+**采集配置**：三个场景共用由产品默认配置与 Guest 部署设置生成的 daemon 配置，使用 eBPF 采集。场景名称表示工作负载和验收内容。
+
+**TLS sync 专项**：独立脚本 `guest/tls-only.sh` 使用 `guest-tls-only.conf`，由 `actrailctl init --patch guest/tls-only/patch_config.toml` 生成，显式选择 `tls-sync` 并关闭 eBPF。
 
 每个 cell 都要求 guest-root control ready、openEuler workload、
 `deployment_permissions_degraded=false` 和 `Completed/Clean` trace。全部完成后输出

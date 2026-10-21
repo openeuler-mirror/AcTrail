@@ -120,6 +120,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=ACTRAIL_LAUNCH_BINDING_BACKEND");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_ONCE_BACKEND");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_TRACE_HASH_ALLOC");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS");
     println!("cargo:rustc-check-cfg=cfg(actrail_event_transport_perf)");
     println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_task_storage)");
     println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_pid_generation_hash)");
@@ -176,6 +177,11 @@ fn main() {
         "bpf".to_string(),
         bpf_target_arch.to_string(),
     ];
+    let tls_direct_copy_max_chunks = env::var("ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS")
+        .expect("ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS must be set by Cargo configuration");
+    clang_args.push(format!(
+        "-DACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS={tls_direct_copy_max_chunks}"
+    ));
     if let Some(include) = target_system_include(&target_arch) {
         clang_args.push(format!("-I{}", include.display()));
     }

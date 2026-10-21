@@ -10,6 +10,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .constants import DEFAULTS
+
 
 class AgentBinaryDiscovery:
     """Resolve any agent binary through one shared search chain.
@@ -73,7 +75,7 @@ class AgentBinaryDiscovery:
                 [str(binary), "debug", "models"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=DEFAULTS.discovery_timeout_seconds,
                 env=environment,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -101,7 +103,7 @@ class AgentBinaryDiscovery:
         return None
 
     def codex_native_binary_for(
-        self, binary: Path, *, use_override: bool = True
+        self, binary: Path, *, use_override: bool = DEFAULTS.native_binary_override
     ) -> Path | None:
         configured = os.environ.get("CODEX_E2E_NATIVE_BINARY") if use_override else None
         if configured:
@@ -186,5 +188,5 @@ def default_claude_model() -> str:
     return (
         os.environ.get("CLAUDE_E2E_MODEL")
         or os.environ.get("ANTHROPIC_MODEL")
-        or "sonnet"
+        or DEFAULTS.claude_model
     )

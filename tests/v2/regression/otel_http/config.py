@@ -7,6 +7,8 @@ from pathlib import Path
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.core.loopback_port import resolve_test_port
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class OtelHttpConfig(CommonTestConfig):
@@ -27,12 +29,12 @@ class OtelHttpConfig(CommonTestConfig):
                 if configured_operator
                 else inputs.work_dir / "actraild.conf"
             ),
-            web_host=os.environ.get("OTEL_HTTP_E2E_WEB_HOST", "127.0.0.1"),
+            web_host=os.environ.get("OTEL_HTTP_E2E_WEB_HOST", CASE_CONSTANTS.web_host),
             web_port=resolve_test_port(
                 "OTEL_HTTP_E2E_WEB_PORT",
                 attempts=common.drain_attempts,
                 connect_timeout_seconds=common.drain_interval_seconds,
             ),
-            plugin_package="otel-http",
-            plugin_instance="v2.otel-http",
+            plugin_package=CASE_CONSTANTS.plugin_package,
+            plugin_instance=CASE_CONSTANTS.plugin_instance,
         )

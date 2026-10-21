@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..constants import CASE_CONSTANTS
+
 import time
 from dataclasses import dataclass
 
@@ -28,7 +30,8 @@ class GuestSystemSandboxObserver:
         )
         poll_iterations = max(
             1,
-            (self.config.ready_timeout_seconds - 5) * 2,
+            int((self.config.ready_timeout_seconds - CASE_CONSTANTS.observer_ready_reserve_seconds)
+                / CASE_CONSTANTS.observer_poll_seconds),
         )
         command = (
             f"remaining={poll_iterations}; "
@@ -39,16 +42,16 @@ class GuestSystemSandboxObserver:
             f"&& grep -Fqx '{expected_ready}' {self.LOG_PATH} "
             f"&& ! systemctl is-enabled --quiet {self.CONNECT_UNIT} "
             f"&& ! systemctl is-active --quiet {self.CONNECT_UNIT}; then "
-            "exit 0; fi; remaining=$((remaining - 1)); sleep 0.5; done; "
+            f"exit 0; fi; remaining=$((remaining - 1)); sleep {CASE_CONSTANTS.observer_poll_seconds}; done; "
             "systemctl --no-pager --full status actrail-sb.service || true; "
             f"systemctl --no-pager --full status {self.CONNECT_UNIT} || true; "
             "ls -la /dev/actrail || true; "
-            f"tail -n 80 {self.LOG_PATH} || true; exit 72"
+            f"tail -n {CASE_CONSTANTS.diagnostic_tail_lines} {self.LOG_PATH} || true; exit 72"
         )
         result = self.guest.capture(
             vm.container_id,
             command,
-            timeout=self.config.ready_timeout_seconds + 2,
+            timeout=self.config.ready_timeout_seconds + CASE_CONSTANTS.command_timeout_slack_seconds,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -66,8 +69,10 @@ class GuestSystemSandboxObserver:
             if remaining <= 0:
                 break
             request_timeout_ms = max(
-                100,
-                min(5_000, int(max(0.1, remaining - 0.5) * 1_000)),
+                CASE_CONSTANTS.observer_request_timeout_min_ms,
+                min(CASE_CONSTANTS.observer_request_timeout_max_ms,
+                    int(max(CASE_CONSTANTS.observer_request_timeout_min_ms / 1_000,
+                            remaining - CASE_CONSTANTS.observer_request_reserve_seconds) * 1_000)),
             )
             result = self.guest.capture(
                 vm.container_id,
@@ -77,7 +82,7 @@ class GuestSystemSandboxObserver:
                 f"--host-cid {self.config.vsock_host_cid} "
                 f"--port {self.config.vsock_port} "
                 f"--request-timeout-ms {request_timeout_ms}",
-                timeout=min(remaining, request_timeout_ms / 1_000 + 2),
+                timeout=min(remaining, request_timeout_ms / 1_000 + CASE_CONSTANTS.command_timeout_slack_seconds),
             )
             output = result.stdout + result.stderr
             if result.returncode == 0:
@@ -93,7 +98,7 @@ class GuestSystemSandboxObserver:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            time.sleep(min(0.5, remaining))
+            time.sleep(min(CASE_CONSTANTS.observer_poll_seconds, remaining))
         raise RuntimeError(
             self.config.IDENTITY.failure(
                 "Guest system sandbox observer VSOCK connection failed before "

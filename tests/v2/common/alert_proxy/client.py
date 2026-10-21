@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from .constants import DEFAULTS
+
 
 class AlertSubscriberClient:
     """A bounded client for the production alert subscriber protocol."""
@@ -20,7 +22,7 @@ class AlertSubscriberClient:
         client_id: str,
         transcript: Path,
         *,
-        max_payload_bytes: int = 262_140,
+        max_payload_bytes: int = DEFAULTS.max_payload_bytes,
     ):
         self._address = address
         self._token = token
@@ -45,13 +47,13 @@ class AlertSubscriberClient:
             try:
                 connection = socket.create_connection(
                     self._address,
-                    timeout=min(0.5, max(0.05, deadline - time.monotonic())),
+                    timeout=min(DEFAULTS.connect_timeout_seconds, max(DEFAULTS.minimum_connect_timeout_seconds, deadline - time.monotonic())),
                 )
             except OSError as error:
                 last_error = error
-                time.sleep(0.05)
+                time.sleep(DEFAULTS.poll_seconds)
                 continue
-            connection.settimeout(0.5)
+            connection.settimeout(DEFAULTS.connect_timeout_seconds)
             self._socket = connection
             try:
                 self._handshake(deadline)
@@ -89,7 +91,7 @@ class AlertSubscriberClient:
     def wait_for_heartbeat(self, timeout_seconds: float) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if self._heartbeat_seen.wait(min(0.05, deadline - time.monotonic())):
+            if self._heartbeat_seen.wait(min(DEFAULTS.poll_seconds, deadline - time.monotonic())):
                 return
             if self._reader_failure is not None:
                 raise ConnectionError(
@@ -169,7 +171,7 @@ class AlertSubscriberClient:
         reader = self._reader
         self._reader = None
         if reader is not None:
-            reader.join(timeout=2)
+            reader.join(timeout=DEFAULTS.reader_join_timeout_seconds)
 
     def _handshake(self, deadline: float) -> None:
         self._send(
@@ -193,7 +195,7 @@ class AlertSubscriberClient:
     def _receive_application_message(self, deadline: float) -> dict[str, Any]:
         while time.monotonic() < deadline:
             try:
-                item = self._messages.get(timeout=max(0.01, deadline - time.monotonic()))
+                item = self._messages.get(timeout=max(DEFAULTS.minimum_receive_timeout_seconds, deadline - time.monotonic()))
             except queue.Empty as error:
                 raise TimeoutError("subscriber receive deadline expired") from error
             if isinstance(item, BaseException):
@@ -242,7 +244,7 @@ class AlertSubscriberClient:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("subscriber receive deadline expired")
-            connection.settimeout(min(0.5, remaining))
+            connection.settimeout(min(DEFAULTS.connect_timeout_seconds, remaining))
             try:
                 chunk = connection.recv(length - len(chunks))
             except socket.timeout:
@@ -276,7 +278,7 @@ class AlertSubscriberClient:
     def _read_loop(self) -> None:
         try:
             while not self._stopping.is_set():
-                message = self._receive(time.monotonic() + 3600)
+                message = self._receive(time.monotonic() + DEFAULTS.receive_timeout_seconds)
                 if message.get("action") == "ping":
                     nonce = message.get("nonce")
                     if not isinstance(nonce, int):

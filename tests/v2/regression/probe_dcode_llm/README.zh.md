@@ -1,6 +1,6 @@
 # Probe dcode LLM
 
-使用 `bpf-copy` TLS 配置，验证真实 deepagents-code（`dcode`）通过 AcTrail
+使用刷新后的默认采集配置，验证真实 deepagents-code（`dcode`）通过 AcTrail
 启动后的 LLM 请求、响应采集与关联。
 
 ## 运行
@@ -13,30 +13,35 @@ sudo -E env "PATH=$PATH" python3 tests/v2/regression/test_all.py \
   --no-profile --case probe_dcode_llm
 ```
 
-测例已纳入默认回归集合。保留日志及工作目录时添加 `--no-cleanup`；
-dcode thread 在每次调用结束时清理。
+- **回归入口**：测例已纳入默认回归集合。
+- **保留产物**：保留日志及工作目录时添加 `--no-cleanup`。
+- **会话清理**：dcode thread 在每次调用结束时清理。
 
 ## 前提与配置
 
-`dcode` 必须可从 PATH 找到，并已配置可访问的默认模型。
-使用 `dcode --version` 和 `dcode --default-model` 查看实际版本与模型。
-测例沿用 dcode 默认 provider/model，在 runner 分配的工作目录下为每次调用
-创建独占临时目录。预检和观测运行均在退出后按该目录精确查询并删除 thread。
-超时通过公共进程管理器终止进程组后执行清理。清理失败输出 warning，
-保留该次调用的观测回归结果。
+### 运行环境与清理
 
-测例在 `<work-root>/probe_dcode_llm/` 生成 `actraild.conf` 和完整的
-`actraild.patch.toml`，将 socket、PID、日志、数据库、导出和插件路径指向该工作目录。
-配置 patch 合并本目录的 [`actraild.patch.toml`](actraild.patch.toml)，设置
-`payload.tls.capture_backend = "bpf-copy"`。
-初始化使用 `actrailctl --config <本地配置> init -f --patch <生成的patch>`；
-daemon、ctl launch 和 viewer 均显式使用同一份本地配置。
+- **程序与模型**：`dcode` 必须可从 PATH 找到，并已配置可访问的默认模型。使用 `dcode --version` 和 `dcode --default-model` 查看实际版本与模型。
+- **调用隔离**：测例沿用 dcode 默认 provider/model，在 runner 分配的工作目录下为每次调用创建独占临时目录。
+- **会话清理**：预检和观测运行均在退出后按该目录精确查询并删除 thread。
+- **超时处理**：超时通过公共进程管理器终止进程组后执行清理。
+- **清理异常**：清理失败输出 warning，保留该次调用的观测回归结果。
 
-`init` 默认使用 `complete` 模式，启动和运行期的直接探针发现沿用默认开启值。
-runner 的 `--profile` 是机器环境配置，与 `init --mode profile` 含义不同。
-TLS `bpf-copy` 每次 SSL 操作最多采集 65,535 字节，完整模式不消除这个后端限制。
-LLM 连接的实际协议取决于 provider 配置；明文 HTTP 可由 socket 采集，因此
-LLM 断言通过不单独证明 TLS uprobe 路径已被覆盖。
+### 配置生成与使用
+
+- **配置位置**：公共配置构建器在 `<work-root>/probe_dcode_llm/` 生成隔离路径补丁。daemon 数据、日志和 socket 使用该测例工作目录。
+- **采集后端**：TLS 和 socket 继承 `init` 生成的默认后端，当前均为 `bpf-copy`，seccomp-notify 关闭。
+- **配置初始化**：初始化使用 `actrailctl --config <本地配置> init -f --patch <隔离路径补丁>`，生成测例使用的 `actraild.conf`。
+- **配置使用**：daemon、ctl launch 和 viewer 均显式使用同一份本地配置。
+
+### 采集模式与覆盖
+
+- **初始化模式**：`init` 默认使用 `complete` 模式，启动和运行期的直接探针发现沿用默认开启值。
+- **运行器参数**：runner 的 `--profile` 是机器环境配置，与 `init --mode profile` 含义不同。
+- **实际协议**：LLM 连接的实际协议取决于 provider 配置。明文 HTTP 由 socket 采集。
+- **TLS 覆盖**：确认 TLS 用户态探针（uprobe）覆盖时，还需检查 TLS 来源的采集证据。
+
+### 超时配置
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -54,7 +59,8 @@ LLM 断言通过不单独证明 TLS uprobe 路径已被覆盖。
 3. 生成新的随机标记，通过 `actrailctl --config <本地配置> launch -- dcode -n <prompt> -q
    --no-mcp --timeout <seconds>` 请求原样回答，不使用工具。
 4. 检查退出码、回答标记和唯一 trace id。
-5. 安全停止 daemon 并等待数据收尾，验证 trace 处于干净终态。
+5. 停止 daemon 并等待数据收尾，确认停止命令成功，trace 的 `state` 为
+   `Completed` 或 `Exited`，且 `health` 为 `Clean`。
 6. 使用公共 `LLMTraceAssertion` 验证 LLM call/request/response 终态、
    有效关联和请求内容证据，确认关联响应成功且完整、包含本次标记。
 
@@ -89,5 +95,5 @@ sudo -E target/release/actrailviewer --config "$DCODE_CONFIG" \
   --output-format json actions --trace-id <trace-id>
 ```
 
-目标 trace 应正常结束；LLM 请求与响应应有有效 call links，响应包含
+目标 trace 应正常结束。LLM 请求与响应应有有效 call links，响应包含
 测例输出的随机标记。自动测例执行完整关联断言。

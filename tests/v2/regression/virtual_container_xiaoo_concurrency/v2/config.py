@@ -15,6 +15,8 @@ from tests.v2.common.kata_runtime.environment import (
 from tests.v2.common.kata_runtime.image import PullPolicy
 from tests.v2.regression.virtual_container.v2.config import SUPPORTED_BACKENDS
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
@@ -48,7 +50,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
         prefix = "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_"
         backend = os.environ.get(
             f"{prefix}BACKEND",
-            os.environ.get("BACKEND", "stratovirt"),
+            os.environ.get("BACKEND", CASE_CONSTANTS.backend),
         )
         if backend not in SUPPORTED_BACKENDS:
             raise ValueError(f"unsupported Kata backend: {backend}")
@@ -85,7 +87,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
 
         pull_value = os.environ.get(
             f"{prefix}IMAGE_PULL_POLICY",
-            os.environ.get("VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY", "never"),
+            os.environ.get("VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY", CASE_CONSTANTS.image_pull_policy),
         )
         try:
             pull_policy = PullPolicy(pull_value)
@@ -97,7 +99,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
         repo = inputs.repo.resolve()
         ctr_runtime = os.environ.get(
             f"{prefix}CTR_RUNTIME",
-            os.environ.get("CTR_RUNTIME", "io.containerd.kata.v2"),
+            os.environ.get("CTR_RUNTIME", CASE_CONSTANTS.ctr_runtime),
         )
         shim_binary(ctr_runtime)
         return cls(
@@ -109,7 +111,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
                 f"{prefix}IMAGE",
                 os.environ.get(
                     "VIRTUAL_CONTAINER_E2E_IMAGE",
-                    "docker.io/library/actrail-openeuler-workload:24.09",
+                    CASE_CONSTANTS.image,
                 ),
             ),
             image_pull_policy=pull_policy,
@@ -123,7 +125,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
                     f"{prefix}WORKLOAD_BUNDLE",
                     os.environ.get(
                         "WORKLOAD_BUNDLE_DIR",
-                        str(repo / "local/kata/workload-bundle"),
+                        str(repo / CASE_CONSTANTS.workload_bundle_path),
                     ),
                 ),
                 f"{prefix}WORKLOAD_BUNDLE",
@@ -131,7 +133,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
             capability_bundle=absolute_path(
                 os.environ.get(
                     "CAPABILITY_BUNDLE_DIR",
-                    str(repo / "local/kata/guest-bundle"),
+                    str(repo / CASE_CONSTANTS.capability_bundle_path),
                 ),
                 "CAPABILITY_BUNDLE_DIR",
             ),
@@ -139,31 +141,31 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
             opencode_free_model=opencode_free_model or None,
             runtime_timeout_seconds=positive_environment_int(
                 f"{prefix}RUNTIME_TIMEOUT_SECONDS",
-                "900",
+                str(CASE_CONSTANTS.runtime_timeout_seconds),
             ),
             ready_timeout_seconds=positive_environment_int(
                 f"{prefix}READY_TIMEOUT_SECONDS",
-                "90",
+                str(CASE_CONSTANTS.ready_timeout_seconds),
             ),
             overlap_timeout_seconds=positive_environment_int(
                 f"{prefix}OVERLAP_TIMEOUT_SECONDS",
-                "30",
+                str(CASE_CONSTANTS.overlap_timeout_seconds),
             ),
             settle_seconds=bounded_environment_int(
                 f"{prefix}SETTLE_SECONDS",
-                "5",
+                str(CASE_CONSTANTS.settle_seconds),
                 minimum=0,
                 maximum=300,
             ),
             workload_uid=bounded_environment_int(
                 f"{prefix}WORKLOAD_UID",
-                "1000",
+                str(CASE_CONSTANTS.workload_uid),
                 minimum=0,
                 maximum=2147483647,
             ),
             workload_gid=bounded_environment_int(
                 f"{prefix}WORKLOAD_GID",
-                "39000",
+                str(CASE_CONSTANTS.workload_gid),
                 minimum=0,
                 maximum=2147483647,
             ),

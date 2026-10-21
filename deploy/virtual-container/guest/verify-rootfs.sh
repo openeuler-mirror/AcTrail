@@ -198,7 +198,7 @@ else
       || fail "local-only rootfs unexpectedly contains $path"
   done
 fi
-for section in payload.socket seccomp_notify process_seccomp enforcement; do
+for section in seccomp_notify process_seccomp enforcement; do
   awk -v section="[$section]" '
     $0 == section { inside = 1; next }
     inside && /^\[/ { exit }

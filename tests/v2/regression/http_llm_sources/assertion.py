@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from http import HTTPStatus
+
 from collections import Counter, defaultdict
+
+from .constants import CASE_CONSTANTS
 
 
 class HttpLlmSourcesAssertion:
     """Validate persisted HTTP source evidence from real agent executions."""
 
-    def __init__(self, document: dict, trace_id: int, closed_at: int, protocol: str = "http1"):
+    def __init__(self, document: dict, trace_id: int, closed_at: int, protocol: str = CASE_CONSTANTS.assertion_protocol):
         self.trace_id = trace_id
         self.closed_at = closed_at
         self.protocol = protocol
@@ -21,7 +25,7 @@ class HttpLlmSourcesAssertion:
                     link["child_action_id"]
                 )
 
-    def require_llm(self, marker: str, minimum_successes: int, *, require_connection_reuse: bool = True) -> dict:
+    def require_llm(self, marker: str, minimum_successes: int, *, require_connection_reuse: bool = CASE_CONSTANTS.require_llm_require_connection_reuse) -> dict:
         requests = self.of_kind("llm.request")
         responses = self.of_kind("llm.response")
         calls = self.of_kind("llm.call")
@@ -65,10 +69,10 @@ class HttpLlmSourcesAssertion:
         http_404s = 0
         for request in request_sources.values():
             response = self.one(request["action_id"], "http.request.http_response", "http.message")
-            if self.http_status(response) < 400:
+            if self.http_status(response) < HTTPStatus.BAD_REQUEST:
                 continue
             http_errors += 1
-            http_404s += int(self.http_status(response) == 404)
+            http_404s += int(self.http_status(response) == HTTPStatus.NOT_FOUND)
             llm_id = reverse_responses.get(response["action_id"])
             if llm_id is None:
                 raise AssertionError(f"failed HTTP response has no LLM response: {response['action_id']}")
@@ -95,7 +99,7 @@ class HttpLlmSourcesAssertion:
         retry_success_connections = 0
         for rows in reused:
             statuses = [self.http_status(self.one(row["action_id"], "http.request.http_response", "http.message")) for row in rows]
-            retry_success_connections += int(any(status >= 400 for status in statuses) and any(200 <= status < 300 for status in statuses))
+            retry_success_connections += int(any(status >= HTTPStatus.BAD_REQUEST for status in statuses) and any(HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES for status in statuses))
         return {
             "reused_connections": len(reused),
             "retry_success_connections": retry_success_connections,

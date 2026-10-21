@@ -7,6 +7,8 @@ from pathlib import Path
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.testing_env import default_codex_model
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ProbeCodexLLMConfig(CommonTestConfig):
@@ -26,8 +28,8 @@ class ProbeCodexLLMConfig(CommonTestConfig):
             model=(
                 os.environ.get("CODEX_E2E_MODEL")
                 or default_codex_model(inputs.repo)
-                or "gpt-5.5"
+                or CASE_CONSTANTS.fallback_model
             ),
-            reasoning_effort=os.environ.get("CODEX_E2E_REASONING_EFFORT", "low"),
+            reasoning_effort=os.environ.get("CODEX_E2E_REASONING_EFFORT", CASE_CONSTANTS.reasoning_effort),
             codex_binary=Path(configured_codex) if configured_codex else None,
         )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import copy
 import json
 import os
@@ -13,18 +15,20 @@ from urllib.request import ProxyHandler, Request, build_opener
 from tests.v2.common.core import CommonTestConfig, TestOutput, TestResult, TestStatus
 from tests.v2.common.plugin_test_environment import PluginRuntimeSpec, PluginTestEnvironment
 
+from .constants import CASE_CONSTANTS
+
 
 class DynamicPolicies(PluginTestEnvironment):
     """Publish real WIT host policies through the existing managed WASM packages."""
 
-    def __init__(self, config: CommonTestConfig, output: TestOutput, port: int):
+    def __init__(self, config: CommonTestConfig, output: TestOutput, port: int, patches: list[Path]):
         self._work = config.work_dir
         self._remote = f"127.0.0.2:{port}"
         self._extra_owners: list[str] = []
         super().__init__(
             config, output, operator_config=self._work / "actraild.conf",
-            operator_config_patch=self._work / "actraild.patch.toml",
-            web_host="127.0.0.1", web_port=0,
+            operator_config_patches=patches,
+            web_host=CASE_CONSTANTS.loopback_host, web_port=CASE_CONSTANTS.init_web_port,
             plugin=PluginRuntimeSpec(
                 package="command-policy-dynamic", instance_id=self.owner("command"),
                 plugin_id=self.owner("command"), runtime="wasm",
@@ -91,15 +95,15 @@ class DynamicPolicies(PluginTestEnvironment):
         documents = {
             "file": {"rules": [
                 {"rule_id": "lsm-dynamic-open", "decision": decision, "operation": "open",
-                 "path": f"{self._work}/protected/**", "priority": 20},
+                 "path": f"{self._work}/protected/**", "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-dynamic-mkdir", "decision": decision, "operation": "mkdir",
-                 "path": str(self._work / "create-target"), "priority": 20},
+                 "path": str(self._work / "create-target"), "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-dynamic-rmdir", "decision": decision, "operation": "rmdir",
-                 "path": str(self._work / "remove-target"), "priority": 20},
+                 "path": str(self._work / "remove-target"), "priority": CASE_CONSTANTS.specific_rule_priority},
             ]},
             "command": {"rules": [
                 {"rule_id": "lsm-dynamic-command", "decision": decision,
-                 "executable": str(self._work / "controlled-true"), "priority": 20},
+                 "executable": str(self._work / "controlled-true"), "priority": CASE_CONSTANTS.specific_rule_priority},
             ]},
             "network": {"rules": [
                 {"rule_id": "lsm-dynamic-network", "decision": decision, "remote": self._remote},
@@ -113,7 +117,7 @@ class DynamicPolicies(PluginTestEnvironment):
                         2147483647 if domain == "file" else "wasm.unavailable-gray-decider"
                     )
                     if domain == "network":
-                        rule.update(timeout_ms=1000, concurrency_limit=1, fallback="allow")
+                        rule.update(timeout_ms=CASE_CONSTANTS.publish_timeout_ms, concurrency_limit=CASE_CONSTANTS.publish_concurrency_limit, fallback="allow")
             owner = self.owner(domain)
             validation = self.api.validate_config(owner, document)
             if validation.get("valid") is not True:
@@ -194,7 +198,7 @@ class DynamicPolicies(PluginTestEnvironment):
         before = self._network_snapshot(peer)
         for suffix in ("/validate", ""):
             status, response = self._config_response("network", suffix, {"rules": rules}, owner=owner)
-            rejected = status >= 400 or (suffix == "/validate" and response.get("valid") is False)
+            rejected = status >= HTTPStatus.BAD_REQUEST or (suffix == "/validate" and response.get("valid") is False)
             if not rejected or not any(fragment in json.dumps(response) for fragment in ("overlap", "owned")):
                 raise AssertionError(f"network owner conflict was not rejected: {status} {response}")
             if self._network_snapshot(peer) != before:
@@ -229,7 +233,7 @@ class DynamicPolicies(PluginTestEnvironment):
         for index in range(capacity // 6 + 1):
             candidate["rules"].append({
                 "rule_id": f"lsm-overflow-{index}", "decision": "deny",
-                "operation": "any", "path": f"{self._work}/overflow-{index}/**", "priority": 0,
+                "operation": "any", "path": f"{self._work}/overflow-{index}/**", "priority": CASE_CONSTANTS.priority,
             })
         self._require_rejected(candidate, "policy_max_entries", domain="file")
 
@@ -239,7 +243,7 @@ class DynamicPolicies(PluginTestEnvironment):
             raise AssertionError(f"{domain} config response omitted its document: {document}")
         return copy.deepcopy(document["config"])
 
-    def _require_rejected(self, candidate: dict[str, Any], reason: str, *, domain: str = "command") -> None:
+    def _require_rejected(self, candidate: dict[str, Any], reason: str, *, domain: str = CASE_CONSTANTS.require_rejected_domain) -> None:
         before_config = self._current_config(domain)
         query = ["rule", "dry-run", str(self._work / "controlled-true")] if domain == "command" else [
             "rule", "dry-run", str(self._work / "protected/file.marker"), "--operation", "open"
@@ -247,7 +251,7 @@ class DynamicPolicies(PluginTestEnvironment):
         before = self._command_fields(domain, query)
         for suffix in ("/validate", ""):
             status, response = self._config_response(domain, suffix, candidate)
-            rejected = status >= 400 or (suffix == "/validate" and response.get("valid") is False)
+            rejected = status >= HTTPStatus.BAD_REQUEST or (suffix == "/validate" and response.get("valid") is False)
             if not rejected or reason not in json.dumps(response):
                 raise AssertionError(f"LSM {suffix or 'submit'} did not reject {reason}: {status} {response}")
             print(f"LSM candidate rejection domain={domain} operation={suffix or '/submit'} status={status} body={response}")

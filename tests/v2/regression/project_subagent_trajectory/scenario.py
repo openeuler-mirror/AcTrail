@@ -7,6 +7,8 @@ from tests.v2.common.actrail_runtime import ActrailRuntime
 
 from .agent import ProjectSubagentAgent
 
+from .constants import CASE_CONSTANTS
+
 
 class ProjectSubagentTrajectoryScenario:
     def __init__(
@@ -45,7 +47,7 @@ class ProjectSubagentTrajectoryScenario:
         if result.returncode != 0:
             raise RuntimeError(
                 f"{self._agent.name} launch exited with {result.returncode}: "
-                f"{result.output[-6000:]}"
+                f"{result.output[-CASE_CONSTANTS.scenario_diagnostic_tail_characters:]}"
             )
 
     def _random_suffix(self) -> str:

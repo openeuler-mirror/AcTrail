@@ -14,6 +14,8 @@ from tests.v2.common.process import CommandTimeoutError, SubprocessRunner
 
 from .config import ProbeDcodeLLMConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeDcodeLLMTask:
     def __init__(
@@ -25,14 +27,14 @@ class ProbeDcodeLLMTask:
         self._runner = SubprocessRunner(
             terminate_grace_seconds=config.command_timeout_seconds
         )
-        self.marker = f"A{secrets.token_hex(5)}"
+        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         discovered = shutil.which("dcode")
         if not discovered:
             raise AgentBinaryNotFoundError("dcode executable not found in PATH")
         self._binary = Path(discovered)
 
     def check_availability(self) -> bool:
-        marker = f"A{secrets.token_hex(5)}"
+        marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         try:
             result = self._run_agent(
                 self._agent_command(marker),
@@ -50,7 +52,7 @@ class ProbeDcodeLLMTask:
         )
 
     def _run_agent(
-        self, command: list[Path | str], *, echo: bool = True
+        self, command: list[Path | str], *, echo: bool = CASE_CONSTANTS.run_agent_echo
     ) -> CommandResult:
         work_dir = Path(
             tempfile.mkdtemp(prefix="dcode-invocation-", dir=self._config.work_dir)

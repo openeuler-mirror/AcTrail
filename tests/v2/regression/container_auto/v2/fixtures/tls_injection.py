@@ -11,6 +11,11 @@ import sys
 import time
 from pathlib import Path
 
+if __package__:
+    from ..constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
 
 class ForeignTracePayload:
     def __init__(self, trace_id: int):
@@ -36,23 +41,26 @@ class ForeignTracePayload:
                 self._field(b"hi"),
             )
         )
-        return struct.pack("<2sBBI", b"AT", 1, 1, len(body)) + body
+        return struct.pack(
+            CASE_CONSTANTS.tls_frame_header_format, CASE_CONSTANTS.tls_frame_magic,
+            CASE_CONSTANTS.tls_frame_version, CASE_CONSTANTS.tls_payload_frame_kind, len(body),
+        ) + body
 
     def send(self, socket_path: str) -> None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(2)
+            client.settimeout(CASE_CONSTANTS.injection_socket_timeout_seconds)
             client.connect(socket_path)
             client.sendall(self.frame())
             client.shutdown(socket.SHUT_WR)
             try:
-                while client.recv(4096):
+                while client.recv(CASE_CONSTANTS.injection_receive_bytes):
                     pass
             except socket.timeout:
                 pass
 
     def verify_rejected(self, daemon_log: Path, database: Path, offset: int) -> str:
         rejection_reason = f"is not authorized for trace trace-{self.trace_id}"
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + CASE_CONSTANTS.injection_audit_timeout_seconds
         while time.monotonic() < deadline:
             with daemon_log.open("rb") as log:
                 log.seek(offset)
@@ -62,7 +70,7 @@ class ForeignTracePayload:
                 for line in audit.splitlines()
             ):
                 break
-            time.sleep(0.2)
+            time.sleep(CASE_CONSTANTS.injection_audit_poll_seconds)
         else:
             raise RuntimeError("foreign TLS payload injection lacked an audited rejection")
         with sqlite3.connect(database) as connection:

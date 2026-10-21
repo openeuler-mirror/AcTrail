@@ -17,9 +17,16 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+if __package__:
+    from .constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
+
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.actrail_runtime import ActrailRuntime  # noqa: E402
 from tests.v2.common.core import TestOutput  # noqa: E402
 from tests.v2.common.core.loopback_port import resolve_test_port  # noqa: E402
@@ -59,24 +66,28 @@ class HttpLlmSourcesRun:
     def run_phase(self, *, llm_enabled: bool) -> None:
         directory = self.root / ("llm-enabled" if llm_enabled else "llm-disabled")
         directory.mkdir(mode=0o700)
+        patches = []
+        if not llm_enabled:
+            patches.append(Path(__file__).with_name("llm_disabled") / "patch_config.toml")
         runtime = ActrailRuntime.isolated(
             REPO, self.bin_dir, self.options.timeout, self.output, directory,
+            operator_config_patches=patches,
         )
         patch = directory / "actraild.patch.toml"
-        with patch.open("a", encoding="utf-8") as output:
-            output.write(
-                "\n[resource_profiling.storage.database.sqlite]\n"
-                f"path = {json.dumps(str(directory / 'data/resources.sqlite'))}\n"
-            )
-            if not llm_enabled:
-                output.write("\n[semantic_retention.l0_llm_call]\nenabled = false\n")
+        (
+            PatchBuilder().apply(patch)
+            .with_values({"resource_profiling": {"storage": {"database": {
+                "sqlite": {"path": str(directory / "data/resources.sqlite")}
+            }}}})
+            .build().save(patch)
+        )
         launches = []
         prepared = False
         try:
             runtime.prepare()
             prepared = True
             for index in range(self.options.runs if llm_enabled else 1):
-                marker = f"HTTP_SOURCES_{secrets.token_hex(8)}"
+                marker = f"HTTP_SOURCES_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
                 marker_path = directory / f"answer-{index}.txt"
                 marker_path.write_text(marker + "\n", encoding="utf-8")
                 prompt = (
@@ -191,7 +202,7 @@ class ReadOnlyContentServer:
     def __enter__(self) -> ReadOnlyContentServer:
         self.log = (self.directory / "web.log").open("w", encoding="utf-8")
         self.process = subprocess.Popen([
-            str(self.binary), "--config", str(self.config), "--addr", "127.0.0.1", "--port", str(self.port),
+            str(self.binary), "--config", str(self.config), "--addr", CASE_CONSTANTS.loopback_host, "--port", str(self.port),
         ], stdout=self.log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + self.timeout
         try:
@@ -202,7 +213,7 @@ class ReadOnlyContentServer:
                     self.read("/api/traces")
                     return self
                 except (urllib.error.URLError, TimeoutError):
-                    time.sleep(0.1)
+                    time.sleep(CASE_CONSTANTS.enter_poll_seconds)
             raise TimeoutError("read-only web readiness timed out")
         except BaseException:
             self.__exit__(None, None, None)
@@ -212,7 +223,7 @@ class ReadOnlyContentServer:
         if self.process is not None and self.process.poll() is None:
             self.process.terminate()
             try:
-                self.process.wait(timeout=5)
+                self.process.wait(timeout=CASE_CONSTANTS.exit_timeout)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
@@ -220,22 +231,22 @@ class ReadOnlyContentServer:
             self.log.close()
 
     def read(self, path: str) -> dict:
-        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=self.timeout) as response:
+        with urllib.request.urlopen(f"http://{CASE_CONSTANTS.loopback_host}:{self.port}{path}", timeout=self.timeout) as response:
             return json.load(response)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bin-dir", type=Path, default=REPO / "target/release")
+    parser.add_argument("--bin-dir", type=Path, default=REPO / CASE_CONSTANTS.bin_dir)
     parser.add_argument("--xiaoo", default=os.environ.get("XIAOO_E2E_BINARY"))
     parser.add_argument("--xiaoo-config", type=Path)
     parser.add_argument("--plain-url", required=True, help="Existing real HTTP endpoint for a non-LLM GET")
-    parser.add_argument("--output-parent", type=Path, default=Path(tempfile.gettempdir()))
-    parser.add_argument("--runs", type=int, default=2)
-    parser.add_argument("--max-turns", type=int, default=4)
-    parser.add_argument("--min-http-errors", type=int, default=1, help="Minimum actual HTTP 404 responses across enabled agent runs")
-    parser.add_argument("--timeout", type=int, default=180)
-    parser.add_argument("--content-max-bytes", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--output-parent", type=Path, default=CASE_CONSTANTS.output_parent)
+    parser.add_argument("--runs", type=int, default=CASE_CONSTANTS.runs)
+    parser.add_argument("--max-turns", type=int, default=CASE_CONSTANTS.max_turns)
+    parser.add_argument("--min-http-errors", type=int, default=CASE_CONSTANTS.min_http_errors, help="Minimum actual HTTP 404 responses across enabled agent runs")
+    parser.add_argument("--timeout", type=int, default=CASE_CONSTANTS.timeout)
+    parser.add_argument("--content-max-bytes", type=int, default=CASE_CONSTANTS.content_max_bytes)
     options = parser.parse_args()
     for name in ("runs", "max_turns", "min_http_errors", "timeout", "content_max_bytes"):
         if getattr(options, name) < 1:

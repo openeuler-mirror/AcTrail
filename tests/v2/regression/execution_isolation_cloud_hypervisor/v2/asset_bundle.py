@@ -2,20 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .constants import CASE_CONSTANTS
+
 from tests.v2.common.kata_runtime import sha256_file
 
 
 class CloudHypervisorAssetBundle:
     @staticmethod
     def xiaoo_config() -> str:
-        return """[llm]
-provider = "deepseek"
-model = "deepseek-chat"
+        return f"""[llm]
+provider = "{CASE_CONSTANTS.llm_provider}"
+model = "{CASE_CONSTANTS.llm_model}"
 api_key_env = "ACTRAIL_VIRTUAL_XIAOO_API_KEY"
-api_base = "http://127.0.0.1:18098"
-max_tokens = 128
-context_window = 32768
-reasoning_effort = "off"
+api_base = "http://{CASE_CONSTANTS.provider_host}:{CASE_CONSTANTS.provider_port}"
+max_tokens = {CASE_CONSTANTS.llm_max_tokens}
+context_window = {CASE_CONSTANTS.llm_context_window}
+reasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"
 """
 
     @staticmethod

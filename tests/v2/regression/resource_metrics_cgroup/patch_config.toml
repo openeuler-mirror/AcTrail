@@ -1,0 +1,74 @@
+[control.finalization]
+poll_interval_ms = 25
+settle_delay_ms = 25
+
+[storage.retention]
+enabled = false
+
+[plugins.startup]
+enabled = false
+load = []
+
+[hand_observation]
+enabled = false
+
+[sandbox_alerts]
+enabled = false
+
+[capture]
+profile_name = "resource-metrics-cgroup-v2"
+capabilities = ["resource-metrics"]
+opportunistic_capabilities = []
+disabled_capabilities = []
+
+[ebpf]
+enabled = "false"
+
+[payload.tls]
+enabled = false
+
+[payload.stdio]
+enabled = false
+
+[payload.socket]
+enabled = false
+
+[seccomp_notify]
+enabled = false
+
+[process_seccomp]
+enabled = false
+
+[agent_invocation]
+enabled = false
+
+[file_observation]
+enabled = false
+
+[application]
+enabled = false
+http1_enabled = false
+http2_enabled = false
+
+[resource_profiling]
+enabled = true
+
+[resource_profiling.collection.workload]
+mode = "cgroup"
+interval_ms = 50
+
+[resource_profiling.collection.workload.cgroup]
+mode = "v2"
+
+[resource_profiling.collection.workload.cgroup.v2.managed]
+recovery_scan_limit = 64
+finalization_timeout_ms = 1000
+
+[resource_profiling.alerts]
+memory_alert_rss_kb = "1"
+
+[resource_profiling.collection.workload.cgroup.v2.process_rss]
+enabled = true
+
+[enforcement]
+enabled = false

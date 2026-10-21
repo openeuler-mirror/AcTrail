@@ -2,9 +2,11 @@
 # Shared helpers for the V2 in-guest Kata fixtures.
 set -u
 
-ACTRAIL_BUNDLE="${ACTRAIL_BUNDLE:-/actrail}"
-ACTRAIL_WORK_BASE="${ACTRAIL_WORK_BASE:-/tmp/actrail-e2e}"
-ACTRAIL_SETTLE_SECONDS="${ACTRAIL_SETTLE_SECONDS:-3}"
+[ -f "$SCRIPT_DIR/runtime-defaults.sh" ] || {
+  echo "Guest fixture defaults are missing; prepare the Guest bundle before running these scripts" >&2
+  exit 1
+}
+. "$SCRIPT_DIR/runtime-defaults.sh"
 
 ACTRAILD="${ACTRAILD:-$ACTRAIL_BUNDLE/actraild}"
 ACTRAILCTL="${ACTRAILCTL:-$ACTRAIL_BUNDLE/actrailctl}"
@@ -33,7 +35,6 @@ actrail_need_binaries() {
   need_exe "$ACTRAILD"
   need_exe "$ACTRAILCTL"
   need_exe "$ACTRAILVIEWER"
-  [ -f "$TLS_SYNC_LIBRARY" ] || fail "TLS sync library missing: $TLS_SYNC_LIBRARY"
 }
 
 openssl_bin() {
@@ -81,12 +82,13 @@ config_value() {
   ' "$file"
 }
 
-payload_tls_enabled() {
+payload_tls_backend() {
   file="$1"
   awk '
     /^\[payload\.tls\]/ { in_tls = 1; next }
     /^\[/ { in_tls = 0 }
-    in_tls && $1 == "enabled" {
+    in_tls && $1 == "capture_backend" {
+      gsub(/"/, "", $3)
       print $3
       exit
     }
@@ -110,17 +112,17 @@ start_daemon() {
   "$ACTRAILD" --config "$config" start
 
   i=0
-  while [ "$i" -lt 80 ]; do
+  while [ "$i" -lt "$ACTRAIL_READY_ATTEMPTS" ]; do
     [ -S "$socket_path" ] && break
-    sleep 0.25
+    sleep "$ACTRAIL_READY_POLL_SECONDS"
     i=$((i + 1))
   done
   [ -S "$socket_path" ] || fail "control socket did not appear: $socket_path"
-  if [ "$(payload_tls_enabled "$config")" = "true" ]; then
+  if [ "$(payload_tls_backend "$config")" = "tls-sync" ]; then
     i=0
-    while [ "$i" -lt 80 ]; do
+    while [ "$i" -lt "$ACTRAIL_READY_ATTEMPTS" ]; do
       [ -S "$tls_socket_path" ] && break
-      sleep 0.25
+      sleep "$ACTRAIL_READY_POLL_SECONDS"
       i=$((i + 1))
     done
     [ -S "$tls_socket_path" ] || fail "tls-sync socket did not appear: $tls_socket_path"
@@ -135,8 +137,8 @@ stop_daemon() {
 generate_tls_cert() {
   openssl="$1"
   work="$2"
-  "$openssl" req -x509 -newkey rsa:2048 -keyout "$work/key.pem" -out "$work/cert.pem" \
-    -days 1 -nodes -subj /CN=localhost >"$work/openssl-cert.log" 2>&1 \
+  "$openssl" req -x509 -newkey "rsa:$ACTRAIL_CERT_RSA_BITS" -keyout "$work/key.pem" -out "$work/cert.pem" \
+    -days "$ACTRAIL_CERT_DAYS" -nodes -subj /CN=localhost >"$work/openssl-cert.log" 2>&1 \
     || { cat "$work/openssl-cert.log"; fail "openssl cert generation failed"; }
 }
 
@@ -144,7 +146,7 @@ start_tls_server() {
   openssl="$1"
   work="$2"
   port="$3"
-  (printf "SERVER_REPLY_9931\n"; sleep 6) | "$openssl" s_server \
+  (printf "SERVER_REPLY_9931\n"; sleep "$ACTRAIL_TLS_SERVER_HOLD_SECONDS") | "$openssl" s_server \
     -accept "$port" -cert "$work/cert.pem" -key "$work/key.pem" -quiet \
     >"$work/srv.out" 2>"$work/srv.err" &
   printf '%s\n' "$!"

@@ -13,8 +13,15 @@ import subprocess
 import time
 from pathlib import Path
 
+if __package__:
+    from .constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
 
 class AccessWorkload:
+    IPV6_SOCKADDR_BYTES = 24
+
     def __init__(self, arguments: argparse.Namespace):
         self._arguments = arguments
 
@@ -79,18 +86,18 @@ class AccessWorkload:
 
     def _connect(self) -> socket.socket:
         if not self._arguments.ipv6:
-            return socket.create_connection(("127.0.0.2", self._arguments.port), self._arguments.timeout)
+            return socket.create_connection((CASE_CONSTANTS.witness_host, self._arguments.port), self._arguments.timeout)
         # Exercise a real kernel connect with the 24-byte sockaddr_in6 form.
         address = ctypes.create_string_buffer(
             struct.pack("=H", socket.AF_INET6) + struct.pack("!H", self._arguments.port)
-            + bytes(4) + socket.inet_pton(socket.AF_INET6, "::1")
+            + bytes(4) + socket.inet_pton(socket.AF_INET6, CASE_CONSTANTS.ipv6_loopback_host)
         )
         libc = ctypes.CDLL(None, use_errno=True)
         libc.connect.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
         libc.connect.restype = ctypes.c_int
         peer = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         try:
-            if libc.connect(peer.fileno(), address, 24) != 0:
+            if libc.connect(peer.fileno(), address, self.IPV6_SOCKADDR_BYTES) != 0:
                 code = ctypes.get_errno()
                 raise OSError(code, os.strerror(code))
             peer.settimeout(self._arguments.timeout)
@@ -238,8 +245,8 @@ if __name__ == "__main__":
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--timeout", type=float, required=True)
-    parser.add_argument("--ipv6", action="store_true")
-    parser.add_argument("--denial-repetitions", type=int, default=1)
-    parser.add_argument("--denial-pause", type=float, default=0)
+    parser.add_argument("--ipv6", action="store_true", default=CASE_CONSTANTS.ipv6)
+    parser.add_argument("--denial-repetitions", type=int, default=CASE_CONSTANTS.workload_denial_repetitions)
+    parser.add_argument("--denial-pause", type=float, default=CASE_CONSTANTS.workload_denial_pause)
     parser.add_argument("--path-probes", type=Path)
     AccessWorkload(parser.parse_args()).run()

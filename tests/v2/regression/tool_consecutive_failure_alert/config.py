@@ -6,6 +6,8 @@ from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ToolConsecutiveFailureAlertConfig(CommonTestConfig):
@@ -41,6 +43,6 @@ class ToolConsecutiveFailureAlertConfig(CommonTestConfig):
                 / "tool-consecutive-failure-alert"
                 / "plugin.toml"
             ),
-            plugin_instance="tool-alert.v2",
-            installed_plugin_instance="tool-alert.installed",
+            plugin_instance=CASE_CONSTANTS.plugin_instance,
+            installed_plugin_instance=CASE_CONSTANTS.installed_plugin_instance,
         )

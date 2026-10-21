@@ -10,6 +10,8 @@ from tests.v2.common.actrail_runtime import CommandResult
 
 from .environment import SemanticActionBoundariesEnvironment
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ExportedSpan:
@@ -38,7 +40,7 @@ class SemanticActionObservation:
         if len(trace_ids) != 1:
             raise AssertionError(
                 f"expected one trace id, found {trace_ids}: "
-                f"{launch.output[-4000:]}"
+                f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         return trace_ids[0]
 
@@ -238,7 +240,7 @@ class SemanticActionObservation:
         if result.returncode != 0:
             raise AssertionError(
                 f"actrailviewer {' '.join(arguments)} exited with "
-                f"{result.returncode}: {result.stderr[-2000:]}"
+                f"{result.returncode}: {result.stderr[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         try:
             document = json.loads(result.stdout)

@@ -1,4 +1,5 @@
 // Verify continuous window behavior on an existing real captured trace.
+import { C } from '../constants.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { TimelineBrowser } from './timeline.mjs';
@@ -10,13 +11,13 @@ let browser;
 try {
   const { chromium } = await import(playwright);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ viewport: C.viewport });
   page.on('request', request => { if (request.url().includes('/api/')) report.requests.push(request.url()); });
   page.on('pageerror', error => report.consoleErrors.push(error.message));
   const navigation = new TimelineBrowser(page, base, trace);
   await navigation.open();
-  const response = await fetch(`${base}/api/traces/${encodeURIComponent(trace)}/actions/timeline?kinds=llm.request&limit=2`);
-  assert.equal(response.status, 200);
+  const response = await fetch(`${base}/api/traces/${encodeURIComponent(trace)}/actions/timeline?kinds=llm.request&limit=${C.filtered_page_limit}`);
+  assert.equal(response.status, C.http_ok);
   const actions = (await response.json()).actions;
   const acceptance = new ContinuousAcceptance(page, base, trace, navigation.metadata, report);
   await acceptance.verify(actions, { requireCancellation: true });
@@ -30,5 +31,5 @@ try {
   throw error;
 } finally {
   await browser?.close();
-  await fs.writeFile(`${output}/continuous.json`, JSON.stringify(report, null, 2));
+  await fs.writeFile(`${output}/continuous.json`, JSON.stringify(report, null, C.json_indent));
 }

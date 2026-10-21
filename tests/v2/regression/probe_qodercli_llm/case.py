@@ -8,6 +8,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from .config import ProbeQoderCliLLMConfig
 from .task import ProbeQoderCliLLMTask
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeQoderCliLLMCase(TestCase):
     def __init__(self, config: ProbeQoderCliLLMConfig):
@@ -83,7 +85,7 @@ class ProbeQoderCliLLMCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,

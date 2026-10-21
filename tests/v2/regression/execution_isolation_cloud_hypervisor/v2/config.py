@@ -17,6 +17,8 @@ from tests.v2.common.kata_runtime.image import PullPolicy
 
 from .identity import CloudHypervisorScenarioIdentity
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
@@ -29,7 +31,7 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
     PROFILE_RUNTIME_CONFIG: ClassVar[str] = (
         "VIRTUAL_CONTAINER_E2E_CLOUD_HYPERVISOR_DATA_CONFIG"
     )
-    DEFAULT_VM_ROOT: ClassVar[str] = "/run/vc/vm"
+    DEFAULT_VM_ROOT: ClassVar[str] = CASE_CONSTANTS.vm_root
     SUPPORTED_ARCHITECTURES: ClassVar[frozenset[str]] = frozenset({"aarch64"})
     IDENTITY: ClassVar[type[CloudHypervisorScenarioIdentity]] = (
         CloudHypervisorScenarioIdentity
@@ -69,12 +71,12 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
 
         ctr_runtime = os.environ.get(
             f"{prefix}CTR_RUNTIME",
-            os.environ.get("CTR_RUNTIME", "io.containerd.kata.v2"),
+            os.environ.get("CTR_RUNTIME", CASE_CONSTANTS.ctr_runtime),
         )
         shim_binary(ctr_runtime)
         pull_value = os.environ.get(
             f"{prefix}IMAGE_PULL_POLICY",
-            os.environ.get("VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY", "never"),
+            os.environ.get("VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY", CASE_CONSTANTS.image_pull_policy),
         )
         try:
             pull_policy = PullPolicy(pull_value)
@@ -96,7 +98,7 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
                 f"{prefix}IMAGE",
                 os.environ.get(
                     "VIRTUAL_CONTAINER_E2E_IMAGE",
-                    "docker.io/library/actrail-openeuler-workload:24.09",
+                    CASE_CONSTANTS.image,
                 ),
             ),
             image_pull_policy=pull_policy,
@@ -120,37 +122,37 @@ class CloudHypervisorExecutionIsolationConfig(CommonTestConfig):
             ),
             vsock_host_cid=bounded_environment_int(
                 f"{prefix}VSOCK_HOST_CID",
-                "2",
+                str(CASE_CONSTANTS.vsock_host_cid),
                 minimum=0,
                 maximum=4_294_967_294,
             ),
             vsock_port=bounded_environment_int(
                 f"{prefix}VSOCK_PORT",
-                "43182",
+                str(CASE_CONSTANTS.vsock_port),
                 minimum=1027,
                 maximum=65535,
             ),
             runtime_timeout_seconds=positive_environment_int(
                 f"{prefix}RUNTIME_TIMEOUT_SECONDS",
-                "900",
+                str(CASE_CONSTANTS.runtime_timeout_seconds),
             ),
             ready_timeout_seconds=positive_environment_int(
                 f"{prefix}READY_TIMEOUT_SECONDS",
-                "90",
+                str(CASE_CONSTANTS.ready_timeout_seconds),
             ),
             root_discovery_settle_seconds=positive_environment_int(
                 f"{prefix}ROOT_DISCOVERY_SETTLE_SECONDS",
-                "3",
+                str(CASE_CONSTANTS.root_discovery_settle_seconds),
             ),
             workload_uid=bounded_environment_int(
                 f"{prefix}WORKLOAD_UID",
-                "1000",
+                str(CASE_CONSTANTS.workload_uid),
                 minimum=0,
                 maximum=2147483647,
             ),
             workload_gid=bounded_environment_int(
                 f"{prefix}WORKLOAD_GID",
-                "39000",
+                str(CASE_CONSTANTS.workload_gid),
                 minimum=0,
                 maximum=2147483647,
             ),

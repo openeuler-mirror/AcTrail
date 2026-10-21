@@ -71,6 +71,48 @@ static __always_inline __u64 rustls_stream_key(void *ctx, __u64 state) {
     return generation ? *generation : 0;
 }
 
+struct actrail_rustls_payload_loop {
+    void *program_ctx;
+    struct actrail_tls_immediate_payload_args args;
+    __u64 chunks;
+    __u64 start;
+    __u64 end;
+    __u64 cursor;
+};
+
+static long rustls_payload_chunk_step(__u32 index, void *opaque) {
+    struct actrail_rustls_payload_loop *state = opaque;
+    struct actrail_rustls_chunk chunk = {};
+    __u64 chunk_start;
+    __u64 chunk_end;
+    __u64 overlap_start;
+    __u64 overlap_end;
+
+    if (!state->chunks) {
+        emit_tls_immediate_payload_args(state->program_ctx, &state->args);
+        return 1;
+    }
+    if (bpf_probe_read_user(
+            &chunk,
+            sizeof(chunk),
+            (void *)(unsigned long)(state->chunks + ((__u64)index * sizeof(chunk)))
+        ) != 0) {
+        return 1;
+    }
+    chunk_start = state->cursor;
+    chunk_end = chunk_start + chunk.length;
+    state->cursor = chunk_end;
+    overlap_start = state->start > chunk_start ? state->start : chunk_start;
+    overlap_end = state->end < chunk_end ? state->end : chunk_end;
+    if (overlap_start >= overlap_end) {
+        return 0;
+    }
+    state->args.buffer_ptr = chunk.pointer + (overlap_start - chunk_start);
+    state->args.requested_size = overlap_end - overlap_start;
+    emit_tls_immediate_payload_args(state->program_ctx, &state->args);
+    return 0;
+}
+
 static __always_inline int emit_rustls_internal_payload(
     void *ctx,
     __u64 stream_key,
@@ -84,6 +126,15 @@ static __always_inline int emit_rustls_internal_payload(
     __u32 tgid = 0;
     __u32 tid = 0;
     __u32 lookup_flags = 0;
+    __u32 count = 1;
+    struct actrail_rustls_payload_loop state = {
+        .program_ctx = ctx,
+        .args = {
+            .direction = ACTRAIL_TLS_PAYLOAD_OUTBOUND,
+            .symbol = symbol,
+            .library = ACTRAIL_TLS_LIBRARY_RUSTLS,
+        },
+    };
 
     if (!payload_ptr ||
         !lookup_current_detailed_trace(&tgid, &tid, &lookup_flags)) {
@@ -93,6 +144,7 @@ static __always_inline int emit_rustls_internal_payload(
     if (!stream_key) {
         return 0;
     }
+    state.args.stream_key = stream_key;
     if (bpf_probe_read_user(&q0, sizeof(q0), (void *)(unsigned long)payload_ptr) != 0 ||
         bpf_probe_read_user(&q1, sizeof(q1), (void *)(unsigned long)(payload_ptr + 8)) != 0 ||
         bpf_probe_read_user(&q2, sizeof(q2), (void *)(unsigned long)(payload_ptr + 16)) != 0) {
@@ -103,67 +155,36 @@ static __always_inline int emit_rustls_internal_payload(
             q0 != ACTRAIL_RUSTLS_BORROWED_TAG_UNSIGNED_MAX) {
             return 0;
         }
-        return emit_tls_immediate_payload(
-            ctx,
-            ACTRAIL_TLS_PAYLOAD_INBOUND,
-            symbol,
-            ACTRAIL_TLS_LIBRARY_RUSTLS,
-            stream_key,
-            q1,
-            q2
-        );
-    }
-    if (bpf_probe_read_user(&q3, sizeof(q3), (void *)(unsigned long)(payload_ptr + 24)) != 0) {
-        return 0;
-    }
-    if (q0 == ACTRAIL_RUSTLS_INLINE_TAG) {
-        return emit_tls_immediate_payload(
-            ctx,
-            ACTRAIL_TLS_PAYLOAD_OUTBOUND,
-            symbol,
-            ACTRAIL_TLS_LIBRARY_RUSTLS,
-            stream_key,
-            q1,
-            q2
-        );
-    }
-
-    __u64 cursor = 0;
-    for (__u32 index = 0; index < ACTRAIL_RUSTLS_MAX_CHUNKS; index++) {
-        struct actrail_rustls_chunk chunk = {};
-        __u64 chunk_start;
-        __u64 chunk_end;
-        __u64 overlap_start;
-        __u64 overlap_end;
-
-        if (index >= q1) {
-            break;
-        }
+        state.args.direction = ACTRAIL_TLS_PAYLOAD_INBOUND;
+        state.args.buffer_ptr = q1;
+        state.args.requested_size = q2;
+    } else {
         if (bpf_probe_read_user(
-                &chunk,
-                sizeof(chunk),
-                (void *)(unsigned long)(q0 + ((__u64)index * sizeof(chunk)))
+                &q3, sizeof(q3), (void *)(unsigned long)(payload_ptr + 24)
             ) != 0) {
+            return 0;
+        }
+        if (q0 == ACTRAIL_RUSTLS_INLINE_TAG) {
+            state.args.buffer_ptr = q1;
+            state.args.requested_size = q2;
+        } else {
+            state.chunks = q0;
+            state.start = q2;
+            state.end = q3;
+            count = q1 > ACTRAIL_RUSTLS_MAX_CHUNKS
+                ? ACTRAIL_RUSTLS_MAX_CHUNKS : (__u32)q1;
+        }
+    }
+#ifdef ACTRAIL_BPF_LOOP
+    bpf_loop(count, rustls_payload_chunk_step, &state, 0);
+#else
+#pragma clang loop unroll(disable)
+    for (__u32 index = 0; index < ACTRAIL_RUSTLS_MAX_CHUNKS; index++) {
+        if (index >= count || rustls_payload_chunk_step(index, &state)) {
             break;
         }
-        chunk_start = cursor;
-        chunk_end = cursor + chunk.length;
-        cursor = chunk_end;
-        overlap_start = q2 > chunk_start ? q2 : chunk_start;
-        overlap_end = q3 < chunk_end ? q3 : chunk_end;
-        if (overlap_start >= overlap_end) {
-            continue;
-        }
-        emit_tls_immediate_payload(
-            ctx,
-            ACTRAIL_TLS_PAYLOAD_OUTBOUND,
-            symbol,
-            ACTRAIL_TLS_LIBRARY_RUSTLS,
-            stream_key,
-            chunk.pointer + (overlap_start - chunk_start),
-            overlap_end - overlap_start
-        );
     }
+#endif
     return 0;
 }
 

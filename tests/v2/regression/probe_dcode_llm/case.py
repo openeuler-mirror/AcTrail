@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from tests.v2.common.actrail_runtime import ActrailRuntime
 from tests.v2.common.core import AgentBinaryNotFoundError, TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
@@ -9,6 +7,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 
 from .config import ProbeDcodeLLMConfig
 from .task import ProbeDcodeLLMTask
+
+from .constants import CASE_CONSTANTS
 
 
 class ProbeDcodeLLMCase(TestCase):
@@ -26,16 +26,6 @@ class ProbeDcodeLLMCase(TestCase):
                 test_context.output,
                 self._config.work_dir,
             )
-            patch_path = self._config.work_dir.resolve() / "actraild.patch.toml"
-            backend_patch = Path(__file__).with_name("actraild.patch.toml").read_text(
-                encoding="utf-8"
-            )
-            patch_path.write_text(
-                patch_path.read_text(encoding="utf-8").replace(
-                    "[payload.tls]\n", backend_patch + "\n", 1
-                ),
-                encoding="utf-8",
-            )
             try:
                 task = ProbeDcodeLLMTask(self._config, runtime, test_context.output)
             except AgentBinaryNotFoundError as error:
@@ -52,7 +42,7 @@ class ProbeDcodeLLMCase(TestCase):
 
             test_context.report_progress(
                 "runtime_prepare",
-                "preparing actraild runtime with bpf-copy TLS capture",
+                "preparing actraild runtime",
             )
             lifecycle = runtime.prepare()
             results["runtime_lifecycle"] = TestResult(
@@ -68,7 +58,7 @@ class ProbeDcodeLLMCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,

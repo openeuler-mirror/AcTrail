@@ -8,6 +8,8 @@ import sys
 import threading
 import time
 
+from constants import CASE_CONSTANTS
+
 
 def exec_from_worker(marker_path: str) -> None:
     os.execv(
@@ -29,7 +31,7 @@ def main() -> int:
     worker = threading.Thread(target=exec_from_worker, args=(sys.argv[1],))
     worker.start()
     while worker.is_alive():
-        time.sleep(0.05)
+        time.sleep(CASE_CONSTANTS.worker_poll_seconds)
     raise RuntimeError("worker-thread exec unexpectedly returned")
 
 

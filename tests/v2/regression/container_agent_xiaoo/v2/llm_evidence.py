@@ -8,6 +8,8 @@ import tomllib
 from contextlib import closing
 from pathlib import Path
 
+from .constants import CASE_CONSTANTS
+
 
 class ContainerLlmEvidence:
     """Require captured outbound requests paired with each real agent's reply."""
@@ -140,10 +142,12 @@ class ContainerLlmEvidence:
         result = subprocess.run(
             [str(self._viewer), "--config", str(self._config), "--output-format", "json",
              "actions", "--trace-id", f"trace-{trace_id}"],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True, text=True,
+            timeout=CASE_CONSTANTS.viewer_timeout_seconds, check=False,
         )
         if result.returncode:
-            raise RuntimeError(f"viewer failed for trace-{trace_id}: {result.stderr[-2000:]}")
+            diagnostic = result.stderr[-CASE_CONSTANTS.viewer_diagnostic_tail_characters:]
+            raise RuntimeError(f"viewer failed for trace-{trace_id}: {diagnostic}")
         return json.loads(result.stdout)
 
     def _body(self, db, trace_id: int, action_id: str):

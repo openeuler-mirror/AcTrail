@@ -1,7 +1,7 @@
 # Kata workload 接入契约
 
-本目录解决的是 **guest 根中的 `actraild` 如何被非 root workload 使用**。daemon
-不进入 workload 镜像；workload 只获得客户端、TLS probe 和两个 Unix socket。
+本目录说明 **guest 根中的 `actraild` 如何被非 root workload 使用**。workload
+通过只读挂载获得客户端、TLS probe 和 control socket。启用 TLS sync 时还提供 TLS event socket。
 
 > 当前 `actrail-launch` 使用共享的通用 launch 语义，观测建立失败仍可能阻止
 > Agent。当前实现不提供 Kata 专用的 fail-open；普通容器与 Kata 的共享 launcher
@@ -18,7 +18,7 @@ Kata guest root
 │   └── export/
 └── /dev/actrail/               0750，guest 侧稳定挂载源
     ├── control.sock            0660 root:actrail
-    └── tls-sync.sock           0660 root:actrail
+    └── tls-sync.sock           启用 TLS sync 时提供，0660 root:actrail
 
 workload mount namespace (UID 1000，GID 39000)
 ├── /opt/actrail/               只读：actrailctl、launcher、probe、依赖和配置
@@ -26,7 +26,7 @@ workload mount namespace (UID 1000，GID 39000)
 │   └── bin/actrailctl-private  仅为 actrailctl 应用 bundle 私有动态库搜索路径
 └── /run/actrail/               只读挂载 guest /dev/actrail
     ├── control.sock
-    └── tls-sync.sock
+    └── tls-sync.sock           启用 TLS sync 时提供
 ```
 
 普通 guest `/run` 不会自动出现在 workload mount namespace。Kata 对源路径位于
@@ -136,14 +136,9 @@ namespace 比较。该断言工具不进入正式 workload bundle。公共生命
 生成唯一 container ID，并用 ownership label 约束定向清理；该 ID 不参与授权，也不
 作为测试通过判据。
 
-当前 Kata Profile 不支持 AcTrail seccomp user-notify：guest 配置关闭
-`seccomp_notify`、`process_seccomp`、依赖 seccomp fallback 的 socket payload 轴和
-enforcement，`actrail-launch` 同时显式使用
-`--seccomp-notify disabled`。在已验证的 Kata 3.32 Cloud
-Hypervisor/StratoVirt 组合中，自动启用该路径会在 workload 退出阶段触发 kata-agent
-超时；TLS sync 与 guest eBPF 不依赖该能力。若以后启用 seccomp 路径，必须作为单独
-runtime profile 重新验收，不能删除这个显式设置后假定
-兼容。
+**采集配置**：Guest 使用默认 eBPF 采集，关闭 enforcement。`actrail-launch` 显式使用
+`--seccomp-notify disabled`。启用 AcTrail seccomp user-notify 需验证对应
+Kata/runtime 版本的兼容性和进程退出行为。
 
 runtime 必须以
 `/bin/sh /opt/actrail/bin/actrail-init <launch-args>` 作为 workload 入口，而不是把

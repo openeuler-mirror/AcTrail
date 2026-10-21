@@ -12,13 +12,20 @@ from typing import Callable
 
 from tests.v2.common.core import TestCase, TestCaseInputs, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
+from tests.v2.common.patch_builder import PatchBuilder
+
+from .constants import CASE_CONSTANTS
 
 
-class ResourceMetricsCgroupCase(TestCase):
+PATCH_CONFIG = Path(__file__).with_name("patch_config.toml")
+
+
+class ResourceMetricsCase(TestCase):
     """Release-binary acceptance for daemon-owned cgroup-v2 trace scopes."""
 
-    def __init__(self, inputs: TestCaseInputs) -> None:
+    def __init__(self, inputs: TestCaseInputs, *, patch_configs: tuple[Path, ...]) -> None:
         self._inputs = inputs
+        self._patch_configs = patch_configs
         self._unit = f"actrail-resource-metrics-v2-{os.getpid()}"
         self._service = f"{self._unit}.service"
         self._config = inputs.work_dir / "actraild.conf"
@@ -83,7 +90,7 @@ class ResourceMetricsCgroupCase(TestCase):
             systemd_version = int(version.split()[1])
         except (IndexError, ValueError):
             return f"could not parse systemd version: {version!r}"
-        if systemd_version < 254:
+        if systemd_version < CASE_CONSTANTS.minimum_systemd_version:
             return "systemd DelegateSubgroup support requires systemd 254 or newer"
         return None
 
@@ -91,10 +98,7 @@ class ResourceMetricsCgroupCase(TestCase):
         for directory in ("run", "data", "log", "export", "plugins"):
             (self._inputs.work_dir / directory).mkdir(parents=True, exist_ok=True)
         patch = self._inputs.work_dir / "operator.patch.toml"
-        patch.write_text(
-            self._operator_patch(),
-            encoding="utf-8",
-        )
+        PatchBuilder().with_values(self._operator_values()).build().save(patch)
         self._command(
             (
                 str(self._binary("actrailctl")),
@@ -104,102 +108,26 @@ class ResourceMetricsCgroupCase(TestCase):
                 "--force",
                 "--patch",
                 str(patch),
+                *(argument for path in self._patch_configs for argument in ("--patch", str(path))),
             )
         )
 
-    def _operator_patch(self) -> str:
+    def _operator_values(self) -> dict[str, object]:
         work = self._inputs.work_dir
-        return f'''[control]
-socket_path = "{self._socket}"
-pid_file = "{self._pid_file}"
-log_path = "{work / 'log/actraild.log'}"
-
-[control.finalization]
-poll_interval_ms = 25
-settle_delay_ms = 25
-
-[storage.sqlite]
-path = "{self._database}"
-
-[storage.retention]
-enabled = false
-
-[export.snapshot]
-directory = "{work / 'export'}"
-
-[plugins.discovery]
-directory = "{work / 'plugins'}"
-
-[plugins.startup]
-enabled = false
-load = []
-
-[hand_observation]
-enabled = false
-
-[sandbox_alerts]
-enabled = false
-
-[capture]
-profile_name = "resource-metrics-cgroup-v2"
-capabilities = ["resource-metrics"]
-opportunistic_capabilities = []
-disabled_capabilities = []
-
-[ebpf]
-enabled = "false"
-
-[payload.tls]
-enabled = false
-sync_event_socket_path = "{work / 'run/tls-sync.sock'}"
-
-[payload.stdio]
-enabled = false
-
-[payload.socket]
-enabled = false
-
-[seccomp_notify]
-enabled = false
-
-[process_seccomp]
-enabled = false
-
-[agent_invocation]
-enabled = false
-
-[file_observation]
-enabled = false
-
-[application]
-enabled = false
-http1_enabled = false
-http2_enabled = false
-
-[resource_profiling]
-enabled = true
-
-[resource_profiling.collection.workload]
-mode = "cgroup"
-interval_ms = 50
-
-[resource_profiling.collection.workload.cgroup]
-mode = "v2"
-
-[resource_profiling.collection.workload.cgroup.v2.managed]
-root = "{self._cgroup}"
-recovery_scan_limit = 64
-finalization_timeout_ms = 1000
-
-[resource_profiling.alerts]
-memory_alert_rss_kb = "1"
-
-[resource_profiling.collection.workload.cgroup.v2.process_rss]
-enabled = true
-
-[enforcement]
-enabled = false
-'''
+        return {
+            "control": {
+                "socket_path": str(self._socket),
+                "pid_file": str(self._pid_file),
+                "log_path": str(work / "log/actraild.log"),
+            },
+            "storage": {"sqlite": {"path": str(self._database)}},
+            "export": {"snapshot": {"directory": str(work / "export")}},
+            "plugins": {"discovery": {"directory": str(work / "plugins")}},
+            "payload": {"tls": {"sync_event_socket_path": str(work / "run/tls-sync.sock")}},
+            "resource_profiling": {"collection": {"workload": {"cgroup": {"v2": {
+                "managed": {"root": str(self._cgroup)},
+            }}}}},
+        }
 
     def _start_daemon(self) -> None:
         self._command(
@@ -211,7 +139,7 @@ enabled = false
                 "--property=Type=exec",
                 "--property=KillMode=process",
                 "--property=Restart=on-failure",
-                "--property=RestartSec=200ms",
+                f"--property=RestartSec={CASE_CONSTANTS.service_restart_milliseconds}ms",
                 f"--property=WorkingDirectory={self._inputs.repo}",
                 str(self._binary("actraild")),
                 "--config",
@@ -237,12 +165,12 @@ enabled = false
             raise AssertionError("managed hierarchy contains an internal-node process")
 
     def _run_exact_case(self) -> str:
-        process = self._launch_process("exact", child_seconds=0.8, parent_seconds=0.2)
+        process = self._launch_process("exact", child_seconds=CASE_CONSTANTS.run_exact_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_exact_case_parent_seconds)
         self._wait_until(lambda: (self._inputs.work_dir / "child-cgroup-exact").exists(),
                          "exact workload did not start")
         scope = self._trace_scope_path(1)
         (scope / "workload/nested/leaf").mkdir(parents=True)
-        process.communicate(timeout=8)
+        process.communicate(timeout=CASE_CONSTANTS.run_exact_case_timeout)
         if process.returncode != 0:
             raise AssertionError("exact workload launch failed")
         self._wait_for_trace(1, "finalized")
@@ -251,7 +179,7 @@ enabled = false
         self._assert_launch_membership("exact")
         self._assert_final(payloads, coverage="exact")
         peak = max(payload["memory_peak_bytes"] or 0 for payload in payloads)
-        if peak < 48 * 1024 * 1024:
+        if peak < CASE_CONSTANTS.minimum_peak_bytes:
             raise AssertionError(f"kernel memory peak was unexpectedly low: {peak}")
         if max(payload["pids_peak"] or 0 for payload in payloads) < 2:
             raise AssertionError("kernel pids.peak did not observe the descendant")
@@ -266,7 +194,7 @@ enabled = false
         return f"events={len(payloads)},peak={peak}"
 
     def _run_restart_case(self) -> str:
-        process = self._launch_process("restart", child_seconds=4.0, parent_seconds=3.5)
+        process = self._launch_process("restart", child_seconds=CASE_CONSTANTS.run_restart_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_restart_case_parent_seconds)
         self._wait_until(
             lambda: (self._inputs.work_dir / "child-cgroup-restart").is_file(),
             "restart workload did not start",
@@ -303,7 +231,7 @@ enabled = false
             lambda: not orphan.exists(),
             "empty startup orphan was not removed",
         )
-        process.communicate(timeout=8)
+        process.communicate(timeout=CASE_CONSTANTS.run_restart_case_timeout)
         self._wait_for_trace(2, "finalized")
         payloads = self._resource_payloads(2)
         self._assert_launch_membership("restart")
@@ -311,7 +239,7 @@ enabled = false
         return f"events={len(payloads)},restarted_pid={self._service_pid()}"
 
     def _run_timeout_case(self) -> str:
-        self._launch("timeout", child_seconds=3.0, parent_seconds=0.2)
+        self._launch("timeout", child_seconds=CASE_CONSTANTS.run_timeout_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_timeout_case_parent_seconds)
         child_pid = int(
             (self._inputs.work_dir / "child-pid-timeout").read_text(encoding="utf-8")
         )
@@ -323,7 +251,7 @@ enabled = false
         self._wait_until(
             lambda: (self._inputs.work_dir / "child-done-timeout").is_file(),
             "timeout descendant did not finish naturally",
-            timeout=6,
+            timeout=CASE_CONSTANTS.run_timeout_case_timeout,
         )
         self._wait_until(
             lambda: not self._trace_scope_path(3).exists(),
@@ -332,7 +260,7 @@ enabled = false
         return f"events={len(payloads)},descendant={child_pid}"
 
     def _run_lost_scope_case(self) -> str:
-        process = self._launch_process("lost", child_seconds=1.0, parent_seconds=0.8)
+        process = self._launch_process("lost", child_seconds=CASE_CONSTANTS.run_lost_scope_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_lost_scope_case_parent_seconds)
         self._wait_until(lambda: self._event_count(4) > 0, "lost-scope workload did not sample")
         old_pid = self._service_pid()
         os.kill(old_pid, signal.SIGSTOP)
@@ -348,7 +276,7 @@ enabled = false
             os.kill(old_pid, signal.SIGKILL)
         self._wait_until(lambda: self._service_pid() not in (0, old_pid) and self._doctor_ok(),
                          "daemon did not recover from lost scope")
-        process.communicate(timeout=8)
+        process.communicate(timeout=CASE_CONSTANTS.run_lost_scope_case_timeout)
         self._wait_for_trace(4, "orphaned")
         payloads = self._resource_payloads(4)
         self._assert_final(payloads, coverage="partial")
@@ -360,14 +288,14 @@ enabled = false
         if health != ("degraded",):
             raise AssertionError(f"lost scope did not degrade the trace: {health}")
         # New live events after startup must not reuse recovery event IDs.
-        self._launch("after-lost", child_seconds=0.8, parent_seconds=0.2)
+        self._launch("after-lost", child_seconds=CASE_CONSTANTS.recovery_child_seconds, parent_seconds=CASE_CONSTANTS.recovery_parent_seconds)
         self._wait_for_trace(5, "finalized")
         self._assert_final(self._resource_payloads(5), coverage="exact")
         return f"events={len(payloads)},post_recovery_trace=5"
 
     def _launch(self, suffix: str, child_seconds: float, parent_seconds: float) -> None:
         completed = self._launch_process(suffix, child_seconds, parent_seconds)
-        completed.communicate(timeout=8)
+        completed.communicate(timeout=CASE_CONSTANTS.launch_timeout)
         if completed.returncode != 0:
             raise RuntimeError(f"launch {suffix} failed rc={completed.returncode}")
 
@@ -420,7 +348,7 @@ enabled = false
         payloads: list[dict[str, object]],
         *,
         coverage: str,
-        timed_out: bool = False,
+        timed_out: bool = CASE_CONSTANTS.assert_final_timed_out,
     ) -> None:
         finals = [payload for payload in payloads if payload["sample_kind"] == "final"]
         if len(finals) != 1:
@@ -440,7 +368,7 @@ enabled = false
         self._wait_until(
             lambda: self._trace_state(trace_id) == ("completed", scope_state),
             f"trace-{trace_id} did not reach completed/{scope_state}",
-            timeout=10,
+            timeout=CASE_CONSTANTS.wait_for_trace_timeout,
         )
 
     def _trace_state(self, trace_id: int) -> tuple[str, str] | None:
@@ -483,7 +411,7 @@ enabled = false
                 "--config", str(self._config),
                 "--output-format", "json",
                 "workload-resources", "--trace-id", f"trace-{trace_id}",
-                "--limit", "10000",
+                "--limit", str(CASE_CONSTANTS.limit),
             )
         )
         return [sample["payload"] for sample in json.loads(result.stdout)]
@@ -542,7 +470,7 @@ enabled = false
             check=True,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=CASE_CONSTANTS.command_timeout,
         )
 
     @staticmethod
@@ -550,11 +478,16 @@ enabled = false
         condition: Callable[[], bool],
         message: str,
         *,
-        timeout: float = 8,
+        timeout: float = CASE_CONSTANTS.wait_until_timeout,
     ) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if condition():
                 return
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_until_poll_seconds)
         raise TimeoutError(message)
+
+
+class ResourceMetricsCgroupCase(ResourceMetricsCase):
+    def __init__(self, inputs: TestCaseInputs) -> None:
+        super().__init__(inputs, patch_configs=(PATCH_CONFIG,))

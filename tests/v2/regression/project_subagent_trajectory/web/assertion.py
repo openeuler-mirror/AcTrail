@@ -10,6 +10,8 @@ from tests.v2.common.llm_trajectory.assertion import (
     TrajectoryAssertionSupport,
 )
 
+from tests.v2.regression.project_subagent_trajectory.constants import CASE_CONSTANTS
+
 
 class PersistedTrajectoryWebAssertion(TrajectoryAssertionSupport):
     def require(self) -> int:
@@ -50,6 +52,6 @@ class PersistedTrajectoryWebAssertion(TrajectoryAssertionSupport):
             echo=False,
         )
         if result.returncode != 0:
-            raise ProductAssertionFailure(f"persisted Web trajectory layout failed: {result.stderr[-2000:]}")
+            raise ProductAssertionFailure(f"persisted Web trajectory layout failed: {result.stderr[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}")
         return json.loads(result.stdout)
 

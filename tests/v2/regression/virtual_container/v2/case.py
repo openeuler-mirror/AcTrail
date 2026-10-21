@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.v2.common.core import has_failure, TestCase, TestResult, TestStatus
+from tests.v2.common.core import TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
 
 from .config import VirtualContainerConfig
@@ -34,7 +34,7 @@ class VirtualContainerCase(TestCase):
                 "running deployment and no-KVM lifecycle contracts",
             )
             results["contracts"] = scenario.run_contracts()
-            if has_failure(results["contracts"]):
+            if results["contracts"].has_failure():
                 return TestResult(
                     TestStatus.COMPOSITE,
                     "virtual-container V2 acceptance",
@@ -99,7 +99,7 @@ class VirtualContainerCase(TestCase):
             "virtual-container V2 acceptance",
             results,
         )
-        if skipped_backends and executed_backends == 0 and not has_failure(acceptance):
+        if skipped_backends and executed_backends == 0 and not acceptance.has_failure():
             return TestResult(
                 TestStatus.SKIPPED,
                 "KVM runtime acceptance was not run for: "

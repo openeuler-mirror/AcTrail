@@ -1,0 +1,8 @@
+[capture]
+profile_name = "network-control-benchmark"
+capabilities = ["proc-lifecycle", "net-transport", "socket-plaintext-payload", "enforcement-network-connect-seccomp"]
+opportunistic_capabilities = []
+[seccomp_notify]
+enabled = true
+[access_control.network.connect]
+backend = "seccomp"

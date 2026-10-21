@@ -11,6 +11,8 @@ from tests.v2.common.actrail_runtime import CommandResult
 from tests.v2.common.mcp_test_support import McpProbeSpec, McpProbeWorkspace
 from tests.v2.common.core import TestOutput
 
+from .constants import CASE_CONSTANTS
+
 
 class ClaudeMcpStreamingLaunch:
     def __init__(
@@ -81,8 +83,8 @@ class ClaudeMcpStreamingLaunch:
             suffix = " and required SIGKILL" if forced else ""
             raise RuntimeError(
                 f"Claude MCP streaming launch failed{suffix}: {error}; "
-                f"stdout_tail={stdout[-4000:]!r} "
-                f"stderr_tail={stderr[-4000:]!r}"
+                f"stdout_tail={stdout[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]!r} "
+                f"stderr_tail={stderr[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]!r}"
             ) from error
         self._output.command_output(stdout, stderr)
         return CommandResult(

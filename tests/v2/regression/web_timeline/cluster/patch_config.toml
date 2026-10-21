@@ -1,0 +1,11 @@
+[cluster]
+enabled = true
+cluster_id = "timeline-cluster"
+node_id = "timeline-node"
+node_name = "Timeline acceptance"
+node_ip = "127.0.0.1"
+
+[cluster.center]
+enabled = true
+listen_host = "127.0.0.1"
+listen_port = 18481

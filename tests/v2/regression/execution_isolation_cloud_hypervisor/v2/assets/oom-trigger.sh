@@ -5,7 +5,7 @@ CGROUP_ROOT=/sys/fs/cgroup
 GROUP="$CGROUP_ROOT/actrail-e2e-oom"
 START_FILE=/tmp/actrail-e2e-oom.start
 TRIGGER_PID=""
-OOM_KILL_MARKER="${ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_MARKER:-ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_OK}"
+OOM_KILL_MARKER="${ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_MARKER:?}"
 
 cleanup() {
   rm -f "$START_FILE"
@@ -31,7 +31,7 @@ fi
 mkdir "$GROUP"
 [ -f "$GROUP/memory.max" ] \
   || { echo "cgroup memory controller is unavailable" >&2; exit 73; }
-echo 33554432 > "$GROUP/memory.max"
+echo "$ACTRAIL_OOM_MEMORY_LIMIT_BYTES" > "$GROUP/memory.max"
 if [ -f "$GROUP/memory.swap.max" ]; then
   echo 0 > "$GROUP/memory.swap.max"
 fi
@@ -47,7 +47,7 @@ esac
 rm -f "$START_FILE"
 (
   while [ ! -f "$START_FILE" ]; do
-    sleep 0.1
+    sleep "$ACTRAIL_OOM_POLL_SECONDS"
   done
   exec awk 'BEGIN {
     value = "0123456789abcdef"
@@ -58,12 +58,12 @@ TRIGGER_PID=$!
 echo "$TRIGGER_PID" > "$GROUP/cgroup.procs"
 touch "$START_FILE"
 
-remaining=300
+remaining="$ACTRAIL_OOM_KILL_ATTEMPTS"
 while kill -0 "$TRIGGER_PID" 2>/dev/null; do
   [ "$remaining" -gt 0 ] \
-    || { echo "OOM trigger was not killed within 30 seconds" >&2; exit 75; }
+    || { echo "OOM trigger was not killed before the configured deadline" >&2; exit 75; }
   remaining=$((remaining - 1))
-  sleep 0.1
+  sleep "$ACTRAIL_OOM_POLL_SECONDS"
 done
 wait "$TRIGGER_PID" 2>/dev/null || true
 TRIGGER_PID=""
@@ -75,7 +75,7 @@ esac
 [ "$events_oom_kill" -gt 0 ] \
   || { echo "cgroup did not report an OOM kill" >&2; exit 77; }
 
-remaining=50
+remaining="$ACTRAIL_OOM_VMSTAT_ATTEMPTS"
 while [ "$remaining" -gt 0 ]; do
   after_vmstat="$(awk '$1 == "oom_kill" { print $2 }' /proc/vmstat)"
   if [ "$after_vmstat" -gt "$before_vmstat" ]; then
@@ -83,7 +83,7 @@ while [ "$remaining" -gt 0 ]; do
     exit 0
   fi
   remaining=$((remaining - 1))
-  sleep 0.1
+  sleep "$ACTRAIL_OOM_POLL_SECONDS"
 done
 
 echo "Guest vmstat oom_kill did not increase" >&2

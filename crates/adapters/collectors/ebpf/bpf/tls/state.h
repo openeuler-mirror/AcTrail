@@ -238,7 +238,7 @@ static __always_inline int payload_tls_bpf_copy_enabled(void) {
         backend == ACTRAIL_TLS_BACKEND_BPF_COPY_ONLY;
 }
 
-static __always_inline __u32 payload_tls_direct_copy_limit(void) {
+static __always_inline __u32 payload_tls_direct_capture_limit(void) {
     __u32 key = 0;
     struct actrail_tls_payload_config *config =
         bpf_map_lookup_elem(&payload_tls_config, &key);
@@ -246,8 +246,9 @@ static __always_inline __u32 payload_tls_direct_copy_limit(void) {
     if (!config) {
         return 0;
     }
-    if (config->max_operation_bytes > ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES) {
-        return ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES;
+    if (config->max_operation_bytes >
+        ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES * ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_CHUNKS) {
+        return ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES * ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_CHUNKS;
     }
     return config->max_operation_bytes;
 }

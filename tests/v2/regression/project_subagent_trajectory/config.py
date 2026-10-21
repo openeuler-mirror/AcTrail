@@ -8,6 +8,8 @@ from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.core.loopback_port import resolve_test_port
 from tests.v2.common.llm_trajectory.config import TrajectoryTestConfig
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ProjectSubagentTrajectoryConfig(TrajectoryTestConfig):
@@ -44,7 +46,7 @@ class ProjectSubagentTrajectoryConfig(TrajectoryTestConfig):
         trace_random_bytes = int(
             os.environ.get(
                 "PROJECT_SUBAGENT_TRAJECTORY_E2E_TRACE_RANDOM_BYTES",
-                "3",
+                str(CASE_CONSTANTS.trace_random_bytes),
             )
         )
         if not 3 <= trace_random_bytes <= 8:
@@ -61,19 +63,19 @@ class ProjectSubagentTrajectoryConfig(TrajectoryTestConfig):
             ),
             web_host=os.environ.get(
                 "PROJECT_SUBAGENT_TRAJECTORY_E2E_WEB_HOST",
-                "127.0.0.1",
+                CASE_CONSTANTS.web_host,
             ),
             web_port=resolve_test_port(
                 "PROJECT_SUBAGENT_TRAJECTORY_E2E_WEB_PORT",
                 attempts=common.drain_attempts,
                 connect_timeout_seconds=common.drain_interval_seconds,
             ),
-            plugin_package="otel-http",
-            plugin_instance="v2.project-subagent-trajectory-otel-http",
+            plugin_package=CASE_CONSTANTS.plugin_package,
+            plugin_instance=CASE_CONSTANTS.plugin_instance,
             request_content_max_bytes=int(
                 os.environ.get(
                     "PROJECT_SUBAGENT_TRAJECTORY_E2E_REQUEST_CONTENT_MAX_BYTES",
-                    str(16 * 1024 * 1024),
+                    str(CASE_CONSTANTS.request_content_max_bytes),
                 )
             ),
             agent_binary=agent_binary,

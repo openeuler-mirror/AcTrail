@@ -11,6 +11,8 @@ from pathlib import Path
 
 from tests.v2.common.process import CommandRunner, SubprocessRunner
 
+from tests.v2.common.execution_isolation.constants import DEFAULTS
+
 
 _ROOT_MARKER = "ACTRAIL_CONTROLLED_HOST_OOM_ROOT"
 _OOM_MARKER = "ACTRAIL_HOST_OOM_KILL_OK"
@@ -19,9 +21,9 @@ _REPO = Path(__file__).resolve().parents[4]
 
 
 def memory_cgroup_problem(
-    cgroup_root: Path = Path("/sys/fs/cgroup"),
+    cgroup_root: Path = DEFAULTS.cgroup_root,
     *,
-    swaps_path: Path = Path("/proc/swaps"),
+    swaps_path: Path = DEFAULTS.swaps_path,
 ) -> str | None:
     if (cgroup_root / "cgroup.controllers").is_file():
         parent = cgroup_root
@@ -32,7 +34,7 @@ def memory_cgroup_problem(
         parent = cgroup_root / "memory"
         limit_name = "memory.limit_in_bytes"
         swap_limit_name = "memory.memsw.limit_in_bytes"
-        swap_limit_value = "33554432\n"
+        swap_limit_value = f"{DEFAULTS.precheck_memory_bytes}\n"
     else:
         return "memory cgroup controller is unavailable"
     try:
@@ -52,7 +54,7 @@ def memory_cgroup_problem(
         limit = probe / limit_name
         if not limit.is_file():
             return f"memory controller is not enabled below {parent}"
-        limit.write_text("33554432\n", encoding="ascii")
+        limit.write_text(f"{DEFAULTS.precheck_memory_bytes}\n", encoding="ascii")
         swap_limit = probe / swap_limit_name
         if swap_limit.is_file():
             swap_limit.write_text(swap_limit_value, encoding="ascii")
@@ -211,14 +213,14 @@ def _remove_recorded_cgroup(coord_dir: Path) -> str | None:
         or not path.name.startswith("actrail-host-oom-")
     ):
         return f"controlled OOM recorded an unsafe cgroup path: {path}"
-    deadline = time.monotonic() + 2
+    deadline = time.monotonic() + DEFAULTS.cgroup_cleanup_timeout_seconds
     last_error: OSError | None = None
     while path.exists() and time.monotonic() < deadline:
         try:
             path.rmdir()
         except OSError as error:
             last_error = error
-            time.sleep(0.05)
+            time.sleep(DEFAULTS.poll_seconds)
         else:
             break
     if path.exists():

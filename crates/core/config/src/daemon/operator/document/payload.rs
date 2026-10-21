@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "payload/constant.rs"]
+mod constant;
+
 use crate::daemon::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
     DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
@@ -150,7 +153,7 @@ impl Default for PayloadTlsDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            capture_backend: "tls-sync".to_string(),
+            capture_backend: constant::DEFAULT_TLS_CAPTURE_BACKEND.to_string(),
             source: "auto".to_string(),
             resolver: "auto".to_string(),
             library: "auto".to_string(),

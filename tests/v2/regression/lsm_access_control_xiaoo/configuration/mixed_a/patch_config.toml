@@ -1,0 +1,27 @@
+[capture]
+profile_name = "access-control-xiaoo-regression"
+capabilities = ["proc-lifecycle", "net-transport", "socket-plaintext-payload", "enforcement-file-permission-fanotify", "enforcement-file-permission-lsm", "enforcement-file-rmdir-seccomp", "enforcement-command-execution-lsm", "enforcement-network-connect-seccomp"]
+opportunistic_capabilities = []
+
+[seccomp_notify]
+enabled = true
+
+[access_control.file.open]
+enabled = true
+backend = "fanotify"
+
+[access_control.file.mkdir]
+enabled = true
+backend = "lsm"
+
+[access_control.file.rmdir]
+enabled = true
+backend = "seccomp"
+
+[access_control.command.exec]
+enabled = true
+backend = "lsm"
+
+[access_control.network.connect]
+enabled = true
+backend = "seccomp"

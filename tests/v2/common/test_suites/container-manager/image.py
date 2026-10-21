@@ -4,17 +4,19 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tests.v2.common.test_suites.constants import CONTAINER_DEFAULTS as DEFAULTS
+
 
 @dataclass(frozen=True)
 class ContainerImage:
     """Ensures a content-addressed test image exists without rebuilding it."""
 
     image_name: str
-    version: str = "latest"
+    version: str = DEFAULTS.image_version
     dockerfile_path: Path | None = None
     build_context: Path | None = None
     build_args: dict[str, str] = field(default_factory=dict)
-    force_rebuild: bool = False
+    force_rebuild: bool = DEFAULTS.force_rebuild
 
     @property
     def reference(self) -> str:

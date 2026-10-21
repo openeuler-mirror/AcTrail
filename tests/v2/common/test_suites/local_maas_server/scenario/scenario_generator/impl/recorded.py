@@ -16,6 +16,8 @@ from ..interface import (
     ScenarioGenerator,
 )
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 
 @dataclass(frozen=True, slots=True)
 class RecordedGenerator(ScenarioGenerator):
@@ -38,8 +40,8 @@ class RecordedGenerator(ScenarioGenerator):
     tool_source: Path
     message_source: Path
     node_parser: Callable[[object, str], ResponseTemplate]
-    loop_exhausted_messages: bool = True
-    lazy_load_size: int = 0
+    loop_exhausted_messages: bool = DEFAULTS.loop_exhausted_messages
+    lazy_load_size: int = DEFAULTS.lazy_load_size
 
     @property
     def kind(self) -> str:

@@ -13,6 +13,8 @@ from tests.v2.common.runner import TestingContextSingleton
 from .environment import SemanticActionBoundariesEnvironment
 from .observation import ExportedSpan, SemanticActionObservation
 
+from .constants import CASE_CONSTANTS
+
 
 class SemanticActionBoundariesTask:
     _OBSERVED_KINDS = frozenset(
@@ -78,7 +80,7 @@ class SemanticActionBoundariesTask:
         )
         marker = (
             "SEMANTIC_ACTION_BOUNDARIES_"
-            f"{secrets.token_hex(6)}"
+            f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
         self._test_context.report_progress(
             "boundary_launch",
@@ -88,7 +90,7 @@ class SemanticActionBoundariesTask:
         if launch.returncode != 0:
             raise AssertionError(
                 "semantic action boundaries: actrailctl launch exited "
-                f"with {launch.returncode}\n{launch.output[-4000:]}"
+                f"with {launch.returncode}\n{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         if marker not in launch.output:
             raise AssertionError(
@@ -177,7 +179,7 @@ class SemanticActionBoundariesTask:
         target.chmod(0o644)
         marker = (
             "SEMANTIC_ACTION_SECCOMP_ONLY_"
-            f"{secrets.token_hex(6)}"
+            f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
         try:
             launch = self._launch_command(
@@ -273,7 +275,7 @@ class SemanticActionBoundariesTask:
     def _require_ebpf_only_exec_completion(self) -> None:
         marker = (
             "SEMANTIC_ACTION_EBPF_ONLY_"
-            f"{secrets.token_hex(6)}"
+            f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
         launch = self._launch_command(
             marker,
@@ -290,7 +292,7 @@ class SemanticActionBoundariesTask:
         if launch.returncode != 0:
             raise AssertionError(
                 f"eBPF-only exec exited with {launch.returncode}\n"
-                f"{launch.output[-4000:]}"
+                f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         trace_id = self._observation.require_trace_id(launch)
         self._observation.wait_for_terminal_trace(trace_id)
@@ -332,7 +334,7 @@ class SemanticActionBoundariesTask:
     def _require_nonzero_process_exit(self) -> None:
         marker = (
             "SEMANTIC_ACTION_NONZERO_EXIT_"
-            f"{secrets.token_hex(6)}"
+            f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
         launch = self._launch_command(
             marker,
@@ -420,8 +422,8 @@ class SemanticActionBoundariesTask:
         marker: str,
         command: list[str],
         *,
-        host_ebpf: str = "auto",
-        seccomp_notify: str = "auto",
+        host_ebpf: str = CASE_CONSTANTS.launch_command_host_ebpf,
+        seccomp_notify: str = CASE_CONSTANTS.launch_command_seccomp_notify,
     ) -> CommandResult:
         return self._environment.runtime.run(
             [

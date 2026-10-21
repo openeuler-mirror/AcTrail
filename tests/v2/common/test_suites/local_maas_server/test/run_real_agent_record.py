@@ -30,14 +30,15 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Sequence
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from constants import DEFAULTS as SERVER_DEFAULTS
+from test.constants import DEFAULTS
 
 from test.e2e_support import MaaSServerProcess, REPO, _free_port  # noqa: E402
 
 
-DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_TOOLS_XIAOO = "file_read,glob,grep"
-DEFAULT_TOOLS_OPENCODE = "read,glob,grep"
 
 
 class AgentRecordBackend(ABC):
@@ -98,7 +99,7 @@ class XiaooBackend(AgentRecordBackend):
             "--provider",
             "openai",
             "--api-base",
-            f"http://127.0.0.1:{self._port}",
+            f"http://{DEFAULTS.loopback_host}:{self._port}",
             "--api-key",
             self._api_key,
             "--model",
@@ -129,7 +130,7 @@ class OpencodeBackend(AgentRecordBackend):
                     "npm": "@ai-sdk/openai-compatible",
                     "options": {
                         "baseURL": (
-                            f"http://127.0.0.1:{server.port}/v1"
+                            f"http://{DEFAULTS.loopback_host}:{server.port}/v1"
                         ),
                         "apiKey": session["api_key"],
                     },
@@ -221,9 +222,9 @@ class RealAgentRecord:
             document={
                 "tools": list(self.tools),
                 "upstream": {
-                    "base_url": "https://api.deepseek.com",
+                    "base_url": SERVER_DEFAULTS.default_upstream_url,
                     "api_key": upstream_api_key,
-                    "model": DEFAULT_MODEL,
+                    "model": DEFAULTS.model,
                 },
             },
         )
@@ -254,7 +255,7 @@ class RealAgentRecord:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
             )
-            deadline = time.monotonic() + 3600
+            deadline = time.monotonic() + DEFAULTS.agent_timeout_seconds
             while time.monotonic() < deadline:
                 cache = Path(self.session["cache_file"])
                 rounds = (
@@ -268,7 +269,7 @@ class RealAgentRecord:
                 )
                 if process.poll() is not None:
                     break
-                time.sleep(15)
+                time.sleep(DEFAULTS.agent_poll_seconds)
             if process.poll() is None:
                 print(
                     "agent still running after the deadline; "
@@ -277,10 +278,10 @@ class RealAgentRecord:
                 )
                 process.terminate()
                 try:
-                    process.wait(timeout=10)
+                    process.wait(timeout=DEFAULTS.agent_stop_timeout_seconds)
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    process.wait(timeout=10)
+                    process.wait(timeout=DEFAULTS.agent_stop_timeout_seconds)
         cache = Path(self.session["cache_file"])
         if not cache.is_file():
             return 0
@@ -342,7 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--agent",
         choices=("xiaoo", "opencode"),
-        default="xiaoo",
+        default=DEFAULTS.agent,
         help="agent to record (xiaoo or opencode)",
     )
     prompt_group = parser.add_mutually_exclusive_group(required=True)
@@ -358,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=35,
+        default=DEFAULTS.max_turns,
         help="max turns allowed for the agent loop",
     )
     parser.add_argument(
@@ -391,8 +392,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"cannot read --prompt-file {args.prompt_file}: {error}"
             )
     tools_text = args.tools or {
-        "xiaoo": DEFAULT_TOOLS_XIAOO,
-        "opencode": DEFAULT_TOOLS_OPENCODE,
+        "xiaoo": DEFAULTS.tools_xiaoo,
+        "opencode": DEFAULTS.tools_opencode,
     }[args.agent]
     tools = tuple(
         tool.strip()
@@ -407,10 +408,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"agent binary not found: {args.agent}")
     if args.agent == "xiaoo":
         backend: AgentRecordBackend = XiaooBackend(
-            binary, DEFAULT_MODEL, tools
+            binary, DEFAULTS.model, tools
         )
     else:
-        backend = OpencodeBackend(binary, DEFAULT_MODEL, tools)
+        backend = OpencodeBackend(binary, DEFAULTS.model, tools)
     runner = RealAgentRecord(
         workdir,
         backend=backend,

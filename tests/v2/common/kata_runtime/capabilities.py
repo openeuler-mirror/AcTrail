@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from .process import CommandRunner
 
+from .constants import DEFAULTS
+
 
 @dataclass(frozen=True)
 class CtrCapabilities:
@@ -17,8 +19,8 @@ class CtrCapabilities:
         cls,
         runner: CommandRunner,
         *,
-        ctr: str = "ctr",
-        timeout: float = 10,
+        ctr: str = DEFAULTS.ctr_command,
+        timeout: float = DEFAULTS.capability_timeout_seconds,
     ) -> CtrCapabilities:
         run_help = runner.run([ctr, "run", "--help"], timeout=timeout)
         if run_help.returncode != 0:

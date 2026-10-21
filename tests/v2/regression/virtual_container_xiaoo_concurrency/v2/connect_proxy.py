@@ -10,8 +10,10 @@ import sys
 import threading
 from pathlib import Path
 
+from constants import CASE_CONSTANTS
 
-MAX_HEADER_BYTES = 16 * 1024
+
+MAX_HEADER_BYTES = CASE_CONSTANTS.proxy_max_header_bytes
 
 
 class ConnectProxy(socketserver.ThreadingTCPServer):
@@ -51,7 +53,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
                 self.server.record(f"connect_proxy_denied={host}:{port}")
                 self.request.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 return
-            upstream = socket.create_connection((host, port), timeout=15)
+            upstream = socket.create_connection((host, port), timeout=CASE_CONSTANTS.proxy_connect_timeout_seconds)
         except (OSError, ValueError):
             self._send_bad_gateway()
             return
@@ -92,7 +94,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
         def copy(source: socket.socket, target: socket.socket) -> None:
             while True:
                 try:
-                    content = source.recv(65536)
+                    content = source.recv(CASE_CONSTANTS.proxy_receive_bytes)
                     if not content:
                         break
                     target.sendall(content)
@@ -110,7 +112,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
         )
         request_to_upstream.start()
         copy(upstream, self.request)
-        request_to_upstream.join(timeout=1)
+        request_to_upstream.join(timeout=CASE_CONSTANTS.proxy_relay_join_timeout_seconds)
 
     def _send_bad_gateway(self) -> None:
         try:
@@ -121,7 +123,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
-    result.add_argument("--bind-host", default="127.0.0.1")
+    result.add_argument("--bind-host", default=CASE_CONSTANTS.bind_host)
     result.add_argument("--bind-port", type=int, required=True)
     result.add_argument(
         "--allow-host",
@@ -130,7 +132,7 @@ def parser() -> argparse.ArgumentParser:
         default=None,
         help="HTTPS host to allow; may be repeated",
     )
-    result.add_argument("--allow-port", type=int, default=443)
+    result.add_argument("--allow-port", type=int, default=CASE_CONSTANTS.allow_port)
     result.add_argument("--log-path", type=Path)
     return result
 

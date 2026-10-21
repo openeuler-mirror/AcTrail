@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import TextIO
 
+from .constants import CASE_CONSTANTS
+
 
 class WorkloadProvider:
     """Use the shared HTTP streaming provider to request one real Bash workload."""
@@ -25,9 +27,9 @@ class WorkloadProvider:
         self._stderr = self._stderr_path.open("w", encoding="utf-8")
         self._process = subprocess.Popen(
             [sys.executable, str(self._proxy), "--mode", "local-stream",
-             "--bind-host", "127.0.0.1", "--bind-port", "0",
+             "--bind-host", CASE_CONSTANTS.loopback_host, "--bind-port", str(CASE_CONSTANTS.bind_port),
              "--local-stream-response-text", "ACTRAIL_LSM_WORKLOAD_DONE",
-             "--local-stream-reasoning-tokens", "1",
+             "--local-stream-reasoning-tokens", str(CASE_CONSTANTS.local_stream_reasoning_tokens),
              "--local-tool-command", self._command],
             text=True, stdout=subprocess.PIPE, stderr=self._stderr,
         )
@@ -73,7 +75,7 @@ class WorkloadProvider:
 class TcpWitness:
     """An actual local peer records connections reaching userspace."""
 
-    def __init__(self, timeout: float, poll_interval: float, *, ipv6: bool = False):
+    def __init__(self, timeout: float, poll_interval: float, *, ipv6: bool = CASE_CONSTANTS.init_ipv6):
         self._timeout = timeout
         self._poll_interval = poll_interval
         self._ipv6 = ipv6
@@ -85,7 +87,7 @@ class TcpWitness:
 
     def start(self) -> int:
         self._socket = socket.socket(socket.AF_INET6 if self._ipv6 else socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.bind(("::1" if self._ipv6 else "127.0.0.2", 0))
+        self._socket.bind((CASE_CONSTANTS.ipv6_loopback_host if self._ipv6 else CASE_CONSTANTS.witness_host, 0))
         self._socket.listen()
         self._socket.settimeout(self._poll_interval)
         port = self._socket.getsockname()[1]

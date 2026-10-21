@@ -1,4 +1,5 @@
 // Verify real captured long strings through bounded API pages and browser navigation.
+import { C } from '../constants.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { TimelineBrowser } from '../browser/timeline.mjs';
@@ -11,26 +12,26 @@ class LongContentAcceptance {
   }
 
   async read(offset) {
-    const query = new URLSearchParams({ pointer: this.expected.pointer, offset, limit: 50 });
+    const query = new URLSearchParams({ pointer: this.expected.pointer, offset, limit: C.long_content_page_limit });
     const response = await fetch(this.base + this.endpoint + '?' + query);
-    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.status, C.http_ok, await response.clone().text());
     return (await response.json()).content.node;
   }
 
   async api() {
     const bytes = Buffer.from(this.expected.value);
-    assert(bytes.length > 150 * 1024);
-    const prefixResponse = await fetch(this.base + this.endpoint.replace(/\/node$/, '') + '?max_bytes=131072');
-    assert.equal(prefixResponse.status, 200);
+    assert(bytes.length > C.long_content_min_bytes);
+    const prefixResponse = await fetch(this.base + this.endpoint.replace(/\/node$/, '') + `?max_bytes=${C.long_content_prefix_bytes}`);
+    assert.equal(prefixResponse.status, C.http_ok);
     const prefixContent = (await prefixResponse.json()).content;
-    assert(prefixContent.truncated, 'real request must exceed the former 128 KiB preview');
+    assert(prefixContent.truncated, 'real request must exceed the prefix preview budget');
     let offset = 0;
     const values = [];
-    for (let count = 0; count < 20; count++) {
+    for (let count = 0; count < C.long_content_max_pages; count++) {
       const node = await this.read(offset);
       assert.equal(node.offset, offset);
       assert.equal(node.value_bytes, bytes.length);
-      assert(node.returned_bytes > 0 && node.returned_bytes <= 64 * 1024);
+      assert(node.returned_bytes > 0 && node.returned_bytes <= C.long_content_page_bytes);
       assert.equal(Buffer.byteLength(node.value), node.returned_bytes);
       assert.deepEqual(Buffer.from(node.value), bytes.subarray(offset, offset + node.returned_bytes));
       assert.equal(node.truncated, offset > 0 || node.next_offset != null);
@@ -47,21 +48,21 @@ class LongContentAcceptance {
     }
     assert.equal(values.join(''), this.expected.value, 'page concatenation changed persisted UTF-8 content');
     this.values = values;
-    const unicode = bytes.findIndex(byte => byte >= 0x80);
+    const unicode = bytes.findIndex(byte => byte >= C.utf8_continuation_prefix);
     assert(unicode >= 0);
     for (const invalid of [unicode + 1, bytes.length + 1]) {
-      const query = new URLSearchParams({ pointer: this.expected.pointer, offset: invalid, limit: 50 });
+      const query = new URLSearchParams({ pointer: this.expected.pointer, offset: invalid, limit: C.long_content_page_limit });
       const response = await fetch(this.base + this.endpoint + '?' + query);
-      assert.equal(response.status, 400, 'invalid string offset must fail locally');
+      assert.equal(response.status, C.http_bad_request, 'invalid string offset must fail locally');
     }
-    assert.equal((await fetch(`${this.base}/api/traces/${this.trace}/metadata`)).status, 200);
+    assert.equal((await fetch(`${this.base}/api/traces/${this.trace}/metadata`)).status, C.http_ok);
     assert.equal((await this.read(0)).value, values[0], 'invalid offset affected subsequent reads');
   }
 
   async browser(playwright, executablePath) {
     const { chromium } = await import(playwright);
     this.instance = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-    const page = await this.instance.newPage({ viewport: { width: 1440, height: 1000 } });
+    const page = await this.instance.newPage({ viewport: C.viewport });
     page.on('request', request => {
       if (request.url().includes('/api/')) this.report.requests.push(request.url());
     });
@@ -69,7 +70,7 @@ class LongContentAcceptance {
     await timeline.open();
     await timeline.kinds(['llm.request']);
     const response = await fetch(`${this.base}/api/traces/${this.trace}/actions/${encodeURIComponent(this.expected.action_id)}`);
-    assert.equal(response.status, 200);
+    assert.equal(response.status, C.http_ok);
     await timeline.select(await response.json());
     const mode = page.locator('.request-mode-switch');
     const summary = page.locator('.llm-request-summary');
@@ -83,7 +84,7 @@ class LongContentAcceptance {
     await mode.locator('.toggle-track').click();
     assert(await mode.locator('input').isChecked());
     const rootResponse = await root;
-    assert.equal(rootResponse.status(), 200);
+    assert.equal(rootResponse.status(), C.http_ok);
     const rootNode = (await rootResponse.json()).content.node;
     const body = page.locator('.llm-request-blocks');
     await body.waitFor();
@@ -131,7 +132,7 @@ class LongContentAcceptance {
         if (await row.getAttribute('aria-expanded') !== 'true') await row.click();
         if (['/messages', '/input'].includes(pointer)) {
           await page.waitForLoadState('networkidle');
-          assert(await field.locator(':scope > .llm-content-body > .llm-content-node').count() <= 5,
+          assert(await field.locator(':scope > .llm-content-body > .llm-content-node').count() <= C.content_max_children,
             'message list loaded more than its first five cards');
         }
       } else if (!(await field.getAttribute('class')).split(' ').includes('is-container')) {
@@ -170,7 +171,7 @@ class LongContentAcceptance {
         && Number(url.searchParams.get('offset')) === offset;
     });
     await leaf.locator(`.llm-content-${direction}`).click();
-    assert.equal((await response).status(), 200);
+    assert.equal((await response).status(), C.http_ok);
     await page.waitForLoadState('networkidle');
     assert.equal(this.contentRequests().length - start, 1, 'page navigation fetched unrelated content');
   }
@@ -183,7 +184,7 @@ class LongContentAcceptance {
     }, { pointer: this.expected.pointer, text: expected });
     assert.equal(await value.count(), 1, 'leaf retained previous page elements');
     assert.equal(await value.textContent(), expected, 'visible page was appended or changed');
-    assert(Buffer.byteLength(await leaf.textContent()) < 70 * 1024, 'leaf DOM accumulated earlier pages');
+    assert(Buffer.byteLength(await leaf.textContent()) < C.long_content_dom_max_bytes, 'leaf DOM accumulated earlier pages');
   }
 }
 
@@ -199,5 +200,5 @@ try {
   throw error;
 } finally {
   await acceptance.instance?.close();
-  await fs.writeFile(`${output}/long-content.json`, JSON.stringify(acceptance.report, null, 2));
+  await fs.writeFile(`${output}/long-content.json`, JSON.stringify(acceptance.report, null, C.json_indent));
 }

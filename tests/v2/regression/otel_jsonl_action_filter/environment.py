@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.core import TestOutput
 from tests.v2.common.plugin_test_environment import (
     PluginRuntimeSpec,
@@ -13,6 +14,8 @@ from tests.v2.common.plugin_test_environment import (
 
 from .config import OtelJsonlActionFilterConfig
 from .receiver import JsonRpcOtelReceiver
+
+from .constants import CASE_CONSTANTS
 
 
 class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
@@ -39,7 +42,7 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
             config,
             output,
             operator_config=config.operator_config,
-            operator_config_patch=self._operator_config_patch,
+            operator_config_patches=[self._operator_config_patch, Path(__file__).with_name("patch_config.toml")],
             web_host=config.web_host,
             web_port=config.web_port,
             plugin=PluginRuntimeSpec(
@@ -106,11 +109,11 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
                 {
                     "endpoint": self._json_rpc_receiver.endpoint,
                     "method": "otel.export",
-                    "connect_timeout_ms": 250,
-                    "request_timeout_ms": 500,
-                    "response_body_max_bytes": 65536,
-                    "max_attempts": 3,
-                    "retry_backoff_ms": 10,
+                    "connect_timeout_ms": CASE_CONSTANTS.connect_timeout_ms,
+                    "request_timeout_ms": CASE_CONSTANTS.request_timeout_ms,
+                    "response_body_max_bytes": CASE_CONSTANTS.response_body_max_bytes,
+                    "max_attempts": CASE_CONSTANTS.max_attempts,
+                    "retry_backoff_ms": CASE_CONSTANTS.retry_backoff_ms,
                 }
             )
 
@@ -154,7 +157,7 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
     def delay_next_json_rpc_responses(
         self,
         delay_seconds: float,
-        count: int = 1,
+        count: int = CASE_CONSTANTS.delay_next_json_rpc_responses_count,
     ) -> None:
         self._json_rpc_receiver.delay_next_responses(
             delay_seconds,
@@ -184,14 +187,12 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
             raise RuntimeError(
                 f"official otel-jsonl manifest not found: {manifest}"
             )
-        self._operator_config_patch.write_text(
-            "[plugins.discovery]\n"
-            f"directory = {json.dumps(str(plugin_root))}\n"
-            "\n[file_observation.collection.read]\n"
-            "observed = true\n"
-            "\n[file_observation.bulk_read]\n"
-            "enabled = false\n",
-            encoding="utf-8",
+        (
+            PatchBuilder()
+            .with_work_dir(self.config.work_dir)
+            .with_plugin_directory(plugin_root)
+            .build()
+            .save(self._operator_config_patch)
         )
 
     @classmethod

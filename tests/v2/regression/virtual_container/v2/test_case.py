@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.v2.common.core import TestCaseInputs, TestResult, TestStatus, effective_status
+from tests.v2.common.core import TestCaseInputs, TestResult, TestStatus
 
 from tests.v2.regression.virtual_container.v2.case import VirtualContainerCase
 from tests.v2.regression.virtual_container.v2.config import VirtualContainerConfig
@@ -209,7 +209,7 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 result = VirtualContainerCase(config).run(context)
 
         self.assertEqual(result.status, TestStatus.COMPOSITE)
-        self.assertEqual(effective_status(result), TestStatus.PASSED)
+        self.assertEqual(result.effective_status(), TestStatus.PASSED)
         self.assertIs(result.details["stratovirt"], backend_pass)
         self.assertIs(result.details["cloud-hypervisor"], backend_skip)
 

@@ -5,16 +5,22 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from tests.v2.regression.resource_metrics_cgroup.case import ResourceMetricsCgroupCase
+from tests.v2.regression.resource_metrics_cgroup.case import (
+    PATCH_CONFIG as CGROUP_PATCH_CONFIG,
+    ResourceMetricsCase,
+)
+
+from .constants import CASE_CONSTANTS
+
+DOCKER_CONTAINER_ID_HEX_LENGTH = 64
 
 
-def assert_container_samples(payloads: list[dict], container_id: str, readings: list[int], *, expect_rss: bool = False) -> None:
+def assert_container_samples(payloads: list[dict], container_id: str, readings: list[int], *, expect_rss: bool = CASE_CONSTANTS.expect_rss) -> None:
     periodic = [p for p in payloads if p["sample_kind"] == "periodic"]
     if not periodic:
         raise AssertionError("no periodic container samples")
-    # A sleeping workload is nearly stable, but counter reads are not atomic
-    # with AcTrail's sampling. Allow 4 MiB of kernel accounting jitter.
-    low, high = min(readings) - 4 * 1024**2, max(readings) + 4 * 1024**2
+    low = min(readings) - CASE_CONSTANTS.memory_accounting_jitter_bytes
+    high = max(readings) + CASE_CONSTANTS.memory_accounting_jitter_bytes
     for payload in periodic:
         if (payload["scope"], payload["accounting_method"], payload["accounting_coverage"]) != (
             "container", "cgroup_v2", "broader_than_trace"
@@ -33,15 +39,19 @@ def assert_container_samples(payloads: list[dict], container_id: str, readings: 
             raise AssertionError("charged memory must not be labelled RSS")
 
 
-class ContainerAcceptance(ResourceMetricsCgroupCase):
+class ContainerAcceptance(ResourceMetricsCase):
     """Standalone acceptance using an isolated daemon and disposable Docker container."""
 
-    def _operator_patch(self) -> str:
-        patch = super()._operator_patch().replace('mode = "cgroup"', 'mode = "auto"')
-        patch = patch.replace(f'root = "{self._cgroup}"',
-                              f'root = "{self._inputs.work_dir / "unavailable-managed-root"}"')
-        return patch.replace('memory_alert_rss_kb = "1"',
-                             'memory_alert_rss_kb = "1"\n\n[resource_profiling.collection.workload.cgroup.v2.external]\npolicy = "require"') + '\n[sandbox_evidence]\nschema_version = 2\n'
+    def __init__(self, inputs) -> None:
+        super().__init__(inputs, patch_configs=(
+            CGROUP_PATCH_CONFIG, Path(__file__).with_name("patch_config.toml"),
+        ))
+
+    def _operator_values(self) -> dict[str, object]:
+        values = super()._operator_values()
+        managed = values["resource_profiling"]["collection"]["workload"]["cgroup"]["v2"]["managed"]
+        managed["root"] = str(self._inputs.work_dir / "unavailable-managed-root")
+        return values
 
     def exercise(self, image: str) -> None:
         self._prepare_config()
@@ -50,15 +60,16 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
         log = (self._inputs.work_dir / "daemon-output.log").open("w")
         try:
             container_id = self._command(("docker", "run", "--pull=never", "-d", "--network=none",
-                                          "--entrypoint", "/bin/sh", image, "-c", "exec sleep 120")).stdout.strip()
-            if len(container_id) != 64 or any(c not in "0123456789abcdef" for c in container_id):
+                                          "--entrypoint", "/bin/sh", image, "-c",
+                                          f"exec sleep {CASE_CONSTANTS.workload_seconds}")).stdout.strip()
+            if len(container_id) != DOCKER_CONTAINER_ID_HEX_LENGTH or any(c not in "0123456789abcdef" for c in container_id):
                 raise AssertionError("docker did not return a full container ID")
             pid = int(self._command(("docker", "inspect", "--format", "{{.State.Pid}}", container_id)).stdout)
             membership = Path(f"/proc/{pid}/cgroup").read_text()
             daemon = self._start_isolated_daemon(log)
             self._command((str(self._binary("actrailctl")), "track-add", "--config", str(self._config),
                            "--pid", str(pid), "--name", "container-cgroup-acceptance"))
-            self._wait_until(lambda: self._event_count(1) >= 3, "no initial samples")
+            self._wait_until(lambda: self._event_count(1) >= CASE_CONSTANTS.initial_sample_count, "no initial samples")
             with sqlite3.connect(self._database) as connection:
                 row = connection.execute("SELECT relative_path FROM trace_external_cgroup_bindings WHERE trace_id=1").fetchone()
             if row is None:
@@ -68,10 +79,10 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
             readings = [int((boundary / "memory.current").read_text())]
             count = self._event_count(1)
             daemon.kill()
-            daemon.wait(timeout=10)
+            daemon.wait(timeout=CASE_CONSTANTS.process_exit_timeout_seconds)
             # Startup recovers the durable external binding without reattaching.
             daemon = self._start_isolated_daemon(log)
-            self._wait_until(lambda: self._event_count(1) >= count + 3, "sampling did not recover")
+            self._wait_until(lambda: self._event_count(1) >= count + CASE_CONSTANTS.recovery_sample_count, "sampling did not recover")
             readings.append(int((boundary / "memory.current").read_text()))
             assert_container_samples(self._resource_payloads(1), container_id, readings, expect_rss=True)
             if self._controls(boundary) != before or Path(f"/proc/{pid}/cgroup").read_text() != membership:
@@ -79,7 +90,7 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
             # Also retain live explicit-removal coverage while the workload runs.
             self._command((str(self._binary("actrailctl")), "track-add", "--config", str(self._config),
                            "--pid", str(pid), "--name", "container-cgroup-final"))
-            self._wait_until(lambda: self._event_count(2) >= 2, "second trace has no samples")
+            self._wait_until(lambda: self._event_count(2) >= CASE_CONSTANTS.second_trace_sample_count, "second trace has no samples")
             self._command((str(self._binary("actrailctl")), "track-remove", "--config", str(self._config),
                            "--trace-id", "trace-2"))
             def closed() -> bool:
@@ -87,7 +98,7 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
                     return connection.execute("SELECT lifecycle_state FROM trace_external_cgroup_bindings WHERE trace_id=2").fetchone() == ("closed",)
             self._wait_until(closed, "external finalization did not close binding")
             self._assert_final(self._resource_payloads(2), coverage="broader_than_trace")
-            self._command(("docker", "stop", "--time", "1", container_id))
+            self._command(("docker", "stop", "--time", str(CASE_CONSTANTS.container_stop_seconds), container_id))
             def recovered_closed() -> bool:
                 with sqlite3.connect(self._database) as connection:
                     return connection.execute(
@@ -99,7 +110,7 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
             if len(finals) != 1:
                 raise AssertionError("original recovered trace must have exactly one final sample")
             daemon.kill()
-            daemon.wait(timeout=10)
+            daemon.wait(timeout=CASE_CONSTANTS.process_exit_timeout_seconds)
             daemon = self._start_isolated_daemon(log)
             if len([p for p in self._resource_payloads(1) if p["sample_kind"] == "final"]) != 1:
                 raise AssertionError("restart duplicated recovered final sample")
@@ -107,10 +118,10 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
             if daemon is not None and daemon.poll() is None:
                 daemon.terminate()
                 try:
-                    daemon.wait(timeout=10)
+                    daemon.wait(timeout=CASE_CONSTANTS.process_exit_timeout_seconds)
                 except subprocess.TimeoutExpired:
                     daemon.kill()
-                    daemon.wait(timeout=10)
+                    daemon.wait(timeout=CASE_CONSTANTS.process_exit_timeout_seconds)
             log.close()
             if container_id:
                 self._command(("docker", "rm", "-f", container_id))
@@ -122,7 +133,7 @@ class ContainerAcceptance(ResourceMetricsCgroupCase):
             self._wait_until(lambda: process.poll() is None and self._doctor_ok(), "daemon not ready")
         except Exception:
             process.terminate()
-            process.wait(timeout=10)
+            process.wait(timeout=CASE_CONSTANTS.process_exit_timeout_seconds)
             raise
         return process
 

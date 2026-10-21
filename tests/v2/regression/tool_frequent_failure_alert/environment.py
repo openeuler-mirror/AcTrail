@@ -10,6 +10,8 @@ from tests.v2.common.core import TestOutput, TestResult, TestStatus
 
 from .config import ToolFrequentFailureAlertConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ToolFrequentFailureAlertEnvironment:
     def __init__(
@@ -61,7 +63,7 @@ class ToolFrequentFailureAlertEnvironment:
         if "loaded instance=" not in load.output:
             raise AssertionError(
                 "plugin load did not report a loaded instance: "
-                f"{load.output[-4000:]}"
+                f"{load.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         self._plugin_loaded = True
 
@@ -75,7 +77,7 @@ class ToolFrequentFailureAlertEnvironment:
         if result.returncode != 0:
             raise AssertionError(
                 f"plugin unload exited with {result.returncode}: "
-                f"{result.output[-1000:]}"
+                f"{result.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}"
             )
         self._plugin_loaded = False
 
@@ -166,7 +168,7 @@ class ToolFrequentFailureAlertEnvironment:
         if "loaded instance=" not in load.output:
             raise AssertionError(
                 "installed package load did not report a loaded instance: "
-                f"{load.output[-4000:]}"
+                f"{load.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         self._installed_plugin_loaded = True
 
@@ -182,7 +184,7 @@ class ToolFrequentFailureAlertEnvironment:
         if result.returncode != 0:
             raise AssertionError(
                 f"installed package unload exited with {result.returncode}: "
-                f"{result.output[-1000:]}"
+                f"{result.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}"
             )
         self._installed_plugin_loaded = False
 
@@ -191,7 +193,7 @@ class ToolFrequentFailureAlertEnvironment:
         if result.returncode != 0:
             raise AssertionError(
                 f"plugin status exited with {result.returncode}: "
-                f"{result.output[-2000:]}"
+                f"{result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         fields: dict[str, str] = {}
         for token in result.stdout.split():
@@ -217,7 +219,7 @@ class ToolFrequentFailureAlertEnvironment:
         if result.returncode != 0:
             raise AssertionError(
                 "actrailviewer actions exited with "
-                f"{result.returncode}: {result.output[-2000:]}"
+                f"{result.returncode}: {result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         try:
             document = json.loads(result.stdout)
@@ -250,12 +252,12 @@ class ToolFrequentFailureAlertEnvironment:
                     echo=False,
                 )
                 if unload.returncode != 0:
-                    failures.append(f"plugin unload: {unload.output[-1000:]}")
+                    failures.append(f"plugin unload: {unload.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}")
             except Exception as error:
                 failures.append(f"plugin unload exception: {error}")
         stop = self.runtime.stop()
         if stop is not None and stop.returncode != 0:
-            failures.append(f"daemon stop: {stop.output[-1000:]}")
+            failures.append(f"daemon stop: {stop.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}")
         if failures:
             return TestResult(
                 TestStatus.FAILED,

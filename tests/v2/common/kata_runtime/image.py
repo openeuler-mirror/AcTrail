@@ -13,6 +13,8 @@ from pathlib import Path
 from .process import CommandResult, CommandRunner
 from .requirements import PreparePolicy, ResolvedImage
 
+from .constants import DEFAULTS
+
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _FIRECRACKER_WORKLOAD_PREFIX = (
@@ -47,7 +49,7 @@ def verified_image_archive_snapshot(
         snapshot = Path(raw_directory) / "workload-image.tar"
         digest = hashlib.sha256()
         with archive.open("rb") as source, snapshot.open("xb") as destination:
-            while block := source.read(1024 * 1024):
+            while block := source.read(DEFAULTS.archive_copy_chunk_bytes):
                 digest.update(block)
                 destination.write(block)
             destination.flush()
@@ -83,12 +85,12 @@ class ContainerdImage:
 
     reference: str
     runner: CommandRunner
-    namespace: str = "default"
+    namespace: str = DEFAULTS.namespace
     pull_policy: PullPolicy = PullPolicy.NEVER
     archive: Path | None = None
     archive_sha256: str | None = None
     prepare_command: tuple[str, ...] | None = None
-    timeout_seconds: float = 600
+    timeout_seconds: float = DEFAULTS.image_timeout_seconds
     snapshotter: str | None = None
 
     def __post_init__(self) -> None:
