@@ -2819,6 +2819,7 @@ dependencies = [
  "sha1",
  "sha2",
  "tracing",
+ "zstd",
 ]
 
 [[package]]

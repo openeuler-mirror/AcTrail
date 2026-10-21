@@ -117,9 +117,11 @@ Stdio 的 stdin/stdout/stderr 分别有 capture 和 storage mode；当前模板�
 
 ## `[semantic_retention]`
 
-HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: br`，再交给 JSON/SSE 解析。压缩的 `text/event-stream` 和 `application/json` 正文按其 Content-Type 保留。TLS 裁剪摘要作为截断标记传递，不参与原始流拼接。
+HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: br`、`gzip` 和 `zstd`，再交给 JSON/SSE 解析。压缩的 `text/event-stream` 和 `application/json` 正文按其 Content-Type 保留。TLS 裁剪摘要作为截断标记传递，不参与原始流拼接。
 
-`semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 分别限制原始 HTTP 流缓冲和解码后的正文大小。内容编码损坏、无法解码或超出容量时，仅隔离当前流并记录诊断。
+`semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 限制解码后的正文大小；HTTP/1 wire 缓冲由 `semantic_retention.l2_http.http1.max_buffer_bytes` 限制。内容编码损坏、无法解码或超出容量时，仅结束受影响消息的正文消费，HTTP framing 继续处理真实消息边界。
+
+各压缩实现使用库原生窗口设置；历史窗口、上下文和临时输出缓冲区另有内存开销。`assembly.max_buffer_bytes` 约束累计解码正文。
 
 `semantic_retention.l2_http.max_active_directions` 限制共享协议路由同时持有的连接方向数，默认 `4096`，必须大于零。一个双向连接最多占两个方向；关闭连接或 trace 后释放。达到上限时拒绝新方向并记录告警，已接纳方向继续处理。该容量独立于 LLM 开关，防止普通 HTTP 观测绕过连接状态限制。
 
