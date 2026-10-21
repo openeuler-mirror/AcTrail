@@ -2,7 +2,7 @@ use super::super::decoder::Http1DecodeFailure;
 use super::bounded_body::BoundedBody;
 use super::constant::DEFAULT_ENCODING_IF_CONTENT_ENCODING_MISSING;
 use super::decoder_handle::DecoderHandle;
-use super::implementations::{BrotliDecoder, GzipDecoder, IdentityDecoder};
+use super::implementations::{BrotliDecoder, GzipDecoder, IdentityDecoder, ZstdDecoder};
 
 pub(in crate::llm_pipeline::transport::http1) struct DecoderFactory;
 
@@ -29,6 +29,10 @@ impl DecoderFactory {
             Ok(DecoderHandle::stateful(Box::new(BrotliDecoder::new(body))))
         } else if coding.eq_ignore_ascii_case("gzip") {
             Ok(DecoderHandle::stateful(Box::new(GzipDecoder::new(body))))
+        } else if coding.eq_ignore_ascii_case("zstd") {
+            Ok(DecoderHandle::stateful(Box::new(
+                ZstdDecoder::new(body).map_err(DecoderHandle::failure)?,
+            )))
         } else {
             Err(Http1DecodeFailure::InvalidContentEncoding)
         }
