@@ -4,16 +4,18 @@ import os
 import sys
 import time
 
+from constants import DEFAULTS
+
 
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: oom_trigger.py START_FILE")
     while not os.path.exists(sys.argv[1]):
-        time.sleep(0.01)
+        time.sleep(DEFAULTS.start_poll_seconds)
     allocations: list[bytearray] = []
     while True:
-        block = bytearray(1024 * 1024)
-        for offset in range(0, len(block), 4096):
+        block = bytearray(DEFAULTS.allocation_bytes)
+        for offset in range(0, len(block), DEFAULTS.touch_stride_bytes):
             block[offset] = 1
         allocations.append(block)
 

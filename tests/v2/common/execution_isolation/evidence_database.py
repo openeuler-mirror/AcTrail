@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .constants import DEFAULTS
+
 
 class SandboxEvidenceDatabase:
     """Read-only record counter for actraild's independent evidence store."""
@@ -18,7 +20,7 @@ class SandboxEvidenceDatabase:
         connection = sqlite3.connect(
             f"file:{self._path}?mode=ro",
             uri=True,
-            timeout=1,
+            timeout=DEFAULTS.database_timeout_seconds,
         )
         try:
             row = connection.execute(

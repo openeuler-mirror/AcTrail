@@ -51,6 +51,8 @@ deploy/virtual-container/host/run-v2-tests.sh --color never
 
 ## 核心通过条件
 
+**采集配置**：两台 Guest 均使用 `actrailctl init` 合并产品默认值与 Guest 部署设置生成的配置，通过 eBPF 采集 Agent 行为。
+
 - 两台 Kata VM 同时处于 Ready；
 - 两个 Provider Ready 后统一释放 barrier；
 - 两个 xiaoO 进程存在同一活跃窗口；

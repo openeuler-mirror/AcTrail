@@ -12,11 +12,13 @@ from tests.v2.common.core import CommonTestConfig, TestOutput
 from tests.v2.common.plugin_test_environment import PluginRuntimeSpec, PluginTestEnvironment
 from .paths import REPO
 
+from .constants import CASE_CONSTANTS
+
 
 class Peer:
     def __init__(self, timeout: float, backlog: int):
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.bind(("127.0.0.1", 0))
+        self._socket.bind((CASE_CONSTANTS.loopback_host, 0))
         self._socket.listen(backlog)
         self._socket.settimeout(timeout)
         self.port = self._socket.getsockname()[1]
@@ -44,7 +46,7 @@ class Peer:
     def stop(self) -> None:
         self._stop.set()
         self._socket.close()
-        self._thread.join(timeout=2)
+        self._thread.join(timeout=CASE_CONSTANTS.stop_timeout)
         if self._thread.is_alive() or self.failure:
             raise RuntimeError(f"TCP peer cleanup failed: {self.failure}")
 
@@ -52,7 +54,7 @@ class Peer:
 class WasmPublisher(PluginTestEnvironment):
     """Publish measured endpoint rules through the installed official WASM package."""
 
-    def __init__(self, args: argparse.Namespace, work: Path, output: TestOutput, ports: list[int]):
+    def __init__(self, args: argparse.Namespace, work: Path, output: TestOutput, ports: list[int], patches: list[Path]):
         config = CommonTestConfig(
             repo=REPO, bin_dir=args.bin_dir, work_dir=work,
             command_timeout_seconds=args.command_timeout,
@@ -66,7 +68,7 @@ class WasmPublisher(PluginTestEnvironment):
         ]}
         super().__init__(
             config, output, operator_config=work / "actraild.conf",
-            operator_config_patch=work / "actraild.patch.toml", web_host="127.0.0.1", web_port=0,
+            operator_config_patches=patches, web_host=CASE_CONSTANTS.loopback_host, web_port=CASE_CONSTANTS.init_web_port,
             plugin=PluginRuntimeSpec(
                 package="network-policy-dynamic", instance_id="wasm.network-policy-dynamic",
                 plugin_id="wasm.network-policy-dynamic", runtime="wasm",
@@ -76,7 +78,7 @@ class WasmPublisher(PluginTestEnvironment):
                 ]},
             ),
         )
-        self._package = Path(os.environ.get("ACTRAIL_PLUGIN_DIR", "~/.actrail/plugins")).expanduser() / self.plugin.package
+        self._package = Path(os.environ.get("ACTRAIL_PLUGIN_DIR", CASE_CONSTANTS.actrail_plugin_dir)).expanduser() / self.plugin.package
 
     def _dry_run(self, remote: str) -> dict[str, str]:
         response = self.api.command(self.plugin.instance_id, ["rule", "dry-run", remote])

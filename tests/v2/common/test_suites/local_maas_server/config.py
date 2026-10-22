@@ -12,7 +12,6 @@ from scenario import ScenarioConfigurationError
 from scenario.model import ScenarioMeta
 from scenario.scenario_generator import ScenarioRegistry
 from scenario.scenario_generator.config import ScenarioGeneratorConfig
-from scenario.scenario_generator.registry import DEFAULT_MAX_TEMPLATE_BYTES
 from scenario.tool_alias import ToolAliasConfig
 from schedule.config import ScheduleConfig
 from server_core.connection.http.config import HTTPConfig
@@ -23,25 +22,9 @@ from transport import TransportConfig
 from transport.upstream import UpstreamConfig
 from utils.json import StrictJsonDecoder, StrictJsonError
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
 
-DEFAULT_HTTP_BIND_HOST = "127.0.0.1"
-DEFAULT_HTTP_BIND_PORT = 0
-DEFAULT_MODEL = "local-maas-test"
-DEFAULT_MAX_REQUEST_BYTES = 1_048_576
-DEFAULT_MAX_GENERATOR_DEPTH = 64
-DEFAULT_MAX_GENERATOR_NODES = 4096
-DEFAULT_RANDOM_SEED = 0
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
-DEFAULT_TTFT_MILLISECONDS = 0.0
-DEFAULT_TPOT_MILLISECONDS = 0.0
-DEFAULT_TLS_OPENSSL_BINARY = "openssl"
-DEFAULT_TLS_CERTIFICATE_VALIDITY_DAYS = 1
-DEFAULT_SCENARIO_GENERATOR_DIR = (
-    Path(__file__).resolve().parent
-    / "scenario"
-    / "scenario_generator"
-)
-DEFAULT_RECORDINGS_DIR = Path(__file__).resolve().parent / "recordings"
+
 
 
 class ConfigurationError(RuntimeError):
@@ -80,38 +63,38 @@ class LocalMaaSConfig:
                     action_pools_dir=getattr(
                         args,
                         "action_pools_dir",
-                        DEFAULT_SCENARIO_GENERATOR_DIR / "action_pools",
+                        DEFAULTS.scenario_generator_dir / "action_pools",
                     ),
-                    template_name=getattr(args, "scenario", "record"),
+                    template_name=getattr(args, "scenario", DEFAULTS.record_scenario_name),
                     max_template_bytes=getattr(
                         args,
                         "max_template_bytes",
-                        DEFAULT_MAX_TEMPLATE_BYTES,
+                        DEFAULTS.max_template_bytes,
                     ),
                     max_depth=getattr(
                         args,
                         "max_generator_depth",
-                        DEFAULT_MAX_GENERATOR_DEPTH,
+                        DEFAULTS.max_generator_depth,
                     ),
                     max_nodes=getattr(
                         args,
                         "max_generator_nodes",
-                        DEFAULT_MAX_GENERATOR_NODES,
+                        DEFAULTS.max_generator_nodes,
                     ),
                     random_seed=getattr(
                         args,
                         "random_seed",
-                        DEFAULT_RANDOM_SEED,
+                        DEFAULTS.random_seed,
                     ),
                     loop_exhausted_messages=getattr(
                         args,
                         "loop_exhausted_messages",
-                        True,
+                        DEFAULTS.loop_exhausted_messages,
                     ),
                     lazy_load_size=getattr(
                         args,
                         "lazy_load_size",
-                        0,
+                        DEFAULTS.lazy_load_size,
                     ),
                 ),
                 tool_alias=ToolAliasConfig.default(),
@@ -121,7 +104,7 @@ class LocalMaaSConfig:
                         getattr(
                             args,
                             "ttft_milliseconds",
-                            DEFAULT_TTFT_MILLISECONDS,
+                            DEFAULTS.ttft_milliseconds,
                         )
                         / 1000.0
                     ),
@@ -129,7 +112,7 @@ class LocalMaaSConfig:
                         getattr(
                             args,
                             "tpot_milliseconds",
-                            DEFAULT_TPOT_MILLISECONDS,
+                            DEFAULTS.tpot_milliseconds,
                         )
                         / 1000.0
                     ),
@@ -150,7 +133,7 @@ class LocalMaaSConfig:
                     recordings_dir=getattr(
                         args,
                         "recordings_dir",
-                        DEFAULT_RECORDINGS_DIR,
+                        DEFAULTS.recordings_dir,
                     ),
                 ),
                 transport=transport_config,
@@ -238,18 +221,18 @@ class LocalMaaSConfig:
                 "https_bind_host",
                 args.http_bind_host,
             ),
-            bind_port=getattr(args, "https_bind_port", 0),
+            bind_port=getattr(args, "https_bind_port", DEFAULTS.https_bind_port),
             best_effort=not explicitly_configured,
             certificate_work_dir=getattr(args, "tls_work_dir", None),
             openssl_binary=getattr(
                 args,
                 "tls_openssl_binary",
-                DEFAULT_TLS_OPENSSL_BINARY,
+                DEFAULTS.tls_openssl_binary,
             ),
             certificate_validity_days=getattr(
                 args,
                 "tls_certificate_validity_days",
-                DEFAULT_TLS_CERTIFICATE_VALIDITY_DAYS,
+                DEFAULTS.tls_certificate_validity_days,
             ),
         )
 
@@ -326,18 +309,18 @@ class LocalMaaSConfigParser:
     def _add_common_options(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--default-model",
-            default=DEFAULT_MODEL,
+            default=DEFAULTS.model,
             help="model name used when a response does not specify one",
         )
         parser.add_argument(
             "--http-bind-host",
-            default=DEFAULT_HTTP_BIND_HOST,
+            default=DEFAULTS.http_bind_host,
             help="host to bind the HTTP listener",
         )
         parser.add_argument(
             "--http-bind-port",
             type=int,
-            default=DEFAULT_HTTP_BIND_PORT,
+            default=DEFAULTS.http_bind_port,
             help="TCP port for the HTTP listener (0 = ephemeral)",
         )
         parser.add_argument(
@@ -376,13 +359,13 @@ class LocalMaaSConfigParser:
         parser.add_argument(
             "--max-request-bytes",
             type=int,
-            default=DEFAULT_MAX_REQUEST_BYTES,
+            default=DEFAULTS.max_request_bytes,
             help="maximum accepted MaaS request body size in bytes",
         )
         parser.add_argument(
             "--request-timeout-seconds",
             type=float,
-            default=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+            default=DEFAULTS.request_timeout_seconds,
             help="timeout for reading a complete MaaS request",
         )
         parser.add_argument(
@@ -406,7 +389,7 @@ class LocalMaaSConfigParser:
         parser.add_argument(
             "--action-pools-dir",
             type=Path,
-            default=DEFAULT_SCENARIO_GENERATOR_DIR / "action_pools",
+            default=DEFAULTS.scenario_generator_dir / "action_pools",
             help="directory containing reusable action pool JSON generators",
         )
         parser.add_argument(
@@ -422,31 +405,31 @@ class LocalMaaSConfigParser:
         parser.add_argument(
             "--max-template-bytes",
             type=int,
-            default=DEFAULT_MAX_TEMPLATE_BYTES,
+            default=DEFAULTS.max_template_bytes,
             help="maximum scenario meta/sequence file size in bytes",
         )
         parser.add_argument(
             "--max-generator-depth",
             type=int,
-            default=DEFAULT_MAX_GENERATOR_DEPTH,
+            default=DEFAULTS.max_generator_depth,
             help="maximum nested generator depth",
         )
         parser.add_argument(
             "--max-generator-nodes",
             type=int,
-            default=DEFAULT_MAX_GENERATOR_NODES,
+            default=DEFAULTS.max_generator_nodes,
             help="maximum generator nodes per scenario",
         )
         parser.add_argument(
             "--random-seed",
             type=int,
-            default=DEFAULT_RANDOM_SEED,
+            default=DEFAULTS.random_seed,
             help="default deterministic seed for random generators",
         )
         parser.add_argument(
             "--loop-exhausted-messages",
             action=argparse.BooleanOptionalAction,
-            default=True,
+            default=DEFAULTS.loop_exhausted_messages,
             help=(
                 "replay recorded message rounds from the start once the "
                 "message queue is exhausted"
@@ -455,7 +438,7 @@ class LocalMaaSConfigParser:
         parser.add_argument(
             "--lazy-load-size",
             type=int,
-            default=0,
+            default=DEFAULTS.lazy_load_size,
             help=(
                 "recorded rounds read batch: 0 reads the whole file eagerly, "
                 "N>0 streams N lines at a time"
@@ -464,13 +447,13 @@ class LocalMaaSConfigParser:
         parser.add_argument(
             "--ttft-milliseconds",
             type=float,
-            default=DEFAULT_TTFT_MILLISECONDS,
+            default=DEFAULTS.ttft_milliseconds,
             help="delay before the first SSE frame",
         )
         parser.add_argument(
             "--tpot-milliseconds",
             type=float,
-            default=DEFAULT_TPOT_MILLISECONDS,
+            default=DEFAULTS.tpot_milliseconds,
             help="delay before each SSE frame after the first frame",
         )
         parser.add_argument(
@@ -508,31 +491,31 @@ class LocalMaaSConfigParser:
         parser.add_argument(
             "--max-template-bytes",
             type=int,
-            default=DEFAULT_MAX_TEMPLATE_BYTES,
+            default=DEFAULTS.max_template_bytes,
             help="maximum scenario meta/sequence file size in bytes",
         )
         parser.add_argument(
             "--max-generator-depth",
             type=int,
-            default=DEFAULT_MAX_GENERATOR_DEPTH,
+            default=DEFAULTS.max_generator_depth,
             help="maximum nested generator depth",
         )
         parser.add_argument(
             "--max-generator-nodes",
             type=int,
-            default=DEFAULT_MAX_GENERATOR_NODES,
+            default=DEFAULTS.max_generator_nodes,
             help="maximum generator nodes per scenario",
         )
         parser.add_argument(
             "--random-seed",
             type=int,
-            default=DEFAULT_RANDOM_SEED,
+            default=DEFAULTS.random_seed,
             help="default deterministic seed for scenario validation",
         )
         parser.add_argument(
             "--recordings-dir",
             type=Path,
-            default=DEFAULT_RECORDINGS_DIR,
+            default=DEFAULTS.recordings_dir,
             help="directory for recording caches and finalized scenarios",
         )
 

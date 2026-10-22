@@ -4,13 +4,13 @@ use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use control_contract::reply::ControlError;
 
 #[derive(Debug)]
 pub(super) struct PeerRoot {
-    peer_pid: u32,
     root: File,
     source: PathBuf,
 }
@@ -24,13 +24,18 @@ pub(super) struct PeerRootResolver {
 
 #[derive(Debug)]
 pub(super) struct PeerRootHandle {
-    peer_pid: u32,
     root: File,
 }
 
 #[derive(Debug)]
 pub(super) struct PinnedPeerPath {
     file: File,
+}
+
+struct PinnedPeerFileSource {
+    root: PeerRootHandle,
+    target: PathBuf,
+    file: PinnedPeerPath,
 }
 
 impl PeerRootResolver {
@@ -74,11 +79,7 @@ impl PeerRoot {
                 format!("open peer root {}: {error}", source.display()),
             )
         })?;
-        Ok(Self {
-            peer_pid,
-            root,
-            source,
-        })
+        Ok(Self { root, source })
     }
 
     pub(super) fn duplicate(&self) -> Result<PeerRootHandle, ControlError> {
@@ -89,32 +90,64 @@ impl PeerRoot {
             )
         })?;
         let root = unsafe { File::from_raw_fd(fd) };
-        Ok(PeerRootHandle {
-            peer_pid: self.peer_pid,
-            root,
-        })
+        Ok(PeerRootHandle { root })
     }
 }
 
 impl PeerRootHandle {
-    pub(super) fn probe_path_for(&self, runtime_path: &Path) -> Result<PathBuf, String> {
-        let relative = safe_relative_path(runtime_path)?;
-        let _keep_root_alive = self.root.as_raw_fd();
-        Ok(Path::new("/proc")
-            .join(self.peer_pid.to_string())
-            .join("root")
-            .join(relative))
+    pub(super) fn into_file_source(
+        self,
+        target: &Path,
+        pinned: Option<PinnedPeerPath>,
+    ) -> Rc<dyn tls_probe_point_finder::ProbeFileSource> {
+        match pinned {
+            Some(file) => Rc::new(PinnedPeerFileSource {
+                root: self,
+                target: target.to_path_buf(),
+                file,
+            }),
+            None => Rc::new(self),
+        }
     }
 
     pub(super) fn pin_path(&self, runtime_path: &Path) -> Result<PinnedPeerPath, String> {
-        let relative = safe_relative_path(runtime_path)?;
-        let file = open_path_in_root(self.root.as_raw_fd(), &relative).map_err(|error| {
+        let file = self.open_runtime_path(runtime_path).map_err(|error| {
             format!(
                 "open runtime path {} in peer root: {error}",
                 runtime_path.display()
             )
         })?;
         Ok(PinnedPeerPath { file })
+    }
+
+    fn open_runtime_path(&self, runtime_path: &Path) -> std::io::Result<File> {
+        if !runtime_path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "TLS runtime file path must be absolute",
+            ));
+        }
+        open_path_in_root(self.root.as_raw_fd(), runtime_path)
+    }
+}
+
+impl tls_probe_point_finder::ProbeFileSource for PeerRootHandle {
+    fn open(&self, runtime_path: &Path) -> std::io::Result<File> {
+        // openat2 resolves absolute symlinks and parent components within this root.
+        let pinned = PinnedPeerPath {
+            file: self.open_runtime_path(runtime_path)?,
+        };
+        File::open(pinned.path())
+    }
+}
+
+impl tls_probe_point_finder::ProbeFileSource for PinnedPeerFileSource {
+    fn open(&self, path: &Path) -> std::io::Result<File> {
+        if path == self.target {
+            File::open(self.file.path())
+        } else {
+            tls_probe_point_finder::ProbeFileSource::open(&self.root, path)
+        }
     }
 }
 
@@ -125,32 +158,6 @@ impl PinnedPeerPath {
             .join("fd")
             .join(self.file.as_raw_fd().to_string())
     }
-}
-
-fn safe_relative_path(runtime_path: &Path) -> Result<PathBuf, String> {
-    if !runtime_path.is_absolute() {
-        return Err(format!(
-            "TLS plan lookup path must be absolute: {}",
-            runtime_path.display()
-        ));
-    }
-    let mut relative = PathBuf::new();
-    for component in runtime_path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(value) => relative.push(value),
-            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
-                return Err(format!(
-                    "TLS plan lookup path contains an unsafe component: {}",
-                    runtime_path.display()
-                ));
-            }
-        }
-    }
-    if relative.as_os_str().is_empty() {
-        return Err("TLS plan lookup path cannot name the runtime root".to_string());
-    }
-    Ok(relative)
 }
 
 fn open_peer_root(peer_pid: u32) -> Result<PeerRoot, String> {

@@ -11,6 +11,8 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 from .config import ProbeClaudeMcpConfig
 from .streaming_launch import ClaudeMcpStreamingLaunch
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeClaudeMcpTask:
     def __init__(
@@ -28,7 +30,7 @@ class ProbeClaudeMcpTask:
             "probe_claude_mcp",
         )
         try:
-            token = secrets.token_hex(6)
+            token = secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
             self.final_marker = f"CLAUDE_MCP_FINAL_{token}"
             self.local = self._workspace.spec(
                 server_name=config.local_server_name,

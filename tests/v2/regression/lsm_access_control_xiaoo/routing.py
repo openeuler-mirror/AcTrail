@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import errno
-import json
 
 
 class BackendSelection:
@@ -46,17 +45,6 @@ class BackendSelection:
             if capability not in capabilities:
                 capabilities.append(capability)
         return capabilities
-
-    def config(self) -> str:
-        capabilities = ["proc-lifecycle", "net-transport", "socket-plaintext-payload", *self.capabilities]
-        document = (
-            '\n[capture]\nprofile_name = "access-control-xiaoo-regression"\n'
-            f"capabilities = {json.dumps(capabilities)}\nopportunistic_capabilities = []\n"
-            f"\n[seccomp_notify]\nenabled = {str(self.seccomp).lower()}\n"
-        )
-        for operation, backend in self.backends.items():
-            document += f'\n[access_control.{operation}]\nenabled = true\nbackend = "{backend}"\n'
-        return document
 
     def require_resources(self, result: dict) -> None:
         fds = result["daemon_fds"]

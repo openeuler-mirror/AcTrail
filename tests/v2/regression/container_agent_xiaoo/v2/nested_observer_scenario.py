@@ -17,6 +17,9 @@ from pathlib import Path
 
 CASE_DIR = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[5]
+sys.path.insert(0, str(REPO))
+
+from tests.v2.regression.container_agent_xiaoo.v2.constants import CASE_CONSTANTS
 
 
 class NestedDockerRuntime:
@@ -71,10 +74,12 @@ class NestedDockerRuntime:
             )
             if result.returncode == 0:
                 return
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.readiness_poll_seconds)
         raise RuntimeError(
             "nested Docker daemon did not become ready:\n"
-            + self._log.read_text(encoding="utf-8", errors="replace")[-16_000:]
+            + self._log.read_text(encoding="utf-8", errors="replace")[
+                -CASE_CONSTANTS.diagnostic_tail_characters:
+            ]
         )
 
     def load_image(self, archive: Path) -> None:
@@ -91,24 +96,26 @@ class NestedDockerRuntime:
         except ProcessLookupError:
             return
         try:
-            self._process.wait(timeout=10)
+            self._process.wait(timeout=CASE_CONSTANTS.docker_stop_timeout_seconds)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(self._process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            self._process.wait(timeout=5)
+            self._process.wait(timeout=CASE_CONSTANTS.docker_kill_timeout_seconds)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bin-dir", default="target/release")
+    parser.add_argument("--bin-dir", default=CASE_CONSTANTS.bin_dir)
     parser.add_argument(
         "--image",
-        default="openeuler/openeuler:24.03-lts-sp3",
+        default=CASE_CONSTANTS.image,
     )
-    parser.add_argument("--xiaoo-bin", default="/root/.cargo/bin/xiaoo")
-    parser.add_argument("--rebuild-image", action="store_true")
+    parser.add_argument("--xiaoo-bin", default=CASE_CONSTANTS.xiaoo_bin)
+    parser.add_argument(
+        "--rebuild-image", action="store_true", default=CASE_CONSTANTS.rebuild_image
+    )
     parser.add_argument("--keep-runtime", action="store_true")
     parser.add_argument("--keep-runtime-on-failure", action="store_true")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
@@ -176,7 +183,7 @@ def run_child(args: argparse.Namespace, runtime: Path) -> int:
     docker = NestedDockerRuntime(runtime)
     try:
         run_checked(["ip", "link", "set", "lo", "up"])
-        docker.start(timeout=30.0)
+        docker.start(timeout=CASE_CONSTANTS.docker_ready_timeout_seconds)
         docker.load_image(runtime / "container-agent-xiaoo-image.tar")
         command = [
             sys.executable,

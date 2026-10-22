@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .constants import DATABASE_DEFAULTS as DEFAULTS
+
 
 _CATEGORY_BY_KIND = {
     1: "sandbox.resource.high_cpu",
@@ -57,7 +59,7 @@ class SandboxAlertDatabase:
         connection = sqlite3.connect(
             f"file:{self._path}?mode=ro",
             uri=True,
-            timeout=1,
+            timeout=DEFAULTS.database_timeout_seconds,
         )
         try:
             self._verify_schema(connection)
@@ -79,7 +81,7 @@ class SandboxAlertDatabase:
         connection = sqlite3.connect(
             f"file:{main_database}?mode=ro",
             uri=True,
-            timeout=1,
+            timeout=DEFAULTS.database_timeout_seconds,
         )
         try:
             row = connection.execute(

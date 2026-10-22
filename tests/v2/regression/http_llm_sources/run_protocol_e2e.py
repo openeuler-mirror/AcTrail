@@ -13,9 +13,16 @@ import shutil
 import sys
 import tempfile
 
+if __package__:
+    from .constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
+
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.actrail_runtime import ActrailRuntime  # noqa: E402
 from tests.v2.common.core import TestOutput  # noqa: E402
 from tests.v2.common.llm_trace_assertion import LLMTraceAssertion  # noqa: E402
@@ -58,20 +65,24 @@ class ProtocolSourcesRun(HttpLlmSourcesRun):
     def run_agent_phase(self, *, llm_enabled: bool) -> None:
         directory = self.root / ("llm-enabled" if llm_enabled else "llm-disabled")
         directory.mkdir(mode=0o700)
-        runtime = ActrailRuntime.isolated(REPO, self.bin_dir, self.options.timeout, self.output, directory)
-        with (directory / "actraild.patch.toml").open("a", encoding="utf-8") as patch:
-            patch.write(
-                "\n[resource_profiling.storage.database.sqlite]\n"
-                f"path = {json.dumps(str(directory / 'data/resources.sqlite'))}\n"
-            )
-            if not llm_enabled:
-                patch.write("\n[semantic_retention.l0_llm_call]\nenabled = false\n")
-            if self.options.retain_transport:
-                patch.write(
-                    '\n[semantic_retention]\ncontent_owner = "configured_layers"\n'
-                    '\n[semantic_retention.l4_payload]\nenabled = true\nstats = true\nbody_content = "retained"\n'
-                )
-        marker = f"PROTOCOL_SOURCES_{secrets.token_hex(8)}"
+        patches = []
+        if not llm_enabled:
+            patches.append(Path(__file__).with_name("llm_disabled") / "patch_config.toml")
+        if self.options.retain_transport:
+            patches.append(Path(__file__).with_name("retain_transport") / "patch_config.toml")
+        runtime = ActrailRuntime.isolated(
+            REPO, self.bin_dir, self.options.timeout, self.output, directory,
+            operator_config_patches=patches,
+        )
+        patch = directory / "actraild.patch.toml"
+        (
+            PatchBuilder().apply(patch)
+            .with_values({"resource_profiling": {"storage": {"database": {
+                "sqlite": {"path": str(directory / "data/resources.sqlite")}
+            }}}})
+            .build().save(patch)
+        )
+        marker = f"PROTOCOL_SOURCES_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         marker_path = directory / "answer.txt"
         self.write_text(marker_path, marker + "\n")
         prompt = (
@@ -139,15 +150,15 @@ class ProtocolSourcesRun(HttpLlmSourcesRun):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", choices=("claude", "codex"), required=True)
-    parser.add_argument("--protocol", choices=("http1", "http2", "websocket"), default="http2")
+    parser.add_argument("--protocol", choices=("http1", "http2", "websocket"), default=CASE_CONSTANTS.protocol)
     parser.add_argument("--agent-binary", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--websocket-relay-upstream", help="Real HTTPS provider base URL; capture loopback WS through a verifying TLS byte relay")
-    parser.add_argument("--retain-transport", action="store_true", help="Retain sensitive original transport bytes in the isolated diagnostic database")
-    parser.add_argument("--bin-dir", type=Path, default=REPO / "target/release")
-    parser.add_argument("--output-parent", type=Path, default=Path(tempfile.gettempdir()))
-    parser.add_argument("--timeout", type=int, default=240)
-    parser.add_argument("--content-max-bytes", type=int, default=8 * 1024 * 1024)
+    parser.add_argument("--retain-transport", action="store_true", help="Retain sensitive original transport bytes in the isolated diagnostic database", default=CASE_CONSTANTS.retain_transport)
+    parser.add_argument("--bin-dir", type=Path, default=REPO / CASE_CONSTANTS.bin_dir)
+    parser.add_argument("--output-parent", type=Path, default=CASE_CONSTANTS.output_parent)
+    parser.add_argument("--timeout", type=int, default=CASE_CONSTANTS.protocol_timeout_seconds)
+    parser.add_argument("--content-max-bytes", type=int, default=CASE_CONSTANTS.content_max_bytes)
     options = parser.parse_args()
     if options.timeout < 1 or options.content_max_bytes < 1:
         parser.error("timeout and content-max-bytes must be positive")

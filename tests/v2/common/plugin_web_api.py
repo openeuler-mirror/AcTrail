@@ -6,6 +6,8 @@ import subprocess
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from .constants import WEB_DEFAULTS as DEFAULTS
+
 
 class PluginWebApi:
     """Small JSON client for the actrailweb plugin control endpoints."""
@@ -167,7 +169,7 @@ class PluginWebApi:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=self._timeout_seconds + 1,
+                timeout=self._timeout_seconds + DEFAULTS.web_command_timeout_margin_seconds,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:

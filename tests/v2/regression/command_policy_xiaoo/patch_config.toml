@@ -1,0 +1,54 @@
+[storage.retention]
+enabled = false
+
+[payload.tls]
+enabled = false
+
+[payload.stdio]
+enabled = false
+
+[payload.socket]
+enabled = false
+
+[capture]
+profile_name = "command-policy-xiaoo-regression"
+capabilities = ["proc-lifecycle", "proc-exec-context", "enforcement-command-execution-seccomp"]
+
+[ebpf]
+enabled = true
+
+[seccomp_notify]
+enabled = true
+reserved_listener_fd = 253
+
+[access_control.command.exec]
+backend = "seccomp"
+
+[enforcement]
+enabled = false
+
+[command_control]
+enabled = true
+default_decision = "allow"
+failure_decision = "deny"
+audit_enabled = true
+audit_default_allow = false
+path_max_bytes = 4096
+argv_max_count = 128
+argv_max_arg_bytes = 8192
+argv_max_total_bytes = 65536
+pending_decision_max = 64
+reusable_cache_max_entries = 4096
+
+[command_control.gray]
+timeout_ms = 5000
+concurrency_limit = 8
+fallback = "deny"
+
+[plugins.discovery]
+max_packages = 4
+manifest_max_bytes = 262144
+
+[plugins.startup]
+enabled = false
+failure_policy = "fail-fast"

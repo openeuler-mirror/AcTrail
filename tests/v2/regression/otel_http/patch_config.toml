@@ -1,0 +1,3 @@
+[semantic_retention.l0_llm_call]
+request_content = "canonical_blocks"
+request_body_export = "canonical_json"

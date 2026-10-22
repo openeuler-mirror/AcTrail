@@ -1,0 +1,8 @@
+[resource_profiling.collection.workload]
+mode = "auto"
+
+[resource_profiling.collection.workload.cgroup.v2.external]
+policy = "require"
+
+[sandbox_evidence]
+schema_version = 2

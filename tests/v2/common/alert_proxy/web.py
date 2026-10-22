@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 
 from tests.v2.common.plugin_web_api import PluginWebApi
 
+from .constants import DEFAULTS
+
 
 ALERT_FORWARDING_INSTANCE = "builtin.alert-forwarding"
 
@@ -67,7 +69,7 @@ class AlertForwardingWebControl:
                     raise RuntimeError(f"actrailweb reported invalid URL: {url}")
                 self.api = PluginWebApi(url, self._command_timeout_seconds)
                 return
-            time.sleep(0.05)
+            time.sleep(DEFAULTS.poll_seconds)
         raise RuntimeError(f"actrailweb did not become ready: {self.log_tail()}")
 
     def configure(self, *, enabled: bool, categories: list[str]) -> dict:
@@ -101,10 +103,10 @@ class AlertForwardingWebControl:
         if process is not None and process.poll() is None:
             process.terminate()
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=DEFAULTS.stop_timeout_seconds)
             except subprocess.TimeoutExpired:
                 process.kill()
-                process.wait(timeout=5)
+                process.wait(timeout=DEFAULTS.stop_timeout_seconds)
         if self._log is not None:
             self._log.close()
             self._log = None

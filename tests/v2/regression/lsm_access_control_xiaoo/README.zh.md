@@ -2,7 +2,9 @@
 
 使用真实 Xiaoo、本地 streaming provider 和实际文件、ELF、TCP 操作，验证独立 BPF LSM 访问控制。
 
-每次启动 daemon 都通过 `actrailctl init -f --patch` 刷新默认配置，开启 socket `bpf-copy` 与 L4 payload 保留，关闭 process seccomp 观测。默认运行五组操作配置：
+每次启动 daemon 都通过 `actrailctl init -f` 刷新默认配置，并依次传入多个 `--patch`。公共构建器生成隔离路径和运行参数补丁，`configuration/patch_config.toml` 设置观测行为，各后端子目录的 `patch_config.toml` 设置能力与操作后端。
+
+测例开启 socket `bpf-copy` 与 L4 payload 保留，关闭 process seccomp 观测。默认运行五组操作配置：
 
 | 名称 | open | mkdir | rmdir | exec | connect |
 | --- | --- | --- | --- | --- | --- |

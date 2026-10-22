@@ -2,22 +2,19 @@
 # Build and assemble the files mounted into a Kata guest for validation.
 set -euo pipefail
 
-ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
-BUNDLE_DIR="${BUNDLE_DIR:-$ROOT_DIR/.actrail-guest-bundle}"
-BUNDLE_SYSROOT="${BUNDLE_SYSROOT:-/}"
-BUNDLE_TARGET_GLIBC="${BUNDLE_TARGET_GLIBC:-}"
-BUILD_PROFILE="${BUILD_PROFILE:-release}"
-ACTRAIL_BUILD="${ACTRAIL_BUILD:-1}"
-COPY_OPENSSL="${COPY_OPENSSL:-1}"
-EBPF_TRANSPORT="${EBPF_TRANSPORT:-auto}"
-BUNDLE_OPENSSL="${BUNDLE_OPENSSL:-}"
-
 fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
 
-for command_name in find install mktemp readelf readlink realpath sha256sum; do
+command -v python3 >/dev/null 2>&1 || fail "missing command: python3"
+HOST_DEFAULTS="$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/constants.py")"
+eval "$HOST_DEFAULTS"
+unset HOST_DEFAULTS
+ROOT_DIR="${ACTRAIL_REPO_ROOT:-$HOST_REPO_ROOT}"
+BUNDLE_DIR="${BUNDLE_DIR:-$ROOT_DIR/$BUNDLE_SUBDIRECTORY}"
+
+for command_name in find install mktemp python3 readelf readlink realpath sha256sum; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name"
 done
 
@@ -88,7 +85,7 @@ resolve_sysroot_path() {
   fi
   while [[ -L "$current" ]]; do
     count=$((count + 1))
-    [[ "$count" -le 40 ]] || return 1
+    [[ "$count" -le "$BUNDLE_MAX_SYMLINK_DEPTH" ]] || return 1
     link="$(readlink "$current")"
     if [[ "$link" == /* ]]; then
       current="$(realpath -ms "$BUNDLE_SYSROOT$link")"
@@ -208,7 +205,7 @@ case "$BUILD_PROFILE" in
     ;;
 esac
 
-TARGET_BASE="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+TARGET_BASE="${CARGO_TARGET_DIR:-$ROOT_DIR/$CARGO_TARGET_SUBDIRECTORY}"
 TARGET_DIR="${ACTRAIL_BIN_DIR:-$TARGET_BASE/$TARGET_SUBDIR}"
 
 echo "== prepare AcTrail guest bundle =="
@@ -304,6 +301,8 @@ for artifact in "${ELF_INPUTS[@]}"; do
   validate_elf "$artifact" "$TARGET_MACHINE" "bundle artifact"
 done
 
+python3 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/constants.py" \
+  --output "$BUNDLE_DIR/tests/guest/runtime-defaults.sh"
 install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/common.sh" \
   "$BUNDLE_DIR/tests/guest/common.sh"
 install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/precheck.sh" \
@@ -381,166 +380,11 @@ default = default_sect
 activate = 1
 EOF
 
-write_config() {
-  local name="$1"
-  local ebpf_enabled="$2"
-  local tls_enabled="$3"
-  local capabilities="$4"
-  local config="$BUNDLE_DIR/guest-$name.conf"
-
-  cat >"$config" <<EOF
-[control]
-socket_path = "/tmp/actrail-e2e/$name/control.sock"
-socket_mode_octal = "660"
-pid_file = "/tmp/actrail-e2e/$name/actraild.pid"
-log_path = "/tmp/actrail-e2e/$name/actraild.log"
-diagnostic_log_level = "info"
-
-[storage]
-backend = "sqlite"
-
-[storage.sqlite]
-path = "/tmp/actrail-e2e/$name/actrail.sqlite"
-busy_timeout_ms = 5000
-
-[semantic_retention]
-content_owner = "configured_layers"
-
-[semantic_retention.l4_payload]
-enabled = true
-stats = true
-body_content = "retained"
-
-[export.snapshot]
-graph_schema_version = "manual-v1"
-allow_active_trace_snapshot = true
-directory = "/tmp/actrail-e2e/$name/export"
-payload_bytes_enabled = false
-payload_text_enabled = false
-
-[plugins.startup]
-enabled = false
-
-[capture]
-profile_name = "container-auto"
-capabilities = [
-$capabilities
-]
-opportunistic_capabilities = []
-
-[enforcement]
-enabled = false
-
-[ebpf]
-enabled = $ebpf_enabled
-memlock_rlimit = "inherit"
-tracked_process_max_entries = 4096
-pending_operation_max_entries = 4096
-suppressed_fd_max_entries = 4096
-suppressed_fd_index_slots_per_process = 64
-event_ring_buffer_max_bytes = 1048576
-file_path_capture_enabled = true
-file_path_max_bytes = 255
-
-[payload.tls]
-enabled = $tls_enabled
-capture_backend = "tls-sync"
-source = "auto"
-resolver = "auto"
-library = "auto"
-library_path = "auto"
-binary_path = "disabled"
-pattern_path = "disabled"
-max_segment_bytes = 4095
-max_operation_bytes = 4194304
-ring_buffer_bytes = 1048576
-pending_operation_max_entries = 4096
-retention_max_bytes_per_trace = 10485760
-redaction_policy = "authorization-header"
-sync_runtime_library_path = "auto"
-sync_event_socket_path = "/tmp/actrail-e2e/$name/tls-sync.sock"
-sync_socket_mode_octal = "660"
-sync_match_limit = 8
-seccomp_syscalls = ["write", "writev", "sendto", "sendmsg"]
-
-[payload.stdio]
-enabled = false
-capture_stdin = false
-capture_stdout = true
-capture_stderr = true
-stdin_storage_mode = "full"
-stdout_storage_mode = "drop"
-stderr_storage_mode = "metadata-only"
-max_segment_bytes = 4095
-ring_buffer_bytes = 1048576
-pending_operation_max_entries = 4096
-stream_state_max_entries = 4096
-retention_max_bytes_per_trace = 10485760
-redaction_policy = "authorization-header"
-
-[payload.socket]
-enabled = false
-capture_backend = "bpf-copy-seccomp-fallback"
-max_segment_bytes = 4095
-max_operation_bytes = 4194304
-ring_buffer_bytes = 2097152
-pending_operation_max_entries = 4096
-stream_state_max_entries = 4096
-retention_max_bytes_per_trace = 10485760
-redaction_policy = "authorization-header"
-http_sniff_max_bytes = 8192
-seccomp_syscalls = ["write", "sendto"]
-
-[seccomp_notify]
-enabled = true
-reserved_listener_fd = 253
-
-[process_seccomp]
-enabled = false
-syscalls = ["execve", "execveat", "fork", "vfork", "clone", "clone3"]
-max_args = 64
-max_arg_bytes = 4095
-pending_max_entries = 4096
-
-[application]
-enabled = true
-http1_enabled = true
-http2_enabled = true
-
-[application.http]
-capture_host = true
-sse_enabled = false
-sse_data_policy = "disabled"
-sse_max_buffer_bytes = 4194304
-sse_max_data_bytes = 4096
-
-[application.http2]
-max_frame_bytes = 16384
-max_connection_buffer_bytes = 1048576
-emit_data_preview = false
-max_data_preview_bytes = 4096
-
-[resource_profiling]
-enabled = false
-
-[provider]
-rules_enabled = false
-rules_path = "/etc/actrail/provider-rules.conf"
-unknown_provider_label = "unknown"
-EOF
-}
-
-write_config "tls-only" "false" "true" '  "tls-plaintext-payload",'
-
-write_config "ebpf-only" "true" "false" '  "proc-lifecycle",
-  "net-transport",
-  "fs-access-basic",'
-
-write_config "combo" "true" "true" '  "proc-lifecycle",
-  "net-transport",
-  "fs-access-basic",
-  "tls-plaintext-payload",
-  "net-application-plaintext-http",'
+for name in tls-only ebpf-only combo; do
+  LD_LIBRARY_PATH="$BUNDLE_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$BUNDLE_DIR/actrailctl" --config "$BUNDLE_DIR/guest-$name.conf" init -f \
+      --patch "$ROOT_DIR/tests/v2/regression/virtual_container/guest/$name/patch_config.toml"
+done
 
 cat >"$BUNDLE_DIR/RUNBOOK.txt" <<'EOF'
 Run inside a Kata guest/container:

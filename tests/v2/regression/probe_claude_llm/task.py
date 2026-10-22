@@ -9,12 +9,14 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import ProbeClaudeLLMConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeClaudeLLMTask:
     def __init__(self, config: ProbeClaudeLLMConfig, runtime: ActrailRuntime):
         self._config = config
         self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(5)}"
+        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._discovery = AgentBinaryDiscovery(config.repo)
         self._claude = self._resolve_claude()
 

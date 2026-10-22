@@ -181,7 +181,7 @@ enum actrail_tls_direct_capture_flags {
 enum actrail_tls_payload_copy_limit {
     ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_ABI_BYTES = 65536,
     ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_BYTES = 65535,
-    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_CHUNKS = 1,
+    ACTRAIL_TLS_PAYLOAD_DIRECT_COPY_MAX_CHUNKS = ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS,
 };
 struct actrail_tls_completion_event {
     __u32 kind;

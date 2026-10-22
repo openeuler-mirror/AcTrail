@@ -7,6 +7,8 @@ from pathlib import Path
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.core.loopback_port import resolve_test_port
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class OtelJsonlActionFilterConfig(CommonTestConfig):
@@ -37,13 +39,13 @@ class OtelJsonlActionFilterConfig(CommonTestConfig):
             ),
             web_host=os.environ.get(
                 "OTEL_JSONL_ACTION_FILTER_E2E_WEB_HOST",
-                "127.0.0.1",
+                CASE_CONSTANTS.web_host,
             ),
             web_port=resolve_test_port(
                 "OTEL_JSONL_ACTION_FILTER_E2E_WEB_PORT",
                 attempts=common.drain_attempts,
                 connect_timeout_seconds=common.drain_interval_seconds,
             ),
-            plugin_package="otel-jsonl",
-            plugin_instance="v2.otel-jsonl-action-filter",
+            plugin_package=CASE_CONSTANTS.plugin_package,
+            plugin_instance=CASE_CONSTANTS.plugin_instance,
         )

@@ -9,6 +9,8 @@ from collections.abc import Sequence
 
 from .process import CommandResult, CommandRunner
 
+from .constants import DEFAULTS
+
 
 _SAFE_CONTAINER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ANSI_CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -21,8 +23,8 @@ class GuestConsole:
         self,
         runner: CommandRunner,
         *,
-        kata_runtime: str = "kata-runtime",
-        script_command: str = "script",
+        kata_runtime: str = DEFAULTS.kata_runtime,
+        script_command: str = DEFAULTS.script_command,
     ) -> None:
         self._runner = runner
         self._kata_runtime = kata_runtime

@@ -1,0 +1,5 @@
+[file_observation.collection.read]
+observed = true
+
+[file_observation.bulk_read]
+enabled = false

@@ -10,12 +10,15 @@ import time
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.core import CommonTestConfig, TestCase, TestCaseInputs, TestResult, TestStatus, has_failure
+from tests.v2.common.patch_builder import PatchBuilder
+from tests.v2.common.core import CommonTestConfig, TestCase, TestCaseInputs, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
 
 from .dynamic import DynamicPolicies
 from .routing import BackendSelection
 from .services import TcpWitness, WorkloadProvider
+
+from .constants import CASE_CONSTANTS
 
 
 class LsmAccessControlXiaooCase(TestCase):
@@ -25,8 +28,8 @@ class LsmAccessControlXiaooCase(TestCase):
         if executable is None:
             raise RuntimeError("real Xiaoo executable is not available")
         self._xiaoo = Path(executable).resolve()
-        self._timeout = float(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_READY_TIMEOUT_SECONDS", "15"))
-        self._poll = float(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_PEER_POLL_SECONDS", "0.1"))
+        self._timeout = float(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_READY_TIMEOUT_SECONDS", str(CASE_CONSTANTS.ready_timeout_seconds)))
+        self._poll = float(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_PEER_POLL_SECONDS", str(CASE_CONSTANTS.peer_poll_seconds)))
         if self._timeout <= 0 or self._poll <= 0:
             raise ValueError("LSM readiness and peer poll timeouts must be positive")
         self._selection = BackendSelection("lsm")
@@ -35,12 +38,12 @@ class LsmAccessControlXiaooCase(TestCase):
         self._paths = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_PATHS") == "1"
         if sum((self._ipv6, self._alerts, self._paths)) > 1:
             raise ValueError("IPv6, boundary alert and path scenarios are mutually exclusive")
-        self._audit_enabled = True
-        self._alert_window_ms = 60_000
-        self._alert_max_groups = 256
-        self._deny_on_error = True
-        self._capacity = int(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_POLICY_MAX_ENTRIES", "64"))
-        if not 32 <= self._capacity <= 128:
+        self._audit_enabled = CASE_CONSTANTS.audit_enabled
+        self._alert_window_ms = CASE_CONSTANTS.alert_window_ms
+        self._alert_max_groups = CASE_CONSTANTS.alert_max_groups
+        self._deny_on_error = CASE_CONSTANTS.deny_on_error
+        self._capacity = int(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_POLICY_MAX_ENTRIES", str(CASE_CONSTANTS.policy_max_entries)))
+        if not CASE_CONSTANTS.policy_capacity_minimum <= self._capacity <= CASE_CONSTANTS.policy_capacity_maximum:
             raise ValueError("LSM test policy capacity must be between 32 and 128")
         self._work = self._config.work_dir
         if any(character.isspace() for character in str(self._work)):
@@ -75,10 +78,10 @@ class LsmAccessControlXiaooCase(TestCase):
             )
             provider_url = self._provider.start()
             self._xiaoo_config.write_text(
-                '[llm]\nprovider = "deepseek"\nmodel = "deepseek-chat"\n'
+                f'[llm]\nprovider = "{CASE_CONSTANTS.llm_provider}"\nmodel = "{CASE_CONSTANTS.llm_model}"\n'
                 'api_key_env = "ACTRAIL_XIAOO_LSM_KEY"\n'
                 f"api_base = {json.dumps(provider_url)}\n"
-                'max_tokens = 128\ncontext_window = 32768\nreasoning_effort = "off"\n',
+                f'max_tokens = {CASE_CONSTANTS.llm_max_tokens}\ncontext_window = {CASE_CONSTANTS.llm_context_window}\nreasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"\n',
                 encoding="utf-8",
             )
             selections = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS", ",".join(BackendSelection.MATRIX)).split(",")
@@ -106,7 +109,8 @@ class LsmAccessControlXiaooCase(TestCase):
                 self._write_patch()
                 self._runtime = ActrailRuntime(
                     self._config.repo, self._config.bin_dir, self._config.command_timeout_seconds,
-                    context.output, self._work / "actraild.conf", self._patch,
+                    context.output, self._work / "actraild.conf",
+                    operator_config_patches=self._patches(),
                 )
                 for decision in ("deny", "allow"):
                     context.report_progress(
@@ -128,7 +132,7 @@ class LsmAccessControlXiaooCase(TestCase):
                 self._run_dynamic(context, scenario, port)
                 assert self._dynamic is not None
                 cleaned = self._dynamic.cleanup()
-                if has_failure(cleaned):
+                if cleaned.has_failure():
                     raise RuntimeError(f"{selection} cleanup failed: {cleaned}")
                 self._dynamic = None
                 self._runtime = None
@@ -141,7 +145,7 @@ class LsmAccessControlXiaooCase(TestCase):
     def _print_daemon_diagnostics(self) -> None:
         log = self._work / "log/actraild.log"
         if log.is_file():
-            limit = int(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_DIAGNOSTIC_BYTES", "65536"))
+            limit = int(os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_DIAGNOSTIC_BYTES", str(CASE_CONSTANTS.diagnostic_bytes)))
             with log.open("rb") as stream:
                 stream.seek(0, os.SEEK_END)
                 stream.seek(max(0, stream.tell() - max(1, limit)))
@@ -159,7 +163,7 @@ class LsmAccessControlXiaooCase(TestCase):
             "--mkdir", str(self._mkdir), "--rmdir", str(self._rmdir),
             "--port", str(port), "--timeout", str(self._timeout),
             *(["--ipv6"] if self._ipv6 else []),
-            *(["--denial-repetitions", "64", "--denial-pause", "0.01"] if self._alerts else []),
+            *(["--denial-repetitions", str(CASE_CONSTANTS.denial_repetitions), "--denial-pause", str(CASE_CONSTANTS.denial_pause)] if self._alerts else []),
             *(["--path-probes", str(self._work / "path-probes.json")] if self._paths else []),
         ])
 
@@ -188,20 +192,20 @@ class LsmAccessControlXiaooCase(TestCase):
         for name in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"):
             environment.pop(name, None)
         environment.update(
-            NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost",
+            NO_PROXY=CASE_CONSTANTS.no_proxy_hosts, no_proxy=CASE_CONSTANTS.no_proxy_hosts,
             ACTRAIL_XIAOO_LSM_KEY="local-test-key", PATH="/usr/bin",
         )
         result = self._runtime.run(
             self._runtime.control_command(
                 "launch", "--seccomp-notify", "required" if self._selection.seccomp else "disabled", "--name", f"v2-lsm-xiaoo-{decision}",
                 "--", self._xiaoo, "--cli", "run", "--config", self._xiaoo_config,
-                "--tools", "bash", "--max-turns", "3", "--debug",
+                "--tools", "bash", "--max-turns", str(CASE_CONSTANTS.agent_max_turns), "--debug",
                 "--prompt", "Use the Bash tool exactly once, then report its operating-system results.",
             ),
             timeout_seconds=self._config.launch_timeout_seconds, environment=environment,
         )
         if result.returncode != 0:
-            raise AssertionError(f"Xiaoo failed: {result.output[-4000:]}")
+            raise AssertionError(f"Xiaoo failed: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}")
         match = re.search(r"trace trace-(\d+) entered Active", result.output)
         if match is None:
             raise AssertionError("Xiaoo launch omitted trace ID")
@@ -211,7 +215,7 @@ class LsmAccessControlXiaooCase(TestCase):
         return int(match.group(1))
 
     def _require_workload(
-        self, decision: str, *, directories: bool = False, network_decision: str | None = None,
+        self, decision: str, *, directories: bool = CASE_CONSTANTS.require_workload_directories, network_decision: str | None = None,
     ) -> None:
         result = json.loads(self._results.read_text(encoding="utf-8"))
         for domain in ("file", "command", "network", "mkdir", "rmdir"):
@@ -280,7 +284,7 @@ class LsmAccessControlXiaooCase(TestCase):
         )
         retained = self._work / "retained-true"
         shutil.copy2(self._executable, retained)
-        self._dynamic = DynamicPolicies(self._config, context.output, port)
+        self._dynamic = DynamicPolicies(self._config, context.output, port, self._patches())
         self._runtime = self._dynamic.runtime
         self._dynamic.prepare()
         retained.unlink()
@@ -340,7 +344,8 @@ class LsmAccessControlXiaooCase(TestCase):
             self._write_patch()
             self._runtime = ActrailRuntime(
                 self._config.repo, self._config.bin_dir, self._config.command_timeout_seconds,
-                context.output, self._work / "actraild.conf", self._patch,
+                context.output, self._work / "actraild.conf",
+                operator_config_patches=self._patches(),
             )
             for decision in ("allow", "deny"):
                 name = f"ipv6_24_{decision}_deny_on_error_{deny_on_error}"
@@ -357,35 +362,35 @@ class LsmAccessControlXiaooCase(TestCase):
                     TestStatus.PASSED, f"trace-{trace_id}: IPv6 {decision}, peer effects and rule audit verified",
                 )
 
+    def _patches(self) -> list[Path]:
+        configuration = Path(__file__).parent / "configuration"
+        return [
+            self._patch,
+            configuration / "patch_config.toml",
+            configuration / self._selection.name / "patch_config.toml",
+        ]
+
     def _write_patch(self) -> None:
         lsm_enabled = "lsm" in self._selection.backends.values()
-        ActrailRuntime.write_isolated_operator_config_patch(
-            self._patch, self._work, payload_tls_enabled=False, payload_stdio_enabled=False,
-        )
-        document = self._patch.read_text(encoding="utf-8")
-        document = document.replace("[payload.tls]\n", '[payload.tls]\ncapture_backend = "bpf-copy"\n')
-        document += (
-            '\n[payload.socket]\nenabled = true\ncapture_backend = "bpf-copy"\n'
-            '\n[semantic_retention.l4_payload]\nenabled = true\nbody_content = "retained"\n'
-            '\n[ebpf]\nenabled = true\n'
-            '\n[process_seccomp]\nenabled = false\n'
-            '\n[access_control.backends.lsm]\ndeny_signal = "none"\n'
-            f"deny_on_error = {str(self._deny_on_error).lower()}\n"
-            f"alert_window_ms = {self._alert_window_ms if lsm_enabled else 0}\n"
-            f"alert_max_groups = {self._alert_max_groups if lsm_enabled else 0}\n"
-            f"policy_max_entries = {self._capacity if lsm_enabled else 0}\n"
-            + ("" if lsm_enabled else "path_max_bytes = 0\naudit_buffer_bytes = 0\naudit_batch_max = 0\n") +
-            '\n[plugins.startup]\nenabled = false\n'
-        )
-        document += self._selection.config()
+        lsm = {
+            "deny_on_error": self._deny_on_error,
+            "alert_window_ms": self._alert_window_ms if lsm_enabled else 0,
+            "alert_max_groups": self._alert_max_groups if lsm_enabled else 0,
+            "policy_max_entries": self._capacity if lsm_enabled else 0,
+        }
+        if not lsm_enabled:
+            lsm.update(path_max_bytes=CASE_CONSTANTS.write_patch_path_max_bytes, audit_buffer_bytes=CASE_CONSTANTS.write_patch_audit_buffer_bytes, audit_batch_max=CASE_CONSTANTS.write_patch_audit_batch_max)
+        values = {"access_control": {"backends": {"lsm": lsm}}}
         for section, domain in (("enforcement", "file"), ("command_control", "command"), ("network_control", "network")):
-            document += (
-                f"\n[{section}]\nenabled = true\n"
-                f"rules_path = {json.dumps(str(self._work / f'{domain}.rules'))}\n"
-                'default_decision = "allow"\n'
-                f"audit_enabled = {str(self._audit_enabled).lower()}\n"
-            )
-        self._patch.write_text(document, encoding="utf-8")
+            values[section] = {
+                "rules_path": str(self._work / f"{domain}.rules"),
+                "audit_enabled": self._audit_enabled,
+            }
+        (
+            PatchBuilder().with_work_dir(self._work).with_runtime_timing()
+            .with_values({"storage": {"retention": {"enabled": False}}})
+            .with_values(values).build().save(self._patch)
+        )
 
     def cleanup(self, context: TestingContextSingleton) -> TestResult:
         del context
@@ -393,7 +398,7 @@ class LsmAccessControlXiaooCase(TestCase):
         try:
             if self._dynamic is not None:
                 result = self._dynamic.cleanup()
-                if has_failure(result):
+                if result.has_failure():
                     failures.append(str(result))
             elif self._runtime is not None:
                 result = self._runtime.stop()

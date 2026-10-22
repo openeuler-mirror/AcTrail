@@ -1,0 +1,28 @@
+[payload.tls]
+enabled = false
+capture_backend = "bpf-copy"
+[payload.stdio]
+enabled = false
+[payload.socket]
+enabled = true
+capture_backend = "bpf-copy"
+[semantic_retention.l4_payload]
+enabled = true
+body_content = "retained"
+[ebpf]
+enabled = true
+[process_seccomp]
+enabled = false
+[access_control.backends.lsm]
+deny_signal = "none"
+[enforcement]
+enabled = true
+default_decision = "allow"
+[command_control]
+enabled = true
+default_decision = "allow"
+[network_control]
+enabled = true
+default_decision = "allow"
+[plugins.startup]
+enabled = false

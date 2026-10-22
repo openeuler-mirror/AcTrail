@@ -8,6 +8,8 @@ from pathlib import Path
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.core.loopback_port import resolve_test_port
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class AlertForwardingRegressionConfig(CommonTestConfig):
@@ -25,10 +27,10 @@ class AlertForwardingRegressionConfig(CommonTestConfig):
     ) -> "AlertForwardingRegressionConfig":
         common = CommonTestConfig.from_environment(inputs, "ALERT_FORWARDING")
         alert_timeout = float(
-            os.environ.get("ALERT_FORWARDING_E2E_ALERT_TIMEOUT_SECONDS", "20")
+            os.environ.get("ALERT_FORWARDING_E2E_ALERT_TIMEOUT_SECONDS", str(CASE_CONSTANTS.alert_timeout_seconds))
         )
         negative_window = float(
-            os.environ.get("ALERT_FORWARDING_E2E_NEGATIVE_WINDOW_SECONDS", "2")
+            os.environ.get("ALERT_FORWARDING_E2E_NEGATIVE_WINDOW_SECONDS", str(CASE_CONSTANTS.negative_window_seconds))
         )
         if alert_timeout <= 0 or negative_window <= 0:
             raise ValueError("alert forwarding E2E timeouts must be positive")
@@ -45,7 +47,7 @@ class AlertForwardingRegressionConfig(CommonTestConfig):
                 attempts=common.drain_attempts,
                 connect_timeout_seconds=common.drain_interval_seconds,
             ),
-            subscriber_token="e2e-" + secrets.token_urlsafe(24),
+            subscriber_token="e2e-" + secrets.token_urlsafe(CASE_CONSTANTS.token_random_bytes),
             alert_timeout_seconds=alert_timeout,
             negative_window_seconds=negative_window,
         )

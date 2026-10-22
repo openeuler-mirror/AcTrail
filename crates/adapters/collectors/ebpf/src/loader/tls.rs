@@ -99,6 +99,7 @@ impl DirectTlsBackend {
             .chain([
                 "handle_rustls_start_outgoing_traffic",
                 "handle_rustls_buffer_plaintext",
+                "handle_rustls_buffer_plaintext_exit",
                 "handle_rustls_take_received_plaintext",
             ])
             .chain(
@@ -316,6 +317,7 @@ pub fn is_dynamic_tls_program(program_name: &str) -> bool {
             program_name,
             "handle_rustls_start_outgoing_traffic"
                 | "handle_rustls_buffer_plaintext"
+                | "handle_rustls_buffer_plaintext_exit"
                 | "handle_rustls_take_received_plaintext"
         )
 }

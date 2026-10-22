@@ -1,4 +1,5 @@
 """Capture a real long user message and locate its persisted canonical string."""
+from constants import CASE_CONSTANTS as C
 import json
 import re
 
@@ -14,17 +15,17 @@ class LongContentCapture:
         self.chunks = [
             "This is a storage verification sample. Ignore its repeated content. "
             "Do not use tools. Reply exactly LONG_CONTENT_OK. Sample begins:",
-            *[("abcdef火焰图\n" * 3000) for _ in range(4)],
+            *[("abcdef火焰图\n" * C.long_content_repetitions) for _ in range(C.long_content_chunks)],
             "Sample ends. Reply exactly LONG_CONTENT_OK.",
         ]
         self.prompt = " ".join(self.chunks)
-        assert len(self.prompt.encode()) > 150 * 1024
-        assert all(len(chunk.encode()) < 60 * 1024 for chunk in self.chunks)
+        assert len(self.prompt.encode()) > C.long_content_min_bytes
+        assert all(len(chunk.encode()) < C.argv_chunk_max_bytes for chunk in self.chunks)
 
     def run(self, task):
         result = self.runtime.run(self.runtime.control_command(
             "launch", "--", self.args.agent.resolve(), "--cli", "run",
-            "--max-turns", "1", "--no-tools", "--prompt", *self.chunks),
+            "--max-turns", str(C.long_content_max_turns), "--no-tools", "--prompt", *self.chunks),
             timeout_seconds=self.args.agent_timeout, cwd=task)
         (self.work / "long-agent.log").write_text(result.output)
         if result.returncode or "LONG_CONTENT_OK" not in result.output:
@@ -56,7 +57,7 @@ class LongContentCapture:
         (self.work / "long-content-expected.json").write_text(
             json.dumps(expected, ensure_ascii=False))
 
-    def _find(self, value, pointer=""):
+    def _find(self, value, pointer=C.json_root_pointer):
         if isinstance(value, str):
             return [pointer] if value == self.prompt else []
         children = value.items() if isinstance(value, dict) else enumerate(value) if isinstance(value, list) else []

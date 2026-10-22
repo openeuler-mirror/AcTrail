@@ -1,4 +1,5 @@
 // Verify an actual ordinary HTTP request appears and opens from default Flamegraph kinds.
+import { C } from '../constants.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { TimelineBrowser } from '../browser/timeline.mjs';
@@ -12,7 +13,7 @@ class NetworkBrowserAcceptance {
   async run(playwright, executablePath) {
     const { chromium } = await import(playwright);
     this.browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-    const page = await this.browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const page = await this.browser.newPage({ viewport: C.viewport });
     page.on('request', request => {
       if (request.url().includes('/api/')) this.report.requests.push(request.url());
     });
@@ -41,7 +42,7 @@ class NetworkBrowserAcceptance {
       beforeToggle, 'message display switch reloaded the timeline');
     await controls.locator('.timeline-kinds-toggle').click();
     const response = await fetch(`${this.base}/api/traces/${trace}/actions/${encodeURIComponent(this.expected.action_id)}`);
-    assert.equal(response.status, 200);
+    assert.equal(response.status, C.http_ok);
     const target = await response.json();
     assert.equal(target.kind, 'http.message');
     assert.equal(target.title, this.expected.title);
@@ -69,5 +70,5 @@ try {
   throw error;
 } finally {
   await acceptance.browser?.close();
-  await fs.writeFile(`${output}/network-browser.json`, JSON.stringify(acceptance.report, null, 2));
+  await fs.writeFile(`${output}/network-browser.json`, JSON.stringify(acceptance.report, null, C.json_indent));
 }

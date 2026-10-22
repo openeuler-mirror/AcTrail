@@ -4,6 +4,8 @@ import os
 import socket
 import struct
 
+from .constants import DEFAULTS
+
 
 class _AutoPort:
     __slots__ = ()
@@ -35,7 +37,7 @@ class LoopbackPortAllocator:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.settimeout(self._connect_timeout_seconds)
-                listener.bind(("127.0.0.1", 0))
+                listener.bind((DEFAULTS.loopback_host, 0))
                 listener.listen(1)
                 port = int(listener.getsockname()[1])
                 attempted_ports.append(port)
@@ -58,7 +60,7 @@ class LoopbackPortAllocator:
                 socket.SO_LINGER,
                 struct.pack("ii", 1, 0),
             )
-            client.connect(("127.0.0.1", port))
+            client.connect((DEFAULTS.loopback_host, port))
             accepted, _ = listener.accept()
             accepted.close()
 
@@ -67,8 +69,8 @@ def resolve_test_port(
     environment_variable: str,
     *,
     fallback: int | _AutoPort = AUTO,
-    attempts: int = 30,
-    connect_timeout_seconds: float = 1.0,
+    attempts: int = DEFAULTS.port_allocation_attempts,
+    connect_timeout_seconds: float = DEFAULTS.port_connect_timeout_seconds,
 ) -> int:
     """Resolve an explicit test port or allocate a reachable loopback port."""
 

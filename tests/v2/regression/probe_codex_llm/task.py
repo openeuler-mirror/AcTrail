@@ -9,11 +9,13 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import ProbeCodexLLMConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeCodexLLMTask:
     def __init__(self, config: ProbeCodexLLMConfig):
         self._config = config
-        self.marker = f"A{secrets.token_hex(5)}"
+        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._discovery = AgentBinaryDiscovery(config.repo)
         self._codex = self._resolve_codex()
         self._native_codex = self._resolve_native_codex()

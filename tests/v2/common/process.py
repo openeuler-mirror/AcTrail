@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TextIO
 
+from .constants import PROCESS_DEFAULTS as DEFAULTS
+
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -120,7 +122,7 @@ class ManagedProcess:
         self,
         *,
         timeout: float | None = None,
-        terminate_grace_seconds: float = 2,
+        terminate_grace_seconds: float = DEFAULTS.terminate_grace_seconds,
     ) -> CommandResult:
         if terminate_grace_seconds < 0:
             raise ValueError("terminate grace must be non-negative")
@@ -132,7 +134,7 @@ class ManagedProcess:
         self._join_output_threads()
         return self._result()
 
-    def terminate(self, *, grace_seconds: float = 2) -> CommandResult:
+    def terminate(self, *, grace_seconds: float = DEFAULTS.terminate_grace_seconds) -> CommandResult:
         if grace_seconds < 0:
             raise ValueError("termination grace must be non-negative")
         if self._process.poll() is None:
@@ -200,7 +202,7 @@ class ManagedProcess:
 class SubprocessRunner:
     """Runs argv-only commands without invoking a shell."""
 
-    def __init__(self, *, terminate_grace_seconds: float = 2) -> None:
+    def __init__(self, *, terminate_grace_seconds: float = DEFAULTS.terminate_grace_seconds) -> None:
         if terminate_grace_seconds < 0:
             raise ValueError("termination grace must be non-negative")
         self._terminate_grace_seconds = terminate_grace_seconds

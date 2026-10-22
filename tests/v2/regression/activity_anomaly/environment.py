@@ -21,6 +21,8 @@ from tests.v2.common.plugin_test_environment import (
 
 from .config import ActivityAnomalyConfig
 
+from .constants import CASE_CONSTANTS
+
 
 INSTANCE_ID = "activity-anomaly.v2"
 PLUGIN_ID = "actrail.activity-anomaly"
@@ -94,9 +96,9 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
                 sys.executable,
                 str(script),
                 "--bind-host",
-                "127.0.0.1",
+                CASE_CONSTANTS.loopback_host,
                 "--bind-port",
-                "0",
+                str(CASE_CONSTANTS.bind_port),
                 "--response-marker",
                 marker,
                 "--long-command",
@@ -123,8 +125,8 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
             "http_proxy",
         ):
             environment.pop(variable, None)
-        environment["NO_PROXY"] = "127.0.0.1,localhost"
-        environment["no_proxy"] = "127.0.0.1,localhost"
+        environment["NO_PROXY"] = CASE_CONSTANTS.no_proxy_hosts
+        environment["no_proxy"] = CASE_CONSTANTS.no_proxy_hosts
         environment["ACTRAIL_ACTIVITY_ANOMALY_LOCAL_KEY"] = "local-test-key"
         result = self.runtime.run(
             self.runtime.control_command(
@@ -140,7 +142,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
                 "--tools",
                 "bash",
                 "--max-turns",
-                "3",
+                str(CASE_CONSTANTS.max_turns),
                 "--prompt",
                 "Execute each requested Bash tool, then return the final result.",
             ),
@@ -149,7 +151,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
         )
         if result.returncode != 0:
             raise AssertionError(
-                f"real Xiaoo exited with {result.returncode}: {result.output[-4000:]}"
+                f"real Xiaoo exited with {result.returncode}: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         matches = TRACE_PATTERN.findall(result.output)
         if len(matches) != 1:
@@ -171,7 +173,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
         )
         if result.returncode != 0:
             raise AssertionError(
-                f"viewer actions failed with {result.returncode}: {result.output[-2000:]}"
+                f"viewer actions failed with {result.returncode}: {result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         try:
             document = json.loads(result.stdout)
@@ -196,7 +198,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
         )
         if result.returncode != 0:
             raise AssertionError(
-                f"plugin status failed with {result.returncode}: {result.output[-2000:]}"
+                f"plugin status failed with {result.returncode}: {result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         fields: dict[str, str] = {}
         for token in result.stdout.split():
@@ -248,7 +250,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
             if not isinstance(rule, dict):
                 raise AssertionError(f"plugin config omitted {key}")
             rule["enabled"] = True
-            rule["hard_limit_bytes"] = 1
+            rule["hard_limit_bytes"] = CASE_CONSTANTS.anomaly_hard_limit_bytes
         command = candidate.get("command_duration")
         if not isinstance(command, dict):
             raise AssertionError("plugin config omitted command_duration")
@@ -280,7 +282,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
                         f"activity provider exited early with {process.returncode}"
                     )
                 remaining = max(0.0, deadline - time.monotonic())
-                if not selector.select(min(0.2, remaining)):
+                if not selector.select(min(CASE_CONSTANTS.io_poll_seconds, remaining)):
                     continue
                 line = process.stdout.readline().strip()
                 if line.startswith("provider_base_url="):
@@ -295,13 +297,13 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
         )
         self._xiaoo_config.write_text(
             "[llm]\n"
-            'provider = "deepseek"\n'
-            'model = "deepseek-chat"\n'
+            f'provider = "{CASE_CONSTANTS.llm_provider}"\n'
+            f'model = "{CASE_CONSTANTS.llm_model}"\n'
             'api_key_env = "ACTRAIL_ACTIVITY_ANOMALY_LOCAL_KEY"\n'
             f"api_base = {json.dumps(chat_completions_url)}\n"
-            "max_tokens = 128\n"
-            "context_window = 32768\n"
-            'reasoning_effort = "off"\n',
+            f"max_tokens = {CASE_CONSTANTS.llm_max_tokens}\n"
+            f"context_window = {CASE_CONSTANTS.llm_context_window}\n"
+            f'reasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"\n',
             encoding="utf-8",
         )
 
@@ -312,10 +314,10 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
             if process.poll() is None:
                 process.terminate()
                 try:
-                    process.wait(timeout=10)
+                    process.wait(timeout=CASE_CONSTANTS.stop_provider_timeout)
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    process.wait(timeout=10)
+                    process.wait(timeout=CASE_CONSTANTS.stop_provider_timeout)
             if process.returncode not in (0, -15):
                 failures.append(f"provider exited with {process.returncode}")
             if process.stdout is not None:

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
 use model_core::capability::Capability;
@@ -12,11 +12,11 @@ impl OperatorConfigInitializer {
         path: &Path,
         mode: Option<InitMode>,
         force: bool,
-        patch_path: Option<&Path>,
+        patch_paths: &[PathBuf],
     ) -> Result<OperatorConfigInitStatus, String> {
         let existed = path.exists();
         if existed && !force {
-            if mode.is_some() || patch_path.is_some() {
+            if mode.is_some() || !patch_paths.is_empty() {
                 return Err(format!(
                     "config {} already exists; pass --force to apply --mode or --patch",
                     path.display()
@@ -27,8 +27,8 @@ impl OperatorConfigInitializer {
             return Ok(OperatorConfigInitStatus::ExistingValid);
         }
         let mut config = Self::configuration(mode.unwrap_or_default())?;
-        if let Some(patch_path) = patch_path {
-            config = config.patch_file(patch_path)?;
+        if !patch_paths.is_empty() {
+            config = config.patch_files(patch_paths)?;
         }
         config.dump_to_path(path, force)?;
         Ok(if existed {

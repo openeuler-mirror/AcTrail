@@ -10,7 +10,7 @@ mount_guest_observation_fs
 OPENSSL="$(openssl_bin)"
 CONFIG="${ACTRAIL_CONFIG:-$ACTRAIL_BUNDLE/guest-combo.conf}"
 WORK="$(prepare_workdir combo)"
-PORT="${ACTRAIL_TLS_PORT:-4435}"
+PORT="${ACTRAIL_TLS_PORT:-$ACTRAIL_COMBO_PORT}"
 SERVER_PID=""
 
 cleanup() {
@@ -27,7 +27,7 @@ echo "kernel=$(uname -r)"
 generate_tls_cert "$OPENSSL" "$WORK"
 start_daemon "$CONFIG"
 SERVER_PID="$(start_tls_server "$OPENSSL" "$WORK" "$PORT")"
-sleep 1
+sleep "$ACTRAIL_TLS_SERVER_SETTLE_SECONDS"
 
 if ! printf "CLIENT_SECRET_MARKER_7788\n" | "$ACTRAILCTL" \
   --config "$CONFIG" \

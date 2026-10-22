@@ -9,12 +9,14 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import ProbeXiaooLLMConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeXiaooLLMTask:
     def __init__(self, config: ProbeXiaooLLMConfig, runtime: ActrailRuntime):
         self._config = config
         self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(5)}"
+        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._discovery = AgentBinaryDiscovery(config.repo)
         self._xiaoo = self._resolve_xiaoo()
 
@@ -39,7 +41,7 @@ class ProbeXiaooLLMTask:
             "run",
             "--no-tools",
             "--max-turns",
-            "1",
+            str(CASE_CONSTANTS.max_turns),
             "--prompt",
             f'Reply with exactly "{self.marker}" and nothing else. Do not use tools.',
         ]

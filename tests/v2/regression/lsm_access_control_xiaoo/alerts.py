@@ -7,6 +7,8 @@ import time
 from tests.v2.common.actrail_runtime import ActrailRuntime
 from tests.v2.common.core import TestResult, TestStatus
 
+from .constants import CASE_CONSTANTS
+
 
 class BoundaryAlertsScenario:
     """Verify real Xiaoo denials, stored alert deltas and audit retention."""
@@ -17,10 +19,10 @@ class BoundaryAlertsScenario:
     def run(self, context, results: dict, port: int) -> None:
         case = self.case
         for name, audit, window, capacity in (
-            ("alerts_trace_tail", True, 60_000, 256),
-            ("alerts_without_audit", False, 60_000, 256),
-            ("alerts_periodic", False, 200, 256),
-            ("alerts_capacity", False, 60_000, 1),
+            ("alerts_trace_tail", True, CASE_CONSTANTS.alert_window_ms, CASE_CONSTANTS.alert_max_groups),
+            ("alerts_without_audit", False, CASE_CONSTANTS.alert_window_ms, CASE_CONSTANTS.alert_max_groups),
+            ("alerts_periodic", False, CASE_CONSTANTS.periodic_alert_window_ms, CASE_CONSTANTS.alert_max_groups),
+            ("alerts_capacity", False, CASE_CONSTANTS.alert_window_ms, CASE_CONSTANTS.capacity_alert_max_groups),
         ):
             context.report_progress(name, "fresh defaults; real Xiaoo repeats file and command denials")
             case._audit_enabled = audit
@@ -30,17 +32,18 @@ class BoundaryAlertsScenario:
             case._write_rules("deny", port)
             case._runtime = ActrailRuntime(
                 case._config.repo, case._config.bin_dir, case._config.command_timeout_seconds,
-                context.output, case._work / "actraild.conf", case._patch,
+                context.output, case._work / "actraild.conf",
+                operator_config_patches=case._patches(),
             )
             case._runtime.prepare()
             trace_id = case._run_xiaoo(name)
             case._require_workload("deny")
             workload = json.loads(case._results.read_text(encoding="utf-8"))
             for domain in ("file", "command"):
-                if workload[domain]["attempts"] != 64 or workload[domain]["denials"] != 64:
+                if workload[domain]["attempts"] != CASE_CONSTANTS.denial_repetitions or workload[domain]["denials"] != CASE_CONSTANTS.denial_repetitions:
                     raise AssertionError(f"real {domain} workload did not produce all denials: {workload}")
             alerts = self._wait_for_alerts(trace_id, capacity)
-            self._require_alerts(alerts, capacity, periodic=window == 200)
+            self._require_alerts(alerts, capacity, periodic=window == CASE_CONSTANTS.periodic_alert_window_ms)
             if audit:
                 case._require_evidence(trace_id, "deny")
             stopped = case._runtime.stop()
@@ -64,7 +67,7 @@ class BoundaryAlertsScenario:
                     raise AssertionError("capacity loss was not summarized exactly once on shutdown")
             results[name] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id}: 128 actual denials, {len(alerts)} alerts; counts, bounds and retention verified",
+                f"trace-{trace_id}: {CASE_CONSTANTS.denial_repetitions * 2} actual denials, {len(alerts)} alerts; counts, bounds and retention verified",
             )
 
     def _read_alerts(self, trace_id: int) -> list[dict]:
@@ -83,9 +86,9 @@ class BoundaryAlertsScenario:
             self.case._runtime.run_checked(self.case._runtime.control_command("list-traces"), echo=False)
             alerts = self._read_alerts(trace_id)
             totals = self._totals(alerts)
-            expected = {"lsm-file-deny": 64}
+            expected = {"lsm-file-deny": CASE_CONSTANTS.denial_repetitions}
             if capacity > 1:
-                expected["lsm-command-deny"] = 64
+                expected["lsm-command-deny"] = CASE_CONSTANTS.denial_repetitions
             if totals == expected:
                 return alerts
             time.sleep(self.case._poll)
@@ -104,12 +107,12 @@ class BoundaryAlertsScenario:
         for domain in ("file", "command") if capacity > 1 else ("file",):
             group = [alert for alert in alerts if alert["payload"]["rule_id"] == f"lsm-{domain}-deny"]
             counts = [alert["payload"]["aggregation"]["received_denials"] for alert in group]
-            if counts[0] != 1 or sum(counts) != 64:
+            if counts[0] != 1 or sum(counts) != CASE_CONSTANTS.denial_repetitions:
                 raise AssertionError(f"first alert or received deltas are wrong: {group}")
             if periodic:
-                if not 2 < len(group) < 32:
+                if not 2 < len(group) < CASE_CONSTANTS.denial_repetitions // 2:
                     raise AssertionError(f"timer did not summarize ongoing denials: {group}")
-            elif counts != [1, 63]:
+            elif counts != [1, CASE_CONSTANTS.denial_repetitions - 1]:
                 raise AssertionError(f"trace finalization did not flush exactly one tail: {group}")
             for alert in group:
                 payload = alert["payload"]

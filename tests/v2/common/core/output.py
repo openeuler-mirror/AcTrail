@@ -7,6 +7,8 @@ from typing import TextIO
 
 from .test_case import TestResult, TestStatus
 
+from .constants import DEFAULTS
+
 
 _COLORS = {
     TestStatus.PASSED: "\033[32m",
@@ -24,7 +26,7 @@ _SYMBOLS = {
 
 @dataclass
 class TestOutput:
-    color_mode: str = "auto"
+    color_mode: str = DEFAULTS.color_mode
     stream: TextIO = field(default_factory=lambda: sys.stdout)
     _lock: threading.RLock = field(
         default_factory=threading.RLock,
@@ -81,7 +83,7 @@ class TestOutput:
         with self._lock:
             if self._progress_name is None:
                 raise RuntimeError("cannot finish inactive progress")
-            status = effective_status(result)
+            status = result.effective_status()
             symbol = self._color(_SYMBOLS[status], status)
             tail = symbol
             if status is TestStatus.SKIPPED and result.message:
@@ -114,7 +116,7 @@ class TestOutput:
                 self._render_progress_line()
 
     def result(self, name: str, result: TestResult, depth: int = 0) -> None:
-        status = effective_status(result)
+        status = result.effective_status()
         symbol = self._color(_SYMBOLS[status], status)
         suffix = f" — {result.message}" if result.message else ""
         self.line(f"{'  ' * depth}{symbol} {name}{suffix}")
@@ -123,7 +125,7 @@ class TestOutput:
                 self.result(child_name, child, depth + 1)
 
     def summary(self, name: str, result: TestResult) -> None:
-        status = effective_status(result)
+        status = result.effective_status()
         symbol = self._color(_SYMBOLS[status], status)
         self.line(f"{symbol} {name}")
 
@@ -207,20 +209,3 @@ class CaseProgressReporter:
         if not normalized_message:
             return normalized_step
         return f"{normalized_step}: {normalized_message}"
-
-
-def effective_status(result: TestResult) -> TestStatus:
-    if result.status != TestStatus.COMPOSITE:
-        return result.status
-    if not result.details:
-        return TestStatus.PASSED
-    child_statuses = [effective_status(child) for child in result.details.values()]
-    if TestStatus.FAILED in child_statuses:
-        return TestStatus.FAILED
-    if child_statuses and all(status == TestStatus.SKIPPED for status in child_statuses):
-        return TestStatus.SKIPPED
-    return TestStatus.PASSED
-
-
-def has_failure(result: TestResult) -> bool:
-    return effective_status(result) == TestStatus.FAILED

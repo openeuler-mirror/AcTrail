@@ -296,8 +296,8 @@ ARM64 Kata 的声明仅限下方实测的 openEuler/Kata/StratoVirt 精确组合
 
 | 能力 | 状态 |
 |---|---|
-| TLS 明文 + LLM 语义(tls-sync,免 eBPF) | V2 验收矩阵要求 OpenSSL `SSL_write`/`SSL_read` 双向明文命中；每个 OS/VMM 组合必须独立复验并附当前提交的运行记录 |
-| eBPF 进程/文件/网络事件 | V2 验收矩阵要求带 BTF/tracefs 的 guest 内核产生非零事件；默认内核缺能力时两轴 `auto` 降级并显式标 degraded |
+| TLS 明文 + LLM 语义 | 默认通过 eBPF 采集。V2 验收矩阵要求 OpenSSL `SSL_write`/`SSL_read` 双向明文完整，每个 OS/VMM 组合需独立验证 |
+| eBPF 进程/文件/网络事件 | Guest 内核需提供配置所需的 eBPF、BTF 和 tracefs 能力。V2 验收矩阵要求产生非零事件 |
 | guest-root workload 接口 | V2 验收矩阵要求 daemon 不进 workload，工具和 `/dev/actrail` socket 只读挂载，UID 1000/GID 39000 可用且错误 GID 明确拒绝 |
 | workload 身份边界 | `SO_PEERCRED` 对端经 PID namespace + mount namespace 授权；`list-traces` 可查询根 PID namespace；container ID 不参与授权或验收 |
 | 归属三键 `host.id` / `k8s.pod.uid` / `container.id` | 数据模型和 cgroup 解析代码就绪；guest-root 实测可见 containerd namespace/container ID。Kata 无 DMI 时不伪造 `host.id`，实时 OTLP trace ID 可回退到根 `container.id`；`host.id`/`k8s.pod.uid` 的 SQLite 持久化、真实 CRI/K8s 归属 e2e 与可选 runtime metadata 富化未完成 |
@@ -387,13 +387,9 @@ openEuler guest 的制作和复测步骤见
   PID namespace 与 workload 的 `/proc/self/ns/pid`。
   尚未完成的是 `container.id` 的 OTLP Collector 端断言、异常 sandbox shutdown
   flush 和 Cloud Hypervisor 上的 openEuler guest 交叉复验。
-- **当前 Kata 组合不支持 AcTrail seccomp user-notify**:Kata 3.32 双 VMM
-  实测自动启用会导致退出超时，因此 guest 配置关闭 `seccomp_notify` 和
-  `process_seccomp`，同时关闭依赖 seccomp fallback 的 socket payload 轴和
-  enforcement；workload launcher 显式选择
-  `--seccomp-notify disabled`。这不表示 Kata/Linux 没有 seccomp；其他
-  Kata/runtime 组合若要启用 AcTrail user-notify，必须单独完成版本兼容与退出
-  生命周期验收。
+- **采集与权限**：Guest 使用默认 eBPF 采集，关闭 enforcement。workload launcher
+  显式选择 `--seccomp-notify disabled`。启用 AcTrail seccomp user-notify 需验证
+  对应 Kata/runtime 版本的兼容性和进程退出行为。
 - **rootfs image 与 initrd 不是同一条安装路径**:完整 rootfs image 的离线注入和
   systemd 启动已经验证；当前实现不适配 `kata-containers-initrd.img`。以后若出现
   明确客户需求，应作为独立部署方案重新设计和验收。
@@ -421,9 +417,8 @@ AcTrail seccomp user-notify 的情况下同时验证 syscall 最小权限、观�
 ## 本目录资产
 
 ```
-guest/operator.conf     guest 内默认本地 SQLite 的 actraild 配置模板；已固化两条易踩的坑:
-                        语义投影需显式开启、capture 需含
-                        net-application-plaintext-http)
+guest/operator.conf     Guest 部署设置，安装时由 actrailctl init 与产品默认配置合并。
+                        配置本地 SQLite、观测能力、接口路径和语义留存。
 guest/otel-http-startup.toml 仅在传入 endpoint 时追加的 otel-http 启动片段。
 guest/actraild.service  guest-root systemd unit 模板(候选 rootfs image 已真实启动验收)
 guest/systemd/required/...  required 启动依赖:kata-agent 强依赖 actraild ready。

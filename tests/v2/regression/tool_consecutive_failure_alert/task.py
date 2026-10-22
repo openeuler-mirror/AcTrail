@@ -13,6 +13,9 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import ToolConsecutiveFailureAlertEnvironment
 
+from .constants import CASE_CONSTANTS
+
+
 _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
 
 _TERMINAL_STATES = frozenset({"exited", "completed"})
@@ -219,7 +222,7 @@ class ToolConsecutiveFailureAlertTask:
         prefix: str,
         command: list[str],
     ) -> TestResult:
-        marker = f"TOOL_ALERT_{prefix}_" + secrets.token_hex(6)
+        marker = f"TOOL_ALERT_{prefix}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         launch = self._launch(marker, command)
         trace_id = self._require_trace_id(launch)
         self._wait_terminal(trace_id)
@@ -239,7 +242,7 @@ class ToolConsecutiveFailureAlertTask:
         prefix: str,
         paths: tuple[str, ...],
     ) -> tuple[int, dict[str, Any]]:
-        marker = f"TOOL_ALERT_{prefix}_" + secrets.token_hex(6)
+        marker = f"TOOL_ALERT_{prefix}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         command = ["bash", "-c", "; ".join(f"ls {path}" for path in paths)]
         launch = self._launch(marker, command)
         trace_id = self._require_trace_id(launch)
@@ -263,7 +266,7 @@ class ToolConsecutiveFailureAlertTask:
         return trace_id, payload
 
     def _run_cooldown_round(self) -> TestResult:
-        marker = "TOOL_ALERT_COOLDOWN_" + secrets.token_hex(6)
+        marker = "TOOL_ALERT_COOLDOWN_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         command = [
             "bash",
             "-c",
@@ -312,7 +315,7 @@ class ToolConsecutiveFailureAlertTask:
             )
         executed_failing_ls = False
         for attempt in (1, 2):
-            marker = f"TOOL_ALERT_AGENT_{attempt}_" + secrets.token_hex(6)
+            marker = f"TOOL_ALERT_AGENT_{attempt}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
             launch = self._launch(
                 marker,
                 agent.command(self._AGENT_PROMPT),
@@ -395,7 +398,7 @@ class ToolConsecutiveFailureAlertTask:
         if len(trace_ids) != 1:
             raise AssertionError(
                 f"expected one trace id, found {trace_ids}: "
-                f"{launch.output[-4000:]}"
+                f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         return trace_ids[0]
 

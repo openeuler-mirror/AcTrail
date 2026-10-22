@@ -11,6 +11,8 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import ProbeCodexMcpConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeCodexMcpTask:
     def __init__(
@@ -27,7 +29,7 @@ class ProbeCodexMcpTask:
             "probe_codex_mcp",
         )
         try:
-            token = secrets.token_hex(6)
+            token = secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
             self.final_marker = f"CODEX_MCP_FINAL_{token}"
             self.local = self._workspace.spec(
                 server_name=config.local_server_name,

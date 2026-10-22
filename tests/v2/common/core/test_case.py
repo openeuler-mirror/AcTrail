@@ -22,6 +22,21 @@ class TestResult:
     message: str = ""
     details: dict[str, "TestResult"] = field(default_factory=dict)
 
+    def effective_status(self) -> TestStatus:
+        if self.status != TestStatus.COMPOSITE:
+            return self.status
+        if not self.details:
+            return TestStatus.PASSED
+        child_statuses = [child.effective_status() for child in self.details.values()]
+        if TestStatus.FAILED in child_statuses:
+            return TestStatus.FAILED
+        if all(status == TestStatus.SKIPPED for status in child_statuses):
+            return TestStatus.SKIPPED
+        return TestStatus.PASSED
+
+    def has_failure(self) -> bool:
+        return self.effective_status() == TestStatus.FAILED
+
 
 class TestCaseMeta(ABCMeta):
     """

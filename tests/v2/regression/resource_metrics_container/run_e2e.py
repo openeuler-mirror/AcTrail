@@ -12,11 +12,12 @@ REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 from tests.v2.common.core import TestCaseInputs
 from tests.v2.regression.resource_metrics_container.case import ContainerAcceptance
+from tests.v2.regression.resource_metrics_container.constants import CASE_CONSTANTS
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bin-dir", type=Path, default=REPO / "target/release")
+    parser.add_argument("--bin-dir", type=Path, default=REPO / CASE_CONSTANTS.binary_relative_directory)
     parser.add_argument("--image", required=True, help="existing local image with sh and sleep; never pulled")
     args = parser.parse_args()
     binaries = args.bin_dir.resolve()
@@ -29,14 +30,14 @@ def main() -> int:
                       stderr=subprocess.DEVNULL).returncode:
         print("SKIPPED: local test image or Docker daemon unavailable")
         return 77
-    with tempfile.TemporaryDirectory(prefix="actrail-container-acceptance-") as directory:
+    with tempfile.TemporaryDirectory(prefix=CASE_CONSTANTS.work_directory_prefix) as directory:
         case = ContainerAcceptance(TestCaseInputs(repo=REPO, bin_dir=binaries, work_dir=Path(directory)))
         try:
             case.exercise(args.image)
         except Exception:
             log = Path(directory) / "daemon-output.log"
             if log.exists():
-                print(log.read_text()[-8000:], file=sys.stderr)
+                print(log.read_text()[-CASE_CONSTANTS.diagnostic_tail_characters:], file=sys.stderr)
             raise
     print("PASSED: container counters, read-only controls, restart recovery and finalization")
     return 0

@@ -13,20 +13,16 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAgentXiaooConfig
 from .llm_evidence import ContainerLlmEvidence
+from .constants import CASE_CONSTANTS
 
 
 class ContainerAgentXiaooCase(TestCase):
     def __init__(self, config: ContainerAgentXiaooConfig):
         self._config = config
         self._runtime: Path | None = None
-        self._script = (
-            config.repo
-            / "tests/v2/regression/container_agent_xiaoo/v2/nested_observer_scenario.py"
-        )
-        self._inner_script = (
-            config.repo
-            / "tests/v2/regression/container_agent_xiaoo/v2/xiaoo_scenario.py"
-        )
+        case_dir = Path(__file__).resolve().parent
+        self._script = case_dir / "nested_observer_scenario.py"
+        self._inner_script = case_dir / "xiaoo_scenario.py"
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         test_context.report_progress(
@@ -114,9 +110,9 @@ class ContainerAgentXiaooCase(TestCase):
             self._config.bin_dir / "actraild",
             self._config.bin_dir / "actrailctl",
             self._config.bin_dir / "actrailviewer",
-            self._config.bin_dir / "libactrail_tls_payload_probe_sync.so",
             self._script,
             self._inner_script,
+            Path(__file__).resolve().parent / "patch_config.toml",
         )
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
@@ -125,10 +121,10 @@ class ContainerAgentXiaooCase(TestCase):
 
     def _failure_report(self, stderr: str) -> str:
         lines = stderr.rstrip().splitlines()
-        diagnostic_lines = lines[-80:]
+        diagnostic_lines = lines[-CASE_CONSTANTS.diagnostic_tail_lines:]
         diagnostic = "\n".join(diagnostic_lines)
-        if len(diagnostic) > 16_000:
-            diagnostic = diagnostic[-16_000:]
+        if len(diagnostic) > CASE_CONSTANTS.diagnostic_tail_characters:
+            diagnostic = diagnostic[-CASE_CONSTANTS.diagnostic_tail_characters:]
         return diagnostic or "scenario produced no stderr diagnostics"
 
     def _external_prerequisite_error(self) -> str | None:
@@ -160,7 +156,7 @@ class ContainerAgentXiaooCase(TestCase):
                 ["docker", "info", "--format", "{{.ServerVersion}}"],
                 text=True,
                 capture_output=True,
-                timeout=15,
+                timeout=CASE_CONSTANTS.docker_info_timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired:

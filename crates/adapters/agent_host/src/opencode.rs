@@ -112,4 +112,3 @@ impl OpenCodeLaunch {
             .map_err(|error| format!("serialize OPENCODE_CONFIG_CONTENT: {error}"))
     }
 }
-

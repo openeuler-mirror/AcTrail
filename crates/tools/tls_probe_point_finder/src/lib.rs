@@ -19,18 +19,19 @@ mod reporter;
 mod resolve;
 
 use args::{Command, parse_args};
+pub use binary::EntryElfResolver;
 pub use binary_identity::{
     BinaryIdentity, BinaryIdentityError, BinaryIdentityRegion, BinaryIdentityResolver,
     BinaryIdentityTypeCode,
 };
-pub use elf::{BinaryAnalysisCache, BinaryAnalysisCacheStats, ScanMode};
+pub use elf::{BinaryAnalysisCache, BinaryAnalysisCacheStats, ProbeFileSource, ScanMode};
 pub use plan::{
     AttachPoint, CaptureStrategy, PayloadDirection, ProbeBinary, ProbePoint, ProbePointPlan,
     ProbeSource, TargetIdentity, TlsProvider,
 };
 pub use resolve::{
     DirectSharedObjectResolver, ProbeResolution, ResolveMode, resolve_plans,
-    resolve_plans_with_analysis_cache, resolve_plans_with_scan,
+    resolve_plans_with_analysis_cache, resolve_plans_with_file_source, resolve_plans_with_scan,
 };
 
 pub const GO_TLS_WRITE_SYMBOL: &str = probe_detector::detector::tls::go_tls::WRITE_SYMBOL;

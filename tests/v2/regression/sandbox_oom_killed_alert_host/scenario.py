@@ -20,6 +20,8 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .config import SandboxOomKilledAlertHostConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class SandboxOomKilledAlertHostScenario:
     _CATEGORY = "sandbox.resource.oom_killed"
@@ -38,7 +40,7 @@ class SandboxOomKilledAlertHostScenario:
             if config.bin_dir.is_absolute()
             else config.repo / config.bin_dir
         )
-        self._run_dir = config.work_dir / f"run-{secrets.token_hex(8)}"
+        self._run_dir = config.work_dir / f"run-{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
 
     def run(self) -> TestResult:
         results: dict[str, TestResult] = {}
@@ -105,8 +107,8 @@ class SandboxOomKilledAlertHostScenario:
             self._assert_public_delivery(delivery, oom)
 
             duplicate_window = (
-                max(timing.io_poll_seconds, timing.resource_poll_seconds) * 2
-                + 0.25
+                max(timing.io_poll_seconds, timing.resource_poll_seconds) * CASE_CONSTANTS.observation_window_poll_count
+                + CASE_CONSTANTS.observation_window_slack_seconds
             )
             alert_path.assert_no_matching_oom_killed_delivery(
                 duplicate_window,
@@ -156,10 +158,10 @@ class SandboxOomKilledAlertHostScenario:
                 if process is None:
                     continue
                 try:
-                    stopped = process.terminate(grace_seconds=3)
+                    stopped = process.terminate(grace_seconds=CASE_CONSTANTS.run_grace_seconds)
                     if "failure" in results and stopped.diagnostic:
                         results["failure"].message += (
-                            f"\n{name} diagnostics:\n" + stopped.diagnostic[-4000:]
+                            f"\n{name} diagnostics:\n" + stopped.diagnostic[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]
                         )
                 except Exception as error:
                     cleanup_errors.append(f"{name}: {error}")
@@ -198,8 +200,8 @@ class SandboxOomKilledAlertHostScenario:
             web_port=None,
             categories=(self._CATEGORY,),
             thresholds=SandboxAlertThresholds(
-                cpu_usage_basis_points=10_000,
-                memory_available_bytes=1,
+                cpu_usage_basis_points=CASE_CONSTANTS.cpu_usage_basis_points,
+                memory_available_bytes=CASE_CONSTANTS.create_alert_path_memory_available_bytes,
                 read_interval_bytes=self._U64_MAX,
                 write_interval_bytes=self._U64_MAX,
             ),
@@ -243,7 +245,7 @@ class SandboxOomKilledAlertHostScenario:
                 timeout=self._config.ready_timeout_seconds,
             )
         except Exception:
-            gateway.terminate(grace_seconds=1)
+            gateway.terminate(grace_seconds=CASE_CONSTANTS.start_gateway_grace_seconds)
             raise
         return gateway
 
@@ -307,15 +309,15 @@ class SandboxOomKilledAlertHostScenario:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                with socket.create_connection((CASE_CONSTANTS.loopback_host, port), timeout=CASE_CONSTANTS.wait_tcp_timeout):
                     return
             except OSError:
-                time.sleep(0.05)
+                time.sleep(CASE_CONSTANTS.wait_tcp_poll_seconds)
         raise RuntimeError("hand-observation listener did not become ready")
 
     @staticmethod
     def _require_alive(process: ManagedProcess, name: str) -> None:
-        time.sleep(0.1)
+        time.sleep(CASE_CONSTANTS.require_alive_poll_seconds)
         if process.poll() is not None:
-            result = process.wait(timeout=1)
+            result = process.wait(timeout=CASE_CONSTANTS.require_alive_timeout)
             raise RuntimeError(f"{name} exited early: {result.diagnostic}")

@@ -16,9 +16,9 @@ sudo -E python3 tests/v2/regression/probe_codex_llm/run_e2e.py
 # 步骤摘要
 
 1. 检查 AcTrail release binaries 和 Codex 外部可用性。
-2. 初始化、清理并启动 AcTrail。
+2. 刷新默认配置、清理并启动 AcTrail。
 3. 生成随机 marker，通过 `actrailctl launch` 启动 `codex exec`。
-4. 验证 Codex 标准输出包含 marker，并取得唯一的 trace id。
+4. 验证启动选择 eBPF、关闭 seccomp-notify 且未降级。确认 Codex 标准输出包含 marker，并取得唯一的 trace id。
 5. 停止 daemon，等待事件排空和 trace finalization 完成。
 6. 从数据库验证 trace 为 `Exited/Clean`，并验证
    `llm.call/request/response` 数量一致、关系完整，response 包含 marker，

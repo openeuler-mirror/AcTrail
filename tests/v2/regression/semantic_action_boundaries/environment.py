@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.core import TestOutput
 from tests.v2.common.plugin_test_environment import (
     PluginRuntimeSpec,
@@ -100,8 +101,10 @@ class SemanticActionBoundariesEnvironment(PluginTestEnvironment):
             raise RuntimeError(
                 f"official otel-jsonl manifest not found: {manifest}"
             )
-        self._operator_config_patch.write_text(
-            "[plugins.discovery]\n"
-            f"directory = {json.dumps(str(plugin_root))}\n",
-            encoding="utf-8",
+        (
+            PatchBuilder()
+            .with_work_dir(self.config.work_dir)
+            .with_plugin_directory(plugin_root)
+            .build()
+            .save(self._operator_config_patch)
         )

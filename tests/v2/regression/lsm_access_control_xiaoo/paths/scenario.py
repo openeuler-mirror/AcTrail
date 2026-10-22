@@ -5,9 +5,11 @@ import json
 import shutil
 from pathlib import Path
 
-from tests.v2.common.core import TestResult, TestStatus, has_failure
+from tests.v2.common.core import TestResult, TestStatus
 
 from ..dynamic import DynamicPolicies
+
+from tests.v2.regression.lsm_access_control_xiaoo.constants import CASE_CONSTANTS
 
 
 class PathBindingScenario:
@@ -87,27 +89,27 @@ class PathBindingScenario:
         self.documents = {
             "file": {"rules": [
                 {"rule_id": "lsm-path-file", "decision": "deny", "operation": "open",
-                 "path": str(self.root / "file-a"), "priority": 20},
+                 "path": str(self.root / "file-a"), "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-path-future-file", "decision": "deny", "operation": "open",
-                 "path": str(self.root / "future-file"), "priority": 20},
+                 "path": str(self.root / "future-file"), "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-path-mkdir", "decision": "deny", "operation": "mkdir",
-                 "path": str(self.root / "future-directory"), "priority": 20},
+                 "path": str(self.root / "future-directory"), "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-path-dangling-file", "decision": "deny", "operation": "open",
-                 "path": str(self.root / "future-alias"), "priority": 20},
+                 "path": str(self.root / "future-alias"), "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-path-alias-mkdir", "decision": "deny", "operation": "mkdir",
-                 "path": str(self.root / "dir-a") + "/**", "priority": 20},
+                 "path": str(self.root / "dir-a") + "/**", "priority": CASE_CONSTANTS.specific_rule_priority},
                 {"rule_id": "lsm-path-alias-rmdir", "decision": "deny", "operation": "rmdir",
-                 "path": str(self.root / "dir-a") + "/**", "priority": 20},
+                 "path": str(self.root / "dir-a") + "/**", "priority": CASE_CONSTANTS.specific_rule_priority},
             ]},
             "command": {"rules": [
                 {"rule_id": "lsm-path-command", "decision": "deny",
-                 "executable": str(self.root / "exec-a"), "priority": 20},
+                 "executable": str(self.root / "exec-a"), "priority": CASE_CONSTANTS.specific_rule_priority},
             ]},
         }
         if self.case._selection.name == "lsm":
             self.documents["file"]["rules"].append({
                 "rule_id": "lsm-path-tree", "decision": "deny", "operation": "open",
-                "path": str(self.root / "future-tree") + "/**", "priority": 20,
+                "path": str(self.root / "future-tree") + "/**", "priority": CASE_CONSTANTS.specific_rule_priority,
             })
 
     def _retarget(self, target: str) -> None:
@@ -128,7 +130,7 @@ class PathBindingScenario:
                 for rule in self.documents["file"]["rules"]
             )
             command_lines.extend(
-                f"{rule['rule_id']} deny exec {rule['executable']} priority 20\n"
+                f"{rule['rule_id']} deny exec {rule['executable']} priority {CASE_CONSTANTS.specific_rule_priority}\n"
                 for rule in self.documents["command"]["rules"]
             )
         (self.case._work / "file.rules").write_text("".join(file_lines), encoding="utf-8")
@@ -137,13 +139,13 @@ class PathBindingScenario:
 
     def _start(self, context, port: int) -> None:
         case = self.case
-        case._dynamic = DynamicPolicies(case._config, context.output, port)
+        case._dynamic = DynamicPolicies(case._config, context.output, port, case._patches())
         case._runtime = case._dynamic.runtime
         case._dynamic.prepare()
 
     def _stop(self) -> None:
         result = self.case._dynamic.cleanup()
-        if has_failure(result):
+        if result.has_failure():
             raise AssertionError(f"path scenario service cleanup failed: {result}")
         self.case._dynamic = None
         self.case._runtime = None

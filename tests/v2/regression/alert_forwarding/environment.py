@@ -18,6 +18,8 @@ from tests.v2.common.core import TestOutput, TestResult, TestStatus
 
 from .config import AlertForwardingRegressionConfig
 
+from .constants import CASE_CONSTANTS
+
 
 TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
 PLUGIN_INSTANCE = "alert-forwarding-trigger.v2"
@@ -55,7 +57,7 @@ class AlertForwardingEnvironment:
         self.web = AlertForwardingWebControl(
             bin_dir / "actrailweb",
             config.operator_config,
-            "127.0.0.1",
+            CASE_CONSTANTS.loopback_host,
             config.web_port,
             config.work_dir,
             config.command_timeout_seconds,
@@ -142,7 +144,7 @@ class AlertForwardingEnvironment:
         if len(matches) != 1:
             raise AssertionError(
                 f"launch did not identify exactly one trace: {matches}; "
-                f"output={result.output[-3000:]}"
+                f"output={result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         return int(matches[0]), result
 
@@ -183,7 +185,7 @@ class AlertForwardingEnvironment:
             echo=False,
         )
         if result.returncode != 0:
-            raise AssertionError(f"viewer actions failed: {result.output[-2000:]}")
+            raise AssertionError(f"viewer actions failed: {result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}")
         document = json.loads(result.stdout)
         actions = document.get("actions") if isinstance(document, dict) else None
         if not isinstance(actions, list):
@@ -209,14 +211,14 @@ class AlertForwardingEnvironment:
                 echo=False,
             )
             if result.returncode != 0:
-                failures.append(f"plugin unload: {result.output[-1000:]}")
+                failures.append(f"plugin unload: {result.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}")
             self._plugin_loaded = False
         if self._web_started:
             self.web.stop()
             self._web_started = False
         stopped = self.runtime.stop()
         if stopped is not None and stopped.returncode != 0:
-            failures.append(f"daemon stop: {stopped.output[-1000:]}")
+            failures.append(f"daemon stop: {stopped.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}")
         try:
             self.profile.terminate()
         except Exception as error:
@@ -230,7 +232,7 @@ class AlertForwardingEnvironment:
 
     def _load_trigger_plugin(self) -> None:
         plugin_root = Path(
-            os.environ.get("ACTRAIL_PLUGIN_DIR", Path.home() / ".actrail" / "plugins")
+            os.environ.get("ACTRAIL_PLUGIN_DIR", CASE_CONSTANTS.plugin_directory)
         )
         manifest = (
             plugin_root
@@ -257,13 +259,13 @@ class AlertForwardingEnvironment:
             ]
         )
         if "loaded instance=" not in result.output:
-            raise AssertionError(f"trigger plugin did not become active: {result.output[-2000:]}")
+            raise AssertionError(f"trigger plugin did not become active: {result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}")
         self._plugin_loaded = True
 
     def _write_trigger_config(self) -> None:
         self._trigger_config.write_text(
             "[alert]\n"
-            "consecutive_failure_threshold = 1\n"
-            "cooldown_seconds = 1\n",
+            f"consecutive_failure_threshold = {CASE_CONSTANTS.consecutive_failure_threshold}\n"
+            f"cooldown_seconds = {CASE_CONSTANTS.cooldown_seconds}\n",
             encoding="utf-8",
         )

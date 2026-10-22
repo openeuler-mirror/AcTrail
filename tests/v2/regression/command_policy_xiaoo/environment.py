@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from tests.v2.common.actrail_runtime import CommandResult
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.core import TestOutput, TestResult, TestStatus
 from tests.v2.common.plugin_test_environment import (
     PluginRuntimeSpec,
@@ -18,6 +19,8 @@ from tests.v2.common.plugin_test_environment import (
 
 from .config import CommandPolicyXiaooConfig
 from .provider import LocalXiaooProvider
+
+from .constants import CASE_CONSTANTS
 
 
 INSTANCE = "wasm.command-policy-dynamic"
@@ -53,7 +56,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             config,
             output,
             operator_config=config.operator_config,
-            operator_config_patch=config.operator_config_patch,
+            operator_config_patches=[config.operator_config_patch, Path(__file__).with_name("patch_config.toml")],
             web_host=config.web_host,
             web_port=config.web_port,
             plugin=PluginRuntimeSpec(
@@ -97,12 +100,12 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
                     "decision": "deny",
                     "executable": str(self.command_config.bash_executable),
                     "args": ["-c", "*"],
-                    "priority": 20,
+                    "priority": CASE_CONSTANTS.priority,
                 },
                 {
                     "decision": "deny",
                     "executable": "/srv/not-granted-command",
-                    "priority": 10,
+                    "priority": CASE_CONSTANTS.fallback_rule_priority,
                 },
             ]
         }
@@ -132,7 +135,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
                     "decision": "deny",
                     "executable": str(self.command_config.bash_executable),
                     "args": ["-c", "*"],
-                    "priority": 20,
+                    "priority": CASE_CONSTANTS.priority,
                 }
             ]
         }
@@ -181,7 +184,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         if result.returncode != 0 or "GNU bash" not in result.output:
             raise AssertionError(
                 "same Bash binary with argv outside [-c, *] was not allowed: "
-                f"{result.output[-2000:]}"
+                f"{result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
 
     def require_nonleader_exec_allowed(self) -> None:
@@ -203,7 +206,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         if result.returncode != 0 or "GNU bash" not in result.output:
             raise AssertionError(
                 "non-leader thread exec outside [-c, *] was not allowed: "
-                f"{result.output[-2000:]}"
+                f"{result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
 
     def run_xiaoo(self, trace_name: str) -> tuple[int, CommandResult]:
@@ -217,8 +220,8 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             "http_proxy",
         ):
             environment.pop(variable, None)
-        environment["NO_PROXY"] = "127.0.0.1,localhost"
-        environment["no_proxy"] = "127.0.0.1,localhost"
+        environment["NO_PROXY"] = CASE_CONSTANTS.no_proxy_hosts
+        environment["no_proxy"] = CASE_CONSTANTS.no_proxy_hosts
         environment["ACTRAIL_XIAOO_COMMAND_POLICY_KEY"] = "local-test-key"
         environment["PATH"] = "/usr/bin"
         result = self.runtime.run(
@@ -237,7 +240,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
                 "--tools",
                 "bash",
                 "--max-turns",
-                "3",
+                str(CASE_CONSTANTS.max_turns),
                 "--debug",
                 "--prompt",
                 "Use the Bash tool exactly once, then report its operating-system result.",
@@ -247,7 +250,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         )
         if result.returncode != 0:
             raise AssertionError(
-                f"real Xiaoo launch failed with {result.returncode}: {result.output[-4000:]}"
+                f"real Xiaoo launch failed with {result.returncode}: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         match = TRACE_RE.search(result.output)
         if match is None:
@@ -355,86 +358,24 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             shutil.copy2(source_path, destination / destination_name)
 
     def _write_operator_patch(self) -> None:
-        work_dir = self.command_config.work_dir
-        paths = {
-            name: json.dumps(str(work_dir / relative))
-            for name, relative in {
-                "socket": "run/control.sock",
-                "pid": "run/actraild.pid",
-                "log": "log/actraild.log",
-                "storage": "data/actrail.sqlite",
-                "export": "data/export",
-                "tls_sync": "run/tls-sync.sock",
-                "plugins": "plugins",
-                "rules": "command-control.rules",
-            }.items()
-        }
-        self.command_config.operator_config_patch.write_text(
-            "[control]\n"
-            f"socket_path = {paths['socket']}\n"
-            f"pid_file = {paths['pid']}\n"
-            f"log_path = {paths['log']}\n"
-            "\n[storage.sqlite]\n"
-            f"path = {paths['storage']}\n"
-            "\n[storage.retention]\n"
-            "enabled = false\n"
-            "\n[export.snapshot]\n"
-            f"directory = {paths['export']}\n"
-            "\n[payload.tls]\n"
-            "enabled = false\n"
-            f"sync_event_socket_path = {paths['tls_sync']}\n"
-            "\n[payload.stdio]\n"
-            "enabled = false\n"
-            "\n[payload.socket]\n"
-            "enabled = false\n"
-            "\n[capture]\n"
-            'profile_name = "command-policy-xiaoo-regression"\n'
-            "capabilities = [\"proc-lifecycle\", \"proc-exec-context\", "
-            "\"enforcement-command-execution-seccomp\"]\n"
-            "\n[ebpf]\n"
-            "enabled = true\n"
-            "\n[seccomp_notify]\n"
-            "enabled = true\n"
-            "reserved_listener_fd = 253\n"
-            '\n[access_control.command.exec]\nbackend = "seccomp"\n'
-            '\n[enforcement]\nenabled = false\n'
-            "\n[command_control]\n"
-            "enabled = true\n"
-            f"rules_path = {paths['rules']}\n"
-            'default_decision = "allow"\n'
-            'failure_decision = "deny"\n'
-            "audit_enabled = true\n"
-            "audit_default_allow = false\n"
-            "path_max_bytes = 4096\n"
-            "argv_max_count = 128\n"
-            "argv_max_arg_bytes = 8192\n"
-            "argv_max_total_bytes = 65536\n"
-            "pending_decision_max = 64\n"
-            "reusable_cache_max_entries = 4096\n"
-            "\n[command_control.gray]\n"
-            "timeout_ms = 5000\n"
-            "concurrency_limit = 8\n"
-            'fallback = "deny"\n'
-            "\n[plugins.discovery]\n"
-            f"directory = {paths['plugins']}\n"
-            "max_packages = 4\n"
-            "manifest_max_bytes = 262144\n"
-            "\n[plugins.startup]\n"
-            "enabled = false\n"
-            'failure_policy = "fail-fast"\n',
-            encoding="utf-8",
+        (
+            PatchBuilder()
+            .with_work_dir(self.config.work_dir)
+            .with_values({"command_control": {"rules_path": str(self._rules)}})
+            .build()
+            .save(self.config.operator_config_patch)
         )
 
     def _write_xiaoo_config(self, provider_url: str) -> None:
         self._xiaoo_config.write_text(
             "[llm]\n"
-            'provider = "deepseek"\n'
-            'model = "deepseek-chat"\n'
+            f'provider = "{CASE_CONSTANTS.llm_provider}"\n'
+            f'model = "{CASE_CONSTANTS.llm_model}"\n'
             'api_key_env = "ACTRAIL_XIAOO_COMMAND_POLICY_KEY"\n'
             f"api_base = {json.dumps(provider_url)}\n"
-            "max_tokens = 128\n"
-            "context_window = 32768\n"
-            'reasoning_effort = "off"\n',
+            f"max_tokens = {CASE_CONSTANTS.llm_max_tokens}\n"
+            f"context_window = {CASE_CONSTANTS.llm_context_window}\n"
+            f'reasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"\n',
             encoding="utf-8",
         )
 

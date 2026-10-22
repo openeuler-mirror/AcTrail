@@ -13,6 +13,8 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import ALERT_CATEGORY, AlertForwardingEnvironment
 
+from .constants import CASE_CONSTANTS
+
 
 class AlertForwardingScenario:
     def __init__(
@@ -37,7 +39,7 @@ class AlertForwardingScenario:
             "script_trigger",
             "running the real failing-command workload at threshold one",
         )
-        marker = "ALERT_FORWARDING_SCRIPT_" + secrets.token_hex(6)
+        marker = "ALERT_FORWARDING_SCRIPT_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         trace_id, _ = self._environment.launch_trigger(marker)
         predicate = lambda alert: alert.get("source", {}).get("trid") == f"trace-{trace_id}"
         first_alert = first.wait_for_alert(
@@ -72,7 +74,7 @@ class AlertForwardingScenario:
         )
         self._environment.configure_forwarding(["unmatched.e2e.category"])
         filtered_trace, _ = self._environment.launch_trigger(
-            "ALERT_FORWARDING_FILTERED_" + secrets.token_hex(6)
+            "ALERT_FORWARDING_FILTERED_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         )
         self._wait_for_stored(filtered_trace)
         first.assert_no_alert(self._environment.config.negative_window_seconds)
@@ -96,7 +98,7 @@ class AlertForwardingScenario:
         recovered = self._environment.connect_subscriber("alert-e2e-recovered")
         recovered.wait_for_heartbeat(self._environment.config.alert_timeout_seconds)
         recovery_trace, _ = self._environment.launch_trigger(
-            "ALERT_FORWARDING_RECOVERY_" + secrets.token_hex(6)
+            "ALERT_FORWARDING_RECOVERY_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         )
         recovery_alert = recovered.wait_for_alert(
             self._environment.config.alert_timeout_seconds,
@@ -126,13 +128,13 @@ class AlertForwardingScenario:
                 TestStatus.SKIPPED,
                 "no usable tool-capable real agent in opencode/codex",
             )
-        missing = f"/actrail-alert-agent-{secrets.token_hex(6)}"
+        missing = f"/actrail-alert-agent-{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         prompt = (
             "Execute exactly this shell command once, then report its result: "
             f"ls {missing}"
         )
         trace_id, _ = self._environment.launch_command(
-            "ALERT_FORWARDING_AGENT_" + secrets.token_hex(6),
+            "ALERT_FORWARDING_AGENT_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes),
             agent.command(prompt),
             environment=agent.environment,
         )

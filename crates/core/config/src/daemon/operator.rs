@@ -343,10 +343,20 @@ impl OperatorConfig {
             .map_err(|error| format!("validate default operator config: {error}"))
     }
 
-    pub fn patch_file(&self, patch_path: &Path) -> Result<Self, String> {
-        let patch = fs::read_to_string(patch_path)
-            .map_err(|error| format!("read config patch {}: {error}", patch_path.display()))?;
-        self.patch(&patch)
+    pub fn patch_files(&self, patch_paths: &[PathBuf]) -> Result<Self, String> {
+        let base = self.dump()?;
+        let mut base_value: toml::Value = toml::from_str(&base)
+            .map_err(|error| format!("parse base operator config: {error}"))?;
+        for patch_path in patch_paths {
+            let patch = fs::read_to_string(patch_path)
+                .map_err(|error| format!("read config patch {}: {error}", patch_path.display()))?;
+            let patch_value: toml::Value = toml::from_str(&patch)
+                .map_err(|error| format!("parse config patch {}: {error}", patch_path.display()))?;
+            merge_toml_value(&mut base_value, patch_value);
+        }
+        let merged = toml::to_string_pretty(&base_value)
+            .map_err(|error| format!("render patched operator config: {error}"))?;
+        Self::parse(&merged).map_err(|error| format!("validate patched operator config: {error}"))
     }
 
     pub fn patch(&self, patch: &str) -> Result<Self, String> {

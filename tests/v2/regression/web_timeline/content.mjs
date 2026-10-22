@@ -1,4 +1,5 @@
 // Compare real canonical requests and exercise bounded content navigation.
+import { C } from './constants.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { TimelineBrowser } from './browser/timeline.mjs';
@@ -11,14 +12,14 @@ let browser;
 const encodeToken = token => String(token).replaceAll('~', '~0').replaceAll('/', '~1');
 async function get(path) {
   const response = await fetch(base + path);
-  assert.equal(response.status, 200, `${path}: ${await response.clone().text()}`);
+  assert.equal(response.status, C.http_ok, `${path}: ${await response.clone().text()}`);
   return response.json();
 }
-async function node(pointer, offset = 0, limit = 2) {
+async function node(pointer, offset = C.content_start_offset, limit = C.content_page_limit) {
   return (await get(endpoint + '/node?' + new URLSearchParams({ pointer, offset, limit }))).content;
 }
-function findString(value, pointer = '') {
-  if (typeof value === 'string' && Buffer.byteLength(value) > 7 && /[^\x00-\x7f]/.test(value)) return { value, pointer };
+function findString(value, pointer = C.json_root_pointer) {
+  if (typeof value === 'string' && Buffer.byteLength(value) > C.content_preview_bytes && /[^\x00-\x7f]/.test(value)) return { value, pointer };
   if (value && typeof value === 'object') {
     for (const [key, child] of Object.entries(value)) {
       const found = findString(child, pointer + '/' + encodeToken(key));
@@ -29,12 +30,12 @@ function findString(value, pointer = '') {
 function prefix(value, bytes) {
   const raw = Buffer.from(value);
   let end = Math.min(raw.length, bytes);
-  while (end > 0 && end < raw.length && (raw[end] & 0xc0) === 0x80) end--;
+  while (end > 0 && end < raw.length && (raw[end] & C.utf8_continuation_mask) === C.utf8_continuation_prefix) end--;
   return raw.subarray(0, end).toString('utf8');
 }
 try {
   if (phase === 'blocked') {
-    const root = await node('', 0, 2);
+    const root = await node(C.json_root_pointer, C.content_start_offset, C.content_page_limit);
     assert.equal(root.node.type, 'object', 'root navigation unexpectedly decoded content blocks');
     const blockPointer = expected.block_pointers[0];
     const tokens = blockPointer.split('/').slice(1);
@@ -55,19 +56,19 @@ try {
     assert.equal(descriptor.child_count, null, 'block description unexpectedly decoded its children');
     const query = new URLSearchParams({ pointer: blockPointer, offset: '0', limit: '1' });
     const response = await fetch(base + endpoint + '/node?' + query);
-    assert.equal(response.status, 400);
+    assert.equal(response.status, C.http_bad_request);
     assert.match(await response.text(), /budget|limit/i);
     await get(`/api/traces/${trace}/metadata`);
     await get(`/api/traces/${trace}/actions/timeline?limit=1`);
   } else if (phase === 'full') {
-    const full = (await get(endpoint + '?max_bytes=16777216')).content;
+    const full = (await get(endpoint + `?max_bytes=${C.content_max_bytes}`)).content;
     assert(!full.truncated, 'real acceptance request exceeded full comparison budget');
     assert.deepEqual(JSON.parse(full.body_json), expected.body, 'content differs from persisted skeleton and blocks');
     const size = Buffer.byteLength(full.body_json);
     assert.equal(Number(full.canonical_body_bytes), size);
-    const unicode = Buffer.from(full.body_json).findIndex(byte => byte >= 0x80);
+    const unicode = Buffer.from(full.body_json).findIndex(byte => byte >= C.utf8_continuation_prefix);
     assert(unicode >= 0, 'real request must contain UTF-8 characters');
-    for (const limit of new Set([1, 2, 7, 31, unicode + 1, Math.floor(size / 2), size - 1, size])) {
+    for (const limit of new Set([...C.content_boundary_bytes, unicode + 1, Math.floor(size / 2), size - 1, size])) {
       const result = (await get(endpoint + '?max_bytes=' + limit)).content;
       assert.equal(result.body_json, prefix(full.body_json, limit));
       assert.equal(Number(result.returned_bytes), Buffer.byteLength(result.body_json));
@@ -76,34 +77,34 @@ try {
     }
     const keys = Object.keys(expected.body).sort();
     const children = [];
-    for (let offset = 0; offset < keys.length; offset += 2) {
+    for (let offset = 0; offset < keys.length; offset += C.content_page_limit) {
       const result = await node('', offset);
       assert.equal(Number(result.canonical_body_bytes), size);
-      assert(result.node.children.length <= 2);
+      assert(result.node.children.length <= C.content_page_limit);
       assert.equal(result.node.total_children, keys.length);
       children.push(...result.node.children.map(child => child.token));
     }
     assert.deepEqual(children, keys);
-    assert.equal((await fetch(base + endpoint + '?max_bytes=16777217')).status, 400);
-    assert.equal((await fetch(base + endpoint + '/node?offset=0&limit=251')).status, 400);
+    assert.equal((await fetch(base + endpoint + `?max_bytes=${C.content_max_bytes + 1}`)).status, C.http_bad_request);
+    assert.equal((await fetch(base + endpoint + `/node?offset=${C.content_start_offset}&limit=${C.content_max_page_limit + 1}`)).status, C.http_bad_request);
   } else {
     const leaf = ['messages', 'input', 'system', 'prompt'].map(key =>
       findString(expected.body[key], '/' + key)).find(Boolean);
     assert(leaf, 'real request needs a nontrivial string leaf');
     const result = (await node(leaf.pointer)).node;
-    assert.equal(result.value, prefix(leaf.value, 7));
+    assert.equal(result.value, prefix(leaf.value, C.content_preview_bytes));
     assert.equal(Number(result.value_bytes), Buffer.byteLength(leaf.value));
     assert.equal(Number(result.returned_bytes), Buffer.byteLength(result.value));
     assert(result.truncated);
     const raw = Buffer.from(leaf.value);
-    const unicodeOffset = raw.findIndex(byte => byte >= 0x80);
+    const unicodeOffset = raw.findIndex(byte => byte >= C.utf8_continuation_prefix);
     const unicodePage = (await node(leaf.pointer, unicodeOffset)).node;
-    assert.equal(unicodePage.value, prefix(raw.subarray(unicodeOffset).toString('utf8'), 7));
+    assert.equal(unicodePage.value, prefix(raw.subarray(unicodeOffset).toString('utf8'), C.content_preview_bytes));
     assert.equal(unicodePage.offset, unicodeOffset);
     assert.equal(unicodePage.returned_bytes, Buffer.byteLength(unicodePage.value));
     const { chromium } = await import(playwright);
     browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const page = await browser.newPage({ viewport: C.viewport });
     page.on('request', request => { if (request.url().includes('/api/')) report.requests.push(request.url()); });
     const timeline = new TimelineBrowser(page, base, trace);
     await timeline.open();
@@ -146,7 +147,7 @@ try {
     const toolNode = (await (await toolResponse).json()).content.node;
     assert.equal(toolNode.type, 'array');
     assert.equal(toolNode.total_children, expected.body[toolsField].length);
-    assert(toolNode.children.length <= 5, 'tool list exceeded its first page');
+    assert(toolNode.children.length <= C.content_max_children, 'tool list exceeded its first page');
     const firstTool = tools.locator(`.llm-content-node[data-pointer="/${toolsField}/0"]`);
     await firstTool.waitFor();
     await page.waitForLoadState('networkidle');
@@ -185,7 +186,7 @@ try {
     }
     const preview = body.locator(`.llm-content-node[data-pointer="${leaf.pointer}"]`);
     await preview.locator(':scope > .llm-content-pages').waitFor();
-    assert.equal(await preview.locator(':scope > .llm-content-value').textContent(), prefix(leaf.value, 7));
+    assert.equal(await preview.locator(':scope > .llm-content-value').textContent(), prefix(leaf.value, C.content_preview_bytes));
     assert(await preview.locator('.llm-content-next').isEnabled(), 'truncated text has no next page');
     assert.equal(report.requests.filter(url => url.includes('/content/llm-request')
       && new URL(url).searchParams.get('pointer') === '').length, 1, 'card expansion reloaded root');
@@ -198,5 +199,5 @@ try {
   throw error;
 } finally {
   if (browser) await browser.close();
-  await fs.writeFile(`${output}/content-${phase}.json`, JSON.stringify(report, null, 2));
+  await fs.writeFile(`${output}/content-${phase}.json`, JSON.stringify(report, null, C.json_indent));
 }

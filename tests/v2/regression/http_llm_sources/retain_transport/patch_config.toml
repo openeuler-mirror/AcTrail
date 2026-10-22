@@ -1,0 +1,7 @@
+[semantic_retention]
+content_owner = "configured_layers"
+
+[semantic_retention.l4_payload]
+enabled = true
+stats = true
+body_content = "retained"

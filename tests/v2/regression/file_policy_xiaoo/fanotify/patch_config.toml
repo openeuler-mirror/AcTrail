@@ -1,0 +1,30 @@
+[payload.tls]
+enabled = false
+[payload.stdio]
+enabled = false
+[payload.socket]
+enabled = false
+[capture]
+profile_name = "file-policy-xiaoo-regression"
+capabilities = ["proc-lifecycle", "enforcement-file-permission-fanotify"]
+opportunistic_capabilities = []
+[ebpf]
+enabled = true
+[seccomp_notify]
+enabled = false
+[process_seccomp]
+enabled = false
+[command_control]
+enabled = false
+[network_control]
+enabled = false
+[access_control.file.open]
+backend = "fanotify"
+[enforcement]
+enabled = true
+scope = "trace"
+default_decision = "allow"
+mark_strategy = "parent-directories"
+audit_enabled = true
+[plugins.startup]
+enabled = false

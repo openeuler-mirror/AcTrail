@@ -1,5 +1,34 @@
 # V2 regression tests
 
+- **通用回归**：通过 `actrailctl init -f` 生成默认配置。场景补丁设置隔离路径、内容保留和导出等验收条件，采集后端继承产品默认值。
+- **后端专项**：权限矩阵、TLS-only 和治理后端测例显式设置所验证的后端，并检查对应的能力与证据。
+
+**配置生成**：公共工具用 `PatchBuilder` 生成运行目录、socket 和数据库等动态配置。测例的固定配置保存在本目录或子场景目录的 `patch_config.toml`，由测例通过 `__file__` 定位并传给执行层。
+
+```python
+from pathlib import Path
+from tests.v2.common.patch_builder import PatchBuilder
+
+runtime_patch = (
+    PatchBuilder()
+    .with_work_dir(work_dir)
+    .build()
+    .save(work_dir / "runtime_patch.toml")
+)
+case_patch = Path(__file__).with_name("patch_config.toml")
+```
+
+```bash
+actrailctl --config "$WORK/actraild.conf" init -f \
+  --patch "$WORK/runtime_patch.toml" --patch "$CASE/patch_config.toml"
+```
+
+**合并顺序**：后面的配置覆盖前面的同名值。表逐层合并，数组整体替换，全部合并后校验最终配置。`PatchBuilder().apply(path)` 使用同样的合并规则，文件路径由调用方传入。
+
+- **测例参数**：运行超时、轮询间隔、数据大小、模型和启动选项等默认值定义在测例同目录的 `constants.py`。使用 dataclass 字段表达固定默认值，使用 `default_factory` 在创建配置对象时计算路径或生成独立容器。
+- **公共套件**：公共执行器、进程管理、告警代理和本地模型服务等参数由所属套件的 `constants.py` 管理。测例配置引用所需套件的字段。
+- **环境覆盖**：环境变量、命令行和构造器的默认值引用对应字段。AcTrail 配置由默认配置和有序 patch 列表经 `actrailctl init --patch` 生成。
+
 运行默认回归集合：
 
 ```bash

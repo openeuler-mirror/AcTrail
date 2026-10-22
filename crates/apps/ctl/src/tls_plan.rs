@@ -21,7 +21,7 @@ pub(crate) struct QueriedLaunchTlsPlan {
 }
 
 pub(crate) fn query_launch_tls_plan_reply(
-    client: &mut impl ControlClientPort,
+    client: &mut (impl ControlClientPort + ?Sized),
     request_id: RequestId,
     binary: &Path,
 ) -> Result<LaunchTlsPlanReply, ControlError> {
@@ -81,7 +81,7 @@ pub(crate) const fn unavailable_reason_text(
 }
 
 pub(crate) fn query_launch_tls_plan(
-    client: &mut impl ControlClientPort,
+    client: &mut (impl ControlClientPort + ?Sized),
     request_id: RequestId,
     binary: &Path,
 ) -> Result<Option<QueriedLaunchTlsPlan>, String> {

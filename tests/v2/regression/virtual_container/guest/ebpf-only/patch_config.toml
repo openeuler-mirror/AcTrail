@@ -1,0 +1,44 @@
+[control]
+socket_path = "/tmp/actrail-e2e/ebpf-only/control.sock"
+socket_mode_octal = "660"
+pid_file = "/tmp/actrail-e2e/ebpf-only/actraild.pid"
+log_path = "/tmp/actrail-e2e/ebpf-only/actraild.log"
+diagnostic_log_level = "info"
+
+[storage.sqlite]
+path = "/tmp/actrail-e2e/ebpf-only/actrail.sqlite"
+
+[semantic_retention]
+content_owner = "configured_layers"
+
+[semantic_retention.l4_payload]
+enabled = true
+stats = true
+body_content = "retained"
+
+[export.snapshot]
+directory = "/tmp/actrail-e2e/ebpf-only/export"
+
+[plugins.startup]
+enabled = false
+
+[payload.tls]
+sync_event_socket_path = "/tmp/actrail-e2e/ebpf-only/tls-sync.sock"
+enabled = false
+
+[capture]
+profile_name = "guest-ebpf-only"
+capabilities = ["proc-lifecycle", "net-transport", "fs-access-basic"]
+opportunistic_capabilities = []
+
+[enforcement]
+enabled = false
+
+[ebpf]
+enabled = true
+
+[payload.socket]
+enabled = false
+
+[payload.stdio]
+enabled = false

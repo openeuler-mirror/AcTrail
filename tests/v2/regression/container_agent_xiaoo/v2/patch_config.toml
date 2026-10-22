@@ -1,0 +1,31 @@
+# Multi-container xiaoO scenario settings applied to the default configuration.
+
+[control]
+socket_mode_octal = "660"
+active_trace_max = 8
+diagnostic_log_level = "info"
+
+[capture]
+profile_name = "multi-container-xiaoo"
+capabilities = [
+    "proc-lifecycle",
+    "net-transport",
+    "fs-access-basic",
+    "socket-plaintext-payload",
+    "tls-plaintext-payload",
+    "net-application-plaintext-http",
+]
+
+[enforcement]
+enabled = false
+
+[file_observation.collection.read]
+observed = true
+bytes = true
+
+[file_observation.collection.write]
+observed = true
+bytes = true
+
+[file_observation.bulk_read]
+enabled = false

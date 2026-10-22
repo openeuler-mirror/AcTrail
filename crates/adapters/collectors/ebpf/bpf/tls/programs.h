@@ -115,21 +115,24 @@ int handle_rustls_start_outgoing_traffic(struct pt_regs *ctx) {
 
 SEC("uprobe")
 int handle_rustls_buffer_plaintext(struct pt_regs *ctx) {
-    return emit_rustls_internal_payload(
+    return store_rustls_write(
         ctx,
         ACTRAIL_UPROBE_ARG1(ctx),
-        ACTRAIL_UPROBE_ARG2(ctx),
-        ACTRAIL_TLS_SYMBOL_RUSTLS_BUFFER_PLAINTEXT
+        ACTRAIL_UPROBE_ARG2(ctx)
     );
 }
 
 SEC("uprobe")
+int handle_rustls_buffer_plaintext_exit(struct pt_regs *ctx) {
+    return emit_rustls_completed_write(ctx, ACTRAIL_UPROBE_RET(ctx));
+}
+
+SEC("uprobe")
 int handle_rustls_take_received_plaintext(struct pt_regs *ctx) {
-    return emit_rustls_internal_payload(
+    return emit_rustls_received_payload(
         ctx,
         ACTRAIL_UPROBE_ARG1(ctx),
-        ACTRAIL_UPROBE_ARG2(ctx),
-        ACTRAIL_TLS_SYMBOL_RUSTLS_TAKE_RECEIVED_PLAINTEXT
+        ACTRAIL_UPROBE_ARG2(ctx)
     );
 }
 

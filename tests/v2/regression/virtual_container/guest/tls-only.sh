@@ -6,10 +6,11 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
 actrail_need_binaries
+[ -f "$TLS_SYNC_LIBRARY" ] || fail "TLS sync library missing: $TLS_SYNC_LIBRARY"
 OPENSSL="$(openssl_bin)"
 CONFIG="${ACTRAIL_CONFIG:-$ACTRAIL_BUNDLE/guest-tls-only.conf}"
 WORK="$(prepare_workdir tls-only)"
-PORT="${ACTRAIL_TLS_PORT:-4433}"
+PORT="${ACTRAIL_TLS_PORT:-$ACTRAIL_TLS_ONLY_PORT}"
 SERVER_PID=""
 
 cleanup() {
@@ -25,7 +26,7 @@ echo "openssl=$OPENSSL"
 generate_tls_cert "$OPENSSL" "$WORK"
 start_daemon "$CONFIG"
 SERVER_PID="$(start_tls_server "$OPENSSL" "$WORK" "$PORT")"
-sleep 1
+sleep "$ACTRAIL_TLS_SERVER_SETTLE_SECONDS"
 
 if ! printf "CLIENT_SECRET_MARKER_7788\n" | "$ACTRAILCTL" \
   --config "$CONFIG" \

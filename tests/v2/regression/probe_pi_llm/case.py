@@ -8,6 +8,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from .config import ProbePiLLMConfig
 from .task import ProbePiLLMTask
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbePiLLMCase(TestCase):
     def __init__(self, config: ProbePiLLMConfig):
@@ -59,7 +61,7 @@ class ProbePiLLMCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,

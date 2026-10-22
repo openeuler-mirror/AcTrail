@@ -66,7 +66,7 @@ done
 
 actual_library_path="$(
   ACTRAIL_BUNDLE="$BUNDLE_DIR" \
-    sh -c '. "$1"; printf "%s|%s\n" "$LD_LIBRARY_PATH" "$TLS_PAYLOAD_SYNC_LIBRARY"' sh \
+    sh -c 'SCRIPT_DIR=$(dirname -- "$1"); . "$1"; printf "%s|%s\n" "$LD_LIBRARY_PATH" "$TLS_PAYLOAD_SYNC_LIBRARY"' sh \
     "$BUNDLE_DIR/tests/guest/common.sh"
 )"
 [[ "$actual_library_path" == "$BUNDLE_DIR/lib|$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so" ]] \

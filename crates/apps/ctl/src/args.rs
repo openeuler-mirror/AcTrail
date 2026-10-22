@@ -33,7 +33,7 @@ pub enum CtlCommand {
     Init {
         config_path: PathBuf,
         force: bool,
-        patch_path: Option<PathBuf>,
+        patch_paths: Vec<PathBuf>,
         mode: Option<InitMode>,
     },
     TrackAdd {
@@ -217,7 +217,7 @@ impl CtlCommandArgs {
             Self::Init(args) => Ok(CtlCommand::Init {
                 config_path: init_config_path(args.output_path, config_path, explicit_config)?,
                 force: args.force,
-                patch_path: args.patch_path,
+                patch_paths: args.patch_paths,
                 mode: args.mode,
             }),
             Self::TrackAdd(args) => {
@@ -344,8 +344,12 @@ struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
 
-    #[arg(long = "patch", value_name = "PATH")]
-    patch_path: Option<PathBuf>,
+    #[arg(
+        long = "patch",
+        value_name = "PATH",
+        help = "Apply a TOML patch; repeat in order, with later values taking precedence"
+    )]
+    patch_paths: Vec<PathBuf>,
 
     #[arg(short = 'f', long = "force")]
     force: bool,

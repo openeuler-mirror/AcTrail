@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from .constants import CASE_CONSTANTS
+
 from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.config import (
     CloudHypervisorExecutionIsolationConfig,
 )
@@ -19,7 +21,7 @@ class FirecrackerExecutionIsolationConfig(
     PROFILE_RUNTIME_CONFIG: ClassVar[str] = (
         "VIRTUAL_CONTAINER_E2E_FIRECRACKER_DATA_CONFIG"
     )
-    DEFAULT_VM_ROOT: ClassVar[str] = "/run/vc/firecracker"
+    DEFAULT_VM_ROOT: ClassVar[str] = CASE_CONSTANTS.vm_root
     SUPPORTED_ARCHITECTURES: ClassVar[frozenset[str]] = frozenset(
         {"aarch64", "x86_64"}
     )

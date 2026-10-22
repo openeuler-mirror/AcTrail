@@ -2,12 +2,9 @@
 # 虚拟容器测试环境预检：验收机必须通过必要能力门禁。
 set -u
 
-ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
-. "$ROOT_DIR/tests/v2/regression/virtual_container/runtime-backend.sh"
+. "$(dirname -- "${BASH_SOURCE[0]}")/runtime-backend.sh" || exit 1
+ROOT_DIR="${ACTRAIL_REPO_ROOT:-$HOST_REPO_ROOT}"
 RUNTIME_CONFIG_VALIDATOR="$ROOT_DIR/tests/v2/regression/virtual_container/validate-runtime-config.py"
-BACKEND="${BACKEND:-stratovirt}" # stratovirt|cloud-hypervisor|all
-RUNTIME_CONFIG_PATH="${RUNTIME_CONFIG_PATH:-}"
-CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
 CTR_RUNTIME="${CTR_RUNTIME:-$(default_kata_ctr_runtime)}"
 KATA_SHIM_BINARY="$(kata_shim_binary_for_runtime "$CTR_RUNTIME")" || exit 1
 

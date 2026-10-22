@@ -10,26 +10,31 @@ import ssl
 import threading
 import time
 import base64
+from http.client import HTTP_PORT, HTTPS_PORT
 from urllib.parse import unquote, urlsplit
 from urllib.request import getproxies, proxy_bypass
+
+from .constants import CASE_CONSTANTS
+
+CONNECT_HEADER_READ_BYTES = 1
 
 
 class TlsRelay:
     def __init__(
         self,
-        upstream_url="https://chatgpt.com/backend-api/codex",
-        timeout_seconds=30,
+        upstream_url=CASE_CONSTANTS.relay_upstream_url,
+        timeout_seconds=CASE_CONSTANTS.relay_timeout_seconds,
         *,
-        header_limit_bytes=65536,
-        max_connections=16,
-        read_size_bytes=65536,
-        cleanup_timeout_seconds=5,
+        header_limit_bytes=CASE_CONSTANTS.relay_header_limit_bytes,
+        max_connections=CASE_CONSTANTS.relay_max_connections,
+        read_size_bytes=CASE_CONSTANTS.relay_read_size_bytes,
+        cleanup_timeout_seconds=CASE_CONSTANTS.relay_cleanup_timeout_seconds,
     ):
         parsed = urlsplit(upstream_url)
         if parsed.scheme != "https" or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("upstream must be an HTTPS URL without credentials, query or fragment")
         upstream_host = parsed.hostname
-        upstream_port = parsed.port or 443
+        upstream_port = parsed.port or HTTPS_PORT
         if not upstream_host or any(c in upstream_host for c in "\r\n /\t"):
             raise ValueError("invalid upstream host")
         for value in (header_limit_bytes, timeout_seconds, max_connections,
@@ -66,7 +71,7 @@ class TlsRelay:
     def base_url(self):
         if self._listener is None:
             raise RuntimeError("relay is not running")
-        return f"http://127.0.0.1:{self._listener.getsockname()[1]}{self._base_path}"
+        return f"http://{CASE_CONSTANTS.loopback_host}:{self._listener.getsockname()[1]}{self._base_path}"
 
     @property
     def ws_base_url(self):
@@ -77,9 +82,9 @@ class TlsRelay:
             raise RuntimeError("relay context cannot be reused")
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self._listener.bind(("127.0.0.1", 0))
+            self._listener.bind((CASE_CONSTANTS.loopback_host, 0))
             self._listener.listen()
-            self._listener.settimeout(min(0.25, self.io_timeout_seconds))
+            self._listener.settimeout(min(CASE_CONSTANTS.io_poll_seconds, self.io_timeout_seconds))
             self._spawn(self._accept)
         except BaseException:
             self.close()
@@ -155,7 +160,7 @@ class TlsRelay:
         head, body = bytes(data).split(b"\r\n\r\n", 1)
         lines = head.split(b"\r\n")
         host = self.upstream_host
-        if self.upstream_port != 443:
+        if self.upstream_port != HTTPS_PORT:
             host += f":{self.upstream_port}"
         replacement = b"Host: " + host.encode("ascii")
         found = False
@@ -215,7 +220,7 @@ class TlsRelay:
 
     def _connect_upstream(self):
         proxy = self._proxy
-        target = (proxy.hostname, proxy.port or 80) if proxy else (
+        target = (proxy.hostname, proxy.port or HTTP_PORT) if proxy else (
             self.upstream_host, self.upstream_port
         )
         raw = self._track(socket.create_connection(target, self.io_timeout_seconds))
@@ -236,7 +241,7 @@ class TlsRelay:
                     if remaining <= 0 or len(response) >= self.header_limit_bytes:
                         raise OSError("proxy response header limit reached")
                     raw.settimeout(remaining)
-                    byte = raw.recv(1)
+                    byte = raw.recv(CONNECT_HEADER_READ_BYTES)
                     if not byte:
                         raise OSError("proxy closed before CONNECT response")
                     response.extend(byte)

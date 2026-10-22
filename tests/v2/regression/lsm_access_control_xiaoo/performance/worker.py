@@ -12,6 +12,8 @@ from pathlib import Path
 
 from ..workload import AccessWorkload
 
+from .constants import CASE_CONSTANTS
+
 
 class Worker:
     def __init__(self, args: argparse.Namespace):
@@ -29,7 +31,7 @@ class Worker:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.settimeout(self.args.timeout)
             try:
-                client.connect(("127.0.0.1", port))
+                client.connect((CASE_CONSTANTS.loopback_host, port))
             except OSError as error:
                 if decision != "deny" or error.errno not in (errno.EACCES, errno.EPERM):
                     raise

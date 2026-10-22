@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
+from .constants import CASE_CONSTANTS
 
-_UNIX_SOCKET_PATH_LIMIT = 107
+
+_UNIX_SOCKET_PATH_LIMIT = CASE_CONSTANTS.unix_socket_path_limit
 
 
 @dataclass(frozen=True)
@@ -66,12 +68,12 @@ class HybridVsockSocketInventory:
             created = after - before
             if created:
                 return self.resolve_new_base_socket(before, after)
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_new_base_socket_poll_seconds)
             after = self.snapshot()
         return self.resolve_new_base_socket(before, after)
 
     def gateway_socket(self, base: Path, port: int) -> Path:
-        if port < 1027 or port > 65535:
+        if port < CASE_CONSTANTS.vsock_port_minimum or port > CASE_CONSTANTS.port_maximum:
             raise ValueError(
                 f"{self.DISPLAY} execution-isolation VSOCK port must be "
                 "1027..65535"
@@ -102,7 +104,7 @@ class HybridVsockSocketInventory:
             try:
                 mode = endpoint.lstat().st_mode
             except FileNotFoundError:
-                time.sleep(0.05)
+                time.sleep(CASE_CONSTANTS.wait_listener_socket_poll_seconds)
                 continue
             if stat.S_ISSOCK(mode):
                 return endpoint

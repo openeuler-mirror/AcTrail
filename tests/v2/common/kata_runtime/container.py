@@ -12,6 +12,8 @@ from .capabilities import CtrCapabilities
 from .process import CommandResult, ManagedProcess, ProcessRunner
 from .requirements import ContainerRequirements, KataCreateSpec, PreparePolicy
 
+from .constants import DEFAULTS
+
 
 _RUN_LABEL = "io.actrail.test.run"
 _CASE_LABEL = "io.actrail.test.case"
@@ -84,7 +86,7 @@ class KataTestContainer:
         runner: ProcessRunner,
         capabilities: CtrCapabilities,
         *,
-        cleanup_timeout_seconds: float = 5,
+        cleanup_timeout_seconds: float = DEFAULTS.cleanup_timeout_seconds,
     ) -> None:
         if not _SAFE_PREFIX.fullmatch(requirements.name_prefix):
             raise ValueError(
@@ -482,7 +484,7 @@ class KataTestContainer:
                 raise RuntimeError(
                     f"owned Kata host process leak for {self._container_id}: {details}"
                 )
-            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+            time.sleep(min(DEFAULTS.cleanup_poll_seconds, max(0, deadline - time.monotonic())))
 
     def _build_run_command(self, spec: KataCreateSpec) -> list[str]:
         command = self._ctr("run")

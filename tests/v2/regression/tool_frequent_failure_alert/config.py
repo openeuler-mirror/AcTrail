@@ -6,6 +6,8 @@ from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ToolFrequentFailureAlertConfig(CommonTestConfig):
@@ -50,6 +52,6 @@ class ToolFrequentFailureAlertConfig(CommonTestConfig):
                 Path(__file__).parent
                 / "tool-frequent-failure-alert.agent.e2e.config.json"
             ),
-            plugin_instance="tool-frequent-alert.v2",
-            installed_plugin_instance="tool-frequent-alert.installed",
+            plugin_instance=CASE_CONSTANTS.plugin_instance,
+            installed_plugin_instance=CASE_CONSTANTS.installed_plugin_instance,
         )

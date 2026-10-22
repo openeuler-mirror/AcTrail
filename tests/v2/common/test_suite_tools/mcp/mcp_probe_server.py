@@ -12,6 +12,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .constants import DEFAULTS
+else:
+    from constants import DEFAULTS
+
 
 class EventRecorder:
     def __init__(self, path: Path) -> None:
@@ -245,7 +250,7 @@ class ProbeServerCommand:
         parser.add_argument(
             "--tool-description-padding-bytes",
             type=int,
-            default=0,
+            default=DEFAULTS.tool_description_padding_bytes,
         )
         return cls(parser.parse_args())
 

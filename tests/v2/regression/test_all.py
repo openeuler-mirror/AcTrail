@@ -7,8 +7,11 @@ import argparse
 import sys
 from pathlib import Path
 
+
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
+
+from tests.v2.regression.constants import DEFAULTS
 
 from tests.v2.common.core import TestOutput
 from tests.v2.common.runner import add_common_arguments, run_selected
@@ -220,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments.color,
         arguments.log_dir,
         arguments.work_root,
-        show_details=False,
+        show_details=DEFAULTS.show_details,
         cleanup_cases=arguments.cleanup,
         fail_fast=arguments.fail_fast,
         lock_path=arguments.lock_path,

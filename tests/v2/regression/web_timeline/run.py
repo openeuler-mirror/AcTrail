@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Generate real agent evidence with fresh isolated defaults, then test the Web UI."""
+from constants import CASE_CONSTANTS as C
 import argparse
 import json
 import os
@@ -25,34 +26,34 @@ class Acceptance:
         self.work = args.work.resolve()
         self.work.mkdir(parents=True, exist_ok=False)
         self.runtime = ActrailRuntime.isolated(
-            REPO, args.bin_dir.resolve(), 240, TestOutput(color_mode="never"),
+            REPO, args.bin_dir.resolve(), C.command_timeout_seconds, TestOutput(color_mode="never"),
             self.work, agent_invocation_commands=[args.agent.resolve()])
         self.web = None
 
     def start_web(self, name, **settings):
         if self.web:
             self.web.terminate()
-            self.web.wait(timeout=10)
+            self.web.wait(timeout=C.web_stop_timeout_seconds)
         with (self.work / f'{name}.log').open('w') as log:
             self.web = subprocess.Popen([
                 str(self.args.bin_dir.resolve() / 'actrailweb'), '--config', str(self.work / 'actraild.conf'),
-                '--addr', '127.0.0.1', '--port', str(self.args.port)],
+                '--addr', C.host, '--port', str(self.args.port)],
                 stdout=log, stderr=subprocess.STDOUT, cwd=REPO, env=dict(os.environ, **settings))
-        base = f'http://127.0.0.1:{self.args.port}'
-        for _ in range(100):
+        base = f'http://{C.host}:{self.args.port}'
+        for _ in range(C.web_ready_attempts):
             if self.web.poll() is not None:
                 raise RuntimeError(f'web exited; inspect {name}.log')
             try:
-                with urlopen(base + '/health', timeout=1):
+                with urlopen(base + '/health', timeout=C.health_timeout_seconds):
                     return base
             except OSError:
-                time.sleep(.1)
+                time.sleep(C.health_poll_seconds)
         raise RuntimeError('web startup timeout')
 
     def content_check(self, base, trace_id, phase):
         subprocess.run(['node', str(Path(__file__).with_name('content.mjs')), base, str(trace_id),
                         str(self.work), phase, self.args.playwright, self.args.chromium],
-                       check=True, timeout=180)
+                       check=True, timeout=C.content_timeout_seconds)
 
     def run(self):
         report = {"status": "failed", "work": str(self.work)}
@@ -62,14 +63,14 @@ class Acceptance:
             task.mkdir()
             prompt = (
                 f"Work only in {task}. Perform these steps using tools, in separate tool calls: "
-                "1. List this directory. 2. Create numbers.txt containing numbers 1 through 8, "
+                f"1. List this directory. 2. Create numbers.txt containing numbers 1 through {C.task_number_count}, "
                 "one per line. 3. Read numbers.txt. 4. Run a shell command to sum its numbers. "
                 "5. Create result.txt containing the sum. 6. Read result.txt. "
                 "This task includes the UTF-8 storage marker 火焰图. "
                 "Finally reply exactly FLAMEGRAPH_E2E_OK. Do not skip tools.")
             launched = self.runtime.run(
                 self.runtime.control_command("launch", "--", self.args.agent.resolve(),
-                                             "--cli", "run", "--max-turns", "16",
+                                             "--cli", "run", "--max-turns", str(C.agent_max_turns),
                                              "--prompt", prompt),
                 timeout_seconds=self.args.agent_timeout, cwd=task)
             (self.work / "agent.log").write_text(launched.output)
@@ -81,15 +82,15 @@ class Acceptance:
             trace_id = int(ids[0])
             long_capture = LongContentCapture(self.runtime, self.args, self.work)
             long_trace_id = long_capture.run(task)
-            for _ in range(2):
+            for _ in range(C.extra_process_traces):
                 extra = self.runtime.run(self.runtime.control_command("launch", "--", "/usr/bin/true"),
-                                         timeout_seconds=60)
+                                         timeout_seconds=C.process_timeout_seconds)
                 if extra.returncode:
                     raise RuntimeError("additional real process capture failed")
             stopped = self.runtime.stop()
             if stopped is None or stopped.returncode:
                 raise RuntimeError("daemon did not drain successfully")
-            if (task / "result.txt").read_text().strip() != "36":
+            if (task / "result.txt").read_text().strip() != str(sum(range(1, C.task_number_count + 1))):
                 raise RuntimeError("real tool task did not produce expected result")
             report["trace_id"] = trace_id
             report["long_trace_id"] = long_trace_id
@@ -115,18 +116,18 @@ class Acceptance:
             subprocess.run([
                 'node', str(Path(__file__).with_name('browser.mjs')), base,
                 str(trace_id), str(self.work), self.args.endpoint,
-                self.args.playwright, self.args.chromium], check=True, timeout=600)
+                self.args.playwright, self.args.chromium], check=True, timeout=C.browser_timeout_seconds)
             self.content_check(base, trace_id, 'full')
             subprocess.run(['node', str(Path(__file__).parent / 'long_content/browser.mjs'), base,
                             str(long_trace_id), str(self.work), self.args.playwright,
-                            self.args.chromium], check=True, timeout=180)
-            base = self.start_web('web-small-budget', ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT='1',
-                                  ACTRAIL_WEB_TIMELINE_MAX_LIMIT='1', ACTRAIL_WEB_TIMELINE_CANDIDATES='1')
+                            self.args.chromium], check=True, timeout=C.content_timeout_seconds)
+            base = self.start_web('web-small-budget', ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT=str(C.timeline_small_budget),
+                                  ACTRAIL_WEB_TIMELINE_MAX_LIMIT=str(C.timeline_small_budget), ACTRAIL_WEB_TIMELINE_CANDIDATES=str(C.timeline_small_budget))
             subprocess.run(['node', str(Path(__file__).with_name('small-budget.mjs')),
-                            base, str(trace_id), str(self.work)], check=True, timeout=60)
-            base = self.start_web('web-content-preview', ACTRAIL_WEB_CONTENT_NODE_PREVIEW_BYTES='7')
+                            base, str(trace_id), str(self.work)], check=True, timeout=C.process_timeout_seconds)
+            base = self.start_web('web-content-preview', ACTRAIL_WEB_CONTENT_NODE_PREVIEW_BYTES=str(C.content_preview_bytes))
             self.content_check(base, trace_id, 'preview')
-            base = self.start_web('web-content-budget', ACTRAIL_WEB_CONTENT_NODE_BLOCK_BYTES='1')
+            base = self.start_web('web-content-budget', ACTRAIL_WEB_CONTENT_NODE_BLOCK_BYTES=str(C.content_block_budget_bytes))
             self.content_check(base, trace_id, 'blocked')
             report["status"] = "passed"
         except Exception as error:
@@ -136,22 +137,22 @@ class Acceptance:
             if self.web:
                 self.web.terminate()
                 try:
-                    self.web.wait(timeout=10)
+                    self.web.wait(timeout=C.web_stop_timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self.web.kill()
                     self.web.wait()
             self.runtime.stop()
-            (self.work / "result.json").write_text(json.dumps(report, indent=2) + "\n")
+            (self.work / "result.json").write_text(json.dumps(report, indent=C.json_indent) + "\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--work", type=Path, required=True, help="new isolated directory")
-    parser.add_argument("--bin-dir", type=Path, default=REPO / "target/release")
-    parser.add_argument("--agent", type=Path, default=Path("/home/yzh/.cargo/bin/xiaoo"))
-    parser.add_argument("--agent-timeout", type=int, default=600)
-    parser.add_argument("--port", type=int, default=18479)
-    parser.add_argument("--endpoint", default="/api/traces/{trace_id}/actions/timeline")
-    parser.add_argument("--playwright", default="/tmp/cliproxy-endpoint-browser/node_modules/playwright/index.mjs")
-    parser.add_argument("--chromium", default="/home/yzh/.cache/ms-playwright/chromium-1248/chrome-linux-arm64/chrome")
+    parser.add_argument("--bin-dir", type=Path, default=REPO / C.bin_dir)
+    parser.add_argument("--agent", type=Path, default=Path(C.agent_path))
+    parser.add_argument("--agent-timeout", type=int, default=C.agent_timeout_seconds)
+    parser.add_argument("--port", type=int, default=C.port)
+    parser.add_argument("--endpoint", default=C.endpoint)
+    parser.add_argument("--playwright", default=C.playwright_path)
+    parser.add_argument("--chromium", default=C.chromium_path)
     Acceptance(parser.parse_args()).run()

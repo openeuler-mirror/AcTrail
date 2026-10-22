@@ -1,4 +1,5 @@
 """Read expected request content from a real captured SQLite database."""
+from constants import CASE_CONSTANTS as C
 import json
 
 
@@ -23,7 +24,7 @@ class CapturedRequest:
             blocks[ordinal] = json.loads(raw)
         block_pointers = []
 
-        def hydrate(value, pointer=''):
+        def hydrate(value, pointer=C.json_root_pointer):
             if isinstance(value, dict):
                 if set(value) == {'$actrail_llm_block'}:
                     block_pointers.append(pointer)

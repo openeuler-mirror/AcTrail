@@ -10,6 +10,15 @@ use crate::{ToolError, ToolResult};
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
 const KNOWN_TLS_LAUNCHER_RUNTIMES: &[&str] = &["node", "bun"];
 
+/// Finds the native executable behind a command entry or supported launcher script.
+pub struct EntryElfResolver;
+
+impl EntryElfResolver {
+    pub fn resolve(path: &Path) -> ToolResult<PathBuf> {
+        resolve_entry_elf(path)
+    }
+}
+
 pub(crate) fn resolve_entry_elf(path: &Path) -> ToolResult<PathBuf> {
     let entry = resolve_command_or_path(path)?;
     if is_elf(&entry) {

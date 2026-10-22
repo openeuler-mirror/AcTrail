@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from tests.v2.common.core import TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
@@ -11,16 +12,15 @@ from tests.v2.common.runner import TestingContextSingleton
 from .config import ContainerAutoConfig
 from .auto_scenario import ContainerAutoScenario
 
+from .constants import CASE_CONSTANTS
+
 
 class ContainerAutoCase(TestCase):
     def __init__(self, config: ContainerAutoConfig):
         self._config = config
-        self._scenario_path = config.repo / (
-            "tests/v2/regression/container_auto/v2/auto_scenario.py"
-        )
-        self._deployment_test_path = config.repo / (
-            "tests/v2/regression/container_auto/v2/test_deployment.py"
-        )
+        self._case_dir = Path(__file__).resolve().parent
+        self._scenario_path = self._case_dir / "auto_scenario.py"
+        self._deployment_test_path = self._case_dir / "test_deployment.py"
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         test_context.report_progress(
@@ -57,7 +57,7 @@ class ContainerAutoCase(TestCase):
             env=environment,
             text=True,
             capture_output=True,
-            timeout=60,
+            timeout=CASE_CONSTANTS.deployment_contract_problem_timeout_seconds,
             check=False,
         )
         if completed.returncode == 0:
@@ -76,12 +76,10 @@ class ContainerAutoCase(TestCase):
             self._config.bin_dir / "actrailviewer",
             self._config.bin_dir / "libactrail_tls_payload_probe_sync.so",
             self._scenario_path,
-            self._config.repo
-            / "tests/v2/regression/container_auto/v2/Dockerfile",
-            self._config.repo
-            / "tests/v2/regression/container_auto/v2/operator.conf",
-            self._config.repo
-            / "tests/v2/regression/container_auto/v2/seccomp/actrail-notify.json",
+            self._case_dir / "Dockerfile",
+            self._case_dir / "patch_config.toml",
+            self._case_dir / "tls-only/patch_config.toml",
+            self._case_dir / "seccomp/actrail-notify.json",
         )
         missing = [str(path) for path in required if not path.is_file()]
         if missing:
@@ -95,7 +93,7 @@ class ContainerAutoCase(TestCase):
             ["docker", "info", "--format", "{{.ServerVersion}}"],
             text=True,
             capture_output=True,
-            timeout=15,
+            timeout=CASE_CONSTANTS.docker_info_timeout_seconds,
             check=False,
         )
         if completed.returncode != 0:

@@ -12,11 +12,14 @@ import time
 from pathlib import Path
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.core import TestOutput, has_failure
+from tests.v2.common.patch_builder import PatchBuilder
+from tests.v2.common.core import TestOutput
 from tests.v2.common.runner import TestingContextSingleton
 from ..services import WorkloadProvider
 from .paths import ENTRY, OUTPUT_DIR, REPO
 from .services import Peer, WasmPublisher
+
+from .constants import CASE_CONSTANTS
 
 
 class Benchmark:
@@ -29,37 +32,20 @@ class Benchmark:
         self._output = TestOutput(color_mode="never")
         self._peers = [Peer(args.peer_poll_seconds, args.backlog) for _ in range(2)]
 
-    def _patch(self, work: Path, backend: str) -> Path:
+    def _patches(self, work: Path, backend: str) -> list[Path]:
         patch = work / "actraild.patch.toml"
-        ActrailRuntime.write_isolated_operator_config_patch(
-            patch, work, payload_tls_enabled=False, payload_stdio_enabled=False,
+        (
+            PatchBuilder().with_work_dir(work).with_runtime_timing()
+            .with_values({"storage": {"retention": {"enabled": False}}})
+            .with_values({"network_control": {"rules_path": str(work / "network.rules")}})
+            .build().save(patch)
         )
-        document = patch.read_text().replace(
-            "[payload.tls]\n", '[payload.tls]\ncapture_backend = "bpf-copy"\n'
-        )
-        document += (
-            '\n[payload.socket]\nenabled = true\ncapture_backend = "bpf-copy"\n'
-            '\n[capture]\nprofile_name = "network-control-benchmark"\n'
-            'capabilities = ["proc-lifecycle", "net-transport", "socket-plaintext-payload", '
-            f'"enforcement-network-connect-{backend}"]\nopportunistic_capabilities = []\n'
-            '\n[ebpf]\nenabled = true\n'
-            f'\n[seccomp_notify]\nenabled = {str(backend == "seccomp").lower()}\n'
-            '\n[process_seccomp]\nenabled = false\n'
-            f'\n[access_control.network.connect]\nbackend = "{backend}"\n'
-            '\n[access_control.backends.lsm]\ndeny_signal = "none"\naudit_default_allow = false\n'
-            '\n[enforcement]\nenabled = false\n'
-            '\n[command_control]\nenabled = false\n'
-            '\n[network_control]\nenabled = true\n'
-            f'rules_path = {json.dumps(str(work / "network.rules"))}\n'
-            'default_decision = "allow"\naudit_enabled = false\naudit_default_allow = false\n'
-            '\n[plugins.startup]\nenabled = false\n'
-        )
-        patch.write_text(document)
         (work / "network.rules").write_text("" if self.args.policy_source == "wasm" else (
             f'bench-allow allow connect 127.0.0.1:{self._peers[0].port}\n'
             f'bench-deny deny connect 127.0.0.1:{self._peers[1].port}\n'
         ))
-        return patch
+        configuration = Path(__file__).parent / "configuration"
+        return [patch, configuration / "patch_config.toml", configuration / backend / "patch_config.toml"]
 
     def _backend(self, root: Path, backend: str) -> dict:
         work = root / backend
@@ -74,11 +60,12 @@ class Benchmark:
             "--xiaoo", str(self._xiaoo), "--daemon-pid", str(work / "run/actraild.pid"),
         ])
         provider = WorkloadProvider(REPO, work, command, self.args.timeout)
+        patches = self._patches(work, backend)
         runtime = ActrailRuntime(
             REPO, self.args.bin_dir, self.args.command_timeout, self._output,
-            work / "actraild.conf", self._patch(work, backend),
+            work / "actraild.conf", operator_config_patches=patches,
         )
-        publisher = WasmPublisher(self.args, work, self._output, [peer.port for peer in self._peers]) \
+        publisher = WasmPublisher(self.args, work, self._output, [peer.port for peer in self._peers], patches) \
             if self.args.policy_source == "wasm" else None
         if publisher is not None:
             runtime = publisher.runtime
@@ -87,10 +74,10 @@ class Benchmark:
             url = provider.start()
             config = work / "xiaoo.toml"
             config.write_text(
-                '[llm]\nprovider = "deepseek"\nmodel = "deepseek-chat"\n'
+                f'[llm]\nprovider = "{CASE_CONSTANTS.llm_provider}"\nmodel = "{CASE_CONSTANTS.llm_model}"\n'
                 'api_key_env = "ACTRAIL_NETWORK_BENCHMARK_KEY"\n'
                 f'api_base = {json.dumps(url)}\n'
-                'max_tokens = 128\ncontext_window = 32768\nreasoning_effort = "off"\n'
+                f'max_tokens = {CASE_CONSTANTS.llm_max_tokens}\ncontext_window = {CASE_CONSTANTS.llm_context_window}\nreasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"\n'
             )
             publication = publisher.prepare_and_publish() if publisher is not None else None
             if publisher is None:
@@ -99,21 +86,21 @@ class Benchmark:
             for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
                 environment.pop(key, None)
             environment.update(
-                NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost",
+                NO_PROXY=CASE_CONSTANTS.no_proxy_hosts, no_proxy=CASE_CONSTANTS.no_proxy_hosts,
                 ACTRAIL_NETWORK_BENCHMARK_KEY="local-test-key", PATH="/usr/bin",
             )
             result = runtime.run(
                 runtime.control_command(
                     "launch", "--seccomp-notify", "required" if backend == "seccomp" else "disabled",
                     "--name", f"network-benchmark-{backend}", "--", self._xiaoo,
-                    "--cli", "run", "--config", config, "--tools", "bash", "--max-turns", "3",
+                    "--cli", "run", "--config", config, "--tools", "bash", "--max-turns", str(CASE_CONSTANTS.agent_max_turns),
                     "--debug", "--prompt", "Use the Bash tool exactly once and report the result.",
                 ), timeout_seconds=self.args.launch_timeout, environment=environment,
             )
             log_name = f"wasm-benchmark-{backend}.log" if publisher is not None else f"benchmark-{backend}.log"
             (self.args.output.parent / log_name).write_text(result.output)
             if result.returncode or not result_path.is_file():
-                raise RuntimeError(f"{backend} Xiaoo benchmark failed: {result.output[-4000:]}")
+                raise RuntimeError(f"{backend} Xiaoo benchmark failed: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}")
             data = json.loads(result_path.read_text())
             if len(data["rounds"]) != self.args.rounds * 2:
                 raise AssertionError("worker did not execute every measured round")
@@ -126,7 +113,9 @@ class Benchmark:
             if any(peer.failure for peer in self._peers):
                 raise RuntimeError("TCP benchmark peer failed")
             data["peer_allowed_connections"] = self._peers[0].accepted - before
-            data["operator_patch"] = (work / "actraild.patch.toml").read_text()
+            data["operator_patches"] = [
+                {"path": str(path), "content": path.read_text()} for path in patches
+            ]
             data["policy_publication"] = publication
             data["xiaoo_log"] = log_name
             return data
@@ -134,7 +123,7 @@ class Benchmark:
             try:
                 if publisher is not None:
                     cleanup = publisher.cleanup()
-                    if has_failure(cleanup):
+                    if cleanup.has_failure():
                         raise RuntimeError(f"WASM benchmark cleanup failed: {cleanup}")
                 else:
                     stopped = runtime.stop()
@@ -150,7 +139,7 @@ class Benchmark:
         self.args.output.parent.mkdir(parents=True, exist_ok=True)
         context = TestingContextSingleton(
             lock_path=Path("/run/lock/actrail-v2-regression.lock"),
-            lock_timeout_seconds=self.args.lock_timeout, lock_poll_seconds=1,
+            lock_timeout_seconds=self.args.lock_timeout, lock_poll_seconds=CASE_CONSTANTS.run_lock_poll_seconds,
             output=self._output,
         )
         root = Path(tempfile.mkdtemp(prefix=".benchmark-", dir=OUTPUT_DIR))

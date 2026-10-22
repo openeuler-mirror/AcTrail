@@ -7,6 +7,8 @@ from pathlib import Path
 from tests.v2.common.runner import TestingContextSingleton
 from tests.v2.common.testing_env import AgentBinaryDiscovery, default_claude_model
 
+from .testing_env.constants import DEFAULTS
+
 
 @dataclass(frozen=True)
 class AgentSelection:
@@ -22,7 +24,7 @@ class AgentSelection:
                 "run",
                 "--no-tools",
                 "--max-turns",
-                "1",
+                str(DEFAULTS.xiaoo_max_turns),
                 "--prompt",
                 prompt,
             ]
@@ -52,23 +54,17 @@ class AgentSelection:
                 "exec",
                 "--ephemeral",
                 "-m",
-                os.environ.get("CODEX_E2E_MODEL", "gpt-5.5"),
+                os.environ.get("CODEX_E2E_MODEL", DEFAULTS.codex_model),
                 "-c",
                 "model_reasoning_effort="
-                + os.environ.get("CODEX_E2E_REASONING_EFFORT", "low"),
+                + os.environ.get("CODEX_E2E_REASONING_EFFORT", DEFAULTS.codex_reasoning_effort),
                 prompt,
             ]
         raise ValueError(f"unsupported agent kind: {self.kind}")
 
 
 class AgentSelector:
-    _CANDIDATES: tuple[tuple[str, str, str], ...] = (
-        ("xiaoo", "XIAOO_E2E_BINARY", "xiaoo"),
-        ("pi", "PI_E2E_BINARY", "pi"),
-        ("opencode", "OPENCODE_E2E_BINARY", "opencode"),
-        ("claude", "CLAUDE_E2E_BINARY", "claude"),
-        ("codex", "CODEX_E2E_BINARY", "codex"),
-    )
+    _CANDIDATES = DEFAULTS.candidates
 
     def __init__(self, repo: Path):
         self._discovery = AgentBinaryDiscovery(repo)
@@ -116,7 +112,7 @@ def _probe_all_agents_enabled() -> bool:
     model call. Set ACTRAIL_TEST_AGENT_PROBE_ALL=1 to restore per-candidate
     availability probing.
     """
-    return os.environ.get("ACTRAIL_TEST_AGENT_PROBE_ALL", "").strip().lower() in {
+    return os.environ.get("ACTRAIL_TEST_AGENT_PROBE_ALL", str(DEFAULTS.probe_all)).strip().lower() in {
         "1",
         "true",
         "yes",

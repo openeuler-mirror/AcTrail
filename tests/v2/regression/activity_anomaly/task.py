@@ -11,6 +11,8 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import ActivityAnomalyEnvironment, PLUGIN_ID
 
+from .constants import CASE_CONSTANTS
+
 
 EXPECTED_DEFINITIONS = {
     "llm-request-growth": ("llm.request.growth", "llm.request", "request"),
@@ -34,8 +36,8 @@ class ActivityAnomalyTask:
         self._test_context = test_context
 
     def run(self) -> dict[str, TestResult]:
-        marker = f"ACTRAIL_ACTIVITY_RESPONSE_{secrets.token_hex(8).upper()}"
-        trace_name = f"activity-anomaly-{secrets.token_hex(4)}"
+        marker = f"ACTRAIL_ACTIVITY_RESPONSE_{secrets.token_hex(CASE_CONSTANTS.response_marker_random_bytes).upper()}"
+        trace_name = f"activity-anomaly-{secrets.token_hex(CASE_CONSTANTS.trace_random_bytes)}"
         self._test_context.report_progress(
             "real_agent",
             "running deterministic three-turn activity through real Xiaoo",
@@ -320,7 +322,7 @@ class ActivityAnomalyTask:
                     return api_alerts, database_alerts
             else:
                 stable_since = None
-            time.sleep(min(0.2, self._environment.activity_config.drain_interval_seconds))
+            time.sleep(min(CASE_CONSTANTS.wait_for_stable_alerts_poll_seconds, self._environment.activity_config.drain_interval_seconds))
         raise AssertionError(
             f"expected three stable activity alerts for trace-{trace_id}, found {last_keys}"
         )

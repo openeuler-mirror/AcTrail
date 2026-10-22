@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+from constants import CASE_CONSTANTS
+
 
 output = Path(sys.argv[1])
 suffix = sys.argv[2]
@@ -21,8 +23,8 @@ def membership() -> str:
     return Path("/proc/self/cgroup").read_text(encoding="utf-8").strip()
 
 
-parent_memory = bytearray(24 * 1024 * 1024)
-parent_memory[::4096] = b"p" * (len(parent_memory) // 4096)
+parent_memory = bytearray(CASE_CONSTANTS.parent_memory_bytes)
+parent_memory[::CASE_CONSTANTS.memory_touch_stride_bytes] = b"p" * (len(parent_memory) // CASE_CONSTANTS.memory_touch_stride_bytes)
 (output / f"parent-cgroup-{suffix}").write_text(membership(), encoding="utf-8")
 
 child = os.fork()
@@ -31,8 +33,8 @@ if child == 0:
     ctypes.CDLL(None).prctl(1, 0, 0, 0, 0)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    child_memory = bytearray(40 * 1024 * 1024)
-    child_memory[::4096] = b"c" * (len(child_memory) // 4096)
+    child_memory = bytearray(CASE_CONSTANTS.child_memory_bytes)
+    child_memory[::CASE_CONSTANTS.memory_touch_stride_bytes] = b"c" * (len(child_memory) // CASE_CONSTANTS.memory_touch_stride_bytes)
     (output / f"child-pid-{suffix}").write_text(
         str(os.getpid()), encoding="utf-8"
     )

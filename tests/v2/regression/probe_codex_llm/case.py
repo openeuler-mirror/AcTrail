@@ -8,6 +8,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from .config import ProbeCodexLLMConfig
 from .task import ProbeCodexLLMTask
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeCodexLLMCase(TestCase):
     def __init__(self, config: ProbeCodexLLMConfig):
@@ -61,7 +63,7 @@ class ProbeCodexLLMCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,
@@ -75,7 +77,7 @@ class ProbeCodexLLMCase(TestCase):
                 != "host_ebpf:auto,seccomp_notify:auto"
             ):
                 raise AssertionError(
-                    "Codex launch did not report the complete preset's auto "
+                    "Codex launch did not report the default auto "
                     "deployment permission request"
                 )
             selected = self._permission_value(
@@ -86,15 +88,18 @@ class ProbeCodexLLMCase(TestCase):
                 launch.output,
                 "deployment_permissions_degraded=",
             )
-            if "seccomp_notify:enabled" not in selected or degraded != "false":
+            if (
+                selected != "host_ebpf:enabled,seccomp_notify:disabled"
+                or degraded != "false"
+            ):
                 raise AssertionError(
-                    "complete capture requires the seccomp-notify path; launch "
+                    "Codex launch permissions differ from the default profile; "
                     f"selected={selected or '<missing>'} "
                     f"degraded={degraded or '<missing>'}"
                 )
-            results["seccomp_notify"] = TestResult(
+            results["default_capture"] = TestResult(
                 TestStatus.PASSED,
-                "Codex launch selected the complete preset's seccomp-notify path",
+                "Codex default launch permissions verified",
             )
 
             test_context.report_progress(

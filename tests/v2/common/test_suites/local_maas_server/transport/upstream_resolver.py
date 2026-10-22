@@ -7,6 +7,8 @@ import urllib.request
 from .config import TransportConfig
 from .upstream import UpstreamConfig
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 
 class UpstreamResolutionError(RuntimeError):
     """Raised when transport mode cannot resolve an upstream at startup."""
@@ -74,7 +76,7 @@ class TransportUpstreamResolver:
         api_key = os.environ.get("DEEPSEEK_API_KEY")
         if not api_key:
             return None
-        base_url = "https://api.deepseek.com"
+        base_url = DEFAULTS.default_upstream_url
         models = self._fetch_models(base_url, api_key)
         model = models[0] if models else None
         try:

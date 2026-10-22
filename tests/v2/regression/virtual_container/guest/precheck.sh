@@ -20,21 +20,21 @@ if [ -e /sys/kernel/btf/vmlinux ]; then
   echo "BTF=YES"
 else
   echo "BTF=NO"
-  [ "${REQUIRE_EBPF:-0}" = 0 ] || fail "required BTF file is missing"
+  [ "$REQUIRE_EBPF" = 0 ] || fail "required BTF file is missing"
 fi
 
 if ls /sys/kernel/tracing >/dev/null 2>&1; then
   echo "tracefs=YES"
 else
   echo "tracefs=NO"
-  [ "${REQUIRE_EBPF:-0}" = 0 ] || fail "tracefs unavailable"
+  [ "$REQUIRE_EBPF" = 0 ] || fail "tracefs unavailable"
 fi
 
 if ls /sys/fs/bpf >/dev/null 2>&1; then
   echo "bpffs=YES"
 else
   echo "bpffs=NO"
-  [ "${REQUIRE_EBPF:-0}" = 0 ] || fail "bpffs unavailable"
+  [ "$REQUIRE_EBPF" = 0 ] || fail "bpffs unavailable"
 fi
 
 config_file=""

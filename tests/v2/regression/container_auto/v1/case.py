@@ -11,6 +11,8 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAutoConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ContainerAutoCase(TestCase):
     def __init__(self, config: ContainerAutoConfig):
@@ -85,7 +87,7 @@ class ContainerAutoCase(TestCase):
                 ["docker", "info", "--format", "{{.ServerVersion}}"],
                 text=True,
                 capture_output=True,
-                timeout=15,
+                timeout=CASE_CONSTANTS.docker_info_timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired:

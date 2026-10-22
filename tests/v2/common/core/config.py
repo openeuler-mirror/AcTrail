@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .constants import DEFAULTS
+
 
 @dataclass(frozen=True)
 class TestCaseInputs:
@@ -33,10 +35,10 @@ class CommonTestConfig(TestCaseInputs):
             repo=inputs.repo,
             bin_dir=inputs.bin_dir,
             work_dir=inputs.work_dir,
-            command_timeout_seconds=int(value("COMMAND_TIMEOUT_SECONDS", "30")),
-            launch_timeout_seconds=int(value("LAUNCH_TIMEOUT_SECONDS", "180")),
-            drain_attempts=int(value("DRAIN_ATTEMPTS", "30")),
-            drain_interval_seconds=float(value("DRAIN_INTERVAL_SECONDS", "1")),
+            command_timeout_seconds=int(value("COMMAND_TIMEOUT_SECONDS", str(DEFAULTS.command_timeout_seconds))),
+            launch_timeout_seconds=int(value("LAUNCH_TIMEOUT_SECONDS", str(DEFAULTS.launch_timeout_seconds))),
+            drain_attempts=int(value("DRAIN_ATTEMPTS", str(DEFAULTS.drain_attempts))),
+            drain_interval_seconds=float(value("DRAIN_INTERVAL_SECONDS", str(DEFAULTS.drain_interval_seconds))),
         )
 
     def as_kwargs(self) -> dict[str, Any]:

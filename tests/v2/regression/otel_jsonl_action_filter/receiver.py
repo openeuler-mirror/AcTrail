@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import argparse
 import copy
 import json
@@ -11,15 +13,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
 
 class JsonRpcOtelReceiver:
-    _MAX_REQUEST_BYTES = 16 * 1024 * 1024
+    _MAX_REQUEST_BYTES = CASE_CONSTANTS.max_request_bytes
+    _INVALID_REQUEST_CODE = -32600
 
     def __init__(
         self,
         method: str,
-        host: str = "127.0.0.1",
-        port: int = 0,
+        host: str = CASE_CONSTANTS.init_host,
+        port: int = CASE_CONSTANTS.init_port,
     ):
         self._method = method
         self._documents: list[dict[str, Any]] = []
@@ -64,7 +72,7 @@ class JsonRpcOtelReceiver:
             return
         self._server.shutdown()
         self._server.server_close()
-        thread.join(timeout=10)
+        thread.join(timeout=CASE_CONSTANTS.stop_timeout)
         self._thread = None
 
     def fail_next_requests(self, count: int) -> None:
@@ -76,7 +84,7 @@ class JsonRpcOtelReceiver:
     def delay_next_responses(
         self,
         delay_seconds: float,
-        count: int = 1,
+        count: int = CASE_CONSTANTS.delay_next_responses_count,
     ) -> None:
         if delay_seconds <= 0:
             raise ValueError("response delay must be positive")
@@ -95,34 +103,34 @@ class JsonRpcOtelReceiver:
 
     def handle(self, handler: BaseHTTPRequestHandler) -> None:
         if handler.path != "/rpc":
-            self._send_json(handler, 404, {"error": "not found"})
+            self._send_json(handler, HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         try:
             length = int(handler.headers.get("Content-Length", ""))
         except ValueError:
-            self._send_json(handler, 411, {"error": "invalid content length"})
+            self._send_json(handler, HTTPStatus.LENGTH_REQUIRED, {"error": "invalid content length"})
             return
         if length <= 0 or length > self._MAX_REQUEST_BYTES:
-            self._send_json(handler, 413, {"error": "invalid request size"})
+            self._send_json(handler, HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid request size"})
             return
         if handler.headers.get_content_type() != "application/json":
-            self._send_json(handler, 415, {"error": "invalid content type"})
+            self._send_json(handler, HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "invalid content type"})
             return
         raw = handler.rfile.read(length)
         try:
             request = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            self._send_json(handler, 400, {"error": "invalid JSON"})
+            self._send_json(handler, HTTPStatus.BAD_REQUEST, {"error": "invalid JSON"})
             return
         validation_error = self._validate_request(request)
         if validation_error is not None:
             self._send_json(
                 handler,
-                400,
+                HTTPStatus.BAD_REQUEST,
                 {
                     "jsonrpc": "2.0",
                     "id": request.get("id") if isinstance(request, dict) else None,
-                    "error": {"code": -32600, "message": validation_error},
+                    "error": {"code": self._INVALID_REQUEST_CODE, "message": validation_error},
                 },
             )
             return
@@ -144,7 +152,7 @@ class JsonRpcOtelReceiver:
         if should_fail:
             self._send_json(
                 handler,
-                503,
+                HTTPStatus.SERVICE_UNAVAILABLE,
                 {"error": "injected retryable failure"},
                 close_connection=True,
             )
@@ -153,7 +161,7 @@ class JsonRpcOtelReceiver:
             time.sleep(response_delay)
         self._send_json(
             handler,
-            200,
+            HTTPStatus.OK,
             {
                 "jsonrpc": "2.0",
                 "id": request["id"],
@@ -191,8 +199,8 @@ class JsonRpcOtelReceiver:
         status: int,
         document: dict[str, Any],
         *,
-        close_connection: bool = False,
-        ignore_disconnect: bool = False,
+        close_connection: bool = CASE_CONSTANTS.send_json_close_connection,
+        ignore_disconnect: bool = CASE_CONSTANTS.send_json_ignore_disconnect,
     ) -> None:
         body = json.dumps(document, separators=(",", ":")).encode("utf-8")
         try:
@@ -233,7 +241,7 @@ class _JsonRpcRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         server = self.server
         if not isinstance(server, _JsonRpcServer):
-            self.send_error(500)
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         server.receiver.handle(self)
 
@@ -242,7 +250,7 @@ class _JsonRpcRequestHandler(BaseHTTPRequestHandler):
 
 
 class JsonRpcOtelReceiverConsole:
-    _POLL_INTERVAL_SECONDS = 0.1
+    _POLL_INTERVAL_SECONDS = CASE_CONSTANTS.poll_interval_seconds
 
     def __init__(
         self,
@@ -298,12 +306,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Receive OTEL JSON through JSON-RPC 2.0 over HTTP.",
     )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--method", default="otel.export")
+    parser.add_argument("--host", default=CASE_CONSTANTS.host)
+    parser.add_argument("--port", type=int, default=CASE_CONSTANTS.port)
+    parser.add_argument("--method", default=CASE_CONSTANTS.method)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--fail-next", type=int, default=0)
-    parser.add_argument("--delay-next-ms", type=int, default=0)
+    parser.add_argument("--fail-next", type=int, default=CASE_CONSTANTS.fail_next)
+    parser.add_argument("--delay-next-ms", type=int, default=CASE_CONSTANTS.delay_next_ms)
     arguments = parser.parse_args()
     if arguments.port < 0 or arguments.port > 65535:
         parser.error("--port must be between 0 and 65535")

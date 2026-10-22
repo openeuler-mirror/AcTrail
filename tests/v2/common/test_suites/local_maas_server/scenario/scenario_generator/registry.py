@@ -8,11 +8,11 @@ from pathlib import Path
 from ..model import ScenarioMeta
 from .loader import ScenarioLoader
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 
 TEMPLATES_DIR_ENV = "LOCAL_MAAS_TEMPLATES_DIR"
-# matches the replay server CLI default (config.DEFAULT_MAX_TEMPLATE_BYTES)
-DEFAULT_MAX_TEMPLATE_BYTES = 1_048_576
-DEFAULT_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+DEFAULT_TEMPLATES_DIR = DEFAULTS.scenario_generator_dir / "templates"
 
 
 class ScenarioRegistry:
@@ -27,7 +27,7 @@ class ScenarioRegistry:
     def __init__(
         self,
         templates_dir: Path = DEFAULT_TEMPLATES_DIR,
-        max_template_bytes: int = DEFAULT_MAX_TEMPLATE_BYTES,
+        max_template_bytes: int = DEFAULTS.max_template_bytes,
     ):
         self._templates_dir = templates_dir
         self._max_template_bytes = max_template_bytes

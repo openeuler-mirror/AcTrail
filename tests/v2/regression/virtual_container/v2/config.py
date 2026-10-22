@@ -14,6 +14,8 @@ from tests.v2.common.kata_runtime.environment import (
 )
 from tests.v2.common.kata_runtime.image import PullPolicy
 
+from .constants import CASE_CONSTANTS
+
 
 SUPPORTED_BACKENDS = shared_filesystem_backends()
 
@@ -46,7 +48,7 @@ class VirtualContainerConfig(CommonTestConfig):
         common = CommonTestConfig.from_environment(inputs, "VIRTUAL_CONTAINER")
         _validate_common_timeouts(common)
 
-        scope = os.environ.get("VIRTUAL_CONTAINER_E2E_SCOPE", "auto")
+        scope = os.environ.get("VIRTUAL_CONTAINER_E2E_SCOPE", CASE_CONSTANTS.scope)
         if scope not in {"auto", "all", "contracts"}:
             raise ValueError(
                 "VIRTUAL_CONTAINER_E2E_SCOPE must be auto, all or contracts"
@@ -55,7 +57,7 @@ class VirtualContainerConfig(CommonTestConfig):
         backends = _csv(
             os.environ.get(
                 "VIRTUAL_CONTAINER_E2E_BACKENDS",
-                "stratovirt,cloud-hypervisor",
+                CASE_CONSTANTS.backends,
             )
         )
         if not backends:
@@ -75,7 +77,7 @@ class VirtualContainerConfig(CommonTestConfig):
             "VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY"
         )
         if pull_policy_value is None:
-            legacy_pull = os.environ.get("VIRTUAL_CONTAINER_E2E_PULL_IMAGE", "0")
+            legacy_pull = os.environ.get("VIRTUAL_CONTAINER_E2E_PULL_IMAGE", str(int(CASE_CONSTANTS.pull_image)))
             if legacy_pull not in {"0", "1"}:
                 raise ValueError("VIRTUAL_CONTAINER_E2E_PULL_IMAGE must be 0 or 1")
             pull_policy_value = "always" if legacy_pull == "1" else "never"
@@ -89,27 +91,27 @@ class VirtualContainerConfig(CommonTestConfig):
 
         runtime_timeout_seconds = positive_environment_int(
             "VIRTUAL_CONTAINER_E2E_RUNTIME_TIMEOUT_SECONDS",
-            "900",
+            str(CASE_CONSTANTS.runtime_timeout_seconds),
         )
         ready_timeout_seconds = positive_environment_int(
             "VIRTUAL_CONTAINER_E2E_READY_TIMEOUT_SECONDS",
-            "90",
+            str(CASE_CONSTANTS.ready_timeout_seconds),
         )
         settle_seconds = bounded_environment_int(
             "VIRTUAL_CONTAINER_E2E_SETTLE_SECONDS",
-            "5",
+            str(CASE_CONSTANTS.settle_seconds),
             minimum=0,
             maximum=300,
         )
         workload_uid = bounded_environment_int(
             "VIRTUAL_CONTAINER_E2E_WORKLOAD_UID",
-            "1000",
+            str(CASE_CONSTANTS.workload_uid),
             minimum=0,
             maximum=2147483647,
         )
         workload_gid = bounded_environment_int(
             "VIRTUAL_CONTAINER_E2E_WORKLOAD_GID",
-            "39000",
+            str(CASE_CONSTANTS.workload_gid),
             minimum=0,
             maximum=2147483647,
         )
@@ -136,9 +138,7 @@ class VirtualContainerConfig(CommonTestConfig):
             absolute_path(value, "KATA_CONFIG_DIRS")
             for value in os.environ.get(
                 "KATA_CONFIG_DIRS",
-                "/opt/kata/share/defaults/kata-containers:"
-                "/usr/share/defaults/kata-containers:"
-                "/etc/kata-containers",
+                CASE_CONSTANTS.kata_config_dirs,
             ).split(os.pathsep)
             if value
         )
@@ -154,7 +154,7 @@ class VirtualContainerConfig(CommonTestConfig):
             ready_timeout_seconds=ready_timeout_seconds,
             image=os.environ.get(
                 "VIRTUAL_CONTAINER_E2E_IMAGE",
-                "docker.io/library/actrail-openeuler-workload:24.09",
+                CASE_CONSTANTS.image,
             ),
             image_pull_policy=image_pull_policy,
             image_archive=optional_absolute_path(
@@ -166,7 +166,7 @@ class VirtualContainerConfig(CommonTestConfig):
             workload_gid=workload_gid,
             ctr_runtime=os.environ.get(
                 "CTR_RUNTIME",
-                "io.containerd.kata.v2",
+                CASE_CONSTANTS.ctr_runtime,
             ),
             runtime_configs=runtime_configs,
             data_configs=data_configs,
@@ -177,11 +177,11 @@ class VirtualContainerConfig(CommonTestConfig):
             ),
             workload_bundle=_path_with_default(
                 "WORKLOAD_BUNDLE_DIR",
-                repo / "local/kata/workload-bundle",
+                repo / CASE_CONSTANTS.workload_bundle_path,
             ),
             capability_bundle=_path_with_default(
                 "CAPABILITY_BUNDLE_DIR",
-                repo / "local/kata/guest-bundle",
+                repo / CASE_CONSTANTS.capability_bundle_path,
             ),
         )
 

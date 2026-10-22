@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from tests.v2.common.core import TestCaseInputs
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ContainerAutoConfig(TestCaseInputs):
@@ -16,10 +18,10 @@ class ContainerAutoConfig(TestCaseInputs):
     @classmethod
     def from_environment(cls, inputs: TestCaseInputs) -> "ContainerAutoConfig":
         timeout_seconds = int(
-            os.environ.get("CONTAINER_AUTO_E2E_TIMEOUT_SECONDS", "1200")
+            os.environ.get("CONTAINER_AUTO_E2E_TIMEOUT_SECONDS", str(CASE_CONSTANTS.timeout_seconds))
         )
         cleanup_grace_seconds = int(
-            os.environ.get("CONTAINER_AUTO_E2E_CLEANUP_GRACE_SECONDS", "30")
+            os.environ.get("CONTAINER_AUTO_E2E_CLEANUP_GRACE_SECONDS", str(CASE_CONSTANTS.cleanup_grace_seconds))
         )
         if timeout_seconds <= 0 or cleanup_grace_seconds <= 0:
             raise ValueError("container-auto timeouts must be positive")
@@ -29,12 +31,12 @@ class ContainerAutoConfig(TestCaseInputs):
             work_dir=inputs.work_dir,
             base_image=os.environ.get(
                 "CONTAINER_AUTO_E2E_BASE_IMAGE",
-                "openeuler/openeuler:24.03-lts-sp3",
+                CASE_CONSTANTS.base_image,
             ),
             timeout_seconds=timeout_seconds,
             cleanup_grace_seconds=cleanup_grace_seconds,
             rebuild_image=os.environ.get(
-                "CONTAINER_AUTO_E2E_REBUILD_IMAGE", "0"
+                "CONTAINER_AUTO_E2E_REBUILD_IMAGE", str(int(CASE_CONSTANTS.rebuild_image))
             )
             == "1",
         )

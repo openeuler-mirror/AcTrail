@@ -4,11 +4,14 @@
 mod direct;
 #[path = "frame_buffer.rs"]
 mod frame_buffer;
+#[path = "launch.rs"]
+mod launch;
 #[path = "resolver.rs"]
 mod resolver;
 #[path = "root_path.rs"]
 mod root_path;
 pub(in crate::services) use direct::{DirectObject, DirectResolution};
+pub(in crate::services) use launch::PinnedLaunchPlan;
 
 use std::collections::BTreeMap;
 use std::fs::{self, Permissions};

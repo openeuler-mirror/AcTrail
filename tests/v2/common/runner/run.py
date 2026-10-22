@@ -16,11 +16,12 @@ from ..core import (
     TestOutput,
     TestResult,
     TestStatus,
-    effective_status,
-    has_failure,
 )
 from .environment_probe import EnvironmentProbe
 from .testing_context import TestingContextSingleton
+
+from .constants import DEFAULTS
+from ..core.constants import DEFAULTS as COMMON_DEFAULTS
 
 
 @dataclass(frozen=True)
@@ -46,15 +47,15 @@ class Tee:
 
 
 DEFAULT_LOG_DIR = Path(
-    os.environ.get("ACTRAIL_TEST_LOG_DIR", "/tmp/actrail-regression/logs")
+    os.environ.get("ACTRAIL_TEST_LOG_DIR", str(DEFAULTS.log_dir))
 )
 DEFAULT_WORK_ROOT = Path(
-    os.environ.get("ACTRAIL_TEST_WORK_ROOT", "/tmp/actrail-regression")
+    os.environ.get("ACTRAIL_TEST_WORK_ROOT", str(DEFAULTS.work_root))
 )
 DEFAULT_LOCK_PATH = Path(
     os.environ.get(
         "ACTRAIL_TEST_LOCK_PATH",
-        "/run/lock/actrail-v2-regression.lock",
+        str(DEFAULTS.lock_path),
     )
 )
 
@@ -63,13 +64,13 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--bin-dir",
         type=Path,
-        default=Path(os.environ.get("ACTRAIL_BIN_DIR", "target/release")),
+        default=Path(os.environ.get("ACTRAIL_BIN_DIR", str(DEFAULTS.bin_dir))),
         help="directory containing release AcTrail binaries",
     )
     parser.add_argument(
         "--color",
         choices=("auto", "always", "never"),
-        default="auto",
+        default=COMMON_DEFAULTS.color_mode,
         help="colored result symbols (default: auto)",
     )
     parser.add_argument(
@@ -87,7 +88,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--cleanup",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=DEFAULTS.cleanup,
         help="run case cleanup hooks (default: enabled; use --no-cleanup to preserve state)",
     )
     parser.add_argument(
@@ -102,7 +103,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lock-timeout-seconds",
         type=float,
-        default=os.environ.get("ACTRAIL_TEST_LOCK_TIMEOUT_SECONDS", "900"),
+        default=os.environ.get("ACTRAIL_TEST_LOCK_TIMEOUT_SECONDS", str(DEFAULTS.lock_timeout_seconds)),
         help=(
             "maximum total wait for another regression thread or process "
             "(default: 900; env: ACTRAIL_TEST_LOCK_TIMEOUT_SECONDS)"
@@ -111,7 +112,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lock-poll-seconds",
         type=float,
-        default=os.environ.get("ACTRAIL_TEST_LOCK_POLL_SECONDS", "1"),
+        default=os.environ.get("ACTRAIL_TEST_LOCK_POLL_SECONDS", str(DEFAULTS.lock_poll_seconds)),
         help=(
             "regression lock polling interval "
             "(default: 1; env: ACTRAIL_TEST_LOCK_POLL_SECONDS)"
@@ -151,11 +152,11 @@ def run_selected(
     work_root: Path,
     *,
     show_details: bool,
-    cleanup_cases: bool = True,
-    fail_fast: bool = False,
+    cleanup_cases: bool = DEFAULTS.cleanup,
+    fail_fast: bool = DEFAULTS.fail_fast,
     lock_path: Path = DEFAULT_LOCK_PATH,
-    lock_timeout_seconds: float = 900,
-    lock_poll_seconds: float = 1,
+    lock_timeout_seconds: float = DEFAULTS.lock_timeout_seconds,
+    lock_poll_seconds: float = DEFAULTS.lock_poll_seconds,
 ) -> int:
     console = TestOutput(color_mode=color_mode)
     if os.geteuid() != 0:
@@ -256,7 +257,7 @@ def run_selected(
                             if (
                                 result is not None
                                 and cleanup_result is not None
-                                and has_failure(cleanup_result)
+                                and cleanup_result.has_failure()
                             ):
                                 result = TestResult(
                                     TestStatus.COMPOSITE,
@@ -311,9 +312,9 @@ def run_selected(
                 console.result(definition.name, result)
             else:
                 console.progress_result(result)
-                if cleanup_cases and has_failure(result):
+                if cleanup_cases and result.has_failure():
                     console.result(definition.name, result)
-            case_failed = has_failure(result)
+            case_failed = result.has_failure()
             completed_results[definition.name] = result
             failed = failed or case_failed
             if fail_fast and case_failed:
@@ -337,7 +338,7 @@ def _dependency_skip_result(
         name
         for name in definition.skip_if_skipped
         if name in completed_results
-        and effective_status(completed_results[name]) is TestStatus.SKIPPED
+        and completed_results[name].effective_status() is TestStatus.SKIPPED
     ]
     if not skipped:
         return None

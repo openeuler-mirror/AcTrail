@@ -2,6 +2,7 @@ target/
 *.log 
 # Local config
 config.toml 
+!/.cargo/config.toml
 develop/
 
 logs/* 

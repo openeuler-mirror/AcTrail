@@ -74,7 +74,7 @@ DATA_CASES = (
     DataCase(
         name="tls-only",
         needs_tls=True,
-        needs_ebpf=False,
+        needs_ebpf=True,
         expected_markers=(
             "TlsUserSpace",
             "SSL_write",
