@@ -16,7 +16,7 @@
 
 ## 状态与请求流
 
-![actrailweb 前端运行时状态与请求流](assets/web-frontend-runtime-flow.png)
+[![actrailweb 前端运行时状态与请求流](assets/web-frontend-runtime-flow.png)](assets/web-frontend-runtime-flow.puml)
 
 ### 根状态
 
@@ -45,7 +45,7 @@ LLM 正文仅在用户打开详情时读取。Time attribution 由用户显式�
 
 ## 构建与嵌入
 
-![actrailweb 前端构建、嵌入与交付链路](assets/web-frontend-build-delivery.png)
+[![actrailweb 前端构建、嵌入与交付链路](assets/web-frontend-build-delivery.png)](assets/web-frontend-build-delivery.puml)
 
 1. `crates/apps/web/build.rs` 调用 `npm run build -- --outDir <cargo-out-dir>`；设置 `ACTRAILWEB_PREBUILT_ASSETS_DIR` 时改为读取指定绝对路径。
 2. Vite 生成 `index.html`、`assets/app.js` 和 `assets/app.css`；构建脚本在编译期检查三项资源。
@@ -53,3 +53,12 @@ LLM 正文仅在用户打开详情时读取。Time attribution 由用户显式�
 4. 运行时 router 在 `/` 返回 `index.html`，在 `/assets/*` 返回对应的嵌入资源。
 
 浏览器资源与 Rust API 共享来源和进程边界，运行时不依赖单独的 Node.js 服务。
+
+## 源码依赖方向
+
+- `main.js` 只负责加载全局样式、创建应用并挂载 `App.vue`。
+- `App.vue` 可以依赖 Workspace、全局 API 和应用级控件；Workspace 不反向依赖 `App.vue`。
+- Workspace 负责数据加载、请求失效、跨视图用例和 leaf view 状态。
+- `tabs/registry.js` 提供 Trace leaf view 的稳定 ID、标签、组件映射和分组 descriptor，不接管选择状态或数据加载。
+- 领域 view 可以组合共享控件；共享控件不得导入 Workspace 或 leaf registry。
+- `api.js` 不依赖 Vue 页面和组件。

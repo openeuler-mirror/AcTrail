@@ -2,6 +2,7 @@
 
 > 本文定义 HTTP、SSE、provider、evidence 和语义投影的职责边界。
 
+Status: Accepted
 Owner: HTTP 与 LLM 语义投影流水线
 Scope: 增量 HTTP/SSE/provider 解析与 stream finalization
 

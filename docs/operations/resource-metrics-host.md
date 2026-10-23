@@ -92,8 +92,9 @@ independent of trace retention.
 
 `remote` sends to Prometheus remote-write or InfluxDB line-protocol endpoints.
 `hybrid` sends independently to a configured list of database and remote backends.
-See the [configuration layout](../architecture/resource_profiling/04.config-layout.md)
-for each branch's fields.
+See the [configuration layout](../architecture/config-layout.md) for each branch's
+fields and the [resource configuration guide](../architecture/components/resource-profiling/configuration.md)
+for a multi-target storage example.
 
 ```bash
 actrailviewer --config operator.toml --output-format json host-resources --limit 100
@@ -113,14 +114,10 @@ schema. An incompatible database is rejected at startup.
 
 ```bash
 cargo build --release -p daemon -p ctl -p view -p web
-python3 tests/process/resource-profiling/e2e.py --out tmp/resource-profiling-e2e
-python3 tests/process/resource-profiling/storage_e2e.py --out tmp/resource-storage-e2e --prometheus /path/to/prometheus --influxd /path/to/influxd
 sudo -E python3 tests/v2/regression/test_all.py --no-profile --case resource_metrics_cgroup
 ```
 
-The process tests launch real Xiaoo workloads with refreshed default configuration.
-The storage test uses real Prometheus and InfluxDB receivers and an unavailable
-Hybrid child to verify independent output. The privileged cgroup v2 regression
+The privileged cgroup v2 regression
 requires root, cgroup v2 and systemd 254+; it checks hierarchy placement, inherited
 membership, completion, restart and timeout. Missing prerequisites are reported as
 skips.

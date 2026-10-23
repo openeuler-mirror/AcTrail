@@ -4,7 +4,9 @@
 
 ADR（Architecture Decision Record）记录长期技术选择及其后果。当前系统结构见[架构](../architecture/README.md)，规范性行为见[规范](../specifications/README.md)。
 
-文件名采用 `NNNN-short-title.md`，状态为 proposed、accepted、superseded 或 rejected。
+已有校验入口及用户许可状态见[校验记录](verifications/denied_and_approved.md)。
+
+本目录的决策文件采用 `NNNN-short-title.md`，状态为 proposed、accepted、superseded 或 rejected。
 
 - [隔离手侧观测通路](0001-isolate-hand-observation-path.md)
 - [使用 pidfd 完成 launch 注册](0002-use-pidfd-for-launch-registration.md)

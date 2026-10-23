@@ -15,9 +15,9 @@ OpenAI-compatible provider 驱动三轮 LLM 请求：先执行一条短 Bash 命
   LLM finding 还能关联回真实 `llm.call`；
 - 插件保持 `active`、无 `last_error`，并且确实消费了 observation records。
 
-测试使用 `scripts/install-release.sh` 安装到 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`
-的插件包，不直接使用仓库内构建产物。provider 和长命令脚本复用既有重型 E2E 资产，
-但该用例只启动一个宿主 Agent，不需要 Docker。
+测试使用 `scripts/install-release.sh` 安装的插件包。本地 provider 为
+`tool_provider.py`，长命令脚本为
+`examples/plugins/wit-component/activity-anomaly/long-running-command.sh`。
 
 从仓库根目录通过刷新默认配置的聚合入口运行：
 

@@ -69,3 +69,5 @@ crates/core/semantic_action_runtime/src/live/
         ├── state/             # 记录、索引、容量和 trace 清理
         └── emission/          # action、link 与诊断构造
 ```
+
+[组件图](assets/live-tool-projector.png) · [图源](assets/live-tool-projector.puml)

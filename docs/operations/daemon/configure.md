@@ -70,7 +70,7 @@ actrailctl init \
 - **实例隔离**：同一主机的多个 daemon 实例必须使用不同的 control socket、PID、日志、SQLite、导出目录和 TLS sync socket。
 - **配置校验**：启动前补齐所需配置、修正无效值，并确认必需采集能力可用。
 
-字段分组与当前默认值见 [daemon 配置参考](../../reference/configuration/daemon.md) 和 [采集配置参考](../../reference/configuration/collection.md)。
+配置项的完整路径、类型、默认值和必填条件见[配置布局](../../architecture/config-layout.md)。表中默认值表示省略字段时采用的模型默认值；`profile` 模式和用户 patch 按上面的顺序覆盖这些值。字段的使用方式见 [daemon 配置参考](../../reference/configuration/daemon.md) 和 [采集配置参考](../../reference/configuration/collection.md)。
 
 ## 仅在线处理
 

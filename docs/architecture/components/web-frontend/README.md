@@ -9,9 +9,9 @@
 | [控件与页面布局](controls-and-layout.md) | 应用壳、Workspace、共享控件、关键页面布局与响应式规则 |
 | [Navigator 与 Workspace](controls/navigation-workspace.md) | 导航控件边界、状态归属，以及 Trace 当前的两级导航结构 |
 | [运行时与交付](runtime-and-delivery.md) | 技术边界、状态与请求流、Vite 构建和 Rust binary 嵌入 |
-| [代码布局](code-layout.md) | 前端源码目录职责、依赖方向和文档中的路径约定 |
+| [代码布局](../../code-layouts/crates/apps/web/code-layout.md) | 前端源码目录职责、依赖方向和文档中的路径约定 |
 
-图源和渲染图统一位于 [`assets/`](assets/)。PUML 是图的源文件，PNG 是 Markdown 使用的渲染结果。
+图源和渲染图统一位于 [`assets/`](assets)。PUML 是图的源文件，PNG 是 Markdown 使用的渲染结果。
 
 ## 系统边界
 

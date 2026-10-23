@@ -4,7 +4,7 @@
 
 一个 AcTrail 本地节点独立完成 workload 观测、治理和本地分析。集群能力在此基础上增加可选的 reporter：它只打包并上传本地终态 trace，不把集群中心变成本地采集或控制的前置依赖。
 
-![AcTrail 产品版图](assets/product-landscape.png)
+[![AcTrail 产品版图](assets/product-landscape.png)](assets/product-landscape.puml)
 
 产品边界包含本地节点与集群中心两类部署单元：
 

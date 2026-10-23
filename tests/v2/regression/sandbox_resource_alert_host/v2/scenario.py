@@ -366,7 +366,7 @@ class SandboxResourceAlertHostScenario:
             "constants.py": Path(__file__).parent / "assets/constants.py",
             "workload.sh": Path(__file__).parent / "assets/workload.sh",
             "provider-proxy.py": (
-                self._config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
+                self._config.repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
             ),
         }
         for name, source in sources.items():

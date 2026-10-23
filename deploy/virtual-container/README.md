@@ -19,7 +19,7 @@ SQLite，可通过随 V2 镜像安装的 `actrailviewer` 调试；需要跨 sand
 宿主机；`network` 模式会拒绝 loopback、`0.0.0.0`、占位符、query/fragment 和非
 `/v1/traces` 路径。`vsock-bridge` 必须与 `--otel-endpoint` 一起使用。
 
-仓库的 [`host-collector/`](host-collector/) 提供受控开发/验收环境使用的主机侧
+仓库的 [`host-collector/`](host-collector) 提供受控开发/验收环境使用的主机侧
 Collector。其 `OTELCOL_OTLP_HTTP_ENDPOINT` 是主机监听地址，而传入 Guest 的 URL
 必须使用 Guest 实际可达的主机地址。明文 HTTP 只适合隔离测试网络，生产环境仍需
 HTTPS/mTLS、认证、证书轮换和持久化后端。
@@ -405,15 +405,6 @@ kata-agent；`required` drop-in 才建立 `Requires/After` 依赖。这个选择
 systemd fail-open 不等于 launcher fail-open。普通容器与 Kata 的共享 launcher
 fail-open 尚未实现。
 
-## 候选研究方向
-
-Kata workload OCI seccomp 加固与 AcTrail eBPF/TLS-sync 观测可以作为独立轴组合，
-并利用 pidfd 的 `clone3` 正常路径与 PR #90 的 `ENOSYS -> clone` 兼容路径，在不启用
-AcTrail seccomp user-notify 的情况下同时验证 syscall 最小权限、观测完整性和身份
-原子性。该方向仍是研究候选，不属于当前支持范围；问题定义、假设、验收矩阵和现有
-证据见
-[`../../docs/designs/virtual-container/hardened-observability-profile.zh.md`](../../docs/designs/virtual-container/hardened-observability-profile.zh.md)。
-
 ## 本目录资产
 
 ```
@@ -465,7 +456,7 @@ workload/README.md       guest `/dev` socket 源、固定 GID、安全边界和�
 ```
 
 测试脚本、Kata runner 和 guest 测试夹具统一位于
-[`../../tests/v2/regression/virtual_container/`](../../tests/v2/regression/virtual_container/)，
+[`../../tests/v2/regression/virtual_container/`](../../tests/v2/regression/virtual_container)，
 由 V2 runner 汇总，不作为部署资产打入 guest 或 workload。PID namespace 断言工具
 也位于该目录，仅在 namespace 测试时额外挂载。runner 的 container ID 只作为
 `ctr` 创建、exec 和定向清理句柄，不参与授权，也不作为测试通过判据。

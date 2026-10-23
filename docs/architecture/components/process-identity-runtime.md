@@ -1,14 +1,14 @@
 # 进程身份运行时
 
-> 本文规定 `actraild`、seccomp 与 eBPF 之间的 PID 坐标，以及 fork 到 exec 期间进程身份物化的统一时序。
+本文说明 `actraild`、seccomp 与 eBPF 之间的 PID 坐标，以及 fork 到 exec 期间进程身份物化的统一时序。
 
-![进程身份统一时序](assets/process-identity-runtime.png)
+[![进程身份统一时序](assets/process-identity-runtime.png)](assets/process-identity-runtime.puml)
 
 ## 统一基准
 
 AcTrail 不把任何裸 PID 当作跨层稳定身份。上层事件、membership、治理与存储统一引用 `ProcessIdentity`；PID 只是在明确 namespace 与 generation 下可解释的坐标。
 
-![raw kernel PID、observer PID 与 agent namespace PID 的关系](assets/process-pid-coordinate-relationship.png)
+[![raw kernel PID、observer PID 与 agent namespace PID 的关系](assets/process-pid-coordinate-relationship.png)](assets/process-pid-coordinate-relationship.puml)
 
 同一个 agent task 在 Linux 内核、`actraild` observer namespace 和 agent 自身 namespace 中可以同时具有不同的数字 PID。`actraild` 与 agent 位于同一个 PID namespace 时，`observer_pid == agent_pid`；agent 位于 daemon 的 descendant PID namespace 时，三套 PID 都可能不同。Agent namespace PID只作为可选 alias，不能改变 daemon 上层统一使用 observer PID 的基准。
 

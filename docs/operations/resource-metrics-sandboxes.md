@@ -64,4 +64,4 @@ ACTRAIL_TEST_GUEST_ROOT_COMM=sleep cargo test -p sandbox_evidence_sqlite --test 
 The live test is ignored by default and fails if explicitly run without its
 prerequisites. The pipeline test does not establish live vsock/mTLS delivery;
 deployment acceptance should also run the existing sandbox transport regressions
-on a VM-capable host. See the [validation record](../designs/resource-metrics-validation.md).
+on a VM-capable host.

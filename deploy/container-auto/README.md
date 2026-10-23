@@ -117,7 +117,7 @@ first, then the deployment runs unattended:
 | root | Installs into `/usr/local/bin`, `/etc/actrail` and `/etc/systemd/system`. | No — run with `sudo -E` |
 
 Kernel-side requirements for eBPF, BTF, tracefs, seccomp and fanotify are a
-separate matter; see [../../docs/platform-requirements.md](../../docs/platform-requirements.md).
+separate matter; see [../../docs/reference/platform-support.md](../../docs/reference/platform-support.md).
 The two permission axes degrade explicitly when the kernel cannot provide them,
 so a host that fails those checks still deploys and still reports what it lost.
 
@@ -309,20 +309,13 @@ The same test also starts two isolated workload containers and verifies that
 container B cannot list, remove, distinguish the existence of, register a
 seccomp listener for, or inject a TLS event into container A's trace.
 
-Run the real-agent concurrent-collection acceptance case with:
+Run the real-agent container acceptance case:
 
 ```bash
-sudo python3 tests/agent-trace/multi-container-xiaoo/run_e2e.py
+sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
 ```
 
-It runs two real xiaoO processes in separate Docker PID namespaces, holds both
-traces Active concurrently, and requires independent eBPF process/network
-evidence, task-specific `file.read`/`file.write` actions, and successful
-`llm.call`, `llm.request`, and `llm.response` actions. The two containers use
-different trace names and tasks; the second starts 10 seconds after the first
-while retaining an overlapping Active window. On a trusted legacy Docker/runc
-host that cannot load the current versioned seccomp profile, add
-`--seccomp-profile unconfined` only for compatibility testing.
+See the [test guide](../../tests/v2/regression/container_agent_xiaoo/README.zh.md).
 
 On Debian/Ubuntu ARM64 builders, the eBPF build automatically adds
 `/usr/include/aarch64-linux-gnu` when it contains the target `asm` headers.

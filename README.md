@@ -12,7 +12,7 @@ A single trace can connect process launches, file and IPC activity, network conn
 
 ## Why you will need AcTrail
 
-![Why self-reported trace is not enough](./images/figure1-agent-log-gap-zh-cn.drawio.svg)
+![Why self-reported trace is not enough](images/figure1-agent-log-gap-zh-cn.drawio.svg)
 
 An agent log describes what the agent chose to report. It does not reliably cover scripts, subprocesses, modified files, network traffic, or incomplete and degraded execution. AcTrail provides independent system-level evidence for questions such as:
 
@@ -22,7 +22,7 @@ An agent log describes what the agent chose to report. It does not reliably cove
 - Which payload, HTTP, or process event proves a higher-level action?
 - Which observations were complete, partial, blocked, or degraded?
 
-![AcTrail evidence-to-action trail](./images/actrail-readme__evidence-to-action__candidate.drawio.svg)
+![AcTrail evidence-to-action trail](images/actrail-readme__evidence-to-action__candidate.drawio.svg)
 
 ## Core Features
 
@@ -42,13 +42,13 @@ AcTrail has two distinct deployment families. A regular Host/VM deployment runs 
 
 A physical Linux Host and a regular Linux VM use the same topology: `actraild`, storage, and the Agent run inside the same operating-system boundary. If the Agent runs in Docker, `actraild` remains on the Docker Host; the workload uses the configured local AcTrail control and payload channels, while Host collectors observe its system activity. A full VM must run its own `actraild` inside the Guest because Host eBPF collection cannot replace Guest-kernel collection.
 
-![AcTrail deployment with the Agent and actraild in one runtime boundary](./images/readme-deployment-local.svg)
+![AcTrail deployment with the Agent and actraild in one runtime boundary](images/readme-deployment-local.svg)
 
 ### Brain and remote Hand sandbox on different Hosts
 
 For execution isolation, the Brain runs on one Host while the Hand runs inside a sandbox Guest on another Host. The Guest runs one `actrail-sb`, not a full `actraild`. The Hand Host terminates the VMM's VSOCK endpoint with `actrail-vsock-gateway`; the gateway forwards observation frames to `actraild` on the Brain Host. Firecracker is the checked-in default for this path, with StratoVirt and Cloud Hypervisor available as alternative backends.
 
-![AcTrail deployment with an Agent Brain and a remote Hand sandbox](./images/readme-deployment-hand-brain.svg)
+![AcTrail deployment with an Agent Brain and a remote Hand sandbox](images/readme-deployment-hand-brain.svg)
 
 The gateway-to-daemon transport is currently plain TCP with AcTrail framing. A cross-Host deployment must protect this link with a trusted private network or an external secure tunnel; it must not be exposed directly to an untrusted network. See [Choose a deployment mode](docs/operations/deployment/choose-a-mode.md), [default deployment architecture](docs/architecture/deployment/default.md), and [execution-isolation deployment](deploy/execution-isolation/README.md).
 

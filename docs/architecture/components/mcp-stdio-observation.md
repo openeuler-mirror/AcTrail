@@ -4,7 +4,7 @@
 
 本页覆盖 Agent 通过匿名 pipe 或 Unix `socketpair` 启动的本地 MCP stdio server。
 
-![MCP stdio 观测链](assets/mcp-stdio-observation.png)
+[![MCP stdio 观测链](assets/mcp-stdio-observation.png)](assets/mcp-stdio-observation.puml)
 
 图中有两条独立的事实链：IPC lineage 证明“谁与谁相连”，stdio payload 提供 JSON-RPC 字节。两条链在 MCP session registry 中汇合，任何一条都不能单独证明一次 MCP 工具调用。
 

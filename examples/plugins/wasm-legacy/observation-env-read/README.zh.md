@@ -9,7 +9,7 @@
 - `plugin.toml`：插件 manifest。
 - `env-read.wat`：WebAssembly Text artifact。
 
-相关 ABI 说明见 [WASM Core Module ABI](../../../../docs/plugins/abi/wasm-core-module.zh.md) 和 [观测消费者 ABI](../../../../docs/plugins/abi/observation-consumer.zh.md)。
+相关 ABI 说明见 [WASM Core Module ABI](../../../../docs/reference/plugin-api/wasm-core-module.md) 和 [观测消费者 ABI](../../../../docs/reference/plugin-api/observation-consumer.md)。
 
 加载时需要授予具体环境变量名：
 

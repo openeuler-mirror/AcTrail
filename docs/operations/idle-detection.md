@@ -69,7 +69,3 @@ curl -fsS "http://127.0.0.1:18092/api/traces/<TRACE_ID>/waterfall" \
 | `end_time_unix_nanos` | 恢复被巡检观察到的时间；未结束为 `null` |
 
 页面标记为 **Agent stalled**。区间起点早于告警产生时间，二者相差阈值及巡检延迟。trace 终止时，Web 将开放区间截断到 trace 终态。Web 重启后仍从告警存储查询这些区间。
-
-## 真实场景验收
-
-`tests/process/idle-detection/e2e.py` 使用刷新后的默认配置及真实 OpenCode。测试通过独立测试插件暂停 Agent 推进，覆盖长停滞告警与恢复、短暂停顿、模型及工具等待、用户权限等待、工具异常、并发会话隔离及 Web 重启后的历史读取。测试接入资产必须复制到隔离目录，避免 OpenCode 安装依赖污染源码目录。

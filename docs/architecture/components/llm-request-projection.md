@@ -4,7 +4,7 @@
 
 当前路径包含两种投影：daemon 识别 LLM 请求类型并生成 `llm.request` action；浏览器从重建的原始 JSON 中提取消息和工具。
 
-![LLM request 当前投影与展示路径](assets/llm-request-projection.png)
+[![LLM request 当前投影与展示路径](assets/llm-request-projection.png)](assets/llm-request-projection.puml)
 
 ## 从字节到完整请求
 

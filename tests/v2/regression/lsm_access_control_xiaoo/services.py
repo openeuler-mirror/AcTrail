@@ -16,7 +16,7 @@ class WorkloadProvider:
     """Use the shared HTTP streaming provider to request one real Bash workload."""
 
     def __init__(self, repo: Path, work_dir: Path, command: str, timeout: float):
-        self._proxy = repo / "tests/support/llm-http-proxy/provider_proxy.py"
+        self._proxy = repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         self._stderr_path = work_dir / "provider.stderr.log"
         self._command = command
         self._timeout = timeout

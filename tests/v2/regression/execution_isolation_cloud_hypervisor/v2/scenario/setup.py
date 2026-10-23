@@ -62,7 +62,7 @@ class CloudHypervisorScenarioSetup:
             "xiaoo-root": source_assets / "named_agent_root.py",
             "provider_proxy.py": (
                 self._config.repo
-                / "tests/support/llm-http-proxy/provider_proxy.py"
+                / "tests/v2/common/llm-http-proxy/provider_proxy.py"
             ),
             "workload.sh": source_assets / "workload.sh",
             "oom-trigger.sh": source_assets / "oom-trigger.sh",

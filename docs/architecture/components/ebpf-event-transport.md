@@ -4,7 +4,7 @@
 
 主 eBPF collector 编译进一种事件传输：优先使用 BPF ring buffer；构建环境无法证明其可用时使用 perf buffer。两条路径共享事件 ABI 和下游消费模型，运行时不会在已经编译好的二进制中切换 transport。
 
-![eBPF 事件传输与消费](assets/ebpf-event-transport.png)
+[![eBPF 事件传输与消费](assets/ebpf-event-transport.png)](assets/ebpf-event-transport.puml)
 
 事件 record 的结构、构造规则和解码数据流由[eBPF 事件 ABI](ebpf-event-abi.md)定义；本页只负责 transport 的选择、缓冲与交接。
 

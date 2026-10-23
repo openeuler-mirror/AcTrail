@@ -33,4 +33,4 @@ state=active
 last_error=none
 ```
 
-相关 ABI 说明见 [WASM Core Module ABI](../../../../docs/plugins/abi/wasm-core-module.zh.md) 和 [LLM Codec ABI](../../../../docs/plugins/abi/llm-codec.zh.md)。
+相关 ABI 说明见 [WASM Core Module ABI](../../../../docs/reference/plugin-api/wasm-core-module.md) 和 [LLM Codec ABI](../../../../docs/reference/plugin-api/llm-codec.md)。

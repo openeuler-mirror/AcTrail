@@ -2,6 +2,7 @@
 
 > 本文定义将 file read/write 聚合为每个生命周期一个有界终态动作的规范。
 
+Status: Accepted
 Owner: file 语义投影器与导出运行时
 Scope: File I/O action 的有界聚合与终态导出
 

@@ -71,3 +71,44 @@ provider 的明确终态决定 LLM 内容语义的结束，HTTP boundary 独立�
 已确认且包含有效语义的异常 response 会生成 error/partial action；未确认或没有有效内容的 stream 只产生紧凑诊断。trace close 会为 partial action 附加对应属性。finalizer 释放当前 stream 状态，不反向终止 payload ingress。
 
 必须保持的分层与容量约束见[流式解析器规范](../../specifications/observation/streaming-parser.md)。
+
+[组件图](assets/streaming-parser.png) · [图源](assets/streaming-parser.puml)
+
+## HTTP 内容解码
+
+### 数据与生命周期
+
+HTTP framing 处理后的输入切片交给一个内容解码实现，再将解压后的正文交给
+SSE/JSON 投影。消息持有一个句柄；gzip、Brotli、zstd 的库状态随消息创建和释放。
+identity 单例执行透传，正文由消息句柄持有。
+
+库的历史窗口、上下文和临时输出缓冲区由库管理，累计解码正文由一个
+`BoundedBody` 持有。输入直接借用。正文容量上限约束累计输出，库内部工作缓冲另有内存开销。
+快照共享 `Arc`，调用链同步消费后释放。
+清理 identity 正文时，独占缓冲区直接清空；仍被快照持有时替换为空缓冲区。
+
+### 库调用与失败
+
+gzip 委托 `flate2::write::MultiGzDecoder`；Brotli 委托
+`brotli::DecompressorWriter`；zstd 委托
+`zstd::stream::zio::Writer<BoundedBody, zstd::stream::raw::Decoder>`。
+追加和结束均使用库原生接口；gzip、zstd 每次追加后调用 flush，
+将库已产生的输出交给正文存储。zstd 结束时调用 Writer::finish 校验帧完整性。
+解压校验由库负责，库原生错误沿消息失败通道返回。
+正文容量限制由 `BoundedBody` 承担。
+
+各压缩实现使用库原生窗口设置。
+`semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 约束累计解码正文，
+库的历史窗口、上下文和临时输出缓冲区另有内存开销。
+
+本模块处理 HTTP/1.x 消息的单个 Content-Encoding。
+
+### 常量
+
+| 所属模块 | 常量 | 值 | 含义 |
+| --- | --- | --- | --- |
+| content_decoder | `DEFAULT_ENCODING_IF_CONTENT_ENCODING_MISSING` | `"identity"` | 缺少 Content-Encoding 时使用透传 |
+| implementations/brotli | `BUFFER_SIZE` | `0` | 委托 Brotli 库选择标准工作缓冲区 |
+
+identity 编码常量与 Brotli 缓冲区参数定义在各自模块的 `constant.rs`。
+gzip、zstd 使用库原生构造接口。

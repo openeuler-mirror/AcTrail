@@ -10,7 +10,7 @@
 | `llm.turn.error_ratio` | 分组内请求错误率超过阈值 |
 | `llm.turn.context_growth` | 分组内请求体字节数相对滚动基线异常膨胀 |
 
-配置、加载、更新和验证步骤见[插件操作手册](../../../../docs/plugins/operator-manual.zh.md)。
+配置、加载、更新和验证步骤见[插件操作手册](../../../../docs/operations/plugins/manage.md)。
 
 ## 检测规则
 

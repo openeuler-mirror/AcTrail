@@ -12,7 +12,7 @@ AcTrail 是面向 Linux 和 WSL AI Agent 的观测与治理底座。它记录 Ag
 
 ## 为什么需要 AcTrail
 
-![Agent 自报轨迹为什么不够](./images/figure1-agent-log-gap-zh-cn.drawio.svg)
+![Agent 自报轨迹为什么不够](images/figure1-agent-log-gap-zh-cn.drawio.svg)
 
 Agent 日志只描述 Agent 选择上报的内容，无法可靠覆盖脚本、子进程、文件修改、网络流量，也难以说明执行是否完整或降级。AcTrail 提供独立的系统级证据，用于回答：
 
@@ -22,7 +22,7 @@ Agent 日志只描述 Agent 选择上报的内容，无法可靠覆盖脚本、�
 - 哪个 payload、HTTP 或进程事件能证明某个高层行为？
 - 哪些观测是完整、部分、被阻断或已降级的？
 
-![AcTrail 从证据到行为的轨迹](./images/actrail-readme__evidence-to-action__candidate.drawio.svg)
+![AcTrail 从证据到行为的轨迹](images/actrail-readme__evidence-to-action__candidate.drawio.svg)
 
 ## 核心能力
 
@@ -42,13 +42,13 @@ AcTrail 有两类明确不同的部署。普通 Host/VM 部署在 Agent 身边�
 
 物理 Linux Host 与普通 Linux VM 采用同一拓扑：`actraild`、存储和 Agent 均位于同一操作系统边界内。Agent 运行在 Docker 中时，`actraild` 仍位于 Docker Host；workload 使用已配置的本地 AcTrail 控制通道和 payload 通道，Host collector 则观测其系统活动。完整 VM 必须在 Guest 内运行自己的 `actraild`，因为 Host eBPF 采集无法替代 Guest 内核采集。
 
-![Agent 与 actraild 位于同一运行边界的 AcTrail 部署](./images/readme-deployment-local.svg)
+![Agent 与 actraild 位于同一运行边界的 AcTrail 部署](images/readme-deployment-local.svg)
 
 ### Brain 与远端 Hand sandbox 位于不同 Host
 
 执行隔离模式中，Brain 运行在一台 Host，Hand 运行在另一台 Host 上的 sandbox Guest 内。Guest 运行唯一的 `actrail-sb`，而不是完整 `actraild`。Hand Host 上的 `actrail-vsock-gateway` 承接 VMM 暴露的 VSOCK 端点，再将观测帧转发到 Brain Host 上的 `actraild`。此路径的仓库默认 VMM 为 Firecracker，同时支持 StratoVirt 和 Cloud Hypervisor 作为可选 backend。
 
-![Agent Brain 与远端 Hand sandbox 的 AcTrail 部署](./images/readme-deployment-hand-brain.svg)
+![Agent Brain 与远端 Hand sandbox 的 AcTrail 部署](images/readme-deployment-hand-brain.svg)
 
 gateway 到 daemon 目前使用 AcTrail 自定义帧上的明文 TCP。跨 Host 部署必须通过可信私有网络或外部安全隧道保护该链路，不得直接暴露到不可信网络。更多边界见[选择部署模式](docs/operations/deployment/choose-a-mode.md)、[默认部署架构](docs/architecture/deployment/default.md)和[执行隔离部署](deploy/execution-isolation/README.md)。
 

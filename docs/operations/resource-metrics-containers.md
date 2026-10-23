@@ -101,15 +101,3 @@ outside the trace. CPU uses `cpuacct.usage` nanosecond deltas. Memory uses charg
 these values do not populate process RSS. Restart restores the saved boundaries,
 resets the CPU rate baseline and retains the selected version. Changed boundary
 identity stops periodic sampling; finalization records unavailable counters as partial.
-
-```bash
-python3 tests/process/resource-profiling/v1_e2e.py --out tmp/resource-v1-e2e --image YOUR_LOCAL_IMAGE
-```
-
-This runner uses refreshed defaults, a real xiaoo executable and a local streaming
-LLM provider inside a disposable container. It compares persisted samples with
-kernel counters, verifies unchanged controls and membership, restarts the daemon,
-and checks explicit removal and recovered completion with a healthy local resource
-database. Binding closure and final sample output are independent.
-It requires Docker, readable v1 cpuacct/memory controllers and a local image with
-Python 3 plus the runtime libraries needed by xiaoo.
