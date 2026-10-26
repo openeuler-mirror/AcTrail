@@ -343,6 +343,15 @@ impl<'a> MessageProjector<'a> {
                 stable_content_descriptor(object, "content"),
             );
         }
+        if object.get("type").and_then(Value::as_str) == Some("tool_use")
+            && object.contains_key("input")
+        {
+            return self.skeletonize_nested(
+                item,
+                Some("input"),
+                stable_content_descriptor(object, "input"),
+            );
+        }
         self.skeletonize_whole_item(item)
     }
 
