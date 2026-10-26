@@ -44,7 +44,7 @@ actrailctl launch --agent-host-config ./agent-host.toml --name opencode -- openc
 
 支持 `permission.*` / `question.*` 与对应的 `.v2.*` 事件。部分 OpenCode 1.18.x 权限事件不转发给 server plugin，接入保留对本地权威 permission 列表的对账：默认 250 ms，可用 `ACTRAIL_OPENCODE_PERMISSION_POLL_INTERVAL_MS` 设置不低于 100 ms 的间隔。
 
-## 协议与验证
+## 协议
 
 daemon 与 adapter 一起部署，使用含显式 session_id 的 `report_turn_lifecycle_v2`、`report_user_interaction_v2`、`report_work_lifecycle` 和 `report_session_closed` 协议。
 
@@ -53,5 +53,3 @@ daemon 与 adapter 一起部署，使用含显式 session_id 的 `report_turn_li
 ```bash
 actrailctl session-closed --trace-id trace-1 --session-id ses_native_id
 ```
-
-真实验收入口为 `tests/process/idle-detection/e2e.py`，使用安装的 OpenCode、刷新默认配置、独立接入配置和本地 MaaS。应核对原生消息/session 身份、真实权限等待、多 session 隔离、工具失败及停滞恢复；缺失上报不能用“没有区间”作为通过证据。

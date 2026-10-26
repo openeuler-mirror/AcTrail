@@ -99,4 +99,4 @@ ORDER BY a.created_at DESC \
 LIMIT 10;"
 ```
 
-相关 ABI 说明见 [WIT Component 观测消费者示例](../../wit-component/observation-read-config/README.zh.md) 和 [观测消费者 ABI](../../../../docs/plugins/abi/observation-consumer.zh.md)。
+相关 ABI 说明见 [WIT Component 观测消费者示例](../../wit-component/observation-read-config/README.zh.md) 和 [观测消费者 ABI](../../../../docs/reference/plugin-api/observation-consumer.md)。

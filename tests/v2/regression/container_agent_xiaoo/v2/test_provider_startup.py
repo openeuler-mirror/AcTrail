@@ -10,7 +10,7 @@ from tests.v2.regression.container_agent_xiaoo.v2.xiaoo_scenario import (
 
 
 REPO = Path(__file__).resolve().parents[5]
-PROVIDER_SCRIPT = REPO / "tests/support/llm-http-proxy/provider_proxy.py"
+PROVIDER_SCRIPT = REPO / "tests/v2/common/llm-http-proxy/provider_proxy.py"
 
 
 class ContainerXiaooProviderStartupTest(unittest.TestCase):

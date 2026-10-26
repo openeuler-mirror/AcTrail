@@ -73,10 +73,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
     def start_provider(self, marker: str) -> str:
         if self._provider_process is not None:
             raise RuntimeError("activity provider is already running")
-        script = (
-            self.activity_config.repo
-            / "tests/agent-trace/multi-container-activity-anomaly/tool_provider.py"
-        )
+        script = Path(__file__).with_name("tool_provider.py")
         long_script = (
             self.activity_config.repo
             / "examples/plugins/wit-component/activity-anomaly/long-running-command.sh"

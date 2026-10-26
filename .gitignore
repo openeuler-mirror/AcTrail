@@ -3,7 +3,7 @@ target/
 # Local config
 config.toml 
 !/.cargo/config.toml
-develop/
+/develop
 
 logs/* 
 .DS_Store 

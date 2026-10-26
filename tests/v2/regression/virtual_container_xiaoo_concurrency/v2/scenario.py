@@ -54,7 +54,7 @@ class DualKataXiaooScenario:
         self._guest = GuestConsole(self._runner)
         self._case_dir = Path(__file__).resolve().parent
         self._provider_source = (
-            config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
+            config.repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         )
         self._connect_proxy = self._case_dir / "connect_proxy.py"
         self._guest_bridge = (

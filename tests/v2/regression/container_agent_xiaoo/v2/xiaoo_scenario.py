@@ -136,7 +136,7 @@ def main() -> int:
     workload_script = require_file(case_dir / "workload.sh")
     image_dockerfile = require_file(case_dir / "Dockerfile")
     docker_seccomp = resolve_docker_seccomp(args.seccomp_profile, repo)
-    provider_script = require_file(repo / "tests/support/llm-http-proxy/provider_proxy.py")
+    provider_script = require_file(repo / "tests/v2/common/llm-http-proxy/provider_proxy.py")
     nonleader_exec_script = require_file(case_dir / "nonleader_exec.py")
     require_command("docker")
 

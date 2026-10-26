@@ -20,7 +20,7 @@ class LocalXiaooProvider:
         marker: Path,
         ready_timeout_seconds: float,
     ):
-        self._proxy = repo / "tests/support/llm-http-proxy/provider_proxy.py"
+        self._proxy = repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         self._stderr_path = work_dir / "provider.stderr.log"
         self._marker = marker
         self._ready_timeout_seconds = ready_timeout_seconds

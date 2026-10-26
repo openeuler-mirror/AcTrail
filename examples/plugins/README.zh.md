@@ -51,7 +51,7 @@ runtime = "wasm"
 artifact_path = "count.wat"
 ```
 
-WASM core module 的固定导出、可选导出和输入写入流程见 [WASM Core Module ABI](../../docs/plugins/abi/wasm-core-module.zh.md)。观测消费者语义见 [观测消费者 ABI](../../docs/plugins/abi/observation-consumer.zh.md)，控制决策语义见 [控制决策 ABI](../../docs/plugins/abi/control-decider.zh.md)，LLM codec 语义见 [LLM Codec ABI](../../docs/plugins/abi/llm-codec.zh.md)。
+WASM core module 的固定导出、可选导出和输入写入流程见 [WASM Core Module ABI](../../docs/reference/plugin-api/wasm-core-module.md)。观测消费者语义见 [观测消费者 ABI](../../docs/reference/plugin-api/observation-consumer.md)，控制决策语义见 [控制决策 ABI](../../docs/reference/plugin-api/control-decider.md)，LLM codec 语义见 [LLM Codec ABI](../../docs/reference/plugin-api/llm-codec.md)。
 
 ## WIT Component 示例
 
@@ -100,4 +100,4 @@ target/release/actraild --config operator.conf plugin load \
 --grant command-policy.rules.apply:kind=deny,path=/usr/bin/bash
 ```
 
-ABI 文档入口见 [插件 ABI 文档索引](../../docs/plugins/abi/README.zh.md)。完整操作说明见 [插件操作手册](../../docs/plugins/operator-manual.zh.md)。
+ABI 文档入口见 [插件 ABI 文档索引](../../docs/reference/plugin-api/README.md)。完整操作说明见 [插件操作手册](../../docs/operations/plugins/manage.md)。

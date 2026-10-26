@@ -4,7 +4,7 @@
 
 `actrailweb` 是独立的本地 HTTP 服务。它提供嵌入式单页应用（SPA）、trace 与统计 API、告警视图和插件管理入口；它不参与采集，也不写入 trace 主存储。Trace 是一次受观测进程树的证据集合。浏览器内部结构见 [actrailweb 前端架构](web-frontend/README.md)。
 
-![actrailweb 当前组件与请求路径](assets/web-runtime.png)
+[![actrailweb 当前组件与请求路径](assets/web-runtime.png)](assets/web-runtime.puml)
 
 ## 请求入口
 

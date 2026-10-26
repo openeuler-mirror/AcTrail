@@ -4,7 +4,7 @@
 
 `actraild` 是默认部署中的核心 daemon。它拥有 brain-side 采集与 trace 生命周期，接收明文 payload 和内核事件，将它们投影为语义 action，并把治理、插件和持久化连接到明确的故障边界。Trace 是一次受观测进程树的证据集合；action 是从底层证据归纳出的语义活动记录。
 
-![actraild 当前核心运行时组件](assets/core-runtime.png)
+[![actraild 当前核心运行时组件](assets/core-runtime.png)](assets/core-runtime.puml)
 
 ## 组件目录
 
@@ -39,6 +39,8 @@ Observation consumer 接收允许导出的语义观测。LLM codec 扩展 provid
 ## 故障边界
 
 启动阶段会验证配置、存储、所需内核能力和必需监听端点；这些基础设施不成立时 daemon 不宣布就绪。运行阶段的 parser、exporter、插件使用方和单次存储操作各自限制故障范围。
+
+可选能力按显式配置处理：`ebpf.enabled = "auto"` 允许能力缺失时降级，启动插件的 `failure_policy = "continue"` 允许单项加载失败后继续。默认值与配置归属见[配置布局](../config-layout.md)。
 
 主存储写入和 best-effort 导出是独立结果：导出失败不会回滚已提交的记录，也不会反向阻塞采集热路径。插件或下游解析失败由对应服务转成诊断、丢弃计数或局部错误，不应终止无关 trace。
 

@@ -11,4 +11,4 @@
 - `wasm-file-graylist-allow.v1`：`schema_ref` 指向的 JSON Schema。
 - `allow-on-gray.wat`：WebAssembly Text artifact。
 
-相关 ABI 说明见 [WASM Core Module ABI](../../../../docs/plugins/abi/wasm-core-module.zh.md) 和 [控制决策 ABI](../../../../docs/plugins/abi/control-decider.zh.md)。
+相关 ABI 说明见 [WASM Core Module ABI](../../../../docs/reference/plugin-api/wasm-core-module.md) 和 [控制决策 ABI](../../../../docs/reference/plugin-api/control-decider.md)。
