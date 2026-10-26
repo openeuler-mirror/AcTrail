@@ -1,110 +1,91 @@
 //! SQLite storage for semantic actions.
 
-use std::collections::BTreeMap;
-use std::sync::OnceLock;
-
 use model_core::ids::TraceId;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
     McpJsonRpcContentWrite, SemanticAction, SemanticActionKind, SemanticActionLink,
-    SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError,
-    SemanticActionWriteStore, SemanticEvidence, attr_keys as attrs,
+    SemanticActionPage, SemanticActionReadStore, SemanticActionStoreError, SemanticActionUpdate,
+    SemanticActionWriteStore, attr_keys as attrs,
 };
 
 use crate::SqliteStorage;
-use crate::semantic_actions::action_ids::{intern_action_id, require_action_key};
-use crate::semantic_actions::codebook::sqlite::{
-    LinkEvidenceKey, evidence_kind_code, link_confidence_code, link_role_code,
-};
+use crate::records::PathInterner;
+use crate::semantic_actions::action_ids::{create_action_id, intern_action_id};
+use crate::semantic_actions::codebook::sqlite::{link_origin_code, link_role_code};
 use crate::semantic_actions::cold_fields::upsert_link_attributes;
+use crate::semantic_actions::evidence;
 use crate::semantic_actions::path_sets::intern_path;
-use crate::semantic_actions::storage_meta::current;
-use crate::semantic_actions::upsert_merge::merge_action;
 
+mod hydration;
 mod rows;
+mod state;
 mod write;
 
-pub(super) use rows::{action_from_row, action_link_from_row, evidence_from_row};
-use write::{
-    action_row_matches, link_valid_code, replace_action_evidence, write_action_row,
-    write_agent_identity,
-};
+pub(super) use hydration::ActionReadHydrator;
+pub(super) use rows::{action_from_row, action_link_from_row, read_action_by_id_shared};
+use state::ActionStateWriter;
+use write::{write_action_row, write_agent_identity};
 
 pub(super) const ACTION_SELECT_COLUMNS: &str = "ids.action_id AS action_id,
-    action.trace_id, action.kind_code, action.title, action.start_time, action.end_time,
-    action.process_id, action.status_code,
-    action.completeness_code,
+    action.trace_id, action.kind_code, COALESCE(action_state.failure_title, action.title) AS stored_title, action.file_path_id,
+    (SELECT path.path_text FROM file_paths path
+      WHERE path.trace_id = action.trace_id AND path.path_id = action.file_path_id) AS file_path_text,
+    action.start_time, action_state.end_time,
+    action.process_id, action_state.status_code,
+    action_state.completeness_code,
+    action_state.finalization_reason, action_state.failure_body_format,
+    action_state.failure_http_status, action_state.failure_http_reason,
+    action_state.command_invocation_kind, action_state.command_tool_name, action_state.tool_result_binding,
     action_attrs.encoding_code AS attributes_encoding_code,
     action_attrs.uncompressed_bytes AS attributes_uncompressed_bytes,
     action_attrs.payload AS attributes_payload";
 
 pub(super) const LINK_SELECT_COLUMNS: &str = "link.trace_id,
     parent_ids.action_id AS parent_action_id, child_ids.action_id AS child_action_id,
-    link.role_code, link.confidence_code, link.valid,
+    link.role_code, link.origin_code, link.valid, link.evidence_blob,
     link_attrs.encoding_code AS attributes_encoding_code,
     link_attrs.uncompressed_bytes AS attributes_uncompressed_bytes,
     link_attrs.payload AS attributes_payload";
 
 pub(super) fn action_cold_field_join() -> &'static str {
-    static JOIN: OnceLock<String> = OnceLock::new();
-    JOIN.get_or_init(|| {
-        format!(
-            "LEFT JOIN semantic_action_cold_fields action_attrs
-               ON action_attrs.owner_key = action.action_key
-              AND action_attrs.field_code = {}",
-            current().cold_fields.action_attributes
-        )
-    })
-    .as_str()
+    "JOIN semantic_action_state action_state ON action_state.action_key = action.action_key
+     LEFT JOIN semantic_action_cold_fields action_attrs
+       ON action_attrs.owner_key = action.action_key"
 }
 
 pub(super) fn link_cold_field_join() -> &'static str {
-    static JOIN: OnceLock<String> = OnceLock::new();
-    JOIN.get_or_init(|| {
-        format!(
-            "LEFT JOIN semantic_action_link_cold_fields link_attrs
-               ON link_attrs.trace_id = link.trace_id
-              AND link_attrs.parent_action_key = link.parent_action_key
-              AND link_attrs.child_action_key = link.child_action_key
-              AND link_attrs.role_code = link.role_code
-              AND link_attrs.field_code = {}",
-            current().cold_fields.link_attributes
-        )
-    })
-    .as_str()
+    "LEFT JOIN semantic_action_link_cold_fields link_attrs
+       ON link_attrs.trace_id = link.trace_id
+      AND link_attrs.parent_action_key = link.parent_action_key
+      AND link_attrs.child_action_key = link.child_action_key
+      AND link_attrs.role_code = link.role_code"
 }
 
 impl SemanticActionWriteStore for SqliteStorage {
-    fn upsert_semantic_action(
+    fn insert_semantic_action(
         &mut self,
         mut action: SemanticAction,
     ) -> Result<(), SemanticActionStoreError> {
         let mut connection = self.connection().borrow_mut();
-        let existing = read_action_by_id(&mut connection, &action.action_id)?;
-        if let Some(existing) = existing.as_ref() {
-            action = merge_action(existing.clone(), action)?;
-        }
-        let row_changed = existing
-            .as_ref()
-            .is_none_or(|existing| !action_row_matches(existing, &action));
-        let evidence_changed = existing
-            .as_ref()
-            .is_none_or(|existing| existing.evidence != action.evidence);
-        if !row_changed && !evidence_changed {
-            return Ok(());
-        }
-        let mut action_key = None;
-        if row_changed {
-            let key = intern_action_id(&mut connection, action.trace_id.get(), &action.action_id)?;
-            if matches!(
-                action.kind,
-                SemanticActionKind::FileRead | SemanticActionKind::FileWrite
-            ) {
-                intern_file_path_attribute(&mut connection, action.trace_id.get(), &mut action)?;
-            }
-            write_action_row(&mut connection, key, &action, self.cold_field_compression)?;
+        let key = create_action_id(&connection, action.trace_id.get(), &action.action_id)?;
+        let path_interner = self.event_path_dictionary().clone();
+        let mut paths = path_interner.borrow_mut();
+        let stored_path = StoredActionPath::prepare(&connection, &mut paths, &mut action)?;
+        let binding = ActionStateWriter::take_initial_binding(&mut action)?;
+        ActionReadHydrator::remove_relationship_attributes(&mut action);
+        let inserted = write_action_row(
+            &mut connection,
+            key,
+            &action,
+            stored_path.path_id,
+            stored_path.store_title.then_some(action.title.as_str()),
+            &self.cold_field_encoder,
+        )?;
+        let writer = ActionStateWriter::new(&connection);
+        if inserted {
+            writer.insert(key, &action, binding)?;
             if action.kind == SemanticActionKind::AgentIdentity {
                 write_agent_identity(
                     &mut connection,
@@ -113,12 +94,19 @@ impl SemanticActionWriteStore for SqliteStorage {
                     key,
                 )?;
             }
-            action_key = Some(key);
         }
-        if evidence_changed {
-            replace_action_evidence(&mut connection, &action, action_key)?;
+        let writer = ActionStateWriter::new(&connection);
+        if writer.append_evidence(key, &action.evidence)? && !inserted {
+            writer.revise(action.trace_id)?;
         }
         Ok(())
+    }
+
+    fn update_semantic_action(
+        &mut self,
+        update: SemanticActionUpdate,
+    ) -> Result<(), SemanticActionStoreError> {
+        ActionStateWriter::new(&self.connection().borrow()).update(update, &self.cold_field_encoder)
     }
 
     fn upsert_semantic_action_link(
@@ -131,11 +119,14 @@ impl SemanticActionWriteStore for SqliteStorage {
         let child_action_key =
             intern_action_id(&mut connection, link.trace_id.get(), &link.child_action_id)?;
         let role_code = link_role_code(link.role);
+        let evidence_blob = evidence::encode(&link.evidence).map_err(|error| {
+            SemanticActionStoreError::new("encode_semantic_action_link_evidence", error.to_string())
+        })?;
         connection
             .prepare_cached(
                 "INSERT OR REPLACE INTO semantic_action_links (
                     trace_id, parent_action_key, child_action_key, role_code,
-                    confidence_code, valid, link_valid_code
+                    origin_code, valid, evidence_blob
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )
             .and_then(|mut statement| {
@@ -144,63 +135,14 @@ impl SemanticActionWriteStore for SqliteStorage {
                     parent_action_key,
                     child_action_key,
                     role_code,
-                    link_confidence_code(link.confidence),
+                    link_origin_code(link.origin),
                     link.valid,
-                    link_valid_code(&link),
+                    evidence_blob,
                 ])
             })
             .map_err(|error| {
                 SemanticActionStoreError::new("upsert_semantic_action_link", error.to_string())
             })?;
-        connection
-            .prepare_cached(
-                "DELETE FROM semantic_action_link_evidence
-                 WHERE trace_id = ?1
-                 AND parent_action_key = ?2
-                 AND child_action_key = ?3
-                 AND role_code = ?4",
-            )
-            .and_then(|mut statement| {
-                statement.execute(params![
-                    link.trace_id.get(),
-                    parent_action_key,
-                    child_action_key,
-                    role_code,
-                ])
-            })
-            .map_err(|error| {
-                SemanticActionStoreError::new(
-                    "replace_semantic_action_link_evidence",
-                    error.to_string(),
-                )
-            })?;
-        for (index, evidence) in link.evidence.iter().enumerate() {
-            connection
-                .prepare_cached(
-                    "INSERT INTO semantic_action_link_evidence (
-                        trace_id, parent_action_key, child_action_key, role_code, evidence_order,
-                        kind_code, evidence_id, evidence_role
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                )
-                .and_then(|mut statement| {
-                    statement.execute(params![
-                        link.trace_id.get(),
-                        parent_action_key,
-                        child_action_key,
-                        role_code,
-                        index,
-                        evidence_kind_code(evidence.kind),
-                        evidence.id,
-                        &evidence.role,
-                    ])
-                })
-                .map_err(|error| {
-                    SemanticActionStoreError::new(
-                        "insert_semantic_action_link_evidence",
-                        error.to_string(),
-                    )
-                })?;
-        }
         upsert_link_attributes(
             &mut connection,
             link.trace_id.get(),
@@ -208,7 +150,7 @@ impl SemanticActionWriteStore for SqliteStorage {
             child_action_key,
             role_code,
             &link.attributes,
-            self.cold_field_compression,
+            &self.cold_field_encoder,
         )
         .map_err(|error| {
             SemanticActionStoreError::new(
@@ -227,28 +169,36 @@ impl SemanticActionWriteStore for SqliteStorage {
             return Ok(());
         }
         let mut connection = self.connection().borrow_mut();
+        let path_interner = self.event_path_dictionary().clone();
+        let mut path_interner = path_interner.borrow_mut();
         let mut interned = Vec::with_capacity(paths.len());
         for path in paths {
             let action_key =
                 intern_action_id(&mut connection, path.trace_id.get(), &path.action_id)?;
-            interned.push((path, action_key));
+            let path_id = intern_path(
+                &connection,
+                &mut path_interner,
+                path.trace_id.get(),
+                &path.path,
+            )?;
+            interned.push((path, action_key, path_id));
         }
         let mut statement = connection
             .prepare(
                 "INSERT OR IGNORE INTO file_observation_paths (
-                    trace_id, action_key, path_order, path
+                    trace_id, action_key, path_order, path_id
                 ) VALUES (?1, ?2, ?3, ?4)",
             )
             .map_err(|error| {
                 SemanticActionStoreError::new("prepare_file_observation_paths", error.to_string())
             })?;
-        for (path, action_key) in interned {
+        for (path, action_key, path_id) in interned {
             statement
                 .execute(params![
                     path.trace_id.get(),
                     action_key,
                     path.path_order,
-                    &path.path,
+                    path_id,
                 ])
                 .map_err(|error| {
                     SemanticActionStoreError::new(
@@ -268,7 +218,12 @@ impl SemanticActionWriteStore for SqliteStorage {
             return Ok(());
         }
         let connection = self.connection().borrow_mut();
-        crate::semantic_actions::path_sets::upsert_file_path_sets(&connection, path_sets)
+        let path_interner = self.event_path_dictionary().clone();
+        crate::semantic_actions::path_sets::upsert_file_path_sets(
+            &connection,
+            &mut path_interner.borrow_mut(),
+            path_sets,
+        )
     }
 
     fn upsert_llm_request_contents(
@@ -328,6 +283,23 @@ impl SemanticActionReadStore for SqliteStorage {
             &connection,
             trace_id,
             action_id,
+        )
+    }
+
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "read_llm_request_lineages",
+                "trace has been purged",
+            ));
+        }
+        let connection = self.connection().borrow();
+        crate::semantic_actions::llm_request_lineage::LlmRequestLineageStore::by_trace(
+            &connection,
+            trace_id,
         )
     }
 
@@ -406,11 +378,7 @@ impl SemanticActionReadStore for SqliteStorage {
             })?;
             actions.push(action);
         }
-        let mut evidence = read_evidence_for_trace(&connection, trace_id)?;
-        for action in &mut actions {
-            action.evidence = evidence.remove(&action.action_id).unwrap_or_default();
-            resolve_file_paths(&connection, action)?;
-        }
+        ActionReadHydrator::hydrate(&connection, actions.iter_mut(), true)?;
         Ok(actions)
     }
 
@@ -464,10 +432,7 @@ impl SemanticActionReadStore for SqliteStorage {
         })?;
         let has_more = actions.len() > limit;
         actions.truncate(limit);
-        for action in &mut actions {
-            action.evidence = read_evidence_shared(&connection, &action.action_id)?;
-            resolve_file_paths(&connection, action)?;
-        }
+        ActionReadHydrator::hydrate(&connection, actions.iter_mut(), true)?;
         let next_offset = if has_more {
             Some(offset.checked_add(limit).ok_or_else(|| {
                 SemanticActionStoreError::new("semantic_actions_page", "offset overflow")
@@ -495,11 +460,13 @@ impl SemanticActionReadStore for SqliteStorage {
         let connection = self.connection().borrow();
         let mut statement = connection
             .prepare(
-                "SELECT path.trace_id, ids.action_id, path.path_order, path.path
+                "SELECT path.trace_id, ids.action_id, path.path_order, dictionary.path_text
                  FROM file_observation_paths path
                  JOIN semantic_action_ids ids ON ids.action_key = path.action_key
+                 JOIN file_paths dictionary
+                   ON dictionary.trace_id = path.trace_id AND dictionary.path_id = path.path_id
                  WHERE path.trace_id = ?1 AND ids.action_id = ?2
-                 ORDER BY path.path_order ASC, path.path ASC",
+                 ORDER BY path.path_order ASC, dictionary.path_text ASC",
             )
             .map_err(|error| {
                 SemanticActionStoreError::new(
@@ -563,12 +530,6 @@ impl SemanticActionReadStore for SqliteStorage {
             })?;
             links.push(link);
         }
-        let mut evidence = read_link_evidence_for_trace(&connection, trace_id)?;
-        for link in &mut links {
-            link.evidence = evidence
-                .remove(&LinkEvidenceKey::from_link(link))
-                .unwrap_or_default();
-        }
         Ok(links)
     }
 
@@ -608,12 +569,13 @@ impl SemanticActionReadStore for SqliteStorage {
             ));
         }
         let connection = self.connection().borrow();
-        crate::semantic_actions::llm_request_content::llm_request_content_page(
+        crate::semantic_actions::llm_request_content::ContentReader::load(
             &connection,
             trace_id,
             action_id,
-            max_bytes,
-        )
+        )?
+        .map(|reader| reader.prefix(max_bytes))
+        .transpose()
     }
 
     fn mcp_jsonrpc_content_page(
@@ -638,282 +600,38 @@ impl SemanticActionReadStore for SqliteStorage {
     }
 }
 
-pub(super) fn read_evidence(
-    connection: &mut rusqlite::Connection,
-    action_id: &str,
-) -> Result<Vec<SemanticEvidence>, SemanticActionStoreError> {
-    let action_key = connection
-        .prepare_cached("SELECT action_key FROM semantic_action_ids WHERE action_id = ?1")
-        .and_then(|mut statement| {
-            statement.query_row(params![action_id], |row| row.get::<_, i64>("action_key"))
+struct StoredActionPath {
+    path_id: Option<u64>,
+    store_title: bool,
+}
+
+impl StoredActionPath {
+    fn prepare(
+        connection: &rusqlite::Connection,
+        paths: &mut PathInterner,
+        action: &mut SemanticAction,
+    ) -> Result<Self, SemanticActionStoreError> {
+        if !matches!(
+            action.kind,
+            SemanticActionKind::FileModify
+                | SemanticActionKind::FileRead
+                | SemanticActionKind::FileWrite
+        ) {
+            return Ok(Self {
+                path_id: None,
+                store_title: true,
+            });
+        }
+        let Some(path) = action.attributes.remove(attrs::file::PATH) else {
+            return Ok(Self {
+                path_id: None,
+                store_title: true,
+            });
+        };
+        let path_id = intern_path(connection, paths, action.trace_id.get(), &path)?;
+        Ok(Self {
+            path_id: Some(path_id),
+            store_title: action.title != path,
         })
-        .map_err(|error| {
-            SemanticActionStoreError::new("resolve_semantic_action_key", error.to_string())
-        })?;
-    let mut statement = connection
-        .prepare_cached(
-            "SELECT kind_code, evidence_id, role FROM semantic_action_evidence
-             WHERE action_key = ?1
-             ORDER BY evidence_order ASC",
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new("prepare_semantic_action_evidence", error.to_string())
-        })?;
-    let rows = statement
-        .query_map(params![action_key], evidence_from_row)
-        .map_err(|error| {
-            SemanticActionStoreError::new("query_semantic_action_evidence", error.to_string())
-        })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        SemanticActionStoreError::new("map_semantic_action_evidence", error.to_string())
-    })
-}
-
-/// Shared-borrow variant for query/export paths that already hold `&Connection`.
-pub(super) fn read_evidence_shared(
-    connection: &rusqlite::Connection,
-    action_id: &str,
-) -> Result<Vec<SemanticEvidence>, SemanticActionStoreError> {
-    let action_key = require_action_key(connection, action_id)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT kind_code, evidence_id, role FROM semantic_action_evidence
-             WHERE action_key = ?1
-             ORDER BY evidence_order ASC",
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new("prepare_semantic_action_evidence", error.to_string())
-        })?;
-    let rows = statement
-        .query_map(params![action_key], evidence_from_row)
-        .map_err(|error| {
-            SemanticActionStoreError::new("query_semantic_action_evidence", error.to_string())
-        })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        SemanticActionStoreError::new("map_semantic_action_evidence", error.to_string())
-    })
-}
-
-fn read_evidence_for_trace(
-    connection: &rusqlite::Connection,
-    trace_id: TraceId,
-) -> Result<BTreeMap<String, Vec<SemanticEvidence>>, SemanticActionStoreError> {
-    let mut statement = connection
-        .prepare(
-            "SELECT ids.action_id, evidence.kind_code, evidence.evidence_id, evidence.role
-             FROM semantic_action_evidence evidence
-             JOIN semantic_actions action
-               ON action.action_key = evidence.action_key
-             JOIN semantic_action_ids ids
-               ON ids.action_key = evidence.action_key
-             WHERE action.trace_id = ?1
-             ORDER BY ids.action_id ASC, evidence.evidence_order ASC",
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new(
-                "prepare_semantic_action_evidence_trace",
-                error.to_string(),
-            )
-        })?;
-    let rows = statement
-        .query_map(params![trace_id.get()], |row| {
-            Ok((row.get::<_, String>("action_id")?, evidence_from_row(row)?))
-        })
-        .map_err(|error| {
-            SemanticActionStoreError::new("query_semantic_action_evidence_trace", error.to_string())
-        })?;
-    let mut evidence = BTreeMap::<String, Vec<SemanticEvidence>>::new();
-    for row in rows {
-        let (action_id, item) = row.map_err(|error| {
-            SemanticActionStoreError::new("map_semantic_action_evidence_trace", error.to_string())
-        })?;
-        evidence.entry(action_id).or_default().push(item);
     }
-    Ok(evidence)
-}
-
-pub(super) fn read_action_by_id(
-    connection: &mut rusqlite::Connection,
-    action_id: &str,
-) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
-    let mut action = connection
-        .prepare_cached(read_action_by_id_sql())
-        .and_then(|mut statement| statement.query_row(params![action_id], action_from_row))
-        .optional()
-        .map_err(|error| {
-            SemanticActionStoreError::new("read_existing_semantic_action", error.to_string())
-        })?;
-    if let Some(action) = &mut action {
-        action.evidence = read_evidence(connection, &action.action_id)?;
-        resolve_file_paths(connection, action)?;
-    }
-    Ok(action)
-}
-
-/// Shared-borrow variant for query/export paths that already hold `&Connection`.
-pub(super) fn read_action_by_id_shared(
-    connection: &rusqlite::Connection,
-    action_id: &str,
-) -> Result<Option<SemanticAction>, SemanticActionStoreError> {
-    let mut action = connection
-        .query_row(read_action_by_id_sql(), params![action_id], action_from_row)
-        .optional()
-        .map_err(|error| {
-            SemanticActionStoreError::new("read_existing_semantic_action", error.to_string())
-        })?;
-    if let Some(action) = &mut action {
-        action.evidence = read_evidence_shared(connection, &action.action_id)?;
-        resolve_file_paths(connection, action)?;
-    }
-    Ok(action)
-}
-
-fn read_action_by_id_sql() -> &'static str {
-    static SQL: OnceLock<String> = OnceLock::new();
-    SQL.get_or_init(|| {
-        format!(
-            "SELECT {ACTION_SELECT_COLUMNS}
-             FROM semantic_actions action
-             JOIN semantic_action_ids ids
-               ON ids.action_key = action.action_key
-             {}
-             WHERE ids.action_id = ?1",
-            action_cold_field_join()
-        )
-    })
-    .as_str()
-}
-
-pub(super) fn read_link_evidence(
-    connection: &rusqlite::Connection,
-    link: &SemanticActionLink,
-) -> Result<Vec<SemanticEvidence>, SemanticActionStoreError> {
-    let parent_action_key = require_action_key(connection, &link.parent_action_id)?;
-    let child_action_key = require_action_key(connection, &link.child_action_id)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT kind_code, evidence_id, evidence_role FROM semantic_action_link_evidence
-             WHERE trace_id = ?1
-             AND parent_action_key = ?2
-             AND child_action_key = ?3
-             AND role_code = ?4
-             ORDER BY evidence_order ASC",
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new(
-                "prepare_semantic_action_link_evidence",
-                error.to_string(),
-            )
-        })?;
-    let rows = statement
-        .query_map(
-            params![
-                link.trace_id.get(),
-                parent_action_key,
-                child_action_key,
-                link_role_code(link.role),
-            ],
-            evidence_from_row,
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new("query_semantic_action_link_evidence", error.to_string())
-        })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        SemanticActionStoreError::new("map_semantic_action_link_evidence", error.to_string())
-    })
-}
-
-fn read_link_evidence_for_trace(
-    connection: &rusqlite::Connection,
-    trace_id: TraceId,
-) -> Result<BTreeMap<LinkEvidenceKey, Vec<SemanticEvidence>>, SemanticActionStoreError> {
-    let mut statement = connection
-        .prepare(
-            "SELECT evidence.trace_id,
-                    parent_ids.action_id AS parent_action_id,
-                    child_ids.action_id AS child_action_id,
-                    evidence.role_code AS link_role_code,
-                    kind_code, evidence_id, evidence_role
-             FROM semantic_action_link_evidence evidence
-             JOIN semantic_action_ids parent_ids
-               ON parent_ids.action_key = evidence.parent_action_key
-             JOIN semantic_action_ids child_ids
-               ON child_ids.action_key = evidence.child_action_key
-             WHERE evidence.trace_id = ?1
-             ORDER BY parent_ids.action_id ASC, child_ids.action_id ASC, link_role_code ASC, evidence.evidence_order ASC",
-        )
-        .map_err(|error| {
-            SemanticActionStoreError::new(
-                "prepare_semantic_action_link_evidence_trace",
-                error.to_string(),
-            )
-        })?;
-    let rows = statement
-        .query_map(params![trace_id.get()], |row| {
-            Ok((LinkEvidenceKey::from_row(row)?, evidence_from_row(row)?))
-        })
-        .map_err(|error| {
-            SemanticActionStoreError::new(
-                "query_semantic_action_link_evidence_trace",
-                error.to_string(),
-            )
-        })?;
-    let mut evidence = BTreeMap::<LinkEvidenceKey, Vec<SemanticEvidence>>::new();
-    for row in rows {
-        let (key, item) = row.map_err(|error| {
-            SemanticActionStoreError::new(
-                "map_semantic_action_link_evidence_trace",
-                error.to_string(),
-            )
-        })?;
-        evidence.entry(key).or_default().push(item);
-    }
-    Ok(evidence)
-}
-
-const FILE_PATH_REF_PREFIX: &str = "@file_path:";
-
-fn intern_file_path_attribute(
-    connection: &mut rusqlite::Connection,
-    trace_id: u64,
-    action: &mut SemanticAction,
-) -> Result<(), SemanticActionStoreError> {
-    let Some(path) = action.attributes.get_mut(attrs::file::PATH) else {
-        return Ok(());
-    };
-    if path.starts_with(FILE_PATH_REF_PREFIX) {
-        return Ok(());
-    }
-    let path_text = std::mem::take(path);
-    let path_id = intern_path(connection, trace_id, &path_text)?;
-    *path = format!("{FILE_PATH_REF_PREFIX}{path_id}");
-    Ok(())
-}
-
-pub(in crate::semantic_actions) fn resolve_file_paths(
-    connection: &rusqlite::Connection,
-    action: &mut SemanticAction,
-) -> Result<(), SemanticActionStoreError> {
-    let Some(value) = action.attributes.get_mut(attrs::file::PATH) else {
-        return Ok(());
-    };
-    let Some(encoded) = value.strip_prefix(FILE_PATH_REF_PREFIX) else {
-        return Ok(());
-    };
-    let path_id = encoded
-        .parse::<i64>()
-        .map_err(|error| SemanticActionStoreError::new("resolve_file_path", error.to_string()))?;
-    let path_text = connection
-        .query_row(
-            "SELECT path_text FROM file_paths WHERE trace_id = ?1 AND path_id = ?2",
-            params![action.trace_id.get(), path_id],
-            |row| row.get::<_, String>("path_text"),
-        )
-        .optional()
-        .map_err(|error| SemanticActionStoreError::new("resolve_file_path", error.to_string()))?
-        .ok_or_else(|| {
-            SemanticActionStoreError::new("resolve_file_path", "file path reference not found")
-        })?;
-    *value = path_text;
-    Ok(())
 }

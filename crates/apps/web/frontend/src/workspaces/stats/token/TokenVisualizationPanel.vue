@@ -95,13 +95,13 @@ const activeTab = ref(TAB_IDS.line);
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-lg);
-  background: var(--stats-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
   box-shadow:
-    var(--stats-highlight),
-    var(--stats-shadow);
-  backdrop-filter: var(--stats-glass-filter);
+    var(--ui-highlight),
+    var(--ui-shadow);
+  backdrop-filter: var(--ui-glass-filter);
   overflow: hidden;
 }
 
@@ -110,35 +110,35 @@ const activeTab = ref(TAB_IDS.line);
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-lg) var(--stats-space-xl);
-  border-bottom: 1px solid var(--stats-border);
-  background: var(--stats-surface-bar);
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-lg) var(--ui-space-xl);
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface-bar);
 }
 
 .visualization-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .visualization-tabs button {
-  height: calc(var(--stats-control-height-md) - 2px);
-  padding: 0 var(--stats-space-lg);
+  height: calc(var(--ui-control-height-md) - 2px);
+  padding: 0 var(--ui-space-lg);
   border: 1px solid transparent;
-  border-radius: var(--stats-radius-md);
+  border-radius: var(--ui-radius-md);
   background: transparent;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   cursor: pointer;
-  font-size: var(--stats-font-ui);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-ui);
+  font-weight: var(--ui-weight-medium);
 }
 
 .visualization-tabs button:hover,
 .visualization-tabs button.active {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
-  color: var(--stats-text);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
+  color: var(--ui-text);
 }
 
 @media (max-width: 900px) {

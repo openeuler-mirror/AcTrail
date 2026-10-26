@@ -3,18 +3,21 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 from typing import Protocol
 
+from tests.v2.common.patch_builder import PatchBuilder
 from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAutoConfig
+from .process_lifecycle import ProcessGroupTerminator
+from .fixtures.tls_injection import ForeignTracePayload
 from .cases import (
     EbpfOffNotifyOffCase,
     EbpfOffNotifyOnCase,
@@ -37,6 +40,13 @@ sys.path.insert(0, str(CONTAINER_MANAGER_DIR))
 from container import TestContainer  # noqa: E402
 from image import ContainerImage  # noqa: E402
 from request import ContainerRequest  # noqa: E402
+
+from .constants import CASE_CONSTANTS
+
+
+EVENT_COLLECTOR_MASK = CASE_CONSTANTS.event_collector_mask
+EVENT_COLLECTOR_EBPF = CASE_CONSTANTS.event_collector_ebpf
+EVENT_COLLECTOR_PROCESS_SECCOMP = CASE_CONSTANTS.event_collector_process_seccomp
 
 
 class MatrixCaseDefinition(Protocol):
@@ -63,7 +73,6 @@ class ContainerAutoScenario:
             tempfile.mkdtemp(prefix="actrail-container-auto-v2.", dir="/tmp")
         )
         self._run_id = f"{int(time.time())}-{os.getpid()}"
-        self._operator_template = self._case_dir / "operator.conf"
         self._operator_config = self._runtime / "container-auto.conf"
         self._database = self._runtime / "data/actrail.sqlite"
         self._daemon_log = self._runtime / "log/actraild.stderr"
@@ -124,12 +133,12 @@ class ContainerAutoScenario:
             "otel-jsonl.config.v1.schema.json",
         ):
             shutil.copy2(plugin_source / name, plugin_target / name)
-        plugin_config = (plugin_source / "otel-jsonl.config.toml").read_text(
-            encoding="utf-8"
-        )
-        (plugin_target / "otel-jsonl.config.toml").write_text(
-            plugin_config.replace("/var/lib/actrail", str(self._runtime / "data")),
-            encoding="utf-8",
+        (
+            PatchBuilder()
+            .apply(plugin_source / "otel-jsonl.config.toml")
+            .with_values({"file": {"path": str(self._runtime / "data/export/live-spans.otlp.jsonl")}})
+            .build()
+            .save(plugin_target / "otel-jsonl.config.toml")
         )
 
     def _prepare_image(self) -> None:
@@ -155,6 +164,12 @@ class ContainerAutoScenario:
             build_args={"BASE_IMAGE": self._config.base_image},
             force_rebuild=self._config.rebuild_image,
         )
+        removed_images = build.prune_other_versions()
+        if removed_images:
+            self._test_context.report_progress(
+                "container_image_prune",
+                f"removed stale image versions: {', '.join(removed_images)}",
+            )
         reference = build.ensure()
         self._image = ContainerImage(build.image_name, build.version)
         self._test_context.report_progress(
@@ -162,17 +177,51 @@ class ContainerAutoScenario:
             f"using content-addressed image {reference}",
         )
 
-    def _render_config(self, ebpf_enabled: str) -> None:
-        rendered = self._operator_template.read_text(encoding="utf-8")
-        rendered = rendered.replace("@RUNTIME_DIR@", str(self._runtime))
-        rendered = rendered.replace("@EBPF_ENABLED@", ebpf_enabled)
-        if "@RUNTIME_DIR@" in rendered or "@EBPF_ENABLED@" in rendered:
-            raise RuntimeError("container-auto operator template is unresolved")
-        self._operator_config.write_text(rendered, encoding="utf-8")
+    def _initialize_config(self, ebpf_enabled: str) -> None:
+        runtime_patch = self._runtime / "runtime.patch.toml"
+        plugin_root = self._runtime / "etc/actrail/plugins/otel-jsonl"
+        (
+            PatchBuilder()
+            .with_work_dir(self._runtime)
+            .with_values({
+                "plugins": {"startup": {"load": [{
+                    "instance": "container-auto.otel-jsonl",
+                    "enabled": True,
+                    "manifest": str(plugin_root / "otel-jsonl.plugin.toml"),
+                    "plugin_config": str(plugin_root / "otel-jsonl.config.toml"),
+                    "host_grants": [],
+                }]}},
+            })
+            .build()
+            .save(runtime_patch)
+        )
+        command = [
+            str(self._actrailctl), "--config", str(self._operator_config),
+            "init", "-f", "--patch", str(runtime_patch),
+            "--patch", str(self._case_dir / "patch_config.toml"),
+        ]
+        if ebpf_enabled == "false":
+            command.extend(["--patch", str(self._case_dir / "tls-only/patch_config.toml")])
+        initialized = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if initialized.returncode != 0:
+            raise RuntimeError(
+                "failed to initialize refreshed operator config: "
+                f"stdout={initialized.stdout!r} stderr={initialized.stderr!r}"
+            )
 
     def _start_daemon(self, ebpf_enabled: str) -> None:
         self._stop_daemon()
-        self._render_config(ebpf_enabled)
+        self._initialize_config(ebpf_enabled)
+        with self._operator_config.open("rb") as stream:
+            tls_config = tomllib.load(stream)["payload"]["tls"]
+        required_sockets = [self._runtime / "run/control.sock"]
+        if tls_config["enabled"] and tls_config["capture_backend"] == "tls-sync":
+            required_sockets.append(self._runtime / "run/tls-sync.sock")
         for socket_name in ("control.sock", "tls-sync.sock", "actraild.pid"):
             try:
                 (self._runtime / "run" / socket_name).unlink()
@@ -188,17 +237,15 @@ class ContainerAutoScenario:
             start_new_session=True,
         )
         daemon_log.close()
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + CASE_CONSTANTS.start_daemon_timeout_seconds
         while time.monotonic() < deadline:
             if self._daemon.poll() is not None:
                 raise RuntimeError(
                     "actraild exited during startup:\n" + self._daemon_log_tail()
                 )
-            if (self._runtime / "run/control.sock").is_socket() and (
-                self._runtime / "run/tls-sync.sock"
-            ).is_socket():
+            if all(path.is_socket() for path in required_sockets):
                 return
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.start_daemon_poll_seconds)
         raise RuntimeError("isolated container-auto daemon sockets did not appear")
 
     def _require_doctor_ebpf(self, expected: bool) -> None:
@@ -246,12 +293,13 @@ class ContainerAutoScenario:
                     "--seccomp-notify",
                     "auto",
                     "--",
-                    "/bin/sh",
-                    "-c",
-                    'curl -sS "$1" -o /dev/null && echo "$2-ok"',
-                    "container-auto",
-                    os.environ.get("TARGET_URL", "https://example.com/"),
-                    case.suffix,
+                    "/usr/bin/curl",
+                    "-sS",
+                    os.environ.get("TARGET_URL", CASE_CONSTANTS.target_url),
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    f"{case.suffix}-ok\n",
                 ]
             )
             stdout, stderr = self._wait_exec(process)
@@ -275,7 +323,7 @@ class ContainerAutoScenario:
         trace_id: int,
         case: MatrixCaseDefinition,
     ) -> None:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + CASE_CONSTANTS.require_matrix_evidence_timeout_seconds
         last = ("", 0, 0, 0)
         while time.monotonic() < deadline:
             with sqlite3.connect(self._database) as connection:
@@ -293,27 +341,29 @@ class ContainerAutoScenario:
                 ebpf_events = int(
                     connection.execute(
                         "SELECT COUNT(*) FROM events "
-                        "WHERE trace_id = ? AND collector = 'ebpf'",
-                        (trace_id,),
+                        "WHERE trace_id = ? AND (event_meta & ?) = ?",
+                        (trace_id, EVENT_COLLECTOR_MASK, EVENT_COLLECTOR_EBPF),
                     ).fetchone()[0]
                 )
                 notify_events = int(
                     connection.execute(
                         "SELECT COUNT(*) FROM events "
-                        "WHERE trace_id = ? AND collector = 'process-seccomp'",
-                        (trace_id,),
+                        "WHERE trace_id = ? AND (event_meta & ?) = ?",
+                        (
+                            trace_id,
+                            EVENT_COLLECTOR_MASK,
+                            EVENT_COLLECTOR_PROCESS_SECCOMP,
+                        ),
                     ).fetchone()[0]
                 )
             last = (profile, payloads, ebpf_events, notify_events)
             host_ok = ebpf_events > 0 if case.expected_host == "enabled" else ebpf_events == 0
-            notify_ok = (
-                notify_events > 0
-                if case.expected_notify == "enabled"
-                else notify_events == 0
-            )
+            # Launch output and profile verify permission selection.
+            # Disabled notify must emit no process-seccomp events.
+            notify_ok = case.expected_notify == "enabled" or notify_events == 0
             if profile == case.expected_profile and payloads > 0 and host_ok and notify_ok:
                 return
-            time.sleep(0.2)
+            time.sleep(CASE_CONSTANTS.require_matrix_evidence_poll_seconds)
         raise RuntimeError(f"{case.suffix}: incomplete matrix evidence {last}")
 
     def _verify_peer_isolation(self) -> None:
@@ -426,62 +476,28 @@ sys.stdout.buffer.write(client.recv(65536))
         if "peer_identity" not in stdout:
             raise RuntimeError("foreign seccomp listener registration was not rejected")
 
-    def _require_tls_injection_rejected(
-        self,
-        peer: TestContainer,
-        trace_id: int,
-    ) -> None:
+    def _require_tls_injection_rejected(self, peer: TestContainer, trace_id: int) -> None:
         offset = self._daemon_log.stat().st_size
-        script = """
-import os, socket, sys
-client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-client.connect(sys.argv[2])
-start_ticks = open("/proc/self/stat", encoding="utf-8").read().split()[21]
-pid_ns = os.readlink("/proc/self/ns/pid")
-line = "v2\\tpayload\\t" + sys.argv[1] + "\\t" + str(os.getpid()) + "\\t" + start_ticks + "\\t" + pid_ns + "\\toutbound\\tpeer-e2e\\tinjection\\t1\\t1\\t6869\\n"
-client.sendall(line.encode())
-client.shutdown(socket.SHUT_WR)
-client.settimeout(2)
-try:
-    while client.recv(4096):
-        pass
-except socket.timeout:
-    pass
-"""
+        script = self._runtime / "tls_injection.py"
+        shutil.copy2(self._case_dir / "fixtures" / script.name, script)
+        shutil.copy2(self._case_dir / "constants.py", self._runtime / "constants.py")
         self._exec_result(
             peer,
             [
                 "python3",
-                "-c",
-                script,
+                str(script),
                 str(trace_id),
                 str(self._runtime / "run/tls-sync.sock"),
             ],
             check=True,
         )
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            with self._daemon_log.open("rb") as log:
-                log.seek(offset)
-                audit = log.read().decode("utf-8", errors="replace")
-            if (
-                "closed rejected TLS-sync peer" in audit
-                and f"trace trace-{trace_id}" in audit
-            ):
-                break
-            time.sleep(0.2)
-        else:
-            raise RuntimeError("foreign TLS payload injection lacked an audited rejection")
-        with sqlite3.connect(self._database) as connection:
-            forged = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM payload_segments "
-                    "WHERE trace_id = ? AND library = 'peer-e2e' AND symbol = 'injection'",
-                    (trace_id,),
-                ).fetchone()[0]
-            )
-        if forged != 0:
-            raise RuntimeError("foreign TLS payload reached another container trace")
+        rejection_reason = ForeignTracePayload(trace_id).verify_rejected(
+            self._daemon_log, self._database, offset
+        )
+        self._test_context.report_progress(
+            "tls_peer_rejection",
+            f"audited: {rejection_reason}; forged payloads stored=0",
+        )
 
     def _verify_required_permission_guards(self) -> None:
         container = self._new_container(
@@ -551,7 +567,7 @@ except socket.timeout:
                 security_options=security,
                 user="0:0",
                 pid=pid,
-                ready_timeout_seconds=30,
+                ready_timeout_seconds=CASE_CONSTANTS.new_container_ready_timeout_seconds,
             )
         ).start()
         self._containers.append(container)
@@ -576,7 +592,7 @@ except socket.timeout:
     ) -> tuple[str, str]:
         self._execs.append(process)
         try:
-            stdout, stderr = process.communicate(timeout=180)
+            stdout, stderr = process.communicate(timeout=CASE_CONSTANTS.wait_exec_timeout_seconds)
         except subprocess.TimeoutExpired as error:
             self._terminate_exec(process)
             raise RuntimeError("docker exec timed out") from error
@@ -590,7 +606,7 @@ except socket.timeout:
         return stdout, stderr
 
     def _wait_for_trace_after(self, previous: int, *, active: bool = False) -> int:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + CASE_CONSTANTS.wait_for_trace_after_timeout_seconds
         while time.monotonic() < deadline:
             if self._database.exists():
                 with sqlite3.connect(self._database) as connection:
@@ -602,7 +618,7 @@ except socket.timeout:
                     ).fetchone()
                 if row is not None:
                     return int(row[0])
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.wait_for_trace_after_poll_seconds)
         raise RuntimeError(f"no new trace appeared after trace-{previous}")
 
     def _latest_trace_id(self) -> int:
@@ -635,7 +651,7 @@ except socket.timeout:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=60,
+            timeout=CASE_CONSTANTS.host_command_timeout_seconds,
             check=False,
         )
         if completed.returncode != 0:
@@ -653,38 +669,14 @@ except socket.timeout:
                 self._containers.remove(container)
 
     def _terminate_exec(self, process: subprocess.Popen[str]) -> None:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
+        ProcessGroupTerminator(CASE_CONSTANTS.process_stop_timeout_seconds).terminate(process)
         if process in self._execs:
             self._execs.remove(process)
 
     def _stop_daemon(self) -> None:
         if self._daemon is None:
             return
-        if self._daemon.poll() is None:
-            try:
-                os.killpg(self._daemon.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self._daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self._daemon.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                self._daemon.wait()
+        ProcessGroupTerminator(CASE_CONSTANTS.daemon_stop_timeout_seconds).terminate(self._daemon)
         self._daemon = None
         self._daemon_ebpf_enabled = None
 

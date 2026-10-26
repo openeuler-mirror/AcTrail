@@ -63,16 +63,16 @@ const visible = computed(() => categoryFlags(props.selectedCategories));
 
 .token-table {
   width: 100%;
-  min-width: var(--stats-model-table-min-width);
+  min-width: var(--ui-model-table-min-width);
   border-collapse: separate;
   border-spacing: 0;
-  font-size: var(--stats-font-md);
+  font-size: var(--ui-font-md);
 }
 
 .token-table th,
 .token-table td {
-  padding: var(--stats-table-cell-padding);
-  border-bottom: 1px solid var(--stats-border);
+  padding: var(--ui-table-cell-padding);
+  border-bottom: 1px solid var(--ui-border);
   text-align: left;
   vertical-align: top;
 }
@@ -81,12 +81,12 @@ const visible = computed(() => categoryFlags(props.selectedCategories));
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
-  backdrop-filter: var(--stats-control-filter);
+  backdrop-filter: var(--ui-control-filter);
 }
 
 .numeric {
@@ -96,12 +96,12 @@ const visible = computed(() => categoryFlags(props.selectedCategories));
 }
 
 .token-table-empty {
-  min-height: var(--stats-empty-min-height);
+  min-height: var(--ui-empty-min-height);
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-regular);
+  color: var(--ui-muted);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-regular);
 }
 </style>

@@ -58,7 +58,7 @@ static GLOBAL_CLOCK: OnceLock<KernelClock> = OnceLock::new();
 /// Timestamps earlier than the anchor (events captured before the daemon
 /// started, or synthetic test values) clamp to the anchor wall time instead
 /// of producing a time before the UNIX epoch.
-pub(super) fn wall_from_ktime(ktime_ns: u64) -> SystemTime {
+pub(crate) fn wall_from_ktime(ktime_ns: u64) -> SystemTime {
     GLOBAL_CLOCK
         .get_or_init(KernelClock::capture)
         .wall_from_ktime(ktime_ns)

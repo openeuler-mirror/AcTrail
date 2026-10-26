@@ -4,6 +4,13 @@ const MAGIC: u16 = 0xac72;
 const VERSION: u8 = 1;
 pub const MAX_FRAME_BYTES: usize = 272 * 1024;
 pub const HEADER_BYTES: usize = 8;
+const WORKLOAD_CGROUP_CAPABILITY: u32 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GatewayWelcome {
+    pub gateway_id: u32,
+    pub workload_cgroup_observations: bool,
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,6 +107,76 @@ impl Frame {
         }
     }
 
+    pub fn gateway_hello(workload_cgroup_observations: bool) -> Self {
+        let payload = if workload_cgroup_observations {
+            WORKLOAD_CGROUP_CAPABILITY.to_be_bytes().to_vec()
+        } else {
+            Vec::new()
+        };
+        Self {
+            code: FrameCode::GatewayHello,
+            payload,
+        }
+    }
+
+    pub fn decode_gateway_hello(&self) -> Result<bool, WireError> {
+        if self.code != FrameCode::GatewayHello {
+            return Err(WireError::new("frame is not a gateway hello"));
+        }
+        if self.payload.is_empty() {
+            return Ok(false);
+        }
+        let flags = self.decode_numeric_id()?;
+        if flags & !WORKLOAD_CGROUP_CAPABILITY != 0 {
+            return Err(WireError::new(
+                "gateway hello contains unknown capabilities",
+            ));
+        }
+        Ok(flags & WORKLOAD_CGROUP_CAPABILITY != 0)
+    }
+
+    pub fn gateway_welcome(
+        gateway_id: u32,
+        workload_cgroup_observations: bool,
+    ) -> Result<Self, WireError> {
+        if gateway_id == 0 {
+            return Err(WireError::new("gateway ID must be non-zero"));
+        }
+        let mut payload = gateway_id.to_be_bytes().to_vec();
+        if workload_cgroup_observations {
+            payload.extend_from_slice(&WORKLOAD_CGROUP_CAPABILITY.to_be_bytes());
+        }
+        Self::new(FrameCode::GatewayWelcome, payload)
+    }
+
+    pub fn decode_gateway_welcome(&self) -> Result<GatewayWelcome, WireError> {
+        if self.code != FrameCode::GatewayWelcome {
+            return Err(WireError::new("frame is not a gateway welcome"));
+        }
+        let (id_bytes, flags) = match self.payload.len() {
+            4 => (&self.payload[..4], 0),
+            8 => {
+                let flags =
+                    u32::from_be_bytes(self.payload[4..8].try_into().expect("checked length"));
+                (&self.payload[..4], flags)
+            }
+            _ => return Err(WireError::new("invalid gateway welcome payload length")),
+        };
+        if flags & !WORKLOAD_CGROUP_CAPABILITY != 0 {
+            return Err(WireError::new(
+                "gateway welcome contains unknown capabilities",
+            ));
+        }
+        let gateway_id = u32::from_be_bytes(id_bytes.try_into().expect("checked length"));
+        if gateway_id == 0 {
+            return Err(WireError::new("gateway welcome contains reserved ID zero"));
+        }
+        Ok(GatewayWelcome {
+            gateway_id,
+            workload_cgroup_observations: flags & WORKLOAD_CGROUP_CAPABILITY != 0,
+        })
+    }
+
     pub fn decode_numeric_id(&self) -> Result<u32, WireError> {
         let bytes: [u8; 4] = self
             .payload
@@ -121,6 +198,39 @@ impl Frame {
         output.extend_from_slice(&header);
         output.extend_from_slice(&self.payload);
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gateway_capability_handshake_is_legacy_compatible() {
+        let legacy_hello = Frame::gateway_hello(false);
+        assert!(legacy_hello.payload.is_empty());
+        assert!(!legacy_hello.decode_gateway_hello().unwrap());
+        let legacy_welcome = Frame::gateway_welcome(3, false).unwrap();
+        assert_eq!(legacy_welcome.payload.len(), 4);
+        assert_eq!(
+            legacy_welcome.decode_gateway_welcome().unwrap(),
+            GatewayWelcome {
+                gateway_id: 3,
+                workload_cgroup_observations: false,
+            }
+        );
+
+        let hello = Frame::gateway_hello(true);
+        assert!(hello.decode_gateway_hello().unwrap());
+        let welcome = Frame::gateway_welcome(7, true).unwrap();
+        assert_eq!(welcome.payload.len(), 8);
+        assert_eq!(
+            welcome.decode_gateway_welcome().unwrap(),
+            GatewayWelcome {
+                gateway_id: 7,
+                workload_cgroup_observations: true,
+            }
+        );
     }
 }
 

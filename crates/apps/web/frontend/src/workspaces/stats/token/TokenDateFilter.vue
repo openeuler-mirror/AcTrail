@@ -57,33 +57,33 @@ function update(key, value) {
 .filter-group {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .filter-group label {
   display: grid;
-  gap: var(--stats-space-xs);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
+  gap: var(--ui-space-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .filter-group input {
-  width: var(--stats-date-input-width);
-  height: var(--stats-control-height-lg);
-  padding: 0 var(--stats-space-lg);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  width: var(--ui-date-input-width);
+  height: var(--ui-control-height-lg);
+  padding: 0 var(--ui-space-lg);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   outline: 0;
 }
 
 .filter-group input:focus {
   border-color: transparent;
   box-shadow:
-    0 0 0 2px var(--stats-accent),
-    0 0 0 4px var(--stats-bg-base);
+    0 0 0 2px var(--ui-accent),
+    0 0 0 4px var(--ui-bg-base);
 }
 </style>

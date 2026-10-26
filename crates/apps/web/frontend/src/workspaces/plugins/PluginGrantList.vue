@@ -2,10 +2,15 @@
   <ul v-if="items?.length" class="plugin-grant-list">
     <li v-for="item in items" :key="item"><code>{{ item }}</code></li>
   </ul>
-  <span v-else class="plugin-grant-empty">none</span>
+  <span v-else class="plugin-grant-empty">{{ t('grantList.none') }}</span>
 </template>
 
 <script setup>
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 defineProps({
   items: {
     type: Array,
@@ -19,7 +24,7 @@ defineProps({
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -28,21 +33,21 @@ defineProps({
 .plugin-grant-list li {
   min-width: 0;
   max-width: 100%;
-  padding: var(--stats-space-xs) var(--stats-space-sm);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-soft);
+  padding: var(--ui-space-xs) var(--ui-space-sm);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-soft);
 }
 
 .plugin-grant-list code {
-  color: var(--stats-text);
+  color: var(--ui-text);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: var(--stats-font-xs);
+  font-size: var(--ui-font-xs);
   overflow-wrap: anywhere;
   white-space: normal;
 }
 
 .plugin-grant-empty {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
 }
 </style>

@@ -19,7 +19,7 @@ SQLite，可通过随 V2 镜像安装的 `actrailviewer` 调试；需要跨 sand
 宿主机；`network` 模式会拒绝 loopback、`0.0.0.0`、占位符、query/fragment 和非
 `/v1/traces` 路径。`vsock-bridge` 必须与 `--otel-endpoint` 一起使用。
 
-仓库的 [`host-collector/`](host-collector/) 提供受控开发/验收环境使用的主机侧
+仓库的 [`host-collector/`](host-collector) 提供受控开发/验收环境使用的主机侧
 Collector。其 `OTELCOL_OTLP_HTTP_ENDPOINT` 是主机监听地址，而传入 Guest 的 URL
 必须使用 Guest 实际可达的主机地址。明文 HTTP 只适合隔离测试网络，生产环境仍需
 HTTPS/mTLS、认证、证书轮换和持久化后端。
@@ -296,8 +296,8 @@ ARM64 Kata 的声明仅限下方实测的 openEuler/Kata/StratoVirt 精确组合
 
 | 能力 | 状态 |
 |---|---|
-| TLS 明文 + LLM 语义(tls-sync,免 eBPF) | V2 验收矩阵要求 OpenSSL `SSL_write`/`SSL_read` 双向明文命中；每个 OS/VMM 组合必须独立复验并附当前提交的运行记录 |
-| eBPF 进程/文件/网络事件 | V2 验收矩阵要求带 BTF/tracefs 的 guest 内核产生非零事件；默认内核缺能力时两轴 `auto` 降级并显式标 degraded |
+| TLS 明文 + LLM 语义 | 默认通过 eBPF 采集。V2 验收矩阵要求 OpenSSL `SSL_write`/`SSL_read` 双向明文完整，每个 OS/VMM 组合需独立验证 |
+| eBPF 进程/文件/网络事件 | Guest 内核需提供配置所需的 eBPF、BTF 和 tracefs 能力。V2 验收矩阵要求产生非零事件 |
 | guest-root workload 接口 | V2 验收矩阵要求 daemon 不进 workload，工具和 `/dev/actrail` socket 只读挂载，UID 1000/GID 39000 可用且错误 GID 明确拒绝 |
 | workload 身份边界 | `SO_PEERCRED` 对端经 PID namespace + mount namespace 授权；`list-traces` 可查询根 PID namespace；container ID 不参与授权或验收 |
 | 归属三键 `host.id` / `k8s.pod.uid` / `container.id` | 数据模型和 cgroup 解析代码就绪；guest-root 实测可见 containerd namespace/container ID。Kata 无 DMI 时不伪造 `host.id`，实时 OTLP trace ID 可回退到根 `container.id`；`host.id`/`k8s.pod.uid` 的 SQLite 持久化、真实 CRI/K8s 归属 e2e 与可选 runtime metadata 富化未完成 |
@@ -387,13 +387,9 @@ openEuler guest 的制作和复测步骤见
   PID namespace 与 workload 的 `/proc/self/ns/pid`。
   尚未完成的是 `container.id` 的 OTLP Collector 端断言、异常 sandbox shutdown
   flush 和 Cloud Hypervisor 上的 openEuler guest 交叉复验。
-- **当前 Kata 组合不支持 AcTrail seccomp user-notify**:Kata 3.32 双 VMM
-  实测自动启用会导致退出超时，因此 guest 配置关闭 `seccomp_notify` 和
-  `process_seccomp`，同时关闭依赖 seccomp fallback 的 socket payload 轴和
-  enforcement；workload launcher 显式选择
-  `--seccomp-notify disabled`。这不表示 Kata/Linux 没有 seccomp；其他
-  Kata/runtime 组合若要启用 AcTrail user-notify，必须单独完成版本兼容与退出
-  生命周期验收。
+- **采集与权限**：Guest 使用默认 eBPF 采集，关闭 enforcement。workload launcher
+  显式选择 `--seccomp-notify disabled`。启用 AcTrail seccomp user-notify 需验证
+  对应 Kata/runtime 版本的兼容性和进程退出行为。
 - **rootfs image 与 initrd 不是同一条安装路径**:完整 rootfs image 的离线注入和
   systemd 启动已经验证；当前实现不适配 `kata-containers-initrd.img`。以后若出现
   明确客户需求，应作为独立部署方案重新设计和验收。
@@ -409,21 +405,11 @@ kata-agent；`required` drop-in 才建立 `Requires/After` 依赖。这个选择
 systemd fail-open 不等于 launcher fail-open。普通容器与 Kata 的共享 launcher
 fail-open 尚未实现。
 
-## 候选研究方向
-
-Kata workload OCI seccomp 加固与 AcTrail eBPF/TLS-sync 观测可以作为独立轴组合，
-并利用 pidfd 的 `clone3` 正常路径与 PR #90 的 `ENOSYS -> clone` 兼容路径，在不启用
-AcTrail seccomp user-notify 的情况下同时验证 syscall 最小权限、观测完整性和身份
-原子性。该方向仍是研究候选，不属于当前支持范围；问题定义、假设、验收矩阵和现有
-证据见
-[`../../docs/designs/virtual-container/hardened-observability-profile.zh.md`](../../docs/designs/virtual-container/hardened-observability-profile.zh.md)。
-
 ## 本目录资产
 
 ```
-guest/operator.conf     guest 内默认本地 SQLite 的 actraild 配置模板；已固化两条易踩的坑:
-                        语义投影需显式开启、capture 需含
-                        net-application-plaintext-http)
+guest/operator.conf     Guest 部署设置，安装时由 actrailctl init 与产品默认配置合并。
+                        配置本地 SQLite、观测能力、接口路径和语义留存。
 guest/otel-http-startup.toml 仅在传入 endpoint 时追加的 otel-http 启动片段。
 guest/actraild.service  guest-root systemd unit 模板(候选 rootfs image 已真实启动验收)
 guest/systemd/required/...  required 启动依赖:kata-agent 强依赖 actraild ready。
@@ -470,7 +456,7 @@ workload/README.md       guest `/dev` socket 源、固定 GID、安全边界和�
 ```
 
 测试脚本、Kata runner 和 guest 测试夹具统一位于
-[`../../tests/v2/regression/virtual_container/`](../../tests/v2/regression/virtual_container/)，
+[`../../tests/v2/regression/virtual_container/`](../../tests/v2/regression/virtual_container)，
 由 V2 runner 汇总，不作为部署资产打入 guest 或 workload。PID namespace 断言工具
 也位于该目录，仅在 namespace 测试时额外挂载。runner 的 container ID 只作为
 `ctr` 创建、exec 和定向清理句柄，不参与授权，也不作为测试通过判据。

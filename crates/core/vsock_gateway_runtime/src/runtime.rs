@@ -212,16 +212,22 @@ impl SbConnectionWorker {
         if hello.code != FrameCode::SbHello || !hello.payload.is_empty() {
             return;
         }
-        let Ok(sb_id) = self.sessions.allocate() else {
+        let Ok(registry_id) = self.sessions.allocate() else {
             return;
         };
         let forward_quota = SessionForwardQuota::new(self.config.per_sb_forward_quota);
         let _guard = SessionRelease {
-            id: sb_id,
+            id: registry_id,
             sessions: Arc::clone(&self.sessions),
             forward_quota: forward_quota.clone(),
         };
-        let welcome = Frame::numeric_id(FrameCode::SbWelcome, sb_id);
+        let workload_cgroup_observations = self.upstream.supports_workload_cgroup_observations();
+        let Ok(welcome) = Frame::sb_welcome(registry_id, workload_cgroup_observations) else {
+            return;
+        };
+        let Ok(sb_id) = welcome.decode_numeric_id() else {
+            return;
+        };
         let Ok(welcome_bytes) = welcome.encode() else {
             return;
         };
@@ -236,6 +242,11 @@ impl SbConnectionWorker {
                     match frame.code {
                         FrameCode::Heartbeat if frame.payload.is_empty() => {}
                         FrameCode::ObservationBatch => {
+                            if workload_cgroup_observations
+                                && !self.upstream.supports_workload_cgroup_observations()
+                            {
+                                return;
+                            }
                             if self.forward(sb_id, &forward_quota, frame).is_err() {
                                 return;
                             }

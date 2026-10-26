@@ -42,6 +42,7 @@ pub struct PluginPayloadReadMetrics {
     pub bytes: u64,
     pub denied: u64,
     pub not_found: u64,
+    pub failed: u64,
     pub invalid: u64,
     pub too_large: u64,
     pub truncated: u64,

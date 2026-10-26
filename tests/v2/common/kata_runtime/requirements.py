@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Protocol
 
+from .constants import DEFAULTS
+
 if TYPE_CHECKING:
     from .container import KataTestContainer
 
@@ -57,7 +59,7 @@ class RequirementCheck:
 class KataMount:
     source: Path
     target: str
-    read_only: bool = True
+    read_only: bool = DEFAULTS.read_only_mounts
 
     def __post_init__(self) -> None:
         if not self.source.is_absolute():
@@ -78,8 +80,8 @@ class KataCreateSpec:
     mounts: tuple[KataMount, ...] = ()
     labels: tuple[tuple[str, str], ...] = ()
     environment: tuple[tuple[str, str], ...] = ()
-    ready_timeout_seconds: float = 60
-    privileged_without_host_devices: bool = False
+    ready_timeout_seconds: float = DEFAULTS.ready_timeout_seconds
+    privileged_without_host_devices: bool = DEFAULTS.privileged_without_host_devices
     snapshotter: str | None = None
 
     def __post_init__(self) -> None:
@@ -175,8 +177,8 @@ class KataContainerRequirements:
     gid: int
     labels: tuple[tuple[str, str], ...] = ()
     environment: tuple[tuple[str, str], ...] = ()
-    privileged_without_host_devices: bool = False
-    ready_timeout_seconds: float = 60
+    privileged_without_host_devices: bool = DEFAULTS.privileged_without_host_devices
+    ready_timeout_seconds: float = DEFAULTS.ready_timeout_seconds
     prepare_policy: PreparePolicy = PreparePolicy.CHECK_ONLY
     artifact_requirement: ArtifactRequirement | None = None
     running_validator: (

@@ -87,37 +87,21 @@ WORK=/tmp/actrail-otel-http-manual
 
 mkdir -p "$WORK/run" "$WORK/log" "$WORK/data" "$WORK/plugins"
 
-cat > "$WORK/actraild.patch.toml" <<EOF
-[control]
-socket_path = "$WORK/run/control.sock"
-pid_file = "$WORK/run/actraild.pid"
-log_path = "$WORK/log/actraild.log"
+cat > "$WORK/create_patch.py" <<'PY'
+from pathlib import Path
+import sys
+from tests.v2.common.patch_builder import PatchBuilder
 
-[storage.sqlite]
-path = "$WORK/data/actrail.sqlite"
+work, repo = map(Path, sys.argv[1:])
+(PatchBuilder().with_work_dir(work).with_runtime_timing()
+ .with_plugin_directory(repo / "examples/plugins/builtin")
+ .build().save(work / "runtime_patch.toml"))
+PY
+PYTHONPATH="$REPO" python3.11 "$WORK/create_patch.py" "$WORK" "$REPO"
 
-[storage.retention]
-enabled = false
-
-[export.snapshot]
-directory = "$WORK/data/export"
-
-[payload.tls]
-sync_event_socket_path = "$WORK/run/tls-sync.sock"
-
-[cluster.report]
-spool_dir = "$WORK/data/cluster-spool"
-state_path = "$WORK/data/cluster-report-state.sqlite"
-
-[cluster.center]
-root_dir = "$WORK/data/cluster"
-
-[plugins.discovery]
-directory = "$REPO/examples/plugins/builtin"
-EOF
-
-"$BIN/actraild" --config "$WORK/actraild.conf" \
-  init -f --patch "$WORK/actraild.patch.toml"
+"$BIN/actrailctl" --config "$WORK/actraild.conf" \
+  init -f --patch "$WORK/runtime_patch.toml" \
+  --patch "$REPO/tests/v2/regression/otel_http/patch_config.toml"
 "$BIN/actraild" --config "$WORK/actraild.conf" stop
 "$BIN/actrailctl" --config "$WORK/actraild.conf" clean
 "$BIN/actraild" --config "$WORK/actraild.conf" start
@@ -125,9 +109,8 @@ EOF
 
 ### 预期结果
 
-所有命令成功；daemon 打印 pid 和 control socket；socket、pid、日志、SQLite 和
-export 路径全部位于 `/tmp/actrail-otel-http-manual`。本手册不读取或清理系统默认的
-`/var/lib/actrail` 数据。
+所有命令成功。daemon 打印 pid 和 control socket，socket、pid、日志、SQLite 和
+export 路径全部位于 `/tmp/actrail-otel-http-manual`。
 
 ## 步骤3：启动本地 receiver 和 Web
 

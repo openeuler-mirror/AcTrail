@@ -7,8 +7,11 @@ import argparse
 import sys
 from pathlib import Path
 
+
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO))
+
+from tests.v2.regression.constants import DEFAULTS
 
 from tests.v2.common.core import TestOutput
 from tests.v2.common.runner import add_common_arguments, run_selected
@@ -31,6 +34,9 @@ from tests.v2.regression.probe_codex_mcp.run_e2e import (  # noqa: E402
 from tests.v2.regression.probe_pi_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as PI,
 )
+from tests.v2.regression.probe_dcode_llm.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as DCODE,
+)
 from tests.v2.regression.probe_qodercli_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as QODERCLI,
 )
@@ -39,6 +45,12 @@ from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
 )
 from tests.v2.regression.command_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as COMMAND_POLICY_XIAOO,
+)
+from tests.v2.regression.file_policy_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as FILE_POLICY_XIAOO,
+)
+from tests.v2.regression.lsm_access_control_xiaoo.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as LSM_ACCESS_CONTROL_XIAOO,
 )
 from tests.v2.regression.network_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as NETWORK_POLICY_XIAOO,
@@ -70,6 +82,9 @@ from tests.v2.regression.sandbox_resource_alert_host.run_e2e import (  # noqa: E
 from tests.v2.regression.sandbox_oom_killed_alert_host.run_e2e import (  # noqa: E402
     TEST_DEFINITION as SANDBOX_OOM_KILLED_ALERT_HOST,
 )
+from tests.v2.regression.resource_metrics_cgroup.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as RESOURCE_METRICS_CGROUP,
+)
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
 )
@@ -100,10 +115,12 @@ DEFAULT_TESTS = [
     CLAUDE_MCP,
     CODEX,
     CODEX_MCP,
+    DCODE,
     PI,
     QODERCLI,
     XIAOO,
     COMMAND_POLICY_XIAOO,
+    FILE_POLICY_XIAOO,
     NETWORK_POLICY_XIAOO,
     VIRTUAL_CONTAINER,
     VIRTUAL_CONTAINER_XIAOO_CONCURRENCY,
@@ -121,6 +138,8 @@ DEFAULT_TESTS = [
 ]
 
 OPTIONAL_TESTS = [
+    LSM_ACCESS_CONTROL_XIAOO,
+    RESOURCE_METRICS_CGROUP,
     SANDBOX_OOM_KILLED_ALERT_HOST,
     EXECUTION_ISOLATION_FIRECRACKER,
     EXECUTION_ISOLATION_CLOUD_HYPERVISOR,
@@ -204,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments.color,
         arguments.log_dir,
         arguments.work_root,
-        show_details=False,
+        show_details=DEFAULTS.show_details,
         cleanup_cases=arguments.cleanup,
         fail_fast=arguments.fail_fast,
         lock_path=arguments.lock_path,

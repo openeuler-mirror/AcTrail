@@ -127,26 +127,34 @@ pub struct KernelSocketPayloadEvent {
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
     pub sequence: u64,
+    pub operation_id: u64,
+    pub operation_offset: u64,
+    pub operation_original_size: u64,
+    pub operation_captured_size: u64,
+    pub operation_chunk_index: u32,
     pub fd: u32,
     pub original_size: u32,
     pub captured_size: u32,
     pub flags: u32,
     pub syscall: u32,
-    pub fd_generation: u32,
+    pub socket_generation: u32,
     pub pid_generation: u64,
     pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelSocketPayloadCompletionEvent {
-    pub pid: u32,
-    pub tid: u32,
-    pub host_pid: u32,
-    pub host_tid: u32,
+    /// Observer namespace coordinates, matching seccomp notification PIDs.
+    pub observer_tgid: u32,
+    pub observer_tid: u32,
+    /// Kernel coordinates; these remain stable across observer namespaces.
+    pub kernel_tgid: u32,
+    pub kernel_tid: u32,
     pub direction: u32,
     pub trace_id: TraceId,
     pub observed_ktime_ns: u64,
     pub sequence: u64,
+    pub operation_id: u64,
     pub completed_size: u64,
     pub requested_size: u64,
     pub buffer_ptr: u64,
@@ -154,7 +162,7 @@ pub struct KernelSocketPayloadCompletionEvent {
     pub fd: u32,
     pub flags: u32,
     pub syscall: u32,
-    pub fd_generation: u32,
+    pub socket_generation: u32,
 }
 
 pub(super) fn decode_tls_capture_request_event(
@@ -226,24 +234,22 @@ pub(super) fn decode_tls_direct_capture_event(
     raw: &[u8],
 ) -> Result<KernelTlsDirectCaptureEvent, LoaderError> {
     const TLS_DIRECT_CAPTURE_HEADER_SIZE: usize = 88;
-    const TLS_DIRECT_CAPTURE_ABI_MAX_BYTES: usize = 65_536;
-    const TLS_DIRECT_CAPTURE_EVENT_SIZE: usize =
-        TLS_DIRECT_CAPTURE_HEADER_SIZE + TLS_DIRECT_CAPTURE_ABI_MAX_BYTES;
-    if raw.len() != TLS_DIRECT_CAPTURE_EVENT_SIZE {
+    const TLS_DIRECT_CAPTURE_MAX_BYTES: usize = 65_535;
+    // Payload capacities of the constant ring reservations in tls/capture.h.
+    // Only captured_size bytes belong to the payload; the rest is bucket padding.
+    let capacity = raw.len().checked_sub(TLS_DIRECT_CAPTURE_HEADER_SIZE);
+    if !matches!(capacity, Some(256 | 1_024 | 4_096 | 16_384 | 65_536)) {
         return Err(LoaderError::new(
             "decode_tls_direct_capture",
-            format!(
-                "unexpected TLS direct capture event size {}, expected {}",
-                raw.len(),
-                TLS_DIRECT_CAPTURE_EVENT_SIZE
-            ),
+            format!("unexpected TLS direct capture event size {}", raw.len()),
         ));
     }
+    let capacity = capacity.expect("event length checked");
     let captured_size = read_u32(raw, 52).expect("event length checked");
-    if captured_size as usize > TLS_DIRECT_CAPTURE_ABI_MAX_BYTES {
+    if captured_size as usize > TLS_DIRECT_CAPTURE_MAX_BYTES || captured_size as usize > capacity {
         return Err(LoaderError::new(
             "decode_tls_direct_capture",
-            format!("TLS captured size {} exceeds ABI maximum", captured_size),
+            format!("TLS captured size {captured_size} exceeds record capacity or capture maximum"),
         ));
     }
     Ok(KernelTlsDirectCaptureEvent {
@@ -382,7 +388,7 @@ pub(super) fn decode_stdio_payload_completion_event(
 pub(super) fn decode_socket_payload_event(
     raw: &[u8],
 ) -> Result<KernelSocketPayloadEvent, LoaderError> {
-    const SOCKET_EVENT_HEADER_SIZE: usize = 80;
+    const SOCKET_EVENT_HEADER_SIZE: usize = 120;
     const SOCKET_PAYLOAD_ABI_MAX_BYTES: usize = 4_096;
     const SOCKET_EVENT_SIZE: usize = SOCKET_EVENT_HEADER_SIZE + SOCKET_PAYLOAD_ABI_MAX_BYTES;
     if raw.len() != SOCKET_EVENT_SIZE {
@@ -395,7 +401,7 @@ pub(super) fn decode_socket_payload_event(
             ),
         ));
     }
-    let captured_size = read_u32(raw, 48).expect("event length checked");
+    let captured_size = read_u32(raw, 80).expect("event length checked");
     if captured_size as usize > SOCKET_PAYLOAD_ABI_MAX_BYTES {
         return Err(LoaderError::new(
             "decode_socket_payload",
@@ -409,15 +415,20 @@ pub(super) fn decode_socket_payload_event(
         trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
         observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
         sequence: read_u64(raw, 32).expect("event length checked"),
-        fd: read_u32(raw, 40).expect("event length checked"),
-        original_size: read_u32(raw, 44).expect("event length checked"),
+        operation_id: read_u64(raw, 40).expect("event length checked"),
+        operation_offset: read_u64(raw, 48).expect("event length checked"),
+        operation_original_size: read_u64(raw, 56).expect("event length checked"),
+        operation_captured_size: read_u64(raw, 64).expect("event length checked"),
+        fd: read_u32(raw, 72).expect("event length checked"),
+        original_size: read_u32(raw, 76).expect("event length checked"),
         captured_size,
-        flags: read_u32(raw, 52).expect("event length checked"),
-        syscall: read_u32(raw, 56).expect("event length checked"),
-        fd_generation: read_u32(raw, 60).expect("event length checked"),
-        pid_generation: read_u64(raw, 64).expect("event length checked"),
-        host_pid: read_u32(raw, 72).expect("event length checked"),
-        host_tid: read_u32(raw, 76).expect("event length checked"),
+        flags: read_u32(raw, 84).expect("event length checked"),
+        syscall: read_u32(raw, 88).expect("event length checked"),
+        socket_generation: read_u32(raw, 92).expect("event length checked"),
+        pid_generation: read_u64(raw, 96).expect("event length checked"),
+        host_pid: read_u32(raw, 104).expect("event length checked"),
+        host_tid: read_u32(raw, 108).expect("event length checked"),
+        operation_chunk_index: read_u32(raw, 112).expect("event length checked"),
         bytes: raw[SOCKET_EVENT_HEADER_SIZE..SOCKET_EVENT_HEADER_SIZE + captured_size as usize]
             .to_vec(),
     })
@@ -426,7 +437,7 @@ pub(super) fn decode_socket_payload_event(
 pub(super) fn decode_socket_payload_completion_event(
     raw: &[u8],
 ) -> Result<KernelSocketPayloadCompletionEvent, LoaderError> {
-    const SOCKET_COMPLETION_EVENT_SIZE: usize = 96;
+    const SOCKET_COMPLETION_EVENT_SIZE: usize = 104;
     if raw.len() != SOCKET_COMPLETION_EVENT_SIZE {
         return Err(LoaderError::new(
             "decode_socket_payload_completion",
@@ -438,21 +449,22 @@ pub(super) fn decode_socket_payload_completion_event(
         ));
     }
     Ok(KernelSocketPayloadCompletionEvent {
-        pid: read_u32(raw, 4).expect("event length checked"),
-        tid: read_u32(raw, 8).expect("event length checked"),
+        observer_tgid: read_u32(raw, 4).expect("event length checked"),
+        observer_tid: read_u32(raw, 8).expect("event length checked"),
         direction: read_u32(raw, 12).expect("event length checked"),
         trace_id: TraceId::new(read_u64(raw, 16).expect("event length checked")),
         observed_ktime_ns: read_u64(raw, 24).expect("event length checked"),
         sequence: read_u64(raw, 32).expect("event length checked"),
-        completed_size: read_u64(raw, 40).expect("event length checked"),
-        requested_size: read_u64(raw, 48).expect("event length checked"),
-        buffer_ptr: read_u64(raw, 56).expect("event length checked"),
-        pid_generation: read_u64(raw, 64).expect("event length checked"),
-        fd: read_u32(raw, 72).expect("event length checked"),
-        flags: read_u32(raw, 76).expect("event length checked"),
-        syscall: read_u32(raw, 80).expect("event length checked"),
-        fd_generation: read_u32(raw, 84).expect("event length checked"),
-        host_pid: read_u32(raw, 88).expect("event length checked"),
-        host_tid: read_u32(raw, 92).expect("event length checked"),
+        operation_id: read_u64(raw, 40).expect("event length checked"),
+        completed_size: read_u64(raw, 48).expect("event length checked"),
+        requested_size: read_u64(raw, 56).expect("event length checked"),
+        buffer_ptr: read_u64(raw, 64).expect("event length checked"),
+        pid_generation: read_u64(raw, 72).expect("event length checked"),
+        fd: read_u32(raw, 80).expect("event length checked"),
+        flags: read_u32(raw, 84).expect("event length checked"),
+        syscall: read_u32(raw, 88).expect("event length checked"),
+        socket_generation: read_u32(raw, 92).expect("event length checked"),
+        kernel_tgid: read_u32(raw, 96).expect("event length checked"),
+        kernel_tid: read_u32(raw, 100).expect("event length checked"),
     })
 }

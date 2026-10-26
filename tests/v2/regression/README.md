@@ -1,5 +1,34 @@
 # V2 regression tests
 
+- **通用回归**：通过 `actrailctl init -f` 生成默认配置。场景补丁设置隔离路径、内容保留和导出等验收条件，采集后端继承产品默认值。
+- **后端专项**：权限矩阵、TLS-only 和治理后端测例显式设置所验证的后端，并检查对应的能力与证据。
+
+**配置生成**：公共工具用 `PatchBuilder` 生成运行目录、socket 和数据库等动态配置。测例的固定配置保存在本目录或子场景目录的 `patch_config.toml`，由测例通过 `__file__` 定位并传给执行层。
+
+```python
+from pathlib import Path
+from tests.v2.common.patch_builder import PatchBuilder
+
+runtime_patch = (
+    PatchBuilder()
+    .with_work_dir(work_dir)
+    .build()
+    .save(work_dir / "runtime_patch.toml")
+)
+case_patch = Path(__file__).with_name("patch_config.toml")
+```
+
+```bash
+actrailctl --config "$WORK/actraild.conf" init -f \
+  --patch "$WORK/runtime_patch.toml" --patch "$CASE/patch_config.toml"
+```
+
+**合并顺序**：后面的配置覆盖前面的同名值。表逐层合并，数组整体替换，全部合并后校验最终配置。`PatchBuilder().apply(path)` 使用同样的合并规则，文件路径由调用方传入。
+
+- **测例参数**：运行超时、轮询间隔、数据大小、模型和启动选项等默认值定义在测例同目录的 `constants.py`。使用 dataclass 字段表达固定默认值，使用 `default_factory` 在创建配置对象时计算路径或生成独立容器。
+- **公共套件**：公共执行器、进程管理、告警代理和本地模型服务等参数由所属套件的 `constants.py` 管理。测例配置引用所需套件的字段。
+- **环境覆盖**：环境变量、命令行和构造器的默认值引用对应字段。AcTrail 配置由默认配置和有序 patch 列表经 `actrailctl init --patch` 生成。
+
 运行默认回归集合：
 
 ```bash
@@ -23,6 +52,9 @@ workload bundle 和 xiaoO 路径，因此正常验收不需要再粘贴环境变
 
 当前已注册的辅助与可选回归 case 包含以下职责：
 
+- `resource_metrics_cgroup` 负责 release binaries 在 systemd delegated cgroup v2
+  下的 exact、restart recovery、exactly-once finalization 与 timeout 验收，仅在显式
+  选择时运行。
 - `sandbox_resource_alert_host` 负责无 VMM 的 Host native-VSOCK 组件通路验收。
 - `sandbox_oom_killed_alert_host` 只负责一次受控 Host memory-cgroup OOM
   与 `sandbox.resource.oom_killed` 公开告警投递，仅在显式选择时运行。
@@ -54,6 +86,7 @@ python3.11 tests/v2/regression/test_all.py --list
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_claude_mcp
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_mcp
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_llm
+sudo -E python3.11 tests/v2/regression/test_all.py --case probe_dcode_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_pi_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_qodercli_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case command_policy_xiaoo
@@ -72,6 +105,8 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --no-profile --case sandbox_resource_alert_host
 deploy/virtual-container/host/run-v2-tests.sh \
   --no-profile --case sandbox_oom_killed_alert_host
+sudo -E python3.11 tests/v2/regression/test_all.py \
+  --no-profile --case resource_metrics_cgroup
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_auto
 sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
 sudo -E python3.11 tests/v2/regression/test_all.py --case semantic_action_boundaries
@@ -154,6 +189,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `probe_claude_mcp` | [`probe_claude_mcp/README.zh.md`](probe_claude_mcp/README.zh.md) |
 | `probe_codex_llm` | [`probe_codex_llm/README.zh.md`](probe_codex_llm/README.zh.md) |
 | `probe_codex_mcp` | [`probe_codex_mcp/README.zh.md`](probe_codex_mcp/README.zh.md) |
+| `probe_dcode_llm` | [`probe_dcode_llm/README.zh.md`](probe_dcode_llm/README.zh.md) |
 | `probe_pi_llm` | [`probe_pi_llm/README.zh.md`](probe_pi_llm/README.zh.md) |
 | `probe_qodercli_llm` | [`probe_qodercli_llm/README.zh.md`](probe_qodercli_llm/README.zh.md) |
 | `probe_xiaoo_llm` | [`probe_xiaoo_llm/README.zh.md`](probe_xiaoo_llm/README.zh.md) |
@@ -162,6 +198,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `virtual_container_xiaoo_concurrency` | [`virtual_container_xiaoo_concurrency/README.zh.md`](virtual_container_xiaoo_concurrency/README.zh.md) |
 | `sandbox_resource_alert_host` | [`sandbox_resource_alert_host/README.zh.md`](sandbox_resource_alert_host/README.zh.md) |
 | `sandbox_oom_killed_alert_host` | [`sandbox_oom_killed_alert_host/README.zh.md`](sandbox_oom_killed_alert_host/README.zh.md) |
+| `resource_metrics_cgroup` | [`resource_metrics_cgroup/README.zh.md`](resource_metrics_cgroup/README.zh.md) |
 | `execution_isolation_firecracker` | [`execution_isolation_firecracker/v2/README.zh.md`](execution_isolation_firecracker/v2/README.zh.md) |
 | `execution_isolation_stratovirt` | [`execution_isolation_stratovirt/v2/README.zh.md`](execution_isolation_stratovirt/v2/README.zh.md) |
 | `execution_isolation_cloud_hypervisor` | [`execution_isolation_cloud_hypervisor/v2/README.zh.md`](execution_isolation_cloud_hypervisor/v2/README.zh.md) |

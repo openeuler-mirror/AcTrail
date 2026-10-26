@@ -1,64 +1,10 @@
 //! Shared helpers for provider-specific LLM response parsing.
 
 use semantic_action::{
-    LlmParsedResponse, LlmParsedSseEvent, LlmTokenUsage, LlmToolCall, LlmToolFunction,
+    LlmParsedResponse, LlmParsedSseEvent, LlmResponseTermination, LlmTokenUsage, LlmToolCall,
+    LlmToolFunction,
 };
 use serde_json::{Map, Number, Value};
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(in crate::llm_pipeline) struct ResponseTexts {
-    pub(in crate::llm_pipeline) content_text: Option<String>,
-    pub(in crate::llm_pipeline) reasoning_text: Option<String>,
-}
-
-impl ResponseTexts {
-    pub(in crate::llm_pipeline) fn chunk_count(&self) -> usize {
-        usize::from(self.content_text.is_some()) + usize::from(self.reasoning_text.is_some())
-    }
-}
-
-pub(in crate::llm_pipeline) fn extract_response_texts(value: &Value) -> ResponseTexts {
-    let mut content_chunks = Vec::new();
-    let mut reasoning_chunks = Vec::new();
-    collect_response_text(value, &mut content_chunks, &mut reasoning_chunks);
-    ResponseTexts {
-        content_text: (!content_chunks.is_empty()).then(|| content_chunks.join("")),
-        reasoning_text: (!reasoning_chunks.is_empty()).then(|| reasoning_chunks.join("")),
-    }
-}
-
-fn collect_response_text(
-    value: &Value,
-    content_chunks: &mut Vec<String>,
-    reasoning_chunks: &mut Vec<String>,
-) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                collect_response_text(item, content_chunks, reasoning_chunks);
-            }
-        }
-        Value::Object(object) => {
-            for key in ["content", "text", "output_text"] {
-                if let Some(text) = object.get(key).and_then(Value::as_str) {
-                    push_non_empty_text(content_chunks, text);
-                }
-            }
-            if let Some(text) = object.get("reasoning_content").and_then(Value::as_str) {
-                push_non_empty_text(reasoning_chunks, text);
-            }
-            if let Some(text) = object.get("thinking").and_then(Value::as_str) {
-                push_non_empty_text(reasoning_chunks, text);
-            }
-            for key in ["content", "message", "delta", "choices", "output"] {
-                if let Some(child) = object.get(key) {
-                    collect_response_text(child, content_chunks, reasoning_chunks);
-                }
-            }
-        }
-        _ => {}
-    }
-}
 
 pub(in crate::llm_pipeline) fn push_non_empty_text(chunks: &mut Vec<String>, text: &str) {
     if !text.is_empty() {
@@ -333,7 +279,10 @@ impl ToolCallAssembler {
         }
     }
 
-    fn apply_openai_response_custom_tool_call(&mut self, item: &Map<String, Value>) {
+    pub(in crate::llm_pipeline) fn apply_openai_response_custom_tool_call(
+        &mut self,
+        item: &Map<String, Value>,
+    ) {
         let raw_name = item
             .get("name")
             .and_then(Value::as_str)
@@ -344,10 +293,29 @@ impl ToolCallAssembler {
             let function = call.function.get_or_insert_with(LlmToolFunction::default);
             function.name = Self::qualified_response_tool_name(item);
         }
-        if raw_name == Some("exec")
-            && let Some(input) = item.get("input").and_then(Value::as_str)
-        {
-            self.apply_code_mode_mcp_calls(input, call_id);
+        if raw_name == Some("exec") {
+            for key in ["input", "arguments", "code"] {
+                if let Some(value) = item.get(key) {
+                    self.apply_code_mode_mcp_inputs(value, call_id);
+                }
+            }
+        }
+    }
+
+    fn apply_code_mode_mcp_inputs(&mut self, value: &Value, call_id: Option<&str>) {
+        match value {
+            Value::String(input) => self.apply_code_mode_mcp_calls(input, call_id),
+            Value::Array(values) => {
+                for value in values {
+                    self.apply_code_mode_mcp_inputs(value, call_id);
+                }
+            }
+            Value::Object(object) => {
+                for value in object.values() {
+                    self.apply_code_mode_mcp_inputs(value, call_id);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -556,26 +524,29 @@ pub(in crate::llm_pipeline) struct ParsedSseResponseAccumulator {
     reasoning_text: Option<String>,
     tool_calls: ToolCallAssembler,
     chunk_count: usize,
-    done: bool,
+    termination: Option<LlmResponseTermination>,
+    finish_reason_observed: bool,
+    response_observed: bool,
 }
 
 impl ParsedSseResponseAccumulator {
     pub(in crate::llm_pipeline) fn observe(&mut self, event: &LlmParsedSseEvent) {
+        self.response_observed |= event.response_observed;
+        self.finish_reason_observed |= event.finish_reason.is_some();
+        self.chunk_count += event.text_chunk_count;
         if self.model.is_none() {
             self.model = event.model.clone();
         }
         if let Some(content) = &event.content_text {
             append_text(&mut self.content_text, content);
-            self.chunk_count += 1;
         }
         if let Some(reasoning) = &event.reasoning_text {
             append_text(&mut self.reasoning_text, reasoning);
-            self.chunk_count += 1;
         }
         for tool_call in &event.tool_calls {
             self.tool_calls.apply_call_delta(tool_call.clone());
         }
-        self.done |= event.done || event.finish_reason.is_some();
+        self.termination = LlmResponseTermination::combine(self.termination, event.termination);
     }
 
     pub(in crate::llm_pipeline) fn finish(
@@ -585,11 +556,11 @@ impl ParsedSseResponseAccumulator {
         stream: bool,
     ) -> Option<LlmParsedResponse> {
         let tool_calls = self.tool_calls.clone().into_calls();
-        if self.content_text.is_none()
-            && self.reasoning_text.is_none()
-            && tool_calls.is_empty()
-            && !self.done
-        {
+        let termination = self.termination.or_else(|| {
+            self.finish_reason_observed
+                .then_some(LlmResponseTermination::Completed)
+        });
+        if !self.response_observed && tool_calls.is_empty() && termination.is_none() {
             return None;
         }
         Some(LlmParsedResponse {
@@ -600,7 +571,9 @@ impl ParsedSseResponseAccumulator {
             tool_calls,
             token_usage,
             chunk_count: self.chunk_count,
-            done: self.done,
+            // Only materialization uses the finish reason. observe_event keeps
+            // accepting usage and other trailing events until an explicit end.
+            termination,
             stream,
         })
     }

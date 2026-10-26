@@ -13,11 +13,11 @@
     <div v-if="depth > 0 && !compact" class="config-meta">
       <div class="config-title-row">
         <strong>{{ displayLabel }}</strong>
-        <span v-if="requiredField" class="config-required">Required</span>
+        <span v-if="requiredField" class="config-required">{{ t('configItem.required') }}</span>
         <ConfigHint v-if="hintText" :label="displayLabel" :text="hintText" />
         <span v-if="readOnly" class="config-access readonly">
           <LockKeyhole :size="12" aria-hidden="true" />
-          Read only
+          {{ t('configItem.readOnly') }}
         </span>
       </div>
     </div>
@@ -44,24 +44,24 @@
           @change="$emit('update:modelValue', $event.target.checked)"
         />
         <span class="config-boolean-copy">
-          <strong>{{ modelValue ? 'Enabled' : 'Disabled' }}</strong>
-          <small>{{ readOnly ? 'Locked by schema' : 'Click to change' }}</small>
+          <strong>{{ modelValue ? t('configItem.enabled') : t('configItem.disabled') }}</strong>
+          <small>{{ readOnly ? t('configItem.lockedBySchema') : t('configItem.clickToChange') }}</small>
         </span>
       </label>
 
       <div v-else-if="valueType === 'array'" class="config-array">
         <div v-for="(item, index) in arrayValue" :key="index" class="config-array-row">
           <div class="config-array-row-heading">
-            <strong>Entry {{ index + 1 }}</strong>
+            <strong>{{ t('configItem.entry', { index: index + 1 }) }}</strong>
             <button
               v-if="!readOnly"
               class="config-remove"
               type="button"
-              :aria-label="`Remove item ${index + 1} from ${displayLabel}`"
+              :aria-label="t('configItem.removeItem', { index: index + 1, label: displayLabel })"
               @click="removeArrayValue(index)"
             >
               <Trash2 :size="14" aria-hidden="true" />
-              Remove
+              {{ t('configItem.remove') }}
             </button>
           </div>
           <PluginConfigItem
@@ -76,9 +76,9 @@
         </div>
         <button v-if="!readOnly" class="config-add" type="button" @click="addArrayValue">
           <Plus :size="14" aria-hidden="true" />
-          Add entry
+          {{ t('configItem.addEntry') }}
         </button>
-        <p v-if="arrayValue.length === 0" class="config-empty">No items configured.</p>
+        <p v-if="arrayValue.length === 0" class="config-empty">{{ t('configItem.noItems') }}</p>
       </div>
 
       <select
@@ -87,7 +87,7 @@
         :value="selectedChoiceIndex"
         @change="selectChoice"
       >
-        <option value="" disabled>{{ `Select ${displayLabel.toLowerCase()}` }}</option>
+        <option value="" disabled>{{ t('configItem.select', { label: displayLabel.toLowerCase() }) }}</option>
         <option
           v-for="(option, index) in choiceOptions"
           :key="option.key"
@@ -125,7 +125,11 @@ import { computed } from 'vue';
 import { LockKeyhole, Plus, Trash2 } from '@lucide/vue';
 
 import ConfigHint from './ConfigHint.vue';
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
 import PluginConfigObjectSchema from './config/PluginConfigObjectSchema.js';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   name: { type: String, required: true },
@@ -151,11 +155,11 @@ const selectedChoiceIndex = computed(() => {
 const rangeLabel = computed(() => {
   if (props.schema.minimum == null && props.schema.maximum == null) return '';
   if (props.schema.minimum != null && props.schema.maximum != null) {
-    return `Allowed range: ${props.schema.minimum}–${props.schema.maximum}`;
+    return t('configItem.allowedRange', { min: props.schema.minimum, max: props.schema.maximum });
   }
   return props.schema.minimum != null
-    ? `Minimum: ${props.schema.minimum}`
-    : `Maximum: ${props.schema.maximum}`;
+    ? t('configItem.minimum', { value: props.schema.minimum })
+    : t('configItem.maximum', { value: props.schema.maximum });
 });
 const hintText = computed(() => [props.schema.description, rangeLabel.value].filter(Boolean).join(' '));
 const objectEntries = computed(() => {
@@ -276,11 +280,11 @@ function humanize(value) {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   align-items: start;
-  gap: var(--stats-space-xl);
+  gap: var(--ui-space-xl);
   margin: 0;
-  padding: var(--stats-space-lg) 0;
+  padding: var(--ui-space-lg) 0;
   border: 0;
-  border-bottom: 1px solid var(--stats-border);
+  border-bottom: 1px solid var(--ui-border);
   background: transparent;
 }
 
@@ -294,14 +298,14 @@ function humanize(value) {
 .config-item.is-object:not(.root),
 .config-item.is-array:not(.root) {
   grid-template-columns: minmax(0, 1fr);
-  padding: var(--stats-space-xl);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface-soft);
+  padding: var(--ui-space-xl);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-soft);
 }
 
 .config-item.is-readonly:not(.root) {
-  color: var(--stats-muted);
+  color: var(--ui-muted);
 }
 
 .config-item.is-compact:not(.root) {
@@ -315,51 +319,51 @@ function humanize(value) {
 .config-meta {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
 }
 
 .config-title-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 .config-title-row strong {
-  color: var(--stats-text);
-  font-size: var(--stats-font-md);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-text);
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-medium);
 }
 
 .config-access {
-  min-height: var(--stats-control-height-sm);
+  min-height: var(--ui-control-height-sm);
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-2xs);
-  padding: 0 var(--stats-space-sm);
-  border: 1px solid var(--stats-border-strong);
+  gap: var(--ui-space-2xs);
+  padding: 0 var(--ui-space-sm);
+  border: 1px solid var(--ui-border-strong);
   border-radius: 100vmax;
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
 }
 
 .config-access.readonly {
-  border-color: var(--stats-border-strong);
-  background: var(--stats-surface-bar);
-  color: var(--stats-muted);
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface-bar);
+  color: var(--ui-muted);
 }
 
 .config-required {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .config-empty {
   margin: 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
   line-height: 1.45;
 }
 
@@ -372,19 +376,19 @@ function humanize(value) {
 .config-object,
 .config-array {
   display: grid;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .config-boolean {
-  min-height: var(--stats-control-height-lg);
+  min-height: var(--ui-control-height-lg);
   display: flex;
   align-items: center;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-md) var(--stats-space-lg);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-md) var(--ui-space-lg);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   cursor: pointer;
 }
 
@@ -392,40 +396,40 @@ function humanize(value) {
   width: 1.125rem;
   height: 1.125rem;
   flex: 0 0 auto;
-  accent-color: var(--stats-accent);
+  accent-color: var(--ui-accent);
 }
 
 .config-boolean-copy {
   display: grid;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .config-boolean-copy strong {
-  font-size: var(--stats-font-md);
-  font-weight: var(--stats-weight-medium);
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-medium);
 }
 
 .config-boolean-copy small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 
 .config-item.is-readonly .config-boolean {
   border-style: dashed;
   background: transparent;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   cursor: not-allowed;
 }
 
 .config-input {
   min-width: 0;
   width: 100%;
-  min-height: var(--stats-control-height-lg);
-  padding: 0 var(--stats-space-md);
-  border: 1px solid color-mix(in srgb, var(--stats-accent) 42%, var(--stats-border-strong));
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  min-height: var(--ui-control-height-lg);
+  padding: 0 var(--ui-space-md);
+  border: 1px solid color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border-strong));
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   font: inherit;
 }
 
@@ -434,126 +438,95 @@ function humanize(value) {
 }
 
 .config-input:focus {
-  border-color: var(--stats-accent);
-  outline: 0.125rem solid color-mix(in srgb, var(--stats-accent) 18%, transparent);
+  border-color: var(--ui-accent);
+  outline: 0.125rem solid color-mix(in srgb, var(--ui-accent) 18%, transparent);
   outline-offset: 0.0625rem;
 }
 
 .config-item.is-readonly .config-input {
   border-style: dashed;
   background: transparent;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
 }
 
 .config-array-row {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-space-lg);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-space-lg);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface);
 }
 
 .config-array-row-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-md);
-  padding-bottom: var(--stats-space-md);
-  border-bottom: 1px solid var(--stats-border);
+  gap: var(--ui-space-md);
+  padding-bottom: var(--ui-space-md);
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .config-array-row-heading strong {
-  color: var(--stats-text);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-text);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
 }
 
 .config-remove,
 .config-add {
-  min-height: var(--stats-control-height-md);
+  min-height: var(--ui-control-height-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--stats-space-xs);
-  padding: 0 var(--stats-space-md);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-muted);
+  gap: var(--ui-space-xs);
+  padding: 0 var(--ui-space-md);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-muted);
   cursor: pointer;
   font: inherit;
-  font-size: var(--stats-font-sm);
-}
-
-:global(.stats-theme-arc-glass) .config-item.is-object:not(.root),
-:global(.stats-theme-arc-glass) .config-item.is-array:not(.root) {
-  border-color: rgb(15 15 20 / 9%);
-  background: rgb(139 92 246 / 3.5%);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 52%);
-}
-
-:global(.stats-theme-arc-glass) .config-array-row {
-  border-color: rgb(139 92 246 / 20%);
-  background: rgb(255 255 255 / 84%);
-  box-shadow:
-    0 0.35rem 1rem rgb(15 15 20 / 8%),
-    inset 0 1px 0 rgb(255 255 255 / 82%);
-  transition:
-    border-color 140ms ease,
-    box-shadow 140ms ease,
-    transform 140ms ease;
-}
-
-:global(.stats-theme-arc-glass) .config-array-row:focus-within {
-  border-color: rgb(139 92 246 / 48%);
-  box-shadow:
-    0 0 0 0.15rem rgb(139 92 246 / 12%),
-    0 0.55rem 1.35rem rgb(15 15 20 / 11%),
-    inset 0 1px 0 rgb(255 255 255 / 86%);
-}
-
-:global(.stats-theme-arc-glass) .config-array-row-heading {
-  border-bottom-color: rgb(15 15 20 / 10%);
+  font-size: var(--ui-font-sm);
 }
 
 .config-remove:hover,
 .config-add:hover {
-  border-color: var(--stats-accent);
-  color: var(--stats-accent);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
 }
 
 .config-remove:focus-visible,
 .config-add:focus-visible,
 .config-boolean:has(input:focus-visible),
 .config-input:focus-visible {
-  outline: 2px solid var(--stats-accent);
-  outline-offset: var(--stats-space-xs);
+  outline: 2px solid var(--ui-accent);
+  outline-offset: var(--ui-space-xs);
 }
 
 .config-remove {
   justify-self: end;
-  border-color: color-mix(in srgb, var(--stats-danger) 28%, var(--stats-border));
+  border-color: color-mix(in srgb, var(--ui-danger) 28%, var(--ui-border));
 }
 
 .config-remove:hover {
-  border-color: var(--stats-danger);
-  background: color-mix(in srgb, var(--stats-danger) 7%, var(--stats-surface));
-  color: var(--stats-danger);
+  border-color: var(--ui-danger);
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-surface));
+  color: var(--ui-danger);
 }
 
 .config-add {
   justify-self: start;
   border-style: dashed;
   background: transparent;
-  color: var(--stats-accent);
+  color: var(--ui-accent);
 }
 
 @container plugin-config (max-width: 52rem) {
   .config-item {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--stats-space-md);
+    gap: var(--ui-space-md);
   }
 }
 

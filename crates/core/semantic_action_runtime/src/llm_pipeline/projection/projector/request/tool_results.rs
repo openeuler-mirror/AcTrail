@@ -6,7 +6,7 @@ use model_core::process::ProcessIdentity;
 use serde_json::Value;
 use std::time::SystemTime;
 
-use crate::llm_pipeline::projection::retention::canonical_llm_json;
+use crate::llm_pipeline::projection::retention::canonical_llm_json_text;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ProjectedLlmToolResult {
@@ -18,8 +18,7 @@ pub(crate) struct ProjectedLlmToolResult {
     pub(crate) ordinal: usize,
     pub(crate) is_error: bool,
     pub(crate) content_json: Option<String>,
-    pub(crate) content_hash: String,
-    pub(crate) content_bytes: u64,
+    pub(crate) content_bytes: Option<u64>,
     pub(crate) content_export_state: &'static str,
 }
 
@@ -31,7 +30,7 @@ pub(super) fn project_tool_results(
     request_action_id: &str,
     body: &Value,
 ) -> Vec<ProjectedLlmToolResult> {
-    if !config.llm_layer_enabled() {
+    if !config.llm_layer_enabled() || !config.l0_llm_call.tool_results_enabled {
         return Vec::new();
     }
     let mut raw = Vec::new();
@@ -43,22 +42,18 @@ pub(super) fn project_tool_results(
     raw.into_iter()
         .enumerate()
         .map(|(ordinal, raw)| {
-            let (canonical_json, content_hash) = canonical_llm_json(raw.content);
-            let content_bytes = canonical_json.len() as u64;
-            let content_json = if !config.llm_tool_result_content_export_enabled() {
-                None
-            } else if content_bytes <= config.l0_llm_call.tool_result_content_export_max_bytes {
-                Some(canonical_json)
-            } else {
-                None
-            };
-            let content_export_state = if !config.llm_tool_result_content_export_enabled() {
-                "none"
-            } else if content_json.is_some() {
-                "exported"
-            } else {
-                "too_large"
-            };
+            let (content_json, content_bytes, content_export_state) =
+                if config.llm_tool_result_content_export_enabled() {
+                    let canonical_json = canonical_llm_json_text(raw.content);
+                    let content_bytes = canonical_json.len() as u64;
+                    if content_bytes <= config.l0_llm_call.tool_result_content_export_max_bytes {
+                        (Some(canonical_json), Some(content_bytes), "exported")
+                    } else {
+                        (None, Some(content_bytes), "too_large")
+                    }
+                } else {
+                    (None, None, "none")
+                };
             ProjectedLlmToolResult {
                 trace_id,
                 process: *process,
@@ -68,7 +63,6 @@ pub(super) fn project_tool_results(
                 ordinal,
                 is_error: raw.is_error,
                 content_json,
-                content_hash,
                 content_bytes,
                 content_export_state,
             }

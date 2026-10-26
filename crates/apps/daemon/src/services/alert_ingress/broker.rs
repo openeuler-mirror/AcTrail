@@ -16,7 +16,8 @@ use plugin_system::{AlertHost, PluginManifest};
 use storage_core::StorageBackend;
 
 use super::protocol::{
-    AlertAdmission, AlertHostClient, AlertRequest, EventSignal, RegisteredOutput,
+    AlertAdmission, AlertAuthorization, AlertHostClient, AlertRequest, EventSignal,
+    RegisteredOutput,
 };
 use super::system::{
     self, CommandExecutionBoundaryAlert, DAEMON_ENFORCEMENT_INSTANCE_ID, FileAccessBoundaryAlert,
@@ -105,6 +106,84 @@ impl AlertIngress {
         self.daemon_alert_host
             .submit_command_execution_boundary_alert(trace_id, alert_token, alert)
             .map_err(|error| ControlError::new(error.code, error.message))
+    }
+
+    /// Registers a built-in producer with module-owned definitions and schemas.
+    pub(crate) fn register_producer(
+        &mut self,
+        instance_id: &str,
+        definitions: Vec<(AlertDefinition, serde_json::Value)>,
+        storage: &mut dyn StorageBackend,
+    ) -> Result<Arc<dyn AlertHost>, ControlError> {
+        if instance_id.trim().is_empty() || self.registrations.contains_key(instance_id) {
+            return Err(ControlError::new(
+                "alert_ingress_registration",
+                format!("producer instance {instance_id:?} is empty or already registered"),
+            ));
+        }
+        if definitions.is_empty() {
+            return Err(ControlError::new(
+                "alert_ingress_registration",
+                "producer must declare at least one alert definition",
+            ));
+        }
+        let mut registered_definitions = BTreeMap::new();
+        let mut outputs = BTreeMap::new();
+        for (definition, schema) in definitions {
+            definition
+                .validate()
+                .map_err(|message| ControlError::new("alert_ingress_registration", message))?;
+            if definition.producer_plugin_id != instance_id {
+                return Err(ControlError::new(
+                    "alert_ingress_registration",
+                    "alert definition producer must match its registered instance",
+                ));
+            }
+            if schema.get("$id").and_then(serde_json::Value::as_str)
+                != Some(definition.payload_schema_id.as_str())
+            {
+                return Err(ControlError::new(
+                    "alert_payload_schema",
+                    format!(
+                        "schema must declare $id = {:?}",
+                        definition.payload_schema_id
+                    ),
+                ));
+            }
+            let validator = jsonschema::validator_for(&schema)
+                .map_err(|error| ControlError::new("alert_payload_schema", error.to_string()))?;
+            outputs.insert(
+                definition.definition_key.clone(),
+                RegisteredOutput::new(validator),
+            );
+            if registered_definitions
+                .insert(definition.definition_key.clone(), definition)
+                .is_some()
+            {
+                return Err(ControlError::new(
+                    "alert_ingress_registration",
+                    "producer declares a duplicate alert definition key",
+                ));
+            }
+        }
+        for definition in registered_definitions.values() {
+            storage
+                .register_alert_definition(definition)
+                .map_err(alert_control_error)?;
+        }
+        let admission = Arc::new(AlertAdmission::new(
+            instance_id.to_string(),
+            instance_id.to_string(),
+            outputs,
+            registered_definitions,
+        ));
+        self.registrations
+            .insert(instance_id.to_string(), Arc::clone(&admission));
+        Ok(Arc::new(AlertHostClient::new(
+            admission,
+            self.request_sender.clone(),
+            Arc::clone(&self.signal),
+        )))
     }
 
     pub(crate) fn register_plugin(
@@ -259,28 +338,51 @@ impl AlertIngress {
                 request.created_at,
             );
             request.admission.complete()?;
-            match result {
-                Ok(alert_contract::AlertSubmitOutcome::Stored(_)) => {
-                    if let Some(definition) = request.admission.definition(&draft.definition_key) {
-                        self.forward_stored_alert(
-                            request.trace_id,
-                            request.created_at,
-                            definition,
-                            &draft.payload_json,
-                        );
-                    } else {
-                        issues.push(AlertIngressIssue {
-                            trace_id: request.trace_id,
-                            instance_id: request.admission.instance_id.clone(),
-                            code: "alert_forwarding_metadata".to_string(),
-                            message: format!(
-                                "alert definition {} has no forwarding metadata",
-                                draft.definition_key
-                            ),
-                        });
-                    }
+            let runtime_authorized = request.authorization == AlertAuthorization::RuntimeAuthorized;
+            let should_forward = match &result {
+                Ok(alert_contract::AlertSubmitOutcome::Stored(_)) => true,
+                Ok(alert_contract::AlertSubmitOutcome::NotPersisted)
+                | Ok(alert_contract::AlertSubmitOutcome::RejectedTraceToken) => runtime_authorized,
+                Ok(alert_contract::AlertSubmitOutcome::DuplicateSuppressed) => false,
+                Err(error) => {
+                    runtime_authorized
+                        && error.kind == alert_contract::AlertStoreErrorKind::StorageFailure
                 }
-                Ok(alert_contract::AlertSubmitOutcome::DuplicateSuppressed)
+            };
+            if should_forward {
+                if let Some(definition) = request.admission.definition(&draft.definition_key) {
+                    self.forward_authorized_alert(
+                        request.trace_id,
+                        request.created_at,
+                        definition,
+                        &draft.payload_json,
+                    );
+                } else {
+                    issues.push(AlertIngressIssue {
+                        trace_id: request.trace_id,
+                        instance_id: request.admission.instance_id.clone(),
+                        code: "alert_forwarding_metadata".to_string(),
+                        message: format!(
+                            "alert definition {} has no forwarding metadata",
+                            draft.definition_key
+                        ),
+                    });
+                }
+            }
+            match result {
+                Ok(alert_contract::AlertSubmitOutcome::RejectedTraceToken)
+                    if runtime_authorized =>
+                {
+                    issues.push(AlertIngressIssue {
+                        trace_id: request.trace_id,
+                        instance_id: request.admission.instance_id.clone(),
+                        code: "alert_storage_authorization_missing".to_string(),
+                        message: "runtime-authorized alert could not be persisted with the stored trace authorization".to_string(),
+                    });
+                }
+                Ok(alert_contract::AlertSubmitOutcome::Stored(_))
+                | Ok(alert_contract::AlertSubmitOutcome::NotPersisted)
+                | Ok(alert_contract::AlertSubmitOutcome::DuplicateSuppressed)
                 | Ok(alert_contract::AlertSubmitOutcome::RejectedTraceToken) => {}
                 Err(error) => {
                     issues.push(AlertIngressIssue {
@@ -308,7 +410,7 @@ impl AlertIngress {
         })
     }
 
-    fn forward_stored_alert(
+    fn forward_authorized_alert(
         &self,
         trace_id: TraceId,
         created_at: std::time::SystemTime,

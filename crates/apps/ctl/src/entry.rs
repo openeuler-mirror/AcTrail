@@ -1,6 +1,8 @@
 //! Top-level entry boundary for the control application.
 
-use std::path::Path;
+mod init;
+
+use init::OperatorConfigInitializer;
 
 use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
 use control_contract::command::{ControlCommand, ResolveLaunchPermissionsCommand};
@@ -26,9 +28,10 @@ pub fn run_from_env() -> Result<i32, String> {
         CtlCommand::Init {
             config_path,
             force,
-            patch_path,
+            patch_paths,
+            mode,
         } => {
-            match initialize_operator_config_file(&config_path, force, patch_path.as_deref())? {
+            match OperatorConfigInitializer::write(&config_path, mode, force, &patch_paths)? {
                 OperatorConfigInitStatus::Created => {
                     println!("initialized config {}", config_path.display());
                 }
@@ -60,6 +63,7 @@ pub fn run_from_env() -> Result<i32, String> {
             agent_invocation_commands,
             supervision_poll_interval_ms,
             ebpf_seccomp_policy,
+            agent_integration,
             argv,
         } => {
             let socket_path = required_socket_path(invocation.socket_path)?;
@@ -84,6 +88,7 @@ pub fn run_from_env() -> Result<i32, String> {
                     agent_invocation_commands,
                     supervision_poll_interval_ms,
                     ebpf_seccomp_policy,
+                    agent_integration,
                     argv,
                 },
             )
@@ -198,36 +203,6 @@ pub fn run_from_env() -> Result<i32, String> {
             Ok(i32::default())
         }
     }
-}
-
-fn initialize_operator_config_file(
-    path: &Path,
-    force: bool,
-    patch_path: Option<&Path>,
-) -> Result<OperatorConfigInitStatus, String> {
-    let existed = path.exists();
-    if existed && !force {
-        if let Some(patch_path) = patch_path {
-            return Err(format!(
-                "config {} already exists; pass --force to rewrite it with patch {}",
-                path.display(),
-                patch_path.display()
-            ));
-        }
-        OperatorConfig::load(path)
-            .map_err(|error| format!("validate config {}: {error}", path.display()))?;
-        return Ok(OperatorConfigInitStatus::ExistingValid);
-    }
-    let mut config = OperatorConfig::init()?;
-    if let Some(patch_path) = patch_path {
-        config = config.patch_file(patch_path)?;
-    }
-    config.dump_to_path(path, force)?;
-    Ok(if existed {
-        OperatorConfigInitStatus::Overwritten
-    } else {
-        OperatorConfigInitStatus::Created
-    })
 }
 
 fn required_socket_path(

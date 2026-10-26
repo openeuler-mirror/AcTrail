@@ -1,27 +1,36 @@
 //! Semantic action contracts kept separate from raw fact events.
 
 pub mod attr_keys;
+mod content_node;
 pub mod evidence_roles;
 pub mod link_roles;
 pub mod llm;
-mod merge;
 pub mod model;
 pub mod model_identity;
 pub mod store;
+mod update;
+pub use content_node::{
+    ContentNode, ContentNodeChild, ContentNodeKind, ContentNodePage, ContentNodeQuery,
+};
+
+pub use update::{
+    SemanticActionChange, SemanticActionFinalizationReason, SemanticActionUpdate,
+    SemanticCommandKind, SemanticToolResultBinding,
+};
 
 pub use llm::{
     LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
-    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
-    LlmTokenUsage, LlmToolCall, LlmToolFunction,
+    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmResponseRetention,
+    LlmResponseTermination, LlmSseEvent, LlmSseResponseInput, LlmTokenUsage, LlmToolCall,
+    LlmToolFunction,
 };
-pub use merge::SemanticActionMergeError;
 pub use model::{
     FileChangeKind, FileObservationPath, FilePathSetIdentity, FilePathSetPath, FilePathSetPathPage,
     FilePathSetState, FilePathSetWrite, LlmRequestBlock, LlmRequestBlockRef, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, LlmRequestManifest,
     LlmTrajectoryStartReason, LlmTrajectoryTransition, McpJsonRpcContentPage,
     McpJsonRpcContentWrite, SemanticAction, SemanticActionCompleteness, SemanticActionKind,
-    SemanticActionLink, SemanticActionLinkConfidence, SemanticActionLinkRole, SemanticActionPage,
+    SemanticActionLink, SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionPage,
     SemanticActionStatus, SemanticEvidence, SemanticEvidenceKind,
     file_path_set_identity_for_overflow_scope, file_path_set_identity_for_paths,
 };

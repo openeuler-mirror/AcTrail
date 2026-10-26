@@ -2,6 +2,7 @@ import { GRAPH_LANES, TREE_NODE_TYPES, UI_LIMITS } from './config';
 import { compactMeta, compactRows, kindClass, shortTime } from './common';
 import { groupActionNodes, mergeActionTreeChildren } from './actionGroups';
 import { semanticActionLabel, semanticActionMeta, semanticActionTarget } from '../../actionLabels';
+import { ToolCallDisplay } from '../../shared/toolCallDisplay.js';
 
 export { mergeActionTreeChildren };
 
@@ -29,9 +30,13 @@ export function buildActionTreeChildNodes({ parentNode, childData }) {
   const actions = childData?.actions ?? [];
   const links = childData?.links ?? [];
   const childState = childStateByActionId(childData?.child_state ?? []);
+  const sources = new Map(actions.map((action) => [action.id, action]));
+  const parentAction = parentNode.detail?.raw;
+  if (parentAction?.id) sources.set(parentAction.id, parentAction);
+  const toolDisplay = new ToolCallDisplay(sources);
   const actionChildren = displayActions(actions, links)
     .sort(parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentDisplayActions : sortDisplayActionByTime)
-    .map(({ action }) => actionTreeNode(action, childState))
+    .map(({ action }) => actionTreeNode(action, childState, toolDisplay.target(action)))
     .filter(Boolean);
   return groupActionNodes(actionChildren);
 }
@@ -45,8 +50,8 @@ export function buildVisibleActionTreeModel({ root, query }) {
   };
 }
 
-function actionTreeNode(action, childState) {
-  const node = actionNode(action);
+function actionTreeNode(action, childState, target) {
+  const node = actionNode(action, target);
   const state = childState.get(action.id);
   applyLazyState(node, {
     hasChildren: Boolean(state?.hasChildren),
@@ -96,8 +101,8 @@ function agentNode(traceDetail, observedAgent) {
   };
 }
 
-function actionNode(action) {
-  const display = actionDisplay(action);
+function actionNode(action, target) {
+  const display = actionDisplay(action, target);
   return {
     id: action.id,
     nodeType: TREE_NODE_TYPES.action,
@@ -117,13 +122,10 @@ function actionNode(action) {
     error: '',
     detail: {
       selectionId: action.id,
-      title: display.label,
+      title: display.target || display.label,
       kind: display.label,
       rows: compactRows({
-        semantic_label: display.label,
-        raw_action_kind: action.kind,
-        target: display.target,
-        status: action.status,
+        status: ToolCallDisplay.statusLabel(action),
         completeness: action.completeness,
         pid: action.process?.pid,
         evidence: action.evidence?.length,
@@ -245,20 +247,19 @@ function nodeMatchesQuery(node, query) {
     .includes(query);
 }
 
-function actionDisplay(action) {
+function actionDisplay(action, target = semanticActionTarget(action)) {
   const label = actionCardLabel(action);
-  const target = semanticActionTarget(action);
   const actionMeta = semanticActionMeta(action);
   const time = shortTime(action.start_time);
   return {
     label,
     target,
     durationBadge: action.duration ?? null,
-    meta: compactMeta([target, actionMeta, time, action.status]),
+    meta: compactMeta([target, actionMeta, time, ToolCallDisplay.statusLabel(action)]),
     metaItems: compactMetaItems([
       metaItem(metaKind(action), target),
       metaItem('time', time),
-      statusMetaItem(action.status),
+      statusMetaItem(ToolCallDisplay.statusLabel(action)),
     ]),
   };
 }
@@ -321,7 +322,7 @@ function pidLabel(pid) {
 
 function laneTitles(depth) {
   const baseTitles = [GRAPH_LANES.agent, GRAPH_LANES.actions];
-  return Array.from({ length: depth }, (_, index) => baseTitles[index] ?? `L${index + 1}`);
+  return Array.from({ length: depth }, (_, index) => baseTitles[index] ?? `Related actions · ${index}`);
 }
 
 function maxDepth(node) {
@@ -509,4 +510,26 @@ function compareDecimalStrings(left, right) {
 
 function compareActionId(left, right) {
   return String(left.id ?? '').localeCompare(String(right.id ?? ''));
+}
+
+export function buildFullActionDetail(currentDetail, action) {
+  const pathSetDetail =
+    (action.kind === 'file.bulk_read' || action.kind === 'fs.enumerate')
+      ? {
+          filePathSetActionId: action.id,
+          filePathSetPageSize: UI_LIMITS.actionTreeChildPageSize,
+        }
+      : {};
+  return {
+    ...currentDetail,
+    ...pathSetDetail,
+    rows: {
+      ...(currentDetail.rows ?? {}),
+      status: ToolCallDisplay.statusLabel(action),
+      evidence: action.evidence?.length ?? 0,
+    },
+    attributes: action.attributes ?? {},
+    evidence: action.evidence ?? [],
+    raw: action,
+  };
 }

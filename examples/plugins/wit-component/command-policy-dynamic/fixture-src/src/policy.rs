@@ -59,7 +59,7 @@ impl PolicyManager {
             Ok(candidate) => candidate,
             Err(error) => return Ok(vec![error]),
         };
-        if candidate == current {
+        if current.rules.is_empty() && candidate.rules.is_empty() {
             return Ok(Vec::new());
         }
         let request = Self::projection_request(&current, &candidate, "web config validation")?;
@@ -115,7 +115,7 @@ impl PolicyManager {
         let mut config = serde_json::from_str::<PolicyConfig>(raw)
             .map_err(|error| format!("parse config JSON: {error}"))?;
         Self::normalize_rule_ids(&mut config, current)?;
-        Self::validate_config(&mut config)?;
+        Self::validate_config(&config)?;
         Ok(config)
     }
 
@@ -150,7 +150,7 @@ impl PolicyManager {
         Ok(())
     }
 
-    fn validate_config(config: &mut PolicyConfig) -> Result<(), String> {
+    fn validate_config(config: &PolicyConfig) -> Result<(), String> {
         for index in 0..config.rules.len() {
             let rule = &config.rules[index];
             let id = rule
@@ -184,20 +184,17 @@ impl PolicyManager {
             }
             Self::validate_args(rule.args.as_deref(), index)?;
         }
-        for rule in &mut config.rules {
-            rule.executable = Self::normalize_absolute(&rule.executable)?;
+        for rule in &config.rules {
+            Self::validate_absolute(&rule.executable)?;
         }
         for index in 0..config.rules.len() {
-            if config.rules[..index]
-                .iter()
-                .any(|existing| {
-                    existing.executable == config.rules[index].executable
-                        && Self::same_args_scope(
-                            existing.args.as_deref(),
-                            config.rules[index].args.as_deref(),
-                        )
-                })
-            {
+            if config.rules[..index].iter().any(|existing| {
+                existing.executable == config.rules[index].executable
+                    && Self::same_args_scope(
+                        existing.args.as_deref(),
+                        config.rules[index].args.as_deref(),
+                    )
+            }) {
                 return Err(format!(
                     "duplicate executable {} args scope",
                     config.rules[index].executable,
@@ -207,23 +204,11 @@ impl PolicyManager {
         Ok(())
     }
 
-    fn normalize_absolute(raw: &str) -> Result<String, String> {
+    fn validate_absolute(raw: &str) -> Result<(), String> {
         if !raw.starts_with('/') {
             return Err(format!("command executable {raw} must be absolute"));
         }
-        let mut parts = Vec::new();
-        for part in raw.split('/') {
-            match part {
-                "" | "." => {}
-                ".." => {
-                    parts.pop();
-                }
-                value => parts.push(value),
-            }
-        }
-        let mut normalized = String::from("/");
-        normalized.push_str(&parts.join("/"));
-        Ok(normalized)
+        Ok(())
     }
 
     fn validate_args(args: Option<&[String]>, rule_index: usize) -> Result<(), String> {
@@ -251,9 +236,7 @@ impl PolicyManager {
         match args {
             None => (0, &[]),
             Some([wildcard]) if wildcard == "*" => (0, &[]),
-            Some(args) if args.last().is_some_and(|arg| arg == "*") => {
-                (2, &args[..args.len() - 1])
-            }
+            Some(args) if args.last().is_some_and(|arg| arg == "*") => (2, &args[..args.len() - 1]),
             Some(args) => (1, args),
         }
     }
@@ -299,7 +282,7 @@ impl PolicyManager {
         candidate: PolicyConfig,
         reason: &str,
     ) -> Result<(), String> {
-        if current == candidate {
+        if current.rules.is_empty() && candidate.rules.is_empty() {
             let mut stored = POLICY_CONFIG.lock();
             if stored.is_none() {
                 *stored = Some(candidate);
@@ -341,7 +324,7 @@ impl PolicyManager {
         }
         let decision = PolicyDecision::parse(&argv[2])?;
         let executable = argv[3].clone();
-        let normalized_executable = Self::normalize_absolute(&executable)?;
+        Self::validate_absolute(&executable)?;
         let mut priority = Self::default_priority();
         let mut gray_target = None;
         let mut args = None;
@@ -359,11 +342,9 @@ impl PolicyManager {
                 }
                 "--gray-target" => gray_target = Some(value.clone()),
                 "--args-json" => {
-                    args = Some(
-                        serde_json::from_str::<Vec<String>>(value).map_err(|error| {
-                            format!("--args-json must be a JSON string array: {error}")
-                        })?,
-                    )
+                    args = Some(serde_json::from_str::<Vec<String>>(value).map_err(|error| {
+                        format!("--args-json must be a JSON string array: {error}")
+                    })?)
                 }
                 "--rule-id" => rule_id = Some(value.clone()),
                 _ => return Err(Self::usage()),
@@ -394,7 +375,7 @@ impl PolicyManager {
             candidate.rules.push(replacement);
         }
         Self::normalize_rule_ids(&mut candidate, &current)?;
-        Self::validate_config(&mut candidate)?;
+        Self::validate_config(&candidate)?;
         let rule_id = match rule_id.as_deref() {
             Some(rule_id) => candidate
                 .rules
@@ -402,7 +383,7 @@ impl PolicyManager {
                 .find(|rule| rule.rule_id.as_deref() == Some(rule_id)),
             None => candidate.rules.last(),
         }
-        .filter(|rule| rule.executable == normalized_executable)
+        .filter(|rule| rule.executable == executable)
         .and_then(|rule| rule.rule_id.clone())
         .ok_or_else(|| "normalized command rule has no id".to_string())?;
         Self::publish_and_commit(current, candidate, "dynamic plugin command")?;

@@ -2,7 +2,7 @@
 
 use semantic_action::{
     LlmParsedResponse, LlmParsedSseEvent, LlmProviderResponseParser,
-    LlmProviderResponseStreamParser, LlmSseEvent, LlmTokenUsage,
+    LlmProviderResponseStreamParser, LlmResponseRetention, LlmSseEvent, LlmTokenUsage,
 };
 
 use super::parser::{ANTHROPIC_PROVIDER_ID, AnthropicMessagesResponseParser};
@@ -10,12 +10,22 @@ use crate::llm_pipeline::provider::driver::{ParsedSseResponseAccumulator, ToolCa
 
 #[derive(Default)]
 pub(super) struct AnthropicMessagesStreamParser {
+    retention: LlmResponseRetention,
     accumulator: ParsedSseResponseAccumulator,
+}
+
+impl AnthropicMessagesStreamParser {
+    pub(super) fn new(retention: LlmResponseRetention) -> Self {
+        Self {
+            retention,
+            ..Default::default()
+        }
+    }
 }
 
 impl LlmProviderResponseStreamParser for AnthropicMessagesStreamParser {
     fn observe_event(&mut self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent {
-        let parsed = AnthropicMessagesResponseParser.parse_sse_event(event);
+        let parsed = AnthropicMessagesResponseParser.parse_sse_event(event, self.retention);
         self.accumulator.observe(&parsed);
         parsed
     }
@@ -46,10 +56,11 @@ pub(super) fn parsed_events_to_response(
         }
     }
     let tool_calls = assembler.into_calls();
-    let done = parsed_events
+    let termination = parsed_events
         .iter()
-        .any(|event| event.done || event.finish_reason.is_some());
-    if content_chunks.is_empty() && reasoning_chunks.is_empty() && tool_calls.is_empty() && !done {
+        .filter_map(|event| event.termination)
+        .max();
+    if !parsed_events.iter().any(|event| event.response_observed) && termination.is_none() {
         return None;
     }
     let content_text = (!content_chunks.is_empty()).then(|| content_chunks.join(""));
@@ -61,8 +72,11 @@ pub(super) fn parsed_events_to_response(
         reasoning_text,
         tool_calls,
         token_usage,
-        chunk_count: content_chunks.len() + reasoning_chunks.len(),
-        done,
+        chunk_count: parsed_events
+            .iter()
+            .map(|event| event.text_chunk_count)
+            .sum(),
+        termination,
         stream,
     })
 }

@@ -119,6 +119,7 @@ pub enum PluginSandboxObservationKind {
     ProcessIo,
     GuestResource,
     OomVictim,
+    GuestPressure,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

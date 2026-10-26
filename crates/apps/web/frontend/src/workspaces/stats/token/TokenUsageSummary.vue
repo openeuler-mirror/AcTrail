@@ -44,37 +44,37 @@ const metrics = computed(() => {
 .token-summary {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: var(--stats-space-xl);
+  gap: var(--ui-space-xl);
 }
 
 .summary-metric {
   min-width: 0;
-  padding: var(--stats-space-2xl) var(--stats-space-2xl) var(--stats-panel-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-lg);
-  background: var(--stats-surface);
+  padding: var(--ui-space-2xl) var(--ui-space-2xl) var(--ui-panel-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
   box-shadow:
-    var(--stats-highlight),
-    var(--stats-shadow);
-  backdrop-filter: var(--stats-glass-filter);
+    var(--ui-highlight),
+    var(--ui-shadow);
+  backdrop-filter: var(--ui-glass-filter);
 }
 
 .summary-metric span {
   display: block;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-md);
-  font-weight: var(--stats-weight-regular);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-regular);
 }
 
 .summary-metric strong {
   display: block;
-  margin-top: var(--stats-space-xs);
+  margin-top: var(--ui-space-xs);
   overflow-wrap: anywhere;
-  color: var(--stats-text);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-lg);
-  font-weight: var(--stats-weight-medium);
-  line-height: var(--stats-line-height-tight);
+  color: var(--ui-text);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-lg);
+  font-weight: var(--ui-weight-medium);
+  line-height: var(--ui-line-height-tight);
 }
 
 @media (max-width: 1100px) {

@@ -13,9 +13,9 @@ set -eu
 : "${ACTRAIL_EXECUTION_ISOLATION_NAMED_ROOT_MARKER:?}"
 : "${ACTRAIL_EXECUTION_ISOLATION_AGENT_TOOLS_MARKER:?}"
 
-PROVIDER_PORT="${ACTRAIL_XIAOO_PROVIDER_PORT:-18098}"
-READY_TIMEOUT="${ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS:-90}"
-LOCAL_API_KEY="${ACTRAIL_VIRTUAL_XIAOO_API_KEY:-actrail-kata-local-key}"
+PROVIDER_PORT="${ACTRAIL_XIAOO_PROVIDER_PORT:?}"
+READY_TIMEOUT="${ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS:?}"
+LOCAL_API_KEY="${ACTRAIL_VIRTUAL_XIAOO_API_KEY:?}"
 PROVIDER_PID=""
 XIAOO_PID=""
 
@@ -84,8 +84,8 @@ while ! grep -q '^proxy_base_url=' "$PROVIDER_STDOUT" 2>/dev/null; do
     fail "local provider exited before readiness"
   }
   [ "$remaining" -gt 0 ] || fail "local provider readiness timed out"
-  remaining=$((remaining - 1))
-  sleep 1
+  remaining=$((remaining - ACTRAIL_XIAOO_POLL_SECONDS))
+  sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
 done
 touch "$PROVIDER_READY"
 echo "KATA_XIAOO_PROVIDER_READY instance=$ACTRAIL_XIAOO_INSTANCE"
@@ -95,8 +95,8 @@ while [ ! -f "$RELEASE_FILE" ]; do
   kill -0 "$PROVIDER_PID" >/dev/null 2>&1 \
     || fail "local provider exited while waiting for release"
   [ "$remaining" -gt 0 ] || fail "workload release timed out"
-  remaining=$((remaining - 1))
-  sleep 1
+  remaining=$((remaining - ACTRAIL_XIAOO_POLL_SECONDS))
+  sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
 done
 
 ACTRAIL_VIRTUAL_XIAOO_API_KEY="$LOCAL_API_KEY" \

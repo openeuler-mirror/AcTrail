@@ -18,6 +18,7 @@ pub(crate) struct ObservedRecordBatch {
     diagnostics: Vec<DiagnosticRecord>,
     semantic_actions: SemanticActionBatch,
     trace_states: Vec<TraceStateRecord>,
+    memberships: Vec<ProcessMembership>,
     process_records: Vec<ProcessRecord>,
 }
 
@@ -26,11 +27,16 @@ impl ObservedRecordBatch {
         &self.semantic_actions
     }
 
+    pub(crate) fn into_semantic_actions(self) -> SemanticActionBatch {
+        self.semantic_actions
+    }
+
     pub(crate) fn from_live_events(
         events: Vec<DomainEvent>,
         diagnostics: Vec<DiagnosticRecord>,
         semantic_actions: SemanticActionBatch,
         trace_states: Vec<TraceStateRecord>,
+        memberships: Vec<ProcessMembership>,
         process_records: Vec<ProcessRecord>,
     ) -> Self {
         Self {
@@ -39,6 +45,7 @@ impl ObservedRecordBatch {
             diagnostics,
             semantic_actions,
             trace_states,
+            memberships,
             process_records,
         }
     }
@@ -50,12 +57,14 @@ impl ObservedRecordBatch {
             diagnostics: Vec::new(),
             semantic_actions,
             trace_states: Vec::new(),
+            memberships: Vec::new(),
             process_records: Vec::new(),
         }
     }
 
     pub(crate) fn from_trace_state(
         trace_state: TraceStateRecord,
+        memberships: Vec<ProcessMembership>,
         process_records: Vec<ProcessRecord>,
     ) -> Self {
         Self {
@@ -64,7 +73,20 @@ impl ObservedRecordBatch {
             diagnostics: Vec::new(),
             semantic_actions: SemanticActionBatch::default(),
             trace_states: vec![trace_state],
+            memberships,
             process_records,
+        }
+    }
+
+    pub(crate) fn from_memberships(memberships: Vec<ProcessMembership>) -> Self {
+        Self {
+            events: Vec::new(),
+            payload_segments: Vec::new(),
+            diagnostics: Vec::new(),
+            semantic_actions: SemanticActionBatch::default(),
+            trace_states: Vec::new(),
+            memberships,
+            process_records: Vec::new(),
         }
     }
 
@@ -75,6 +97,7 @@ impl ObservedRecordBatch {
             diagnostics: vec![diagnostic],
             semantic_actions: SemanticActionBatch::default(),
             trace_states: Vec::new(),
+            memberships: Vec::new(),
             process_records: Vec::new(),
         }
     }
@@ -82,12 +105,11 @@ impl ObservedRecordBatch {
 
 pub struct TraceStateRecord {
     trace: TraceRecord,
-    memberships: Vec<ProcessMembership>,
 }
 
 impl TraceStateRecord {
-    pub fn new(trace: TraceRecord, memberships: Vec<ProcessMembership>) -> Self {
-        Self { trace, memberships }
+    pub fn new(trace: TraceRecord) -> Self {
+        Self { trace }
     }
 }
 
@@ -114,12 +136,18 @@ impl<'a> ObservedRecordRecorder<'a> {
         &mut self,
         batch: ObservedRecordBatch,
     ) -> Result<ObservedRecordCommit, RecordingError> {
+        if !self.storage.retains_observations() {
+            return Ok(ObservedRecordCommit {
+                semantic_actions: batch.into_semantic_actions(),
+            });
+        }
         let ObservedRecordBatch {
             events,
             payload_segments,
             diagnostics,
             semantic_actions,
             trace_states,
+            memberships,
             process_records,
         } = batch;
 
@@ -145,9 +173,9 @@ impl<'a> ObservedRecordRecorder<'a> {
         // Persist trace snapshots after their observed records in the same transaction.
         for state in trace_states {
             self.storage.create_trace(state.trace)?;
-            for membership in state.memberships {
-                self.storage.upsert_membership(membership)?;
-            }
+        }
+        for membership in memberships {
+            self.storage.upsert_membership(membership)?;
         }
 
         Ok(ObservedRecordCommit { semantic_actions })
@@ -184,7 +212,14 @@ impl<'a> ObservedRecordWriteSession<'a> {
         trace_state: TraceStateRecord,
     ) -> Result<(), RecordingError> {
         self.storage.create_trace(trace_state.trace)?;
-        for membership in trace_state.memberships {
+        Ok(())
+    }
+
+    pub fn persist_memberships(
+        &mut self,
+        memberships: Vec<ProcessMembership>,
+    ) -> Result<(), RecordingError> {
+        for membership in memberships {
             self.storage.upsert_membership(membership)?;
         }
         Ok(())

@@ -33,7 +33,7 @@ trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有
 OTLP Span Links 输出。因为 action kind 是显式出境白名单，已有配置升级后需要自行加入
 `"llm.tool_call" = true` 和 `"llm.tool_result" = true`。
 
-工具结果正文采用独立授权，daemon 默认仅生成 ID、错误态、字节数、哈希与绑定状态，
+工具结果正文采用独立授权，daemon 默认仅生成 ID、错误态、字节数与绑定状态，
 这些属性也只有插件设置 `attribute_mode = "full"` 时才会出境。正文还要求 daemon 设置
 `semantic_retention.l0_llm_call.tool_result_content_export = "canonical_json"`；规范化 JSON
 仅在不超过 `tool_result_content_export_max_bytes` 时才会出境。

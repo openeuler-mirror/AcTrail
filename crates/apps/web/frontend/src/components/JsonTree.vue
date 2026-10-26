@@ -192,10 +192,10 @@ function escapePathKey(key) {
   justify-content: space-between;
   gap: 10px;
   padding: 7px 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
   background: var(--trace-json-row-bg);
-  color: var(--text);
+  color: var(--ui-text);
   cursor: pointer;
 }
 
@@ -223,7 +223,7 @@ function escapePathKey(key) {
 
 .json-kind {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
 }
 
@@ -232,7 +232,7 @@ function escapePathKey(key) {
   margin: 4px 0 8px;
   padding: 9px 10px;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
   background: var(--trace-code-bg);
   color: var(--trace-code-text);

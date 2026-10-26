@@ -6,9 +6,10 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, SystemTime};
 
 use model_core::ids::TraceId;
-use model_core::payload::PayloadSegment;
 use model_core::trace::{TraceLifecycleState, TraceRecord};
-use plugin_system::{ObservationBatch, ObservationConsumer, PluginRuntimeError, PostTraceTask};
+use plugin_system::{
+    ObservationBatch, ObservationConsumer, PayloadReference, PluginRuntimeError, PostTraceTask,
+};
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
 
 use super::subscription_slot::{
@@ -23,7 +24,7 @@ pub(super) struct QueuedObservationBatch {
     pub(super) semantic_actions: Vec<SemanticAction>,
     pub(super) semantic_links: Vec<SemanticActionLink>,
     pub(super) file_observation_paths: Vec<FileObservationPath>,
-    pub(super) payload_segments: Vec<PayloadSegment>,
+    pub(super) payload_refs: Vec<PayloadReference>,
 }
 
 pub(super) enum ObservationWorkItem {
@@ -144,7 +145,7 @@ fn run_observation_batch(
             semantic_actions: &batch.semantic_actions,
             semantic_links: &batch.semantic_links,
             file_observation_paths: &batch.file_observation_paths,
-            payload_segments: &batch.payload_segments,
+            payload_refs: &batch.payload_refs,
         })
     }));
     let reevaluate_at = match result {
@@ -226,7 +227,7 @@ fn take_due_observation(
         semantic_actions: Vec::new(),
         semantic_links: Vec::new(),
         file_observation_paths: Vec::new(),
-        payload_segments: Vec::new(),
+        payload_refs: Vec::new(),
     })
 }
 

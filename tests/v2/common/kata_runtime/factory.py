@@ -17,6 +17,8 @@ from .requirements import (
     RequirementCheck,
 )
 
+from .constants import DEFAULTS
+
 
 @dataclass(frozen=True)
 class KataRequirementsBuilder:
@@ -43,7 +45,7 @@ class KataRequirementsBuilder:
         artifact_directories: tuple[Path, ...],
         labels: tuple[tuple[str, str], ...],
         running_validator: Callable[[KataTestContainer], RequirementCheck],
-        privileged_without_host_devices: bool = False,
+        privileged_without_host_devices: bool = DEFAULTS.privileged_without_host_devices,
     ) -> KataContainerRequirements:
         backend = kata_backend(self.backend)
         snapshotter = self.snapshotter

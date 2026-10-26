@@ -10,6 +10,7 @@ pub enum ProbeConsumer {
     Standalone,
     Sync,
     Daemon,
+    Direct,
 }
 
 impl ProbeConsumer {
@@ -19,6 +20,7 @@ impl ProbeConsumer {
             Self::Standalone => "standalone",
             Self::Sync => "sync",
             Self::Daemon => "daemon",
+            Self::Direct => "direct",
         }
     }
 }
@@ -91,14 +93,6 @@ impl<'a> ProbeContext<'a> {
     }
 
     pub(crate) fn parse_probe_image(&self, path: &std::path::Path) -> ToolResult<ElfImage> {
-        match self.target_image.analysis_cache() {
-            Some(cache) => ElfImage::parse_with_analysis_cache(
-                path,
-                self.target_image.scan_mode(),
-                self.target_image.scan_chunk_bytes(),
-                cache,
-            ),
-            None => ElfImage::parse(path),
-        }
+        self.target_image.parse_related(path)
     }
 }

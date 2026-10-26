@@ -1,0 +1,26 @@
+[control]
+socket_path = "/tmp/actrail-e2e/combo/control.sock"
+socket_mode_octal = "660"
+pid_file = "/tmp/actrail-e2e/combo/actraild.pid"
+log_path = "/tmp/actrail-e2e/combo/actraild.log"
+diagnostic_log_level = "info"
+
+[storage.sqlite]
+path = "/tmp/actrail-e2e/combo/actrail.sqlite"
+
+[semantic_retention]
+content_owner = "configured_layers"
+
+[semantic_retention.l4_payload]
+enabled = true
+stats = true
+body_content = "retained"
+
+[export.snapshot]
+directory = "/tmp/actrail-e2e/combo/export"
+
+[plugins.startup]
+enabled = false
+
+[payload.tls]
+sync_event_socket_path = "/tmp/actrail-e2e/combo/tls-sync.sock"

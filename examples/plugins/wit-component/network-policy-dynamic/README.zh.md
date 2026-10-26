@@ -4,7 +4,7 @@
 
 ## 前置条件
 
-daemon 必须启用 `[network_control]` 和 seccomp user-notify。加载时需要授予以下自动权限：
+默认后端为 LSM，网络控制域默认关闭。本示例包含 gray 同步裁决，需要启用 `[network_control]` 和 seccomp user-notify，并设置 `[access_control.network.connect] backend = "seccomp"`；向 capture profile 添加 `enforcement-network-connect-seccomp`，保留其他已启用控制所需的能力。加载时需要授予以下自动权限：
 
 - `network-policy.rules.read`
 - `network-policy.rules.match-dry-run`
@@ -36,7 +36,7 @@ daemon 必须启用 `[network_control]` 和 seccomp user-notify。加载时需�
 }
 ```
 
-配置更新是 AON：插件先读取 revision、校验完整候选，再应用同一 patch。revision 冲突、重复或重叠 selector、grant 越权、非法 selector 或不可用 gray target 会拒绝整批更新，旧配置继续生效。同一 IP 的 `IP:*` 与任何精确端口规则视为重叠，不允许共存。省略 `rule_id` 时插件生成 `network-dynamic-N`。卸载本 publisher 会先撤销它拥有的全部动态规则；gray target 卸载则固定拒绝仍路由到它的待决策连接。
+配置更新是 AON：插件先读取 revision、校验完整候选，再应用同一 patch。revision 冲突、相同 selector 重复、跨 owner 的 selector 重叠、grant 越权或非法 selector 会拒绝整批更新，旧配置继续生效。同一 owner 的 `IP:*` 和精确端口规则可以共存，精确端口优先。例如，本实例可同时发布 `deny 203.0.113.10:*` 和 `allow 203.0.113.10:443`，允许 443 并拒绝其他端口。省略 `rule_id` 时插件生成 `network-dynamic-N`。卸载本 publisher 会先撤销它拥有的全部动态规则；gray target 允许在规则发布后启动；目标未启动或卸载时，固定拒绝仍路由到它的待决策连接。
 
 Web 的 Test/Update 与 Plugin command 操作同一份插件内存配置。`--persist` 只持久化插件加载记录，不会把之后的 Web Configuration 更新写入磁盘；需要重启后仍生效的安全基线应放在 `network_control.rules_path` 或初始插件配置中。
 

@@ -14,90 +14,144 @@ pub(super) enum RuntimeAction {
     Block,
 }
 
+pub(super) struct PreparedPayloadDecision {
+    action: RuntimeAction,
+    provider: String,
+    direction: PayloadDirection,
+    symbol: String,
+    stream_key: usize,
+    sequence: u64,
+}
+
+impl PreparedPayloadDecision {
+    pub(super) fn prepare(
+        direction: PayloadDirection,
+        symbol: &str,
+        stream_key: usize,
+        payload: &[u8],
+    ) -> Option<Self> {
+        let config = config::get()?;
+        let sequence = config.next_sequence();
+        let provider = config.provider_for_symbol(symbol);
+        let action = if payload.len() > config.max_payload_bytes() {
+            report_decision(
+                &provider,
+                "block",
+                direction,
+                symbol,
+                stream_key,
+                sequence,
+                payload.len(),
+                "max_payload_bytes",
+            );
+            RuntimeAction::Block
+        } else {
+            match config.decide(&provider, symbol, direction, stream_key, payload) {
+                Ok(Decision::Allow) => RuntimeAction::Allow,
+                Ok(Decision::Block { reason }) => {
+                    report_decision(
+                        &provider,
+                        "block",
+                        direction,
+                        symbol,
+                        stream_key,
+                        sequence,
+                        payload.len(),
+                        &reason,
+                    );
+                    RuntimeAction::Block
+                }
+                Ok(Decision::ReplaceEqualLen {
+                    replacement,
+                    reason,
+                }) => {
+                    if replacement.len() != payload.len() {
+                        report_decision(
+                            &provider,
+                            "block",
+                            direction,
+                            symbol,
+                            stream_key,
+                            sequence,
+                            payload.len(),
+                            "replacement_len_mismatch",
+                        );
+                        RuntimeAction::Block
+                    } else {
+                        report_decision(
+                            &provider,
+                            "replace_equal_len",
+                            direction,
+                            symbol,
+                            stream_key,
+                            sequence,
+                            payload.len(),
+                            &reason,
+                        );
+                        RuntimeAction::Replace(replacement)
+                    }
+                }
+                Err(error) => {
+                    report_decision(
+                        &provider,
+                        "block",
+                        direction,
+                        symbol,
+                        stream_key,
+                        sequence,
+                        payload.len(),
+                        &format!("processor_error:{error}"),
+                    );
+                    RuntimeAction::Block
+                }
+            }
+        };
+        Some(Self {
+            action,
+            provider,
+            direction,
+            symbol: symbol.to_string(),
+            stream_key,
+            sequence,
+        })
+    }
+
+    pub(super) fn action(&self) -> &RuntimeAction {
+        &self.action
+    }
+
+    pub(super) fn record_completed(&self, payload: &[u8], completed: usize) {
+        let completed = completed.min(payload.len());
+        if completed == 0 || matches!(self.action, RuntimeAction::Block) {
+            return;
+        }
+        report_payload(
+            &self.provider,
+            self.direction,
+            &self.symbol,
+            self.stream_key,
+            self.sequence,
+            &payload[..completed],
+        );
+    }
+
+    pub(super) fn into_action(self) -> RuntimeAction {
+        self.action
+    }
+}
+
 pub(super) fn decide_payload(
     direction: PayloadDirection,
     symbol: &str,
     stream_key: usize,
     payload: &[u8],
 ) -> RuntimeAction {
-    let Some(config) = config::get() else {
+    let Some(decision) = PreparedPayloadDecision::prepare(direction, symbol, stream_key, payload)
+    else {
         return RuntimeAction::Allow;
     };
-    let sequence = config.next_sequence();
-    if payload.len() > config.max_payload_bytes() {
-        let provider = config.provider_for_symbol(symbol);
-        report_decision(
-            &provider,
-            "block",
-            direction,
-            symbol,
-            stream_key,
-            sequence,
-            payload.len(),
-            "max_payload_bytes",
-        );
-        return RuntimeAction::Block;
-    }
-    let provider = config.provider_for_symbol(symbol);
-    report_payload(&provider, direction, symbol, stream_key, sequence, payload);
-    match config.decide(&provider, symbol, direction, stream_key, payload) {
-        Ok(Decision::Allow) => RuntimeAction::Allow,
-        Ok(Decision::Block { reason }) => {
-            report_decision(
-                &provider,
-                "block",
-                direction,
-                symbol,
-                stream_key,
-                sequence,
-                payload.len(),
-                &reason,
-            );
-            RuntimeAction::Block
-        }
-        Ok(Decision::ReplaceEqualLen {
-            replacement,
-            reason,
-        }) => {
-            if replacement.len() != payload.len() {
-                report_decision(
-                    &provider,
-                    "block",
-                    direction,
-                    symbol,
-                    stream_key,
-                    sequence,
-                    payload.len(),
-                    "replacement_len_mismatch",
-                );
-                return RuntimeAction::Block;
-            }
-            report_decision(
-                &provider,
-                "replace_equal_len",
-                direction,
-                symbol,
-                stream_key,
-                sequence,
-                payload.len(),
-                &reason,
-            );
-            RuntimeAction::Replace(replacement)
-        }
-        Err(error) => {
-            report_decision(
-                &provider,
-                "block",
-                direction,
-                symbol,
-                stream_key,
-                sequence,
-                payload.len(),
-                &format!("processor_error:{error}"),
-            );
-            RuntimeAction::Block
-        }
-    }
+    decision.record_completed(payload, payload.len());
+    decision.into_action()
 }
 
 pub(super) fn report_payload(

@@ -4,7 +4,6 @@ use std::ffi::OsStr;
 
 use config_core::daemon::EbpfCollectorConfig;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
-use model_core::capability::Capability;
 
 use crate::loader::{AttachPlan, LoaderError};
 
@@ -39,12 +38,17 @@ pub fn configure_file_config_map(
     let key = 0_u32.to_ne_bytes();
     let mut value = [0_u8; 8];
     value[0..4].copy_from_slice(&config.file_path_max_bytes.to_ne_bytes());
-    let fs_capture_enabled =
-        config.file_path_capture_enabled && attach_plan.contains(&Capability::FsAccessBasic);
-    let ipc_lineage_enabled = attach_plan.contains(&Capability::IpcPipeFifo)
-        || attach_plan.contains(&Capability::IpcUnixSocket);
-    let capture_enabled = fs_capture_enabled || ipc_lineage_enabled;
-    value[4..8].copy_from_slice(&u32::from(capture_enabled).to_ne_bytes());
+    let demand = attach_plan.file_collection();
+    let file_enabled = attach_plan.file_capture_enabled();
+    let capture_flags = u32::from(file_enabled)
+        | (u32::from(attach_plan.mcp_stdio_enabled()) << 1)
+        | (u32::from(file_enabled && demand.writable_open) << 2)
+        | (u32::from(file_enabled && demand.path_mutations) << 3)
+        | (u32::from(file_enabled && demand.fd_mutations) << 4)
+        | (u32::from(file_enabled && demand.read.enabled()) << 5)
+        | (u32::from(file_enabled && demand.write.enabled()) << 6)
+        | (u32::from(file_enabled && attach_plan.file_directory_observation()) << 7);
+    value[4..8].copy_from_slice(&capture_flags.to_ne_bytes());
     map.update(&key, &value, MapFlags::ANY)
         .map_err(|error| LoaderError::new("file_path_config", error.to_string()))
 }

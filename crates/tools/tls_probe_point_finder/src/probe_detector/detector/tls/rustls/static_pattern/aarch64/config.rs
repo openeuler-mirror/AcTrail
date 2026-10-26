@@ -3,6 +3,7 @@ use crate::probe_detector::contract::selection::SelectionPolicy;
 
 use super::common_state_pair_48_56::CommonStatePair4856ProbeDetectorConfig;
 use super::common_state_pair_52_64::CommonStatePair5264ProbeDetectorConfig;
+use super::common_state_pair_52_64_x22::CommonStatePair5264X22ProbeDetectorConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Aarch64RustlsProbeDetectorConfig {
@@ -10,6 +11,7 @@ pub(crate) struct Aarch64RustlsProbeDetectorConfig {
     pub(crate) selection: SelectionPolicy,
     pub(crate) common_state_pair_52_64: CommonStatePair5264ProbeDetectorConfig,
     pub(crate) common_state_pair_48_56: CommonStatePair4856ProbeDetectorConfig,
+    pub(crate) common_state_pair_52_64_x22: CommonStatePair5264X22ProbeDetectorConfig,
 }
 
 impl Aarch64RustlsProbeDetectorConfig {
@@ -19,6 +21,7 @@ impl Aarch64RustlsProbeDetectorConfig {
             selection: SelectionPolicy::UniqueClosure,
             common_state_pair_52_64: CommonStatePair5264ProbeDetectorConfig::default(),
             common_state_pair_48_56: CommonStatePair4856ProbeDetectorConfig::default(),
+            common_state_pair_52_64_x22: CommonStatePair5264X22ProbeDetectorConfig::default(),
         }
     }
 }
@@ -31,6 +34,7 @@ impl ProbeDetectorConfig for Aarch64RustlsProbeDetectorConfig {
             ));
         }
         self.common_state_pair_52_64.validate()?;
-        self.common_state_pair_48_56.validate()
+        self.common_state_pair_48_56.validate()?;
+        self.common_state_pair_52_64_x22.validate()
     }
 }

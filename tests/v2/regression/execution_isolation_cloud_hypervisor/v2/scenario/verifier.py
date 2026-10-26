@@ -17,6 +17,8 @@ from tests.v2.common.sandbox_alert_database import (
 from ..config import CloudHypervisorExecutionIsolationConfig
 from .transport import CoordinationDirectory, CoordinationFile, HostCoordination
 
+from ..constants import CASE_CONSTANTS
+
 
 class CloudHypervisorAlertVerifier:
     _EXPECTED_CATEGORIES = {
@@ -43,10 +45,10 @@ class CloudHypervisorAlertVerifier:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                with socket.create_connection(("127.0.0.1", port), timeout=CASE_CONSTANTS.wait_tcp_timeout_seconds):
                     return
             except OSError:
-                time.sleep(0.05)
+                time.sleep(CASE_CONSTANTS.wait_tcp_poll_seconds)
         raise RuntimeError(
             self._config.IDENTITY.failure(
                 "hand-observation TCP listener did not become ready"
@@ -64,13 +66,13 @@ class CloudHypervisorAlertVerifier:
             if path.is_file():
                 return
             if process.poll() is not None:
-                result = process.wait(timeout=1)
+                result = process.wait(timeout=CASE_CONSTANTS.wait_path_timeout_seconds)
                 raise RuntimeError(
                     self._config.IDENTITY.failure(
                         f"process exited before {description}: {result.diagnostic}"
                     )
                 )
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_path_poll_seconds)
         raise RuntimeError(
             self._config.IDENTITY.failure(
                 f"timed out waiting for {description}"
@@ -107,7 +109,7 @@ class CloudHypervisorAlertVerifier:
                 for category, message in external.items():
                     self._assert_delivery(expected[category], message)
                 return expected
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_observation_alerts_poll_seconds)
         raise RuntimeError(
             self._config.IDENTITY.failure(
                 "timed out waiting for Guest high-CPU, OOM-killed, OOM-risk, "
@@ -127,8 +129,12 @@ class CloudHypervisorAlertVerifier:
             vm.container_id,
             f"printf %s {shlex.quote(payload)} | /usr/bin/base64 -d | "
             "/usr/bin/env "
-            f"ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_MARKER={marker} /bin/sh",
-            timeout=45,
+            f"ACTRAIL_EXECUTION_ISOLATION_OOM_KILL_MARKER={marker} "
+            f"ACTRAIL_OOM_MEMORY_LIMIT_BYTES={CASE_CONSTANTS.oom_memory_limit_bytes} "
+            f"ACTRAIL_OOM_KILL_ATTEMPTS={CASE_CONSTANTS.oom_kill_attempts} "
+            f"ACTRAIL_OOM_VMSTAT_ATTEMPTS={CASE_CONSTANTS.oom_vmstat_attempts} "
+            f"ACTRAIL_OOM_POLL_SECONDS={CASE_CONSTANTS.oom_poll_seconds} /bin/sh",
+            timeout=CASE_CONSTANTS.trigger_guest_oom_timeout_seconds,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -155,7 +161,7 @@ class CloudHypervisorAlertVerifier:
                 for record in self._alerts.records()
             ):
                 return
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_resource_baseline_poll_seconds)
         raise RuntimeError(
             self._config.IDENTITY.failure(
                 "timed out waiting for the pre-OOM Guest resource baseline"
@@ -195,7 +201,7 @@ class CloudHypervisorAlertVerifier:
         resolved = self._guest.capture(
             vm.container_id,
             command,
-            timeout=min(10.0, float(self._config.ready_timeout_seconds)),
+            timeout=min(CASE_CONSTANTS.resource_baseline_timeout_seconds, float(self._config.ready_timeout_seconds)),
         )
         candidates = [
             line.strip()
@@ -305,9 +311,9 @@ class CloudHypervisorAlertVerifier:
             )
 
     def require_alive(self, process: ManagedProcess, name: str) -> None:
-        time.sleep(0.1)
+        time.sleep(CASE_CONSTANTS.require_alive_poll_seconds)
         if process.poll() is not None:
-            result = process.wait(timeout=1)
+            result = process.wait(timeout=CASE_CONSTANTS.require_alive_timeout_seconds)
             raise RuntimeError(
                 self._config.IDENTITY.failure(
                     f"{name} exited early: {result.diagnostic}"

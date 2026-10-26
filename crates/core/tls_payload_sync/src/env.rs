@@ -17,12 +17,17 @@ pub const ENV_POINTS: &str = "TLS_PAYLOAD_SYNC_POINTS";
 pub const ENV_PLAN_BUNDLE: &str = "TLS_PAYLOAD_SYNC_PLAN_BUNDLE";
 pub const ENV_RULES: &str = "TLS_PAYLOAD_SYNC_RULES";
 pub const ENV_MAX_PAYLOAD_BYTES: &str = "TLS_PAYLOAD_SYNC_MAX_PAYLOAD_BYTES";
+pub const ENV_MAX_FRAME_BYTES: &str = "TLS_PAYLOAD_SYNC_MAX_FRAME_BYTES";
 pub const ENV_REDACTION: &str = "TLS_PAYLOAD_SYNC_REDACTION";
 pub const ENV_EVENTS: &str = "TLS_PAYLOAD_SYNC_EVENTS";
 pub const ENV_TRACE_ID: &str = "TLS_PAYLOAD_SYNC_TRACE_ID";
 pub const ENV_EVENT_SOCKET: &str = "TLS_PAYLOAD_SYNC_EVENT_SOCKET";
 pub const ENV_EVENT_FD: &str = "TLS_PAYLOAD_SYNC_EVENT_FD";
 pub const ENV_EVENT_WRITE_BUFFER_BYTES: &str = "TLS_PAYLOAD_SYNC_EVENT_WRITE_BUFFER_BYTES";
+pub const ENV_EVENT_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS";
+pub const DEFAULT_EVENT_TIMEOUT_MS: u64 = 100;
+pub const ENV_PLAN_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_PLAN_TIMEOUT_MS";
+pub const DEFAULT_PLAN_TIMEOUT_MS: u64 = 100;
 pub const ENV_FLOW_CONTROL_ENABLED: &str = "TLS_PAYLOAD_SYNC_FLOW_CONTROL_ENABLED";
 pub const ENV_FLOW_SNIFF_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_SNIFF_BYTES";
 pub const ENV_FLOW_MAX_HEADER_BYTES: &str = "TLS_PAYLOAD_SYNC_FLOW_MAX_HEADER_BYTES";
@@ -44,6 +49,7 @@ pub const RUNTIME_MUSL_LIBRARY_NAME: &str = "libactrail_tls_payload_probe_sync-m
 pub struct RuntimeEnvConfig {
     pub rules: Vec<RewriteRule>,
     pub max_payload_bytes: usize,
+    pub max_frame_bytes: usize,
     pub flow_control: RuntimeFlowControlConfig,
     pub redaction: RedactionMode,
     pub events: EventFilter,
@@ -165,6 +171,7 @@ pub fn runtime_env_for_plan_descriptors(
         pair(ENV_ENABLED, "1"),
         pair(ENV_RULES, &encode_rules(&config.rules)),
         pair(ENV_MAX_PAYLOAD_BYTES, &config.max_payload_bytes.to_string()),
+        pair(ENV_MAX_FRAME_BYTES, &config.max_frame_bytes.to_string()),
         pair(
             ENV_FLOW_CONTROL_ENABLED,
             if config.flow_control.enabled {

@@ -13,12 +13,12 @@ use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use storage_factory::StorageConfig;
 
 use super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig, CommandControlConfig,
-    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
-    IpcLineageConfig, NetworkControlConfig, PayloadConfig, PayloadSocketConfig, PayloadTlsConfig,
-    ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, StorageRetentionConfig, TraceFinalizationConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig,
+    CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
+    FileObservationConfig, IdleDetectionConfig, IpcLineageConfig, NetworkControlConfig,
+    PayloadConfig, PayloadSocketConfig, PayloadTlsConfig, ProcessSeccompConfig,
+    SeccompNotifyConfig, SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
+    StorageRetentionConfig, TraceFinalizationConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use crate::capture_profile::{CaptureProfile, LaunchSeccompRequirements};
 use crate::export::ExportConfig;
@@ -42,7 +42,7 @@ pub enum OperatorConfigInitStatus {
     Overwritten,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
@@ -67,6 +67,7 @@ pub struct OperatorConfig {
     pub diagnostic_log_level: DiagnosticLogLevel,
     pub workload_diagnostics: WorkloadDiagnosticsConfig,
     pub capture_profile: CaptureProfile,
+    pub idle_detection: IdleDetectionConfig,
     pub ebpf_config: EbpfCollectorConfig,
     pub payload_config: PayloadConfig,
     pub seccomp_notify: SeccompNotifyConfig,
@@ -75,9 +76,10 @@ pub struct OperatorConfig {
     pub semantic_retention: SemanticRetentionConfig,
     pub file_observation: FileObservationConfig,
     pub application_protocol: ApplicationProtocolConfig,
-    pub resource_metrics: ResourceMetricsConfig,
+    pub resource_profiling: toml::Table,
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
+    pub access_control: AccessControlConfig,
     pub enforcement: EnforcementConfig,
     pub command_control: CommandControlConfig,
     pub network_control: NetworkControlConfig,
@@ -279,22 +281,35 @@ pub struct StartupPluginLoadConfig {
 }
 
 /// Derive the seccomp-notify capabilities a launch must install from the
-/// payload, process, and network config. A payload backend needs the notify
-/// path only when it is enabled *and* its capture backend cannot collect
-/// without it. Single source of truth shared by ctl and the daemon.
+/// payload, notify, process, and network config. A payload backend needs the
+/// notify path only when it is enabled *and* its capture backend cannot collect
+/// without it. TLS sync adds its child-exec hook only when notify is enabled;
+/// root-launch synchronization remains available without it. Single source of
+/// truth shared by ctl and the daemon.
 pub fn launch_seccomp_requirements(
     payload: &PayloadConfig,
+    seccomp_notify: &SeccompNotifyConfig,
     process_seccomp: &ProcessSeccompConfig,
     network_control: &NetworkControlConfig,
     command_control: &CommandControlConfig,
+    access_control: &AccessControlConfig,
 ) -> LaunchSeccompRequirements {
     LaunchSeccompRequirements::new(
         payload.tls.enabled && payload.tls.capture_backend.requires_seccomp_notify(),
         payload.socket.enabled && payload.socket.capture_backend.requires_seccomp_notify(),
-        process_seccomp.enabled,
-        network_control.enabled,
+        process_seccomp.enabled
+            || (seccomp_notify.enabled
+                && payload.tls.enabled
+                && payload.tls.capture_backend.is_sync()),
+        network_control.enabled && access_control.network.connect.is_seccomp(),
     )
-    .with_command_control(command_control.enabled)
+    .with_command_control(command_control.enabled && access_control.command.exec.is_seccomp())
+    .with_file_enforcement(
+        crate::capture_profile::FileEnforcementSeccompRequirements::new(
+            access_control.file.mkdir.is_seccomp(),
+            access_control.file.rmdir.is_seccomp(),
+        ),
+    )
 }
 
 impl OperatorConfig {
@@ -304,9 +319,15 @@ impl OperatorConfig {
     pub fn launch_seccomp_requirements(&self) -> crate::capture_profile::LaunchSeccompRequirements {
         launch_seccomp_requirements(
             &self.payload_config,
+            &self.seccomp_notify,
             &self.process_seccomp,
             &self.network_control,
             &self.command_control,
+            &self.access_control.resolve(
+                self.enforcement.enabled,
+                self.command_control.enabled,
+                self.network_control.enabled,
+            ),
         )
     }
 
@@ -322,10 +343,20 @@ impl OperatorConfig {
             .map_err(|error| format!("validate default operator config: {error}"))
     }
 
-    pub fn patch_file(&self, patch_path: &Path) -> Result<Self, String> {
-        let patch = fs::read_to_string(patch_path)
-            .map_err(|error| format!("read config patch {}: {error}", patch_path.display()))?;
-        self.patch(&patch)
+    pub fn patch_files(&self, patch_paths: &[PathBuf]) -> Result<Self, String> {
+        let base = self.dump()?;
+        let mut base_value: toml::Value = toml::from_str(&base)
+            .map_err(|error| format!("parse base operator config: {error}"))?;
+        for patch_path in patch_paths {
+            let patch = fs::read_to_string(patch_path)
+                .map_err(|error| format!("read config patch {}: {error}", patch_path.display()))?;
+            let patch_value: toml::Value = toml::from_str(&patch)
+                .map_err(|error| format!("parse config patch {}: {error}", patch_path.display()))?;
+            merge_toml_value(&mut base_value, patch_value);
+        }
+        let merged = toml::to_string_pretty(&base_value)
+            .map_err(|error| format!("render patched operator config: {error}"))?;
+        Self::parse(&merged).map_err(|error| format!("validate patched operator config: {error}"))
     }
 
     pub fn patch(&self, patch: &str) -> Result<Self, String> {
@@ -428,6 +459,7 @@ fn merge_toml_value(base: &mut toml::Value, patch: toml::Value) {
 }
 
 fn validate_seccomp_config(
+    access_control: &AccessControlConfig,
     notify: &SeccompNotifyConfig,
     payload_tls: &PayloadTlsConfig,
     payload_socket: &PayloadSocketConfig,
@@ -456,7 +488,8 @@ fn validate_seccomp_config(
             "process_seccomp_enabled=true requires seccomp_notify_enabled=true".to_string(),
         );
     }
-    if enforcement.enabled && !enforcement.seccomp_syscalls.is_empty() && !notify.enabled {
+    if enforcement.enabled && !access_control.file.seccomp_syscalls().is_empty() && !notify.enabled
+    {
         return Err("enforcement seccomp syscalls require seccomp_notify_enabled=true".to_string());
     }
     let command_control_requested = capability_requested(
@@ -493,10 +526,6 @@ fn validate_seccomp_config(
         return Err(
             "enforcement-network-connect-seccomp requires seccomp_notify.enabled=true".to_string(),
         );
-    }
-    if capability_requested(capabilities, &Capability::ProcExecContext) && !process_seccomp.enabled
-    {
-        return Err("proc-exec-context requires process_seccomp_enabled=true".to_string());
     }
     Ok(())
 }
@@ -568,35 +597,25 @@ fn validate_application_protocol_config(
     Ok(())
 }
 
-fn validate_resource_metrics_config(
-    config: &ResourceMetricsConfig,
-    capabilities: &[CapabilityRequest],
-) -> Result<(), String> {
-    if capability_requested(capabilities, &Capability::ResourceMetrics) && !config.enabled {
-        return Err("resource-metrics requires resource_metrics_enabled=true".to_string());
-    }
-    Ok(())
-}
-
 fn validate_ipc_lineage_config(
     config: &IpcLineageConfig,
     capabilities: &[CapabilityRequest],
+    payload: &PayloadConfig,
+    semantic_projection_enabled: bool,
 ) -> Result<(), String> {
     if config.enabled {
         return Ok(());
     }
-    let required_ipc = capabilities.iter().find(|request| {
-        request.mode == RequestMode::Required
-            && matches!(
-                &request.capability,
-                Capability::IpcPipeFifo | Capability::IpcUnixSocket
-            )
-    });
-    if let Some(request) = required_ipc {
-        return Err(format!(
-            "{} requires ebpf.ipc_lineage.enabled=true",
-            request.capability.as_str()
-        ));
+    if semantic_projection_enabled
+        && payload.mcp.enabled
+        && payload.stdio.enabled
+        && payload.stdio.capture_stdin
+        && capability_requested(capabilities, &Capability::StdioChunk)
+    {
+        return Err(
+            "MCP stdio projection requires ebpf.ipc_lineage.enabled=true for stdio bundle identity"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -628,165 +647,5 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::{
-        LlmRequestBodyExportRetention, LlmRequestContentRetention,
-        LlmToolResultContentExportRetention,
-    };
-    use super::OperatorConfig;
-
-    fn parse_l0_llm_call(patch: &str) -> Result<OperatorConfig, String> {
-        OperatorConfig::init()
-            .expect("default operator config initializes")
-            .patch(&format!("[semantic_retention.l0_llm_call]\n{patch}"))
-    }
-
-    #[test]
-    fn request_body_export_is_off_by_default() {
-        let raw = OperatorConfig::default_hierarchical_template()
-            .expect("default operator config template renders");
-
-        assert!(raw.contains("request_body_export = \"none\""));
-        let config = OperatorConfig::parse(&raw).expect("default template parses");
-        assert_eq!(
-            config.semantic_retention.l0_llm_call.request_body_export,
-            LlmRequestBodyExportRetention::None
-        );
-    }
-
-    #[test]
-    fn request_body_export_limit_defaults_to_the_web_body_view_limit() {
-        let raw = OperatorConfig::default_hierarchical_template()
-            .expect("default operator config template renders");
-        let config = OperatorConfig::parse(&raw).expect("default template parses");
-
-        assert_eq!(
-            config
-                .semantic_retention
-                .l0_llm_call
-                .request_body_export_max_bytes,
-            128 * 1024
-        );
-    }
-
-    #[test]
-    fn request_body_export_can_be_enabled_with_a_custom_limit() {
-        let config = parse_l0_llm_call(
-            "request_body_export = \"canonical_json\"\nrequest_body_export_max_bytes = 1048576\n",
-        )
-        .expect("explicit body export parses");
-
-        assert_eq!(
-            config.semantic_retention.l0_llm_call.request_body_export,
-            LlmRequestBodyExportRetention::CanonicalJson
-        );
-        assert_eq!(
-            config
-                .semantic_retention
-                .l0_llm_call
-                .request_body_export_max_bytes,
-            1_048_576
-        );
-        assert_eq!(
-            config.semantic_retention.l0_llm_call.request_content,
-            LlmRequestContentRetention::CanonicalBlocks
-        );
-    }
-
-    #[test]
-    fn request_body_export_without_canonical_block_retention_fails_validation() {
-        for request_content in ["none", "shape"] {
-            let error = parse_l0_llm_call(&format!(
-                "request_content = \"{request_content}\"\n\
-                 request_body_export = \"canonical_json\"\n"
-            ))
-            .expect_err("contradictory retention and export should fail validation");
-
-            assert!(
-                error.contains("semantic_retention.l0_llm_call.request_body_export"),
-                "error should name the offending setting, got: {error}"
-            );
-            assert!(
-                error.contains("request_content"),
-                "error should name the conflicting setting, got: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn request_body_export_limit_of_zero_fails_validation() {
-        let error = parse_l0_llm_call("request_body_export_max_bytes = 0\n")
-            .expect_err("a zero body ceiling should fail validation");
-
-        assert!(error.contains("semantic_retention.l0_llm_call.request_body_export_max_bytes"));
-        assert!(error.contains("must be positive"));
-    }
-
-    #[test]
-    fn request_body_export_survives_a_serialization_round_trip() {
-        let config = parse_l0_llm_call(
-            "request_body_export = \"canonical_json\"\nrequest_body_export_max_bytes = 4096\n",
-        )
-        .expect("explicit body export parses");
-
-        let rendered = config.dump().expect("operator config renders");
-        let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
-
-        assert_eq!(reparsed.semantic_retention, config.semantic_retention);
-    }
-
-    #[test]
-    fn tool_result_content_export_is_off_by_default_and_can_be_enabled() {
-        let defaults = OperatorConfig::init().expect("default operator config initializes");
-        assert_eq!(
-            defaults
-                .semantic_retention
-                .l0_llm_call
-                .tool_result_content_export,
-            LlmToolResultContentExportRetention::None
-        );
-
-        let config = parse_l0_llm_call(
-            "tool_result_content_export = \"canonical_json\"\n\
-             tool_result_content_export_max_bytes = 4096\n",
-        )
-        .expect("explicit tool result export parses");
-        assert_eq!(
-            config
-                .semantic_retention
-                .l0_llm_call
-                .tool_result_content_export,
-            LlmToolResultContentExportRetention::CanonicalJson
-        );
-        assert_eq!(
-            config
-                .semantic_retention
-                .l0_llm_call
-                .tool_result_content_export_max_bytes,
-            4096
-        );
-    }
-
-    #[test]
-    fn logical_agent_tool_names_have_safe_defaults_and_round_trip() {
-        let config = OperatorConfig::init().expect("default operator config initializes");
-        assert!(
-            config
-                .agent_invocation
-                .tool_names
-                .iter()
-                .any(|name| name == "Agent")
-        );
-        assert!(
-            config
-                .agent_invocation
-                .tool_names
-                .iter()
-                .any(|name| name == "task")
-        );
-
-        let rendered = config.dump().expect("operator config renders");
-        let reparsed = OperatorConfig::parse(&rendered).expect("rendered config parses");
-        assert_eq!(reparsed.agent_invocation, config.agent_invocation);
-    }
-}
+#[path = "operator/tests.rs"]
+mod tests;

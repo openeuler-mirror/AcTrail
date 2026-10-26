@@ -5,6 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+resource_profiling = { path = "../../core/resource_profiling" }
 alert_contract = { path = "../../contracts/alert" }
 model_core = { path = "../../core/model" }
 semantic_action = { path = "../../contracts/semantic_action" }

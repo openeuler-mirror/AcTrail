@@ -7,7 +7,7 @@
     <button
       ref="trigger"
       type="button"
-      :aria-label="`More information about ${label}`"
+      :aria-label="t('hint.moreInformation', { label })"
       :aria-describedby="visible ? hintId : undefined"
       :aria-expanded="visible"
       @click="togglePinned"
@@ -35,6 +35,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { CircleHelp } from '@lucide/vue';
+
+import { useModuleLocale } from '../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 defineProps({
   label: { type: String, required: true },
@@ -96,8 +101,8 @@ function updatePosition() {
   if (!visible.value || !trigger.value || !popover.value) return;
   const triggerRect = trigger.value.getBoundingClientRect();
   const popoverRect = popover.value.getBoundingClientRect();
-  const gap = cssPixelValue('--stats-space-sm');
-  const viewportInset = cssPixelValue('--stats-space-lg');
+  const gap = cssPixelValue('--ui-space-sm');
+  const viewportInset = cssPixelValue('--ui-space-lg');
   const left = Math.min(
     Math.max(viewportInset, triggerRect.left),
     window.innerWidth - popoverRect.width - viewportInset,
@@ -134,19 +139,19 @@ function cssPixelValue(name) {
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--stats-border-strong);
+  border: 1px solid var(--ui-border-strong);
   border-radius: 50%;
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
   cursor: help;
 }
 
 .config-hint > button:hover,
 .config-hint > button:focus-visible,
 .config-hint > button[aria-expanded="true"] {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
-  color: var(--stats-accent);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
+  color: var(--ui-accent);
   outline: none;
 }
 
@@ -154,25 +159,18 @@ function cssPixelValue(name) {
   position: fixed;
   z-index: 100;
   width: max-content;
-  max-width: min(22rem, calc(100vw - 2 * var(--stats-space-xl)));
-  padding: var(--stats-space-md) var(--stats-space-lg);
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  box-shadow: var(--stats-shadow);
-  color: var(--stats-text);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-regular);
+  max-width: min(22rem, calc(100vw - 2 * var(--ui-space-xl)));
+  padding: var(--ui-space-md) var(--ui-space-lg);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  box-shadow: var(--ui-shadow);
+  color: var(--ui-text);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-regular);
   line-height: 1.45;
   text-transform: none;
   white-space: normal;
 }
 
-:global(.stats-theme-arc-glass) .config-hint-popover {
-  border-color: rgb(15 15 20 / 14%);
-  background: rgb(255 255 255 / 94%);
-  box-shadow:
-    0 0.65rem 1.8rem rgb(15 15 20 / 14%),
-    inset 0 1px 0 rgb(255 255 255 / 80%);
-}
 </style>

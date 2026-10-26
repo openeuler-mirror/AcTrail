@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use semantic_action::{
-    LlmRequestLineageWrite, SemanticAction, SemanticActionLink, SemanticActionLinkConfidence,
+    LlmRequestLineageWrite, SemanticAction, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole,
 };
 
@@ -40,7 +40,7 @@ fn lineage_link(
         parent_action_id: parent_action_id.to_string(),
         child_action_id: lineage.action_id.clone(),
         role,
-        confidence: SemanticActionLinkConfidence::Derived,
+        origin: SemanticActionLinkOrigin::Derived,
         valid: true,
         evidence: Vec::new(),
         attributes: BTreeMap::new(),
@@ -51,14 +51,14 @@ pub(super) fn action_link(
     parent: &SemanticAction,
     child: &SemanticAction,
     role: SemanticActionLinkRole,
-    confidence: SemanticActionLinkConfidence,
+    origin: SemanticActionLinkOrigin,
 ) -> SemanticActionLink {
     SemanticActionLink {
         trace_id: child.trace_id,
         parent_action_id: parent.action_id.clone(),
         child_action_id: child.action_id.clone(),
         role,
-        confidence,
+        origin,
         valid: true,
         evidence: child.evidence.clone(),
         attributes: BTreeMap::new(),

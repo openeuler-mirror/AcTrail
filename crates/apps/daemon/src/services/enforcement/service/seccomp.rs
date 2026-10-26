@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use config_core::daemon::{EnforcementDecision, EnforcementSeccompSyscall};
 use control_contract::reply::ControlError;
@@ -11,20 +11,20 @@ use plugin_system::{ControlDecisionBudget, ControlVerdict, DecisionScope, FilePo
 use process_identity::{ProcessIdentityManager, ProcessIdentityReader};
 use trace_runtime::registry::TraceRuntime;
 
-use super::FanotifyBackend;
+use super::FileBackend;
 use super::audit::{
     Decision, DecisionSource, EnforcementOutcomeDraft, SyncPluginFallbackReason, outcome_draft,
 };
-use super::decision::{
-    control_decision_request, release_in_flight, reserve_in_flight, trace_requests_enforcement,
-};
+use super::decision::{control_decision_request, release_in_flight, reserve_in_flight};
 use super::worker::{CachedDecision, ReusableDecisionKey};
 use crate::services::control_runtime::ControlPluginRuntime;
-use crate::services::enforcement::rules::{EnforcementRule, RuleDecision};
 use crate::services::identity::TraceIdentityResolver;
-use crate::services::seccomp_notify::{NotificationContinuation, read_c_string, target_exited};
+use crate::services::seccomp_notify::{
+    NotificationContinuation, TraceePath, read_c_string, target_exited,
+};
+use access_control::policy::file::{EnforcementRule, RuleDecision};
 
-impl FanotifyBackend {
+impl FileBackend {
     pub(super) fn handle_seccomp_notification(
         &mut self,
         trace_runtime: &TraceRuntime,
@@ -66,7 +66,22 @@ impl FanotifyBackend {
         else {
             return Ok(None);
         };
-        if !trace_requests_enforcement(trace_runtime, trace_id) {
+        let capability = match request.operation {
+            FilePolicyOperation::Mkdir => {
+                model_core::capability::Capability::EnforcementFileMkdirSeccomp
+            }
+            FilePolicyOperation::Rmdir => {
+                model_core::capability::Capability::EnforcementFileRmdirSeccomp
+            }
+            _ => return Ok(None),
+        };
+        if !trace_runtime.get_trace(trace_id).is_some_and(|entry| {
+            entry
+                .sensor_plan
+                .collectors
+                .iter()
+                .any(|collector| collector.capabilities.contains(&capability))
+        }) {
             return Ok(None);
         }
         let rule = self.rules.find_path(request.operation, &path).cloned();
@@ -364,59 +379,17 @@ impl MutationRequest {
         let Some(raw_path) = path.value.filter(|path| !path.is_empty()) else {
             return Ok(None);
         };
-        let raw = Path::new(&raw_path);
-        let path = if raw.is_absolute() {
-            raw.to_path_buf()
-        } else {
-            let base = if self.dirfd.is_none_or(|fd| fd == libc::AT_FDCWD) {
-                PathBuf::from(format!("/proc/{}/cwd", self.pid))
-            } else {
-                PathBuf::from(format!(
-                    "/proc/{}/fd/{}",
-                    self.pid,
-                    self.dirfd.expect("non-AT_FDCWD dirfd")
-                ))
-            };
-            let base = match std::fs::read_link(base) {
-                Ok(base) => base,
-                Err(error) if target_exited(&error) => return Ok(None),
-                Err(error) => {
-                    return Err(ControlError::new(
-                        "file_enforcement_path",
-                        error.to_string(),
-                    ));
-                }
-            };
-            base.join(raw)
-        };
-        normalize_absolute_path(&path).map(Some)
-    }
-}
-
-fn normalize_absolute_path(path: &Path) -> Result<PathBuf, ControlError> {
-    if !path.is_absolute() {
-        return Err(ControlError::new(
-            "file_enforcement_path",
-            format!("resolved path {} is not absolute", path.display()),
-        ));
-    }
-    let mut normalized = PathBuf::from("/");
-    for component in path.components() {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::Prefix(_) => {
-                return Err(ControlError::new(
-                    "file_enforcement_path",
-                    "non-Unix path prefix",
-                ));
-            }
+        match TraceePath::new(self.pid)
+            .and_then(|paths| paths.directory_entry(&raw_path, self.dirfd))
+        {
+            Ok(path) => Ok(Some(path)),
+            Err(error) if target_exited(&error) => Ok(None),
+            Err(error) => Err(ControlError::new(
+                "file_enforcement_path",
+                error.to_string(),
+            )),
         }
     }
-    Ok(normalized)
 }
 
 fn traced_process(

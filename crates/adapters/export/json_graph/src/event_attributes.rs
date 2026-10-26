@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use model_core::event::{
     ApplicationPayload, DomainEvent, EnforcementPayload, EventPayload, FilePayload, IpcPayload,
-    LabelPayload, LossPayload, NetPayload, ProcessPayload, ResourcePayload, StdioPayload,
+    LabelPayload, LossPayload, NetPayload, ProcessPayload, StdioPayload,
 };
 use model_core::process::ProcessIdentity;
 
@@ -79,7 +79,7 @@ pub fn event_title(event: &DomainEvent) -> String {
         EventPayload::Application(payload) => {
             format!("Application {} {}", payload.protocol, payload.operation)
         }
-        EventPayload::Resource(payload) => format!("Resource {}", payload.scope),
+
         EventPayload::Control(payload) => format!("Control {}", payload.action),
         EventPayload::Loss(payload) => format!("Loss {}", payload.reason),
         EventPayload::Label(payload) => format!("Label {}", payload.provider),
@@ -123,7 +123,7 @@ fn insert_payload_attributes(attributes: &mut BTreeMap<String, String>, payload:
         EventPayload::Ipc(payload) => insert_ipc_payload(attributes, payload),
         EventPayload::Stdio(payload) => insert_stdio_payload(attributes, payload),
         EventPayload::Application(payload) => insert_application_payload(attributes, payload),
-        EventPayload::Resource(payload) => insert_resource_payload(attributes, payload),
+
         EventPayload::Control(payload) => {
             attributes.insert("action".to_string(), payload.action.clone());
             attributes.insert("detail".to_string(), payload.detail.clone());
@@ -154,6 +154,49 @@ fn insert_file_payload(attributes: &mut BTreeMap<String, String>, payload: &File
         attributes.insert("result".to_string(), result.to_string());
     }
     insert_metadata(attributes, "metadata.", &payload.metadata);
+    if let Some(summary) = &payload.io_summary {
+        attributes.insert("file.token".to_string(), summary.file_token.to_string());
+        attributes.insert("file.errno".to_string(), summary.errno.to_string());
+        attributes.insert(
+            "file.interval_complete".to_string(),
+            summary.interval_complete.to_string(),
+        );
+        attributes.insert(
+            "file.path_observation".to_string(),
+            "first_observed".to_string(),
+        );
+        attributes.insert(
+            "file.path_state".to_string(),
+            match summary.path_state {
+                model_core::event::FileSummaryPathState::Resolved => "resolved",
+                model_core::event::FileSummaryPathState::Truncated => "truncated",
+                model_core::event::FileSummaryPathState::Unavailable => "unavailable",
+            }
+            .to_string(),
+        );
+        attributes.insert(
+            "file.target_kind".to_string(),
+            match summary.target_kind {
+                model_core::event::FileIoTargetKind::RegularFile => "regular_file",
+                model_core::event::FileIoTargetKind::CharacterDevice => "character_device",
+            }
+            .to_string(),
+        );
+        if let Some(count) = summary.operations {
+            attributes.insert("file.operations".to_string(), count.to_string());
+        }
+        if let Some(bytes) = summary.bytes {
+            attributes.insert("file.bytes".to_string(), bytes.to_string());
+        }
+        for (key, time) in [
+            ("file.interval_start_unix_nanos", summary.interval_start),
+            ("file.interval_end_unix_nanos", summary.interval_end),
+        ] {
+            if let Ok(duration) = time.duration_since(std::time::UNIX_EPOCH) {
+                attributes.insert(key.to_string(), duration.as_nanos().to_string());
+            }
+        }
+    }
 }
 
 fn insert_net_payload(attributes: &mut BTreeMap<String, String>, payload: &NetPayload) {
@@ -206,27 +249,6 @@ fn insert_application_payload(
     attributes.insert("protocol".to_string(), payload.protocol.clone());
     attributes.insert("operation".to_string(), payload.operation.clone());
     attributes.insert("summary".to_string(), payload.summary.clone());
-    insert_metadata(attributes, "metadata.", &payload.metadata);
-}
-
-fn insert_resource_payload(attributes: &mut BTreeMap<String, String>, payload: &ResourcePayload) {
-    attributes.insert("scope".to_string(), payload.scope.clone());
-    attributes.insert("subject".to_string(), payload.subject.clone());
-    if let Some(cpu_percent_millis) = payload.cpu_percent_millis {
-        attributes.insert(
-            "cpu_percent_millis".to_string(),
-            cpu_percent_millis.to_string(),
-        );
-    }
-    if let Some(rss_kb) = payload.rss_kb {
-        attributes.insert("rss_kb".to_string(), rss_kb.to_string());
-    }
-    if let Some(virtual_memory_kb) = payload.virtual_memory_kb {
-        attributes.insert(
-            "virtual_memory_kb".to_string(),
-            virtual_memory_kb.to_string(),
-        );
-    }
     insert_metadata(attributes, "metadata.", &payload.metadata);
 }
 

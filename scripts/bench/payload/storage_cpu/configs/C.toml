@@ -1,0 +1,23 @@
+# C is a configuration group; collection fallbacks may use synchronous seccomp.
+[capture]
+profile_name = "default-full-monitor"
+capabilities = ["proc-lifecycle", "proc-exec-context", "fs-access-basic", "fs-mmap", "net-transport", "stdio-chunk", "tls-plaintext-payload", "socket-plaintext-payload", "net-application-plaintext-http", "net-application-http2-frames", "resource-metrics"]
+
+[enforcement]
+enabled = false
+[command_control]
+enabled = false
+[network_control]
+enabled = false
+[process_seccomp]
+enabled = false
+
+[payload.tls]
+enabled = true
+capture_backend = "tls-sync"
+sync_flow_control_enabled = false
+[payload.socket]
+enabled = true
+capture_backend = "bpf-copy-seccomp-fallback"
+[seccomp_notify]
+enabled = true

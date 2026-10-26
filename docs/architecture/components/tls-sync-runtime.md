@@ -1,41 +1,54 @@
 # TLS sync 运行时
 
-> 本文展示 TLS sync 如何解析目标二进制、覆盖动态加载与子进程，并把明文字节送回 daemon。
+TLS sync 在进程调用 TLS（传输层安全协议）的明文读写接口时采集数据，并将实际处理的字节送回 daemon。设置 `payload.tls.capture_backend = "tls-sync"` 并启用 TLS 采集后，`actrailctl launch` 会准备该后端所需的探针计划和注入资源。
 
-TLS sync 是 launch 注入的用户态采集运行时。它不解密网络包，而是在进程调用 TLS 明文接口时记录函数真实处理的字节。**Probe plan** 是针对某个 executable 或 shared object 的 provider、符号与 hook 位置集合。
+## 对象与术语
 
-![TLS sync 从解析到明文上报](assets/tls-sync-runtime.png)
+| 对象 | 含义与用途 |
+| --- | --- |
+| 可执行文件与共享库 | 进程的主程序和运行时加载的库。Linux 通常用 ELF 文件格式保存它们的代码、符号和依赖信息 |
+| TLS 实现（provider） | 提供 TLS 读写接口的库或语言运行时，例如 OpenSSL、rustls 和 Go；在本文中用于选择探针解析方式 |
+| 探针计划（probe plan） | 一个可执行文件或共享库的 TLS 实现、目标函数及拦截位置集合；直接探针计划（direct plan）用于直接挂载相应入口 |
+| 解析器（resolver） | daemon 中负责打开目标文件、识别 TLS 实现并生成探针计划的服务 |
+| 注入运行库（runtime） | 装入目标进程的用户态库；安装探针、发现新加载的库并上报明文字节 |
+| 挂载命名空间（mount namespace）与进程根目录（peer root） | 目标进程可见的文件系统视图及其根目录；解析器据此打开目标实际使用的文件 |
+| 二进制身份（binary identity） | 识别已打开的二进制文件，供探针计划绑定和分析缓存查找使用 |
+| 函数拦截（hook） | 在目标函数入口或调用绑定处安装采集入口；包装函数调用真实 TLS 函数并记录其处理结果 |
+
+解析器可以通过导出的符号、机器码特征（pattern）或 Go 的程序计数器与行号表（pclntab）定位函数。pclntab 保存代码位置与函数信息，供 Go 二进制分析使用。
+
+[![TLS sync 从解析到明文上报](assets/tls-sync-runtime.png)](assets/tls-sync-runtime.puml)
 
 ## 初始进程
 
-`actrailctl launch` 创建 trace 后，向 daemon 请求初始 executable 的 probe plan。resolver 在目标进程当前 mount namespace 可见的 peer root 下打开 ELF，识别 binary identity、架构、依赖和 TLS provider，并尝试符号、pattern 或 Go pclntab 等解析器。
+使用 sync 后端时，`actrailctl launch` 在创建并注册受观测子进程前，向 daemon 请求初始可执行文件的探针计划。解析器在目标文件系统视图中打开 ELF，识别二进制身份、架构、依赖和 TLS 实现，再选择相应的函数定位方式。
 
-静态 executable 必须取得 direct plan，它不会注入 TLS sync runtime。动态 executable 则按 libc 选择 runtime，注入 `LD_PRELOAD`、event socket、trace id、redaction、容量设置和可用的 plan bundle。`LD_AUDIT` 只用于 glibc 且初始 plan 来自 shared library 的场景，并非每次 launch 都注入。
+静态可执行文件必须取得直接探针计划，运行库注入适用于动态可执行文件。动态可执行文件按所用 C 运行库（libc）选择注入运行库，通过 `LD_PRELOAD` 加载它，并传入事件 socket、观测任务标识（trace id）、脱敏和容量设置，以及可用的探针计划集合。`LD_AUDIT` 是 glibc 提供的动态链接审计入口，用于初始计划来自共享库的场景。
 
-preload runtime 通过 `.init_array` 初始化。base namespace 安装初始 plan 并扫描已经加载的 shared object；audit namespace 只装载配置与 binding callback，避免重复安装 inline hook。初始化配置或必需资源无效属于启动错误，运行时会以 126 退出，不带着不完整观测继续执行目标程序。
+预加载运行库通过 ELF 的初始化函数表 `.init_array` 启动。动态链接器的基础命名空间负责安装初始计划并扫描已加载的共享库；独立的审计命名空间负责装载配置和符号绑定回调。直接修改函数入口的拦截方式称为 inline hook，由基础命名空间统一安装。初始化配置或必需资源无效时，运行库以退出码 126 结束启动。
 
 ## 运行期发现
 
-初始 plan 不是唯一入口。运行时继续覆盖三类变化：
+运行库通过动态链接器事件继续发现三类变化：
 
-1. glibc audit 和 `dlsym`/`dlvsym` 可以为 allowlist 中的 TLS symbol 返回 per-binding wrapper；
-2. `dlopen`/`dlmopen` 在真实 load 前预取请求 library 的 plan，成功后再扫描该 library 与 `/proc/self/maps` 中已加载的 TLS library；
-3. exec 与 posix_spawn 系列入口为动态子进程重写 TLS 环境，并根据目标 libc 与已有 capture plan 决定 preload/audit 注入。
+1. glibc 审计回调及符号查询函数 `dlsym`、`dlvsym` 为允许采集的 TLS 符号返回包装函数。每个包装函数对应一次符号绑定，即 per-binding wrapper。
+2. 库加载函数 `dlopen`、`dlmopen` 在加载前预取目标库的探针计划。加载成功后，运行库扫描该库及进程内存映射表 `/proc/self/maps` 中的 TLS 库。
+3. exec 与 posix_spawn 系列入口为动态子进程配置 TLS 环境，并根据目标 libc 和已有采集计划选择预加载与审计注入。
 
-静态子进程会剥离 AcTrail loader 环境和 `TLS_PAYLOAD_SYNC_*`；musl 子进程不会继承 `LD_AUDIT`。运行期 plan 会按 binary identity 和映射关系复核，避免把预取结果应用到另一个 artifact。
+静态子进程会清除 AcTrail 动态加载环境和 `TLS_PAYLOAD_SYNC_*`。使用 musl C 运行库的子进程会清除 `LD_AUDIT`。安装运行期计划时，运行库核对二进制身份和内存映射关系，确保计划属于当前文件。
 
-plan 安装会去重同一 binary、OpenSSL interpose 和 rustls singleton 已覆盖的入口。OpenSSL shared-library plan 可由 interpose 或 binding wrapper 捕获；executable 内符号、BoringSSL、rustls 和 Go 等场景使用相应的 native hook。未识别的 library 只影响本次发现，后续 loader 事件仍可继续尝试。
+计划安装会跳过已覆盖的函数入口。OpenSSL 共享库可通过同名符号替换（interpose）或符号绑定包装函数采集；可执行文件内的符号、BoringSSL、rustls 和 Go 使用相应的原生函数拦截（native hook）。rustls 的单实例安装状态（singleton）记录已覆盖入口，防止重复安装。某个库无法识别时，本次发现结束，后续加载事件仍可继续尝试。
 
 ## 二进制分析缓存
 
-daemon 的 resolver worker 持有有界 LRU 缓存，保存不含路径的符号、pattern marker、offset 和 pclntab 分析结果。带 GNU build-id 的 ELF 以 `BinaryIdentity` 为分析键；没有 build-id 时，再结合已打开文件的 device、inode、size、mtime 与 ctime 区分 artifact generation。
+daemon 的解析工作线程持有有界的最近最少使用（LRU）缓存，保存符号、机器码特征、偏移和 pclntab 分析结果。带 GNU build-id 构建标识的 ELF 使用 `BinaryIdentity` 作为分析键。缺少构建标识时，再结合已打开文件的设备号、inode、大小、修改时间和元数据变更时间区分文件版本。
 
-路径和 PID 不进入缓存键。每次查询仍在当前 peer root 下重新发现依赖，并把缓存的分析结果绑定到本次 runtime path。这样同一 artifact 可以复用昂贵扫描，又不会把另一个 namespace 的路径或已经更换的 ELF 当成同一个运行对象。容量由 `payload.tls.binary_analysis_cache_capacity` 控制。
+每次查询都在当前进程根目录下重新发现依赖，再把缓存分析结果绑定到本次运行路径。同一个二进制文件可以复用扫描结果，路径和进程标识由当前查询提供。缓存容量由 `payload.tls.binary_analysis_cache_capacity` 控制。
 
 ## 明文捕获与故障边界
 
-inline hook、OpenSSL interpose、audit wrapper、resolver wrapper 和 Java JSSE hook 最终都产生 TLS payload segment。native wrapper 先调用真实 TLS 函数，再根据真实返回值确定方向和有效长度；segment 经 Unix socket 发送给 daemon 的 payload ingress，之后才进入应用协议和语义投影。
+函数入口拦截、OpenSSL 符号替换、审计和符号查询包装函数，以及 Java 安全套接字接口（JSSE）探针，最终都产生 TLS 明文片段（payload segment）。原生包装函数先调用真实 TLS 函数，再根据返回值确定有效长度和收发方向。片段经 Unix socket 发送给 daemon 的明文接收入口，然后交给应用协议解析和语义投影。
 
-启动后的 plan lookup 返回 Unsupported、某个 library 无法访问、身份变化或动态扫描失败时，只跳过当前目标并记录错误。daemon resolver 与其他进程继续运行，后续 loader 事件仍有机会发现新的 TLS provider。
+启动后，若计划查询报告目标不受支持、库无法访问、身份变化或动态扫描失败，运行库会跳过当前目标并记录错误。daemon 解析服务和其他进程继续运行，后续加载事件仍可发现新的 TLS 实现。
 
 部署所需 library 与 launch 条件见[在 Linux 主机部署](../../operations/deployment/host.md)。

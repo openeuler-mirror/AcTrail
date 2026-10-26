@@ -30,8 +30,6 @@ pub struct ApplicationProtocolConfig {
     pub sse_data_policy: SseDataPolicy,
     pub sse_max_buffer_bytes: u64,
     pub sse_max_data_bytes: u64,
-    pub http2_max_frame_bytes: u64,
-    pub http2_max_connection_buffer_bytes: u64,
     pub http2_emit_data_preview: bool,
     pub http2_max_data_preview_bytes: u64,
 }
@@ -47,8 +45,6 @@ impl Default for ApplicationProtocolConfig {
             sse_data_policy: SseDataPolicy::Disabled,
             sse_max_buffer_bytes: 4_194_304,
             sse_max_data_bytes: 65_536,
-            http2_max_frame_bytes: 65_536,
-            http2_max_connection_buffer_bytes: 4_194_304,
             http2_emit_data_preview: true,
             http2_max_data_preview_bytes: 65_536,
         }

@@ -8,7 +8,5 @@ mod enumerate;
 mod io_action;
 #[path = "projection/summary.rs"]
 mod summary;
-#[path = "projection/tty.rs"]
-mod tty;
 
 pub(in crate::live) use access::FileAccessProjector;

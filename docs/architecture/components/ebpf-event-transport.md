@@ -4,7 +4,9 @@
 
 主 eBPF collector 编译进一种事件传输：优先使用 BPF ring buffer；构建环境无法证明其可用时使用 perf buffer。两条路径共享事件 ABI 和下游消费模型，运行时不会在已经编译好的二进制中切换 transport。
 
-![eBPF 事件传输与消费](assets/ebpf-event-transport.png)
+[![eBPF 事件传输与消费](assets/ebpf-event-transport.png)](assets/ebpf-event-transport.puml)
+
+事件 record 的结构、构造规则和解码数据流由[eBPF 事件 ABI](ebpf-event-abi.md)定义；本页只负责 transport 的选择、缓冲与交接。
 
 ## 构建时选择
 
@@ -22,13 +24,13 @@ cargo build --release -p daemon --features perf-buffer
 
 ring buffer 路径直接使用 `bpf_ringbuf_reserve`、submit 和 discard。perf buffer 没有等价的可变长 reserve，因此使用 per-CPU scratch map 暂存事件，再调用 `bpf_perf_event_output`；perf event array 的 entry 数按主机 CPU 数设置。
 
-TLS direct-copy 事件最大可达 4 MiB。perf buffer 不为此分配同等大小的 per-CPU scratch，而是让 direct-copy 未命中，交给既有的 seccomp 用户态读取路径。
+TLS direct-copy 事件包含固定 65536 字节正文区，单次实际复制最多 65535 字节。perf buffer 分支不输出 direct-copy 正文；配置 `bpf-copy-seccomp-fallback` 时由既有 seccomp 用户态读取路径处理，纯 TLS `bpf-copy` 在 perf-buffer 制品中启动时报错。
 
 ## 单消费者与有界交接
 
 ring buffer 和 perf buffer 都由一个专用线程 drain。consumer 独占内核 buffer 的 epoll fd，在就绪或 250 ms 看门狗到期后尽可能清空事件，并按最多 4096 条或 2 MiB 组成 batch。batch 进入容量为 32 的同步队列，随后通过 eventfd 唤醒 daemon 主循环。
 
-daemon 主循环从用户态队列取 batch，再执行解码、按观测时间排序、语义投影和持久化。重处理不会直接占用内核 buffer 的消费线程。队列满时 consumer 会等待，内核 buffer 继续承接短时突发；若最终发生内核侧丢失，诊断链会显式报告。
+daemon 主循环从用户态队列取 batch，再执行解码、按观测时间排序、语义投影和持久化。Kernel TGID 与 daemon 可见 PID 的关联遵循[进程身份运行时](process-identity-runtime.md)，不由 transport consumer 猜测或改写。重处理不会直接占用内核 buffer 的消费线程。队列满时 consumer 会等待，内核 buffer 继续承接短时突发；若最终发生内核侧丢失，诊断链会显式报告。
 
 ## 传输丢失诊断
 

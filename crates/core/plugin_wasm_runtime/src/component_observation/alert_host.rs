@@ -27,6 +27,12 @@ struct AlertCall {
     trace_id: TraceId,
     alert_token: TraceAlertToken,
     draft: AlertDraft,
+    authorization: AlertAuthorization,
+}
+
+enum AlertAuthorization {
+    ObservationContext,
+    PersistedToken,
 }
 
 impl AlertCall {
@@ -42,6 +48,17 @@ impl AlertCall {
         };
         let trace_id = record_trace_id(fields)?;
         let alert_token = record_alert_token(fields)?;
+        let authorization = if let Some(context) = state.observation_trace_context() {
+            if context.trace_id != trace_id || context.alert_token.as_ref() != Some(&alert_token) {
+                return Err(PluginRuntimeError::new(
+                    "alert_authorization",
+                    "alert trace/token does not match the observation context",
+                ));
+            }
+            AlertAuthorization::ObservationContext
+        } else {
+            AlertAuthorization::PersistedToken
+        };
         let draft_fields = match record_field(fields, "draft") {
             Some(Val::Record(fields)) => fields,
             _ => return Err(invalid_field("draft")),
@@ -63,6 +80,7 @@ impl AlertCall {
             host,
             trace_id,
             alert_token,
+            authorization,
             draft: AlertDraft {
                 definition_key,
                 payload_json,
@@ -72,8 +90,16 @@ impl AlertCall {
     }
 
     fn submit(self) -> Result<(), PluginRuntimeError> {
-        self.host
-            .submit_alert(self.trace_id, self.alert_token, self.draft)
+        match self.authorization {
+            AlertAuthorization::ObservationContext => {
+                self.host
+                    .submit_observation_alert(self.trace_id, self.alert_token, self.draft)
+            }
+            AlertAuthorization::PersistedToken => {
+                self.host
+                    .submit_alert(self.trace_id, self.alert_token, self.draft)
+            }
+        }
     }
 }
 

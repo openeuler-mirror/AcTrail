@@ -1,0 +1,2 @@
+# Access control inherits the default LSM backends.
+# TLS and socket capture inherit the default eBPF backends.

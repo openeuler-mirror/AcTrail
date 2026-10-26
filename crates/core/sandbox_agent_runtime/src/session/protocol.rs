@@ -1,7 +1,7 @@
 use std::io;
 
 use sandbox_observation::{Observation, ObservationBatch};
-use sandbox_vsock_contract::{Frame, FrameCode, FrameDecoder, ObservationBatchCodec};
+use sandbox_vsock_contract::{Frame, FrameCode, FrameDecoder, ObservationBatchCodec, SbWelcome};
 
 use crate::SandboxConnection;
 
@@ -16,7 +16,10 @@ impl SessionProtocol {
         }
     }
 
-    pub(super) fn handshake(&self, connection: &mut dyn SandboxConnection) -> io::Result<u32> {
+    pub(super) fn handshake(
+        &self,
+        connection: &mut dyn SandboxConnection,
+    ) -> io::Result<SbWelcome> {
         self.write_frame(
             connection,
             &Frame::new(FrameCode::SbHello, Vec::new())
@@ -29,16 +32,9 @@ impl SessionProtocol {
                 "gateway did not return SbWelcome",
             ));
         }
-        let sb_id = welcome
-            .decode_numeric_id()
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if sb_id == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "gateway assigned reserved SB ID zero",
-            ));
-        }
-        Ok(sb_id)
+        welcome
+            .decode_sb_welcome()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     pub(super) fn send_batch(

@@ -1,5 +1,6 @@
 //! Concrete daemon services backed by procfs bootstrap and storage persistence.
 
+pub(crate) mod access_control;
 pub(crate) mod alert_forwarding;
 pub(crate) mod alert_ingress;
 #[path = "services/application_protocol/service.rs"]
@@ -18,7 +19,7 @@ pub(crate) mod payload;
 pub(crate) mod payload_gate;
 pub(crate) mod post_trace;
 pub(crate) mod process_seccomp;
-pub(crate) mod resource_metrics;
+pub(crate) mod resource_profiling;
 pub(crate) mod retention;
 pub(crate) mod sandbox_alerts;
 pub(crate) mod sandbox_plugins;
@@ -28,6 +29,7 @@ pub(crate) mod seccomp_tls;
 pub(crate) mod semantic_actions;
 #[path = "services/tls_sync/service.rs"]
 pub(crate) mod tls_sync;
+pub(crate) mod user_lifecycle;
 pub(crate) mod wiring;
 #[path = "services/logging/workload.rs"]
 pub(crate) mod workload_diagnostics;

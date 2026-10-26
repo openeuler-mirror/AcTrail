@@ -24,12 +24,14 @@ impl ConnectionGeneration {
 
 pub(super) struct ConnectionGate {
     generation: AtomicU64,
+    workload_generation: AtomicU64,
 }
 
 impl ConnectionGate {
     pub(super) fn disconnected() -> Self {
         Self {
             generation: AtomicU64::new(0),
+            workload_generation: AtomicU64::new(0),
         }
     }
 
@@ -39,10 +41,27 @@ impl ConnectionGate {
 
     pub(super) fn disable(&self) {
         self.generation.store(0, Ordering::Release);
+        self.workload_generation.store(0, Ordering::Release);
     }
 
-    pub(super) fn enable(&self, generation: ConnectionGeneration) {
+    pub(super) fn enable(
+        &self,
+        generation: ConnectionGeneration,
+        workload_cgroup_observations: bool,
+    ) {
+        self.workload_generation.store(
+            if workload_cgroup_observations {
+                generation.get()
+            } else {
+                0
+            },
+            Ordering::Release,
+        );
         self.generation.store(generation.get(), Ordering::Release);
+    }
+
+    pub(super) fn workload_generation(&self) -> Option<ConnectionGeneration> {
+        ConnectionGeneration::new(self.workload_generation.load(Ordering::Acquire))
     }
 }
 
@@ -69,6 +88,10 @@ impl DeliveryPipeline {
 
     pub(super) fn capture_generation(&self) -> Option<ConnectionGeneration> {
         self.gate.generation()
+    }
+
+    pub(super) fn capture_workload_generation(&self) -> Option<ConnectionGeneration> {
+        self.gate.workload_generation()
     }
 
     pub(super) fn generation_is_current(&self, expected: ConnectionGeneration) -> bool {
@@ -170,5 +193,27 @@ impl DeliveryCounts {
             accepted: 0,
             dropped: count as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workload_publication_requires_negotiated_capability() {
+        let gate = ConnectionGate::disconnected();
+        let generation = ConnectionGeneration::new(7).unwrap();
+
+        gate.enable(generation, false);
+        assert_eq!(gate.generation(), Some(generation));
+        assert_eq!(gate.workload_generation(), None);
+
+        gate.enable(generation, true);
+        assert_eq!(gate.workload_generation(), Some(generation));
+
+        gate.disable();
+        assert_eq!(gate.generation(), None);
+        assert_eq!(gate.workload_generation(), None);
     }
 }

@@ -48,20 +48,31 @@ pub(super) fn require_positive_u64(key: &'static str, value: u64) -> Result<u64,
     Ok(value)
 }
 
-pub(super) fn parse_disabled_or_positive_u64(
+pub(super) fn require_positive_usize(key: &'static str, value: usize) -> Result<usize, String> {
+    if value == usize::default() {
+        return Err(format!("invalid {key}: value must be positive"));
+    }
+    Ok(value)
+}
+
+pub(super) fn require_bounded_positive_usize(
     key: &'static str,
-    raw: &str,
-) -> Result<Option<u64>, String> {
-    if raw == "disabled" {
-        return Ok(None);
+    value: usize,
+    maximum: usize,
+) -> Result<usize, String> {
+    let value = require_positive_usize(key, value)?;
+    if value > maximum {
+        return Err(format!("invalid {key}: value must not exceed {maximum}"));
     }
-    let value = raw
-        .parse::<u64>()
-        .map_err(|error| format!("invalid {key}: {error}"))?;
-    if value == u64::default() {
-        return Err(format!("invalid {key}: value must be positive or disabled"));
+    Ok(value)
+}
+
+pub(super) fn require_zstd_level(key: &'static str, value: i32) -> Result<i32, String> {
+    if (-7..=22).contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("invalid {key}: expected -7..=22"))
     }
-    Ok(Some(value))
 }
 
 pub(super) fn parse_duration_millis(
@@ -171,14 +182,9 @@ pub(super) fn memlock_rlimit_as_str(value: MemlockRlimit) -> String {
     }
 }
 
-pub(super) fn disabled_or_u64_as_string(value: Option<u64>) -> String {
-    value
-        .map(|raw| raw.to_string())
-        .unwrap_or_else(|| "disabled".to_string())
-}
-
 pub(super) fn payload_tls_capture_backend_as_str(value: PayloadTlsCaptureBackend) -> &'static str {
     match value {
+        PayloadTlsCaptureBackend::BpfCopy => "bpf-copy",
         PayloadTlsCaptureBackend::SeccompUserRead => "seccomp-user-read",
         PayloadTlsCaptureBackend::BpfCopySeccompFallback => "bpf-copy-seccomp-fallback",
         PayloadTlsCaptureBackend::TlsSync => "tls-sync",
@@ -302,15 +308,6 @@ pub(super) fn network_control_seccomp_syscall_as_str(
 ) -> &'static str {
     match value {
         NetworkControlSeccompSyscall::Connect => "connect",
-    }
-}
-
-pub(super) fn enforcement_seccomp_syscall_as_str(
-    value: &EnforcementSeccompSyscall,
-) -> &'static str {
-    match value {
-        EnforcementSeccompSyscall::Mkdir => "mkdir",
-        EnforcementSeccompSyscall::Rmdir => "rmdir",
     }
 }
 
@@ -444,12 +441,6 @@ pub(super) fn sse_data_policy_as_str(value: SseDataPolicy) -> &'static str {
     match value {
         SseDataPolicy::Disabled => "disabled",
         SseDataPolicy::Preview => "preview",
-    }
-}
-
-pub(super) fn enforcement_backend_as_str(value: EnforcementBackend) -> &'static str {
-    match value {
-        EnforcementBackend::Fanotify => "fanotify",
     }
 }
 

@@ -10,8 +10,8 @@ use model_core::process::ProcessIdentity;
 use plugin_system::DecisionScope;
 
 use super::decision::ExecNotificationContext;
-use super::rules::StoredCommandRule;
 use crate::services::alert_ingress::{CommandExecutionBoundaryAlert, CommandExecutionDenySource};
+use access_control::policy::command::StoredCommandRule;
 
 pub(crate) struct CommandControlDrain {
     pub(crate) outcomes: Vec<CommandEnforcementDraft>,

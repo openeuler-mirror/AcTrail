@@ -8,6 +8,8 @@ from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 from tests.v2.common.mcp_test_support import STDIO_CAPTURE_ABI_MAX_BYTES
 from tests.v2.common.testing_env import default_codex_model
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class ProbeCodexMcpConfig(CommonTestConfig):
@@ -49,31 +51,31 @@ class ProbeCodexMcpConfig(CommonTestConfig):
             model=(
                 os.environ.get("CODEX_E2E_MODEL")
                 or default_codex_model(inputs.repo)
-                or "gpt-5.5"
+                or CASE_CONSTANTS.fallback_model
             ),
             reasoning_effort=os.environ.get(
                 "CODEX_E2E_REASONING_EFFORT",
-                "low",
+                CASE_CONSTANTS.reasoning_effort,
             ),
             codex_binary=Path(configured_binary) if configured_binary else None,
             artifact_root=Path(
                 os.environ.get(
                     "CODEX_MCP_E2E_ARTIFACT_ROOT",
-                    "temp/v2-regression/mcp",
+                    CASE_CONSTANTS.artifact_root,
                 )
             ),
             local_server_name=os.environ.get(
                 "CODEX_MCP_E2E_LOCAL_SERVER_NAME",
-                "actrail_codex_stdio",
+                CASE_CONSTANTS.local_server_name,
             ),
             tool_name=os.environ.get(
                 "CODEX_MCP_E2E_TOOL_NAME",
-                "emit_marker",
+                CASE_CONSTANTS.tool_name,
             ),
             tool_description_padding_bytes=int(
                 os.environ.get(
                     "CODEX_MCP_E2E_TOOL_DESCRIPTION_PADDING_BYTES",
-                    "8192",
+                    str(CASE_CONSTANTS.tool_description_padding_bytes),
                 )
             ),
         )

@@ -8,11 +8,35 @@ use storage_core::StorageBackend;
 
 use crate::json;
 
+#[path = "traces/page.rs"]
+mod page;
+pub(crate) use page::trace_page_json;
+
 pub(super) struct ProcessDisplayIndex {
     processes: BTreeMap<ProcessIdentity, ProcessRecord>,
 }
 
 impl ProcessDisplayIndex {
+    pub(super) fn for_trace(
+        storage: &dyn StorageBackend,
+        trace: &TraceRecord,
+    ) -> Result<Self, String> {
+        let process = storage
+            .get_process_record(trace.root_process_identity)
+            .map_err(|error| {
+                format!(
+                    "read root process failed: {}: {}",
+                    error.stage, error.message
+                )
+            })?;
+        Ok(Self {
+            processes: process
+                .into_iter()
+                .map(|record| (record.identity, record))
+                .collect(),
+        })
+    }
+
     pub(super) fn load(storage: &dyn StorageBackend) -> Result<Self, String> {
         let processes = storage
             .list_process_records()

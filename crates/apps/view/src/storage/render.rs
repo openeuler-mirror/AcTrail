@@ -245,7 +245,7 @@ fn event_operation(event: &DomainEvent) -> String {
         EventPayload::Ipc(payload) => payload.channel.clone(),
         EventPayload::Stdio(payload) => payload.stream.clone(),
         EventPayload::Application(payload) => payload.operation.clone(),
-        EventPayload::Resource(payload) => payload.scope.clone(),
+
         EventPayload::Control(payload) => payload.action.clone(),
         EventPayload::Loss(payload) => payload.reason.clone(),
         EventPayload::Label(payload) => payload.provider.clone(),
@@ -260,7 +260,7 @@ fn event_detail(event: &DomainEvent) -> String {
         EventPayload::File(payload) => file_detail(payload),
         EventPayload::Ipc(payload) => ipc_detail(payload),
         EventPayload::Application(payload) => application_detail(payload),
-        EventPayload::Resource(payload) => resource_detail(payload),
+
         EventPayload::Label(payload) => label_detail(payload),
         EventPayload::Enforcement(payload) => enforcement_detail(payload),
         _ => String::new(),
@@ -307,6 +307,21 @@ fn network_detail(payload: &NetPayload) -> String {
 }
 
 fn file_detail(payload: &model_core::event::FilePayload) -> String {
+    if let Some(summary) = &payload.io_summary {
+        let mut detail = format!(
+            "path={} token={} errno={}",
+            payload.path.as_deref().unwrap_or("unavailable"),
+            summary.file_token,
+            summary.errno
+        );
+        if let Some(count) = summary.operations {
+            detail.push_str(&format!(" operations={count}"));
+        }
+        if let Some(bytes) = summary.bytes {
+            detail.push_str(&format!(" bytes={bytes}"));
+        }
+        return detail;
+    }
     let result = payload
         .result
         .map(|value| value.to_string())
@@ -339,25 +354,6 @@ fn ipc_detail(payload: &model_core::event::IpcPayload) -> String {
 
 fn application_detail(payload: &model_core::event::ApplicationPayload) -> String {
     format!("{} {}", payload.protocol, payload.summary)
-}
-
-fn resource_detail(payload: &model_core::event::ResourcePayload) -> String {
-    format!(
-        "subject={} cpu_percent={} rss_kb={} virtual_memory_kb={}",
-        payload.subject,
-        payload
-            .cpu_percent_millis
-            .map(format_percent_millis)
-            .unwrap_or_default(),
-        payload
-            .rss_kb
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        payload
-            .virtual_memory_kb
-            .map(|value| value.to_string())
-            .unwrap_or_default()
-    )
 }
 
 fn label_detail(payload: &model_core::event::LabelPayload) -> String {
@@ -394,10 +390,6 @@ fn enforcement_detail(payload: &model_core::event::EnforcementPayload) -> String
     } else {
         format!("{base} metadata={metadata}")
     }
-}
-
-fn format_percent_millis(value: u64) -> String {
-    format!("{}.{:03}", value / 1000, value % 1000)
 }
 
 fn limit_vec<T>(mut items: Vec<T>, row_limit: Option<RowLimit>) -> Vec<T> {

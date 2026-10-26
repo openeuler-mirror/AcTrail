@@ -147,7 +147,7 @@ class FileLeakageE2E:
         self.patch.write_text(self.operator_patch(), encoding="utf-8")
         run_checked(
             [
-                str(self.actraild),
+                str(self.actrailctl),
                 "--config",
                 str(self.config),
                 "init",
@@ -201,6 +201,9 @@ capabilities = ["proc-lifecycle", "fs-access-basic"]
 opportunistic_capabilities = []
 disabled_capabilities = []
 
+[enforcement]
+enabled = false
+
 [payload.tls]
 enabled = false
 sync_event_socket_path = {quote(str(self.run_dir / 'tls-sync.sock'))}
@@ -230,8 +233,9 @@ capture_host = false
 sse_enabled = false
 sse_data_policy = "disabled"
 
-[resource_metrics]
+[resource_profiling]
 enabled = false
+
 """
 
     def start_services(self) -> None:

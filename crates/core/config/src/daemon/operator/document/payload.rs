@@ -1,10 +1,16 @@
 use super::*;
 
+#[path = "payload/constant.rs"]
+mod constant;
+
 use crate::daemon::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
     DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
+    DEFAULT_TLS_DYNAMIC_DISCOVERY_CAPACITY,
 };
-use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
+use payload_capability::{
+    DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES, DEFAULT_TLS_SYNC_MAX_FRAME_BYTES,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -51,7 +57,7 @@ pub(super) struct PayloadMcpDocument {
 impl Default for PayloadMcpDocument {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             parse_buffer_max_bytes: DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES,
             stdio_candidate_max_bytes: DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES,
             pending_stdio_candidate_max_entries: DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
@@ -126,9 +132,13 @@ pub(super) struct PayloadTlsDocument {
     pub redaction_policy: String,
     pub sync_runtime_library_path: String,
     pub sync_event_socket_path: String,
+    pub sync_max_frame_bytes: u32,
     pub sync_socket_mode_octal: String,
     pub sync_match_limit: u32,
     pub binary_analysis_cache_capacity: u32,
+    pub dynamic_discovery_capacity: u32,
+    pub direct_startup_discovery_enabled: bool,
+    pub direct_dynamic_discovery_enabled: bool,
     pub dynamic_exec_plan_timeout_ms: u64,
     pub sync_flow_control_enabled: bool,
     pub sync_flow_sniff_bytes: u32,
@@ -143,7 +153,7 @@ impl Default for PayloadTlsDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            capture_backend: "tls-sync".to_string(),
+            capture_backend: constant::DEFAULT_TLS_CAPTURE_BACKEND.to_string(),
             source: "auto".to_string(),
             resolver: "auto".to_string(),
             library: "auto".to_string(),
@@ -163,9 +173,13 @@ impl Default for PayloadTlsDocument {
             redaction_policy: "disabled".to_string(),
             sync_runtime_library_path: "auto".to_string(),
             sync_event_socket_path: "/run/actrail/tls-sync.sock".to_string(),
+            sync_max_frame_bytes: DEFAULT_TLS_SYNC_MAX_FRAME_BYTES,
             sync_socket_mode_octal: "660".to_string(),
             sync_match_limit: 8,
             binary_analysis_cache_capacity: DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
+            dynamic_discovery_capacity: DEFAULT_TLS_DYNAMIC_DISCOVERY_CAPACITY,
+            direct_startup_discovery_enabled: true,
+            direct_dynamic_discovery_enabled: true,
             dynamic_exec_plan_timeout_ms: DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
             sync_flow_control_enabled: true,
             sync_flow_sniff_bytes: 65536,
@@ -206,9 +220,13 @@ impl PayloadTlsDocument {
                 &config.sync_runtime_library_path,
             ),
             sync_event_socket_path: config.sync_event_socket_path.display().to_string(),
+            sync_max_frame_bytes: config.sync_max_frame_bytes,
             sync_socket_mode_octal: format!("{:o}", config.sync_socket_mode),
             sync_match_limit: config.sync_match_limit,
             binary_analysis_cache_capacity: config.binary_analysis_cache_capacity,
+            dynamic_discovery_capacity: config.dynamic_discovery_capacity,
+            direct_startup_discovery_enabled: config.direct_startup_discovery_enabled,
+            direct_dynamic_discovery_enabled: config.direct_dynamic_discovery_enabled,
             dynamic_exec_plan_timeout_ms: config.dynamic_exec_plan_timeout_ms,
             sync_flow_control_enabled: config.sync_flow_control_enabled,
             sync_flow_sniff_bytes: config.sync_flow_sniff_bytes,
@@ -221,6 +239,11 @@ impl PayloadTlsDocument {
     }
 
     pub(super) fn to_config(&self) -> Result<PayloadTlsConfig, String> {
+        if (self.sync_max_frame_bytes as usize) < payload_capability::TLS_SYNC_FRAME_HEADER_BYTES {
+            return Err(
+                "payload.tls.sync_max_frame_bytes must include the TLS frame header".to_string(),
+            );
+        }
         Ok(PayloadTlsConfig {
             enabled: self.enabled,
             capture_backend: parse_value("payload.tls.capture_backend", &self.capture_backend)?,
@@ -258,6 +281,10 @@ impl PayloadTlsDocument {
                 &self.sync_runtime_library_path,
             )?,
             sync_event_socket_path: PathBuf::from(&self.sync_event_socket_path),
+            sync_max_frame_bytes: require_positive_u32(
+                "payload.tls.sync_max_frame_bytes",
+                self.sync_max_frame_bytes,
+            )?,
             sync_socket_mode: parse_octal(
                 "payload.tls.sync_socket_mode_octal",
                 &self.sync_socket_mode_octal,
@@ -270,10 +297,16 @@ impl PayloadTlsDocument {
                 "payload.tls.binary_analysis_cache_capacity",
                 self.binary_analysis_cache_capacity,
             )?,
+            dynamic_discovery_capacity: require_positive_u32(
+                "payload.tls.dynamic_discovery_capacity",
+                self.dynamic_discovery_capacity,
+            )?,
             dynamic_exec_plan_timeout_ms: require_positive_u64(
                 "payload.tls.dynamic_exec_plan_timeout_ms",
                 self.dynamic_exec_plan_timeout_ms,
             )?,
+            direct_startup_discovery_enabled: self.direct_startup_discovery_enabled,
+            direct_dynamic_discovery_enabled: self.direct_dynamic_discovery_enabled,
             sync_flow_control_enabled: self.sync_flow_control_enabled,
             sync_flow_sniff_bytes: require_positive_u32(
                 "payload.tls.sync_flow_sniff_bytes",
@@ -426,7 +459,7 @@ impl Default for PayloadSocketDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            capture_backend: "bpf-copy-seccomp-fallback".to_string(),
+            capture_backend: "bpf-copy".to_string(),
             max_segment_bytes: 4095,
             max_operation_bytes: 4194304,
             ring_buffer_bytes: 8388608,
@@ -467,6 +500,13 @@ impl PayloadSocketDocument {
     }
 
     pub(super) fn to_config(&self) -> Result<PayloadSocketConfig, String> {
+        let segment_bytes =
+            require_positive_u32("payload.socket.max_segment_bytes", self.max_segment_bytes)?
+                .min(4095);
+        // Linux bpf_loop permits at most 1 << 23 callback invocations.
+        if u64::from(self.max_operation_bytes).div_ceil(u64::from(segment_bytes)) > (1 << 23) {
+            return Err("payload.socket.max_operation_bytes requires more than the kernel bpf_loop limit of 8388608 segments".to_owned());
+        }
         Ok(PayloadSocketConfig {
             enabled: self.enabled,
             capture_backend: parse_value("payload.socket.capture_backend", &self.capture_backend)?,

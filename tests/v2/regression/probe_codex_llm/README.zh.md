@@ -16,9 +16,9 @@ sudo -E python3 tests/v2/regression/probe_codex_llm/run_e2e.py
 # 步骤摘要
 
 1. 检查 AcTrail release binaries 和 Codex 外部可用性。
-2. 初始化、清理并启动 AcTrail。
+2. 刷新默认配置、清理并启动 AcTrail。
 3. 生成随机 marker，通过 `actrailctl launch` 启动 `codex exec`。
-4. 验证 Codex 标准输出包含 marker，并取得唯一的 trace id。
+4. 验证启动选择 eBPF、关闭 seccomp-notify 且未降级。确认 Codex 标准输出包含 marker，并取得唯一的 trace id。
 5. 停止 daemon，等待事件排空和 trace finalization 完成。
 6. 从数据库验证 trace 为 `Exited/Clean`，并验证
    `llm.call/request/response` 数量一致、关系完整，response 包含 marker，
@@ -56,7 +56,7 @@ AcTrail binaries 均可执行；Codex 命令成功并输出 `CODEX_PREFLIGHT_OK`
 ### 手动指令
 
 ```bash
-sudo -E target/release/actraild init -f
+sudo -E target/release/actrailctl init -f
 sudo -E target/release/actraild stop
 sudo -E target/release/actrailctl clean
 sudo -E target/release/actraild start
@@ -163,9 +163,10 @@ jq --arg marker "$CASE_MARKER" '
         $requests[]
         | select(
             .attributes["llm.request.content_state"] == "canonical_blocks"
-            and ((.attributes["llm.request.canonical_body_hash"] // "")
-                 | startswith("sha256:"))
-            and (((.attributes["llm.request.canonical_body_bytes"] // "0")
+            and .status == "success" and .completeness == "complete"
+            and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
+            and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
+            and (((.attributes["llm.request.payload_bytes"] // "0")
                   | tonumber) > 0)
           )
         | .action_id

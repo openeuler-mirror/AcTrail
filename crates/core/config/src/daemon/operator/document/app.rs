@@ -36,8 +36,6 @@ impl ApplicationDocument {
                 sse_max_data_bytes: config.sse_max_data_bytes,
             },
             http2: Http2ApplicationDocument {
-                max_frame_bytes: config.http2_max_frame_bytes,
-                max_connection_buffer_bytes: config.http2_max_connection_buffer_bytes,
                 emit_data_preview: config.http2_emit_data_preview,
                 max_data_preview_bytes: config.http2_max_data_preview_bytes,
             },
@@ -62,14 +60,6 @@ impl ApplicationDocument {
             sse_max_data_bytes: require_positive_u64(
                 "application.http.sse_max_data_bytes",
                 self.http.sse_max_data_bytes,
-            )?,
-            http2_max_frame_bytes: require_positive_u64(
-                "application.http2.max_frame_bytes",
-                self.http2.max_frame_bytes,
-            )?,
-            http2_max_connection_buffer_bytes: require_positive_u64(
-                "application.http2.max_connection_buffer_bytes",
-                self.http2.max_connection_buffer_bytes,
             )?,
             http2_emit_data_preview: self.http2.emit_data_preview,
             http2_max_data_preview_bytes: require_positive_u64(
@@ -105,8 +95,6 @@ impl Default for HttpApplicationDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Http2ApplicationDocument {
-    pub max_frame_bytes: u64,
-    pub max_connection_buffer_bytes: u64,
     pub emit_data_preview: bool,
     pub max_data_preview_bytes: u64,
 }
@@ -114,54 +102,9 @@ pub(super) struct Http2ApplicationDocument {
 impl Default for Http2ApplicationDocument {
     fn default() -> Self {
         Self {
-            max_frame_bytes: 65536,
-            max_connection_buffer_bytes: 4194304,
             emit_data_preview: true,
             max_data_preview_bytes: 65536,
         }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct ResourceMetricsDocument {
-    pub enabled: bool,
-    pub interval_ms: u64,
-    pub include_children: bool,
-    pub include_system: bool,
-    pub cpu_alert_percent_millis: String,
-    pub memory_alert_rss_kb: String,
-}
-
-impl Default for ResourceMetricsDocument {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            interval_ms: 1000,
-            include_children: true,
-            include_system: true,
-            cpu_alert_percent_millis: "disabled".to_string(),
-            memory_alert_rss_kb: "disabled".to_string(),
-        }
-    }
-}
-
-impl ResourceMetricsDocument {
-    pub(super) fn to_config(&self) -> Result<ResourceMetricsConfig, String> {
-        Ok(ResourceMetricsConfig {
-            enabled: self.enabled,
-            interval_ms: require_positive_u64("resource_metrics.interval_ms", self.interval_ms)?,
-            include_children: self.include_children,
-            include_system: self.include_system,
-            cpu_alert_percent_millis: parse_disabled_or_positive_u64(
-                "resource_metrics.cpu_alert_percent_millis",
-                &self.cpu_alert_percent_millis,
-            )?,
-            memory_alert_rss_kb: parse_disabled_or_positive_u64(
-                "resource_metrics.memory_alert_rss_kb",
-                &self.memory_alert_rss_kb,
-            )?,
-        })
     }
 }
 
@@ -196,7 +139,6 @@ impl ProviderDocument {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct EnforcementDocument {
     pub enabled: bool,
-    pub backend: String,
     pub scope: String,
     pub rules_path: String,
     pub builtin_rules: Vec<EnforcementBuiltinRuleDocument>,
@@ -204,7 +146,6 @@ pub(super) struct EnforcementDocument {
     pub mark_strategy: String,
     pub audit_enabled: bool,
     pub event_buffer_bytes: u32,
-    pub seccomp_syscalls: Vec<String>,
     pub seccomp_path_max_bytes: u32,
 }
 
@@ -212,7 +153,6 @@ impl Default for EnforcementDocument {
     fn default() -> Self {
         Self {
             enabled: true,
-            backend: "fanotify".to_string(),
             scope: "trace".to_string(),
             rules_path: "/etc/actrail/enforcement-rules.conf".to_string(),
             builtin_rules: Vec::new(),
@@ -220,7 +160,6 @@ impl Default for EnforcementDocument {
             mark_strategy: "parent-directories".to_string(),
             audit_enabled: true,
             event_buffer_bytes: 65536,
-            seccomp_syscalls: vec!["mkdir".to_string(), "rmdir".to_string()],
             seccomp_path_max_bytes: 4096,
         }
     }
@@ -230,7 +169,6 @@ impl EnforcementDocument {
     pub(super) fn to_config(&self) -> Result<EnforcementConfig, String> {
         Ok(EnforcementConfig {
             enabled: self.enabled,
-            backend: parse_value("enforcement.backend", &self.backend)?,
             scope: parse_value("enforcement.scope", &self.scope)?,
             rules_path: PathBuf::from(&self.rules_path),
             builtin_rules: self
@@ -245,11 +183,6 @@ impl EnforcementDocument {
                 "enforcement.event_buffer_bytes",
                 self.event_buffer_bytes,
             )?,
-            seccomp_syscalls: self
-                .seccomp_syscalls
-                .iter()
-                .map(|raw| parse_value("enforcement.seccomp_syscalls", raw))
-                .collect::<Result<Vec<_>, _>>()?,
             seccomp_path_max_bytes: require_positive_u32(
                 "enforcement.seccomp_path_max_bytes",
                 self.seccomp_path_max_bytes,

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import pwd
 import shutil
 import subprocess
 from pathlib import Path
+
+from .constants import DEFAULTS
 
 
 class AgentBinaryDiscovery:
@@ -50,6 +53,15 @@ class AgentBinaryDiscovery:
             environment["HOME"] = str(home)
         return environment
 
+    def codex_environment(self, binary: Path) -> dict[str, str]:
+        environment = self.environment(binary)
+        for parent in binary.resolve().parents:
+            if parent.name == ".codex":
+                environment["HOME"] = str(parent.parent)
+                environment["CODEX_HOME"] = str(parent)
+                break
+        return environment
+
     def default_codex_model(self) -> str | None:
         binary = self.resolve("CODEX_E2E_BINARY", "codex")
         if binary is None:
@@ -57,13 +69,13 @@ class AgentBinaryDiscovery:
         return self.default_codex_model_for_binary(binary)
 
     def default_codex_model_for_binary(self, binary: Path) -> str | None:
-        environment = self.environment(binary)
+        environment = self.codex_environment(binary)
         try:
             completed = subprocess.run(
                 [str(binary), "debug", "models"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=DEFAULTS.discovery_timeout_seconds,
                 env=environment,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -89,6 +101,46 @@ class AgentBinaryDiscovery:
             ):
                 return slug
         return None
+
+    def codex_native_binary_for(
+        self, binary: Path, *, use_override: bool = DEFAULTS.native_binary_override
+    ) -> Path | None:
+        configured = os.environ.get("CODEX_E2E_NATIVE_BINARY") if use_override else None
+        if configured:
+            candidate = Path(configured)
+            return candidate if self.is_executable(candidate) else None
+
+        entry = binary.resolve()
+        try:
+            with entry.open("rb") as stream:
+                if stream.read(4) == b"\x7fELF":
+                    return entry
+        except OSError:
+            return None
+
+        target = {
+            "aarch64": ("codex-linux-arm64", "aarch64-unknown-linux-musl"),
+            "x86_64": ("codex-linux-x64", "x86_64-unknown-linux-musl"),
+        }.get(platform.machine())
+        if target is None or entry.name != "codex.js":
+            return None
+        package_name, target_triple = target
+        package_root = entry.parent.parent
+        candidates = (
+            package_root
+            / "node_modules"
+            / "@openai"
+            / package_name
+            / "vendor"
+            / target_triple
+            / "bin"
+            / "codex",
+            package_root / "vendor" / target_triple / "bin" / "codex",
+        )
+        return next(
+            (candidate for candidate in candidates if self.is_executable(candidate)),
+            None,
+        )
 
     @staticmethod
     def is_executable(path: Path) -> bool:
@@ -136,5 +188,5 @@ def default_claude_model() -> str:
     return (
         os.environ.get("CLAUDE_E2E_MODEL")
         or os.environ.get("ANTHROPIC_MODEL")
-        or "sonnet"
+        or DEFAULTS.claude_model
     )

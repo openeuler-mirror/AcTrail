@@ -3,10 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
 };
 
+use crate::live::actions::action_for_live_state;
 use crate::live::process_parent::{parent_identity_has_conflict, parent_process_from_action};
 
 use super::shared::{ActionLinkKey, invalidate_child_links, is_nested_file_write_event};
@@ -27,8 +28,10 @@ impl AgentPerformedActionLinkProjector {
         if !is_observed_agent_process(action) {
             return;
         }
-        self.agents_by_process
-            .insert((action.trace_id, action.process.clone()), action.clone());
+        self.agents_by_process.insert(
+            (action.trace_id, action.process.clone()),
+            action_for_live_state(action),
+        );
     }
 
     pub(super) fn invalidate_command_parent_conflict(
@@ -131,7 +134,7 @@ impl AgentPerformedActionLinkProjector {
             parent_action_id,
             child_action_id: action.action_id.clone(),
             role: SemanticActionLinkRole::AgentPerformedAction,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: action.evidence.clone(),
             attributes,
@@ -157,9 +160,9 @@ impl AgentPerformedActionLinkProjector {
             .iter_mut()
             .find(|candidate| candidate.action_id == action.action_id)
         {
-            *existing = action.clone();
+            *existing = action_for_live_state(action);
         } else {
-            pending.push(action.clone());
+            pending.push(action_for_live_state(action));
         }
         self.pending_key_by_child
             .insert(child_key, (action.trace_id, agent_process));

@@ -8,13 +8,13 @@ import json
 import os
 import re
 import select
+import signal
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-import tomllib
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,16 +31,29 @@ CONTAINER_MANAGER_DIR = (
     / "container-manager"
 )
 sys.path.insert(0, str(CONTAINER_MANAGER_DIR))
+sys.path.insert(0, str(REPO))
+
+from tests.v2.common.patch_builder import PatchBuilder  # noqa: E402
+from tests.v2.regression.container_agent_xiaoo.v2.constants import CASE_CONSTANTS
 
 from container import TestContainer  # noqa: E402
 from image import ContainerImage  # noqa: E402
 from request import ContainerRequest  # noqa: E402
 
 
-RUNTIME_TOKEN = "@RUNTIME_DIR@"
 LOCAL_API_KEY_ENV = "ACTRAIL_MULTI_CONTAINER_XIAOO_API_KEY"
 LOCAL_API_KEY = "actrail-multi-container-local-key"
 PROFILE_NAME = "multi-container-xiaoo"
+IDENTITY_HANDSHAKE_TRACE_NAME = "existing-process-identity-handshake"
+NONLEADER_EXEC_TRACE_NAME = "nonleader-thread-exec"
+BUSINESS_TRACE_NAMES = (
+    "container-a-release-summary",
+    "container-b-security-review",
+)
+EVENT_COLLECTOR_MASK = 0x0F
+EVENT_COLLECTOR_EBPF = 1
+EVENT_KIND_PROCESS = 0
+EVENT_KIND_NET = 2
 
 
 @dataclass(frozen=True)
@@ -62,30 +75,50 @@ class Workload:
 def parse_args() -> argparse.Namespace:
     case_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bin-dir", default=os.environ.get("ACTRAIL_BIN_DIR", "target/release"))
+    parser.add_argument(
+        "--bin-dir", default=os.environ.get("ACTRAIL_BIN_DIR", CASE_CONSTANTS.bin_dir)
+    )
     parser.add_argument(
         "--image",
         default=os.environ.get(
             "ACTRAIL_MULTI_CONTAINER_IMAGE",
-            "openeuler/openeuler:24.03-lts-sp3",
+            CASE_CONSTANTS.image,
         ),
     )
     parser.add_argument(
         "--xiaoo-bin",
-        default=os.environ.get("XIAOO_BINARY", "/root/.cargo/bin/xiaoo"),
+        default=os.environ.get("XIAOO_BINARY", CASE_CONSTANTS.xiaoo_bin),
     )
-    parser.add_argument("--operator-template", default=str(case_dir / "operator.conf"))
     parser.add_argument(
         "--seccomp-profile",
         default=str(case_dir / "seccomp/actrail-notify.json"),
     )
-    parser.add_argument("--container-start-stagger-seconds", type=float, default=10.0)
-    parser.add_argument("--active-overlap-seconds", type=float, default=3.0)
-    parser.add_argument("--ready-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--launch-timeout-seconds", type=float, default=180.0)
-    parser.add_argument("--drain-timeout-seconds", type=float, default=30.0)
-    parser.add_argument("--rebuild-image", action="store_true")
+    parser.add_argument(
+        "--container-start-stagger-seconds", type=float,
+        default=CASE_CONSTANTS.container_start_stagger_seconds,
+    )
+    parser.add_argument(
+        "--active-overlap-seconds", type=float,
+        default=CASE_CONSTANTS.active_overlap_seconds,
+    )
+    parser.add_argument(
+        "--ready-timeout-seconds", type=float,
+        default=CASE_CONSTANTS.ready_timeout_seconds,
+    )
+    parser.add_argument(
+        "--launch-timeout-seconds", type=float,
+        default=CASE_CONSTANTS.launch_timeout_seconds,
+    )
+    parser.add_argument(
+        "--drain-timeout-seconds", type=float,
+        default=CASE_CONSTANTS.drain_timeout_seconds,
+    )
+    parser.add_argument(
+        "--rebuild-image", action="store_true", default=CASE_CONSTANTS.rebuild_image
+    )
     parser.add_argument("--keep-runtime", action="store_true")
+    parser.add_argument("--keep-runtime-on-failure", action="store_true")
+    parser.add_argument("--runtime", type=Path, help="runtime directory managed by the caller")
     return parser.parse_args()
 
 
@@ -98,16 +131,18 @@ def main() -> int:
     actraild = require_executable(bin_dir / "actraild")
     actrailctl = require_executable(bin_dir / "actrailctl")
     actrailviewer = require_executable(bin_dir / "actrailviewer")
-    tls_runtime = require_file(bin_dir / "libactrail_tls_payload_probe_sync.so")
     xiaoo = require_executable(resolve_path(args.xiaoo_bin, repo))
-    operator_template = require_file(resolve_path(args.operator_template, repo))
+    patch_config = require_file(case_dir / "patch_config.toml")
     workload_script = require_file(case_dir / "workload.sh")
     image_dockerfile = require_file(case_dir / "Dockerfile")
     docker_seccomp = resolve_docker_seccomp(args.seccomp_profile, repo)
-    provider_script = require_file(repo / "tests/support/llm-http-proxy/provider_proxy.py")
+    provider_script = require_file(repo / "tests/v2/common/llm-http-proxy/provider_proxy.py")
+    nonleader_exec_script = require_file(case_dir / "nonleader_exec.py")
     require_command("docker")
 
-    runtime = Path(tempfile.mkdtemp(prefix="actrail-multi-container-xiaoo.", dir="/tmp"))
+    runtime = args.runtime or Path(
+        tempfile.mkdtemp(prefix="actrail-multi-container-xiaoo.", dir="/tmp")
+    )
     if args.container_start_stagger_seconds < 0 or args.active_overlap_seconds < 0:
         raise RuntimeError("container stagger and active overlap must be non-negative")
     run_id = f"{int(time.time())}-{os.getpid()}"
@@ -167,10 +202,12 @@ def main() -> int:
     daemon: subprocess.Popen[str] | None = None
     test_image: ContainerImage | None = None
     succeeded = False
+    failure_stage = "runtime_preparation"
 
     try:
-        prepare_runtime(runtime, operator_template, config, actraild)
+        prepare_runtime(runtime, patch_config, config, actrailctl)
         prepare_workload_files(workloads)
+        failure_stage = "container_image_preparation"
         test_image = prepare_agent_image(
             runtime,
             args.image,
@@ -178,6 +215,7 @@ def main() -> int:
             args.rebuild_image,
         )
         provider_urls = []
+        failure_stage = "provider_startup"
         for workload in workloads:
             provider, listen_url = start_provider(
                 provider_script,
@@ -186,10 +224,11 @@ def main() -> int:
                 repo,
             )
             provider_processes.append(provider)
-            provider_urls.append(rewrite_provider_host(listen_url, "127.0.0.1"))
+            provider_urls.append(rewrite_provider_host(listen_url, CASE_CONSTANTS.provider_host))
         for workload, provider_url in zip(workloads, provider_urls):
             write_xiaoo_config(workload.config_path, provider_url)
 
+        failure_stage = "daemon_startup"
         daemon = start_daemon(actraild, config, daemon_log)
         wait_for_daemon(
             actrailctl,
@@ -198,7 +237,23 @@ def main() -> int:
             daemon_log,
             args.ready_timeout_seconds,
         )
+        failure_stage = "existing_process_identity_handshake"
+        verify_existing_process_identity_handshake(
+            actrailctl,
+            config,
+            args.ready_timeout_seconds,
+        )
+        failure_stage = "nonleader_exec_validation"
+        verify_nonleader_exec_lifecycle(
+            actrailctl,
+            config,
+            database,
+            nonleader_exec_script,
+            runtime / "nonleader-exec.marker",
+            args.ready_timeout_seconds,
+        )
 
+        failure_stage = "container_startup"
         for workload in workloads:
             container = TestContainer(
                 ContainerRequest(
@@ -208,8 +263,6 @@ def main() -> int:
                     volumes=(
                         f"{runtime}:{runtime}",
                         f"{actrailctl}:/usr/local/bin/actrailctl:ro",
-                        f"{tls_runtime}:"
-                        "/usr/local/bin/libactrail_tls_payload_probe_sync.so:ro",
                         f"{xiaoo}:/root/.cargo/bin/xiaoo:ro",
                         f"{workload_script}:"
                         "/usr/local/bin/actrail-multi-workload:ro",
@@ -228,6 +281,7 @@ def main() -> int:
         require_distinct_pid_namespaces(pid_namespaces)
         container_ids = {container.container_id for container in containers}
 
+        failure_stage = "workload_launch"
         launches.append(
             start_workload(
                 containers[0],
@@ -252,6 +306,7 @@ def main() -> int:
             )
         )
 
+        failure_stage = "active_trace_validation"
         trace_rows = wait_for_active_traces(
             database,
             len(workloads),
@@ -266,12 +321,14 @@ def main() -> int:
             args.container_start_stagger_seconds,
         )
 
+        failure_stage = "workload_completion"
         outputs = wait_for_launches(launches, workloads, args.launch_timeout_seconds)
         for workload in workloads:
             (runtime / f"container-{workload.suffix}.stdout").write_text(
                 outputs[workload.suffix],
                 encoding="utf-8",
             )
+        failure_stage = "trace_evidence_validation"
         wait_for_completed_traces(database, len(workloads), args.drain_timeout_seconds)
         trace_by_workload = wait_for_trace_evidence(
             database,
@@ -280,6 +337,7 @@ def main() -> int:
             workloads,
             args.drain_timeout_seconds,
         )
+        failure_stage = "output_and_isolation_validation"
         verify_outputs(outputs, workloads)
         verify_file_outputs(workloads)
         verify_no_cross_trace_llm_actions(
@@ -288,7 +346,7 @@ def main() -> int:
             trace_by_workload,
             workloads,
         )
-        verify_tls_binary_analysis_cache(daemon_log, config)
+        TlsObjectReuseAssertion(daemon_log, xiaoo).require()
 
         succeeded = True
         return 0
@@ -311,45 +369,63 @@ def main() -> int:
             except Exception as error:
                 print(f"image cleanup failed: {error}", file=sys.stderr)
         if daemon is not None:
-            terminate_process(daemon)
+            terminate_process(
+                daemon,
+                stop_timeout=CASE_CONSTANTS.daemon_stop_timeout_seconds,
+                kill_timeout=CASE_CONSTANTS.daemon_kill_timeout_seconds,
+            )
             if not succeeded:
+                daemon_lines = daemon_log.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
                 print(
-                    "daemon_log:\n" + daemon_log.read_text(encoding="utf-8"),
+                    "daemon_summary:\n"
+                    + "\n".join(daemon_lines[-CASE_CONSTANTS.diagnostic_tail_lines:]),
                     file=sys.stderr,
                 )
         for provider in provider_processes:
             terminate_process(provider)
             if not succeeded:
                 print_process_stderr("provider", provider)
-        if args.keep_runtime:
+        if not succeeded:
+            print(f"failure_stage={failure_stage}", file=sys.stderr)
+        if (
+            args.runtime is not None
+            or args.keep_runtime
+            or (args.keep_runtime_on_failure and not succeeded)
+        ):
             print(
                 f"multi_container_runtime_preserved={runtime} succeeded={succeeded}",
                 file=sys.stderr,
             )
         else:
-            shutil.rmtree(runtime, ignore_errors=True)
+            shutil.rmtree(runtime)
 
 
 def prepare_runtime(
     runtime: Path,
-    template: Path,
+    patch: Path,
     config: Path,
-    actraild: Path,
+    actrailctl: Path,
 ) -> None:
     for child in ("run", "data", "data/export", "log"):
         (runtime / child).mkdir(parents=True, exist_ok=True)
-    rendered = template.read_text(encoding="utf-8").replace(RUNTIME_TOKEN, str(runtime))
-    if RUNTIME_TOKEN in rendered:
-        raise RuntimeError("operator template still contains an unresolved runtime token")
-    patch = runtime / "operator.patch.toml"
-    patch.write_text(rendered, encoding="utf-8")
+    runtime_patch = runtime / "runtime.patch.toml"
+    (
+        PatchBuilder()
+        .with_work_dir(runtime)
+        .build()
+        .save(runtime_patch)
+    )
     initialized = subprocess.run(
         [
-            str(actraild),
+            str(actrailctl),
             "--config",
             str(config),
             "init",
             "-f",
+            "--patch",
+            str(runtime_patch),
             "--patch",
             str(patch),
         ],
@@ -409,15 +485,15 @@ def start_provider(
             "--mode",
             "local-stream",
             "--bind-host",
-            "127.0.0.1",
+            CASE_CONSTANTS.provider_host,
             "--bind-port",
-            "0",
+            str(CASE_CONSTANTS.provider_port),
             "--local-stream-response-text",
             response_marker,
             "--local-stream-reasoning-tokens",
-            "3",
+            str(CASE_CONSTANTS.provider_reasoning_tokens),
             "--response-chunk-delay-seconds",
-            "0.05",
+            str(CASE_CONSTANTS.provider_chunk_delay_seconds),
         ],
         cwd=cwd,
         text=True,
@@ -453,13 +529,13 @@ def write_xiaoo_config(path: Path, provider_url: str) -> None:
         "\n".join(
             [
                 "[llm]",
-                'provider = "deepseek"',
-                'model = "deepseek-chat"',
+                f"provider = {json.dumps(CASE_CONSTANTS.llm_provider)}",
+                f"model = {json.dumps(CASE_CONSTANTS.llm_model)}",
                 f'api_key_env = "{LOCAL_API_KEY_ENV}"',
                 f'api_base = "{provider_url}"',
-                "max_tokens = 128",
-                "context_window = 32768",
-                'reasoning_effort = "off"',
+                f"max_tokens = {CASE_CONSTANTS.llm_max_tokens}",
+                f"context_window = {CASE_CONSTANTS.llm_context_window}",
+                f"reasoning_effort = {json.dumps(CASE_CONSTANTS.llm_reasoning_effort)}",
                 "",
             ]
         ),
@@ -505,7 +581,7 @@ def wait_for_daemon(
         )
         if result.returncode == 0 and "ebpf" in result.stdout:
             return
-        time.sleep(0.1)
+        time.sleep(CASE_CONSTANTS.readiness_poll_seconds)
     raise RuntimeError("actraild did not become ready with eBPF")
 
 
@@ -522,10 +598,6 @@ def start_workload(
         "launch",
         "--name",
         workload.trace_name,
-        "--host-ebpf",
-        "required",
-        "--seccomp-notify",
-        "required",
         "--",
         "/bin/sh",
         "/usr/local/bin/actrail-multi-workload",
@@ -540,6 +612,203 @@ def start_workload(
             "ACTRAIL_TASK_HOLD_SECONDS": str(workload.hold_seconds),
         },
     )
+
+
+def verify_existing_process_identity_handshake(
+    actrailctl: Path,
+    config: Path,
+    timeout: float,
+) -> None:
+    root = subprocess.Popen(
+        ["/bin/sh", "-c", 'sleep "$1" & wait', "identity-handshake",
+         str(CASE_CONSTANTS.identity_process_hold_seconds)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        wait_for_process_child(root, timeout)
+        run_checked(
+            [
+                str(actrailctl),
+                "--config",
+                str(config),
+                "track-add",
+                "--pid",
+                str(root.pid),
+                "--name",
+                IDENTITY_HANDSHAKE_TRACE_NAME,
+            ]
+        )
+        if os.environ.get("ACTRAIL_REQUIRE_NESTED_PID_IDENTITY") == "1":
+            require_cached_identity_pid_separation(root.pid)
+        run_checked(
+            [
+                str(actrailctl),
+                "--config",
+                str(config),
+                "track-remove",
+                "--name",
+                IDENTITY_HANDSHAKE_TRACE_NAME,
+            ]
+        )
+    finally:
+        try:
+            os.killpg(root.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            root.communicate(timeout=CASE_CONSTANTS.process_stop_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(root.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            root.communicate()
+
+
+def wait_for_process_child(root: subprocess.Popen[str], timeout: float) -> None:
+    children_path = Path(f"/proc/{root.pid}/task/{root.pid}/children")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if root.poll() is not None:
+            _, stderr = root.communicate()
+            raise RuntimeError(
+                "existing-process identity root exited before attach: "
+                f"exit={root.returncode} stderr={stderr}"
+            )
+        try:
+            if children_path.read_text(encoding="utf-8").strip():
+                return
+        except FileNotFoundError:
+            pass
+        time.sleep(CASE_CONSTANTS.process_child_poll_seconds)
+    raise RuntimeError("existing-process identity root did not create its snapshot child")
+
+
+def verify_nonleader_exec_lifecycle(
+    actrailctl: Path,
+    config: Path,
+    database: Path,
+    fixture: Path,
+    marker: Path,
+    timeout: float,
+) -> None:
+    completed = subprocess.run(
+        [
+            str(actrailctl),
+            "--config",
+            str(config),
+            "launch",
+            "--name",
+            NONLEADER_EXEC_TRACE_NAME,
+            "--host-ebpf",
+            "required",
+            "--seccomp-notify",
+            "disabled",
+            "--",
+            sys.executable,
+            str(fixture),
+            str(marker),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "non-leader exec fixture failed: "
+            f"exit={completed.returncode} stdout={completed.stdout} stderr={completed.stderr}"
+        )
+    if marker.read_text(encoding="utf-8").strip() != "NONLEADER_EXEC_COMPLETE":
+        raise RuntimeError("non-leader exec fixture did not write its completion marker")
+
+    deadline = time.monotonic() + timeout
+    last_row: tuple[int, int] | None = None
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database) as connection:
+            last_row = connection.execute(
+                """
+                SELECT traces.trace_id, COUNT(events.event_id)
+                FROM traces
+                LEFT JOIN events ON events.trace_id = traces.trace_id
+                  AND (events.event_meta & ?) = ?
+                  AND events.kind_code = ?
+                WHERE traces.display_name = ?
+                GROUP BY traces.trace_id
+                """,
+                (
+                    EVENT_COLLECTOR_MASK,
+                    EVENT_COLLECTOR_EBPF,
+                    EVENT_KIND_PROCESS,
+                    NONLEADER_EXEC_TRACE_NAME,
+                ),
+            ).fetchone()
+        if last_row is not None and int(last_row[1]) >= 2:
+            return
+        time.sleep(CASE_CONSTANTS.trace_poll_seconds)
+    raise RuntimeError(
+        "non-leader exec did not preserve process lifecycle observation: "
+        f"last_row={last_row}"
+    )
+
+
+def require_cached_identity_pid_separation(observer_tgid: int) -> None:
+    maps = json.loads(run_checked(["bpftool", "-j", "map", "show"]))
+    candidates = [
+        item
+        for item in maps
+        if item.get("name") == "process_identit"
+        and item.get("bytes_key") == 4
+        and item.get("bytes_value") == 16
+    ]
+    for candidate in candidates:
+        entries = json.loads(
+            run_checked(
+                ["bpftool", "-j", "map", "dump", "id", str(candidate["id"])]
+            )
+        )
+        for entry in entries:
+            key = decode_bpftool_bytes(entry.get("key"))
+            value = decode_bpftool_bytes(entry.get("value"))
+            if len(key) != 4 or len(value) != 16:
+                continue
+            cached_observer_tgid = int.from_bytes(value[8:12], sys.byteorder)
+            if cached_observer_tgid != observer_tgid:
+                continue
+            kernel_tgid = int.from_bytes(key, sys.byteorder)
+            if kernel_tgid == observer_tgid:
+                raise RuntimeError(
+                    "nested observer PID unexpectedly equals raw kernel TGID: "
+                    f"pid={observer_tgid}"
+                )
+            print(
+                "nested_process_identity="
+                f"observer_tgid:{observer_tgid},kernel_tgid:{kernel_tgid}",
+                file=sys.stderr,
+            )
+            return
+    raise RuntimeError(
+        "nested observer identity was not present in the process identity cache: "
+        f"observer_tgid={observer_tgid} maps={[item.get('id') for item in candidates]}"
+    )
+
+
+def decode_bpftool_bytes(value: object) -> bytes:
+    if not isinstance(value, list):
+        return b""
+    decoded = bytearray()
+    for item in value:
+        if isinstance(item, int):
+            decoded.append(item)
+        elif isinstance(item, str):
+            decoded.append(int(item, 16))
+        else:
+            return b""
+    return bytes(decoded)
 
 
 def wait_for_active_traces(
@@ -566,13 +835,14 @@ def wait_for_active_traces(
                     SELECT trace_id, lifecycle_state, root_container_id
                     FROM traces
                     WHERE profile_name LIKE ?
+                      AND display_name IN (?, ?)
                     ORDER BY trace_id
                     """,
-                    (f"{PROFILE_NAME}%",),
+                    (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
                 ).fetchall()
             if len(last_rows) == expected and all(row[1] == "active" for row in last_rows):
                 return last_rows
-        time.sleep(0.05)
+        time.sleep(CASE_CONSTANTS.trace_poll_seconds)
     raise RuntimeError(f"expected traces were not simultaneously active: {last_rows}")
 
 
@@ -612,9 +882,10 @@ def require_trace_display_names(database: Path, workloads: list[Workload]) -> No
             SELECT display_name
             FROM traces
             WHERE profile_name LIKE ?
+              AND display_name IN (?, ?)
             ORDER BY trace_id
             """,
-            (f"{PROFILE_NAME}%",),
+            (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
         ).fetchall()
     actual = {str(row[0]) for row in rows}
     expected = {workload.trace_name for workload in workloads}
@@ -631,14 +902,17 @@ def require_trace_start_stagger(database: Path, expected_seconds: float) -> None
             SELECT trace_id, created_at
             FROM traces
             WHERE profile_name LIKE ?
+              AND display_name IN (?, ?)
             ORDER BY created_at
             """,
-            (f"{PROFILE_NAME}%",),
+            (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
         ).fetchall()
     if len(rows) != 2:
         raise RuntimeError(f"cannot verify trace start stagger: {rows}")
     actual_seconds = (int(rows[1][1]) - int(rows[0][1])) / 1_000_000_000
-    minimum_seconds = max(0.0, expected_seconds - 0.5)
+    minimum_seconds = max(
+        0.0, expected_seconds - CASE_CONSTANTS.start_stagger_tolerance_seconds
+    )
     if actual_seconds < minimum_seconds:
         raise RuntimeError(
             "trace start stagger is too short: "
@@ -654,7 +928,7 @@ def wait_for_launches(
     deadline = time.monotonic() + timeout
     outputs: dict[str, str] = {}
     for launch, workload in zip(launches, workloads):
-        remaining = max(0.1, deadline - time.monotonic())
+        remaining = max(CASE_CONSTANTS.process_wait_minimum_seconds, deadline - time.monotonic())
         try:
             stdout, stderr = launch.communicate(timeout=remaining)
         except subprocess.TimeoutExpired as error:
@@ -678,15 +952,16 @@ def wait_for_completed_traces(database: Path, expected: int, timeout: float) -> 
                 SELECT trace_id, lifecycle_state
                 FROM traces
                 WHERE profile_name LIKE ?
+                  AND display_name IN (?, ?)
                 ORDER BY trace_id
                 """,
-                (f"{PROFILE_NAME}%",),
+                (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
             ).fetchall()
         if len(last_rows) == expected and all(
             state in ("completed", "exited") for _, state in last_rows
         ):
             return
-        time.sleep(0.1)
+        time.sleep(CASE_CONSTANTS.completion_poll_seconds)
     raise RuntimeError(f"traces did not complete: {last_rows}")
 
 
@@ -715,7 +990,7 @@ def wait_for_trace_evidence(
             return trace_by_workload
         except RuntimeError as error:
             last_error = str(error)
-            time.sleep(0.2)
+            time.sleep(CASE_CONSTANTS.evidence_poll_seconds)
     raise RuntimeError(f"trace evidence did not become complete: {last_error}")
 
 
@@ -734,9 +1009,10 @@ def identify_traces_by_response_marker(
                 SELECT trace_id
                 FROM traces
                 WHERE profile_name LIKE ?
+                  AND display_name IN (?, ?)
                 ORDER BY trace_id
                 """,
-                (f"{PROFILE_NAME}%",),
+                (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
             ).fetchall()
         ]
     actions_by_trace = {
@@ -767,18 +1043,29 @@ def identify_traces_by_response_marker(
 def require_ebpf_evidence(database: Path, trace_id: int) -> None:
     with sqlite3.connect(database) as connection:
         process_count = connection.execute(
-            "SELECT COUNT(*) FROM events WHERE trace_id = ? AND collector = 'ebpf' AND kind = 'process'",
-            (trace_id,),
+            "SELECT COUNT(*) FROM events WHERE trace_id = ? "
+            "AND (event_meta & ?) = ? AND kind_code = ?",
+            (
+                trace_id,
+                EVENT_COLLECTOR_MASK,
+                EVENT_COLLECTOR_EBPF,
+                EVENT_KIND_PROCESS,
+            ),
         ).fetchone()[0]
         network_count = connection.execute(
             """
             SELECT COUNT(*)
             FROM events
             WHERE trace_id = ?
-              AND collector = 'ebpf'
-              AND kind IN ('net', 'network')
+              AND (event_meta & ?) = ?
+              AND kind_code = ?
             """,
-            (trace_id,),
+            (
+                trace_id,
+                EVENT_COLLECTOR_MASK,
+                EVENT_COLLECTOR_EBPF,
+                EVENT_KIND_NET,
+            ),
         ).fetchone()[0]
     if process_count < 1 or network_count < 1:
         raise RuntimeError(
@@ -798,6 +1085,13 @@ def require_llm_response(actrailviewer: Path, config: Path, trace_id: int) -> No
         raise RuntimeError(f"trace-{trace_id} has no llm.response action")
     if any(action.get("status") != "success" for action in responses):
         raise RuntimeError(f"trace-{trace_id} contains failed llm.response actions")
+    if any(action.get("completeness") != "complete" for action in responses):
+        raise RuntimeError(f"trace-{trace_id} contains incomplete llm.response actions")
+    if any(
+        action.get("attributes", {}).get("llm.response.done") != "true"
+        for action in responses
+    ):
+        raise RuntimeError(f"trace-{trace_id} contains llm.response without protocol termination")
 
 
 def require_file_actions(
@@ -917,66 +1211,32 @@ def verify_no_cross_trace_llm_actions(
                     )
 
 
-def verify_tls_binary_analysis_cache(daemon_log: Path, config: Path) -> None:
-    with config.open("rb") as stream:
-        capacity = int(
-            tomllib.load(stream)["payload"]["tls"][
-                "binary_analysis_cache_capacity"
-            ]
-        )
-    peer_lookups: list[tuple[str, str, int]] = []
-    seen_peers: set[str] = set()
-    for line in daemon_log.read_text(encoding="utf-8").splitlines():
-        if "TLS binary analysis cache lookup" not in line:
-            continue
-        if diagnostic_field(line, "consumer") != "sync":
-            continue
-        runtime_binary = diagnostic_field(line, "runtime_binary")
-        if runtime_binary is None or Path(runtime_binary).name != "xiaoo":
-            continue
-        probe_binary = diagnostic_field(line, "probe_binary")
-        cache = diagnostic_field(line, "cache")
-        entries = diagnostic_field(line, "cache_entries")
-        if (
-            probe_binary is None
-            or cache not in {"hit", "miss"}
-            or entries is None
-        ):
-            continue
-        peer = re.search(r"^/proc/(\d+)/root/", probe_binary)
-        if peer is None or peer.group(1) in seen_peers:
-            continue
-        seen_peers.add(peer.group(1))
-        entry_count = int(entries)
-        if entry_count > capacity:
-            raise RuntimeError(
-                f"TLS binary analysis cache entries {entry_count} exceed {capacity}"
-            )
-        peer_lookups.append((peer.group(1), cache, entry_count))
-    if len(peer_lookups) < 2:
-        raise RuntimeError(
-            "TLS binary analysis diagnostics lack two xiaoO peer PIDs: "
-            f"{peer_lookups}"
-        )
-    first_peer, second_peer = peer_lookups[:2]
-    if second_peer[1] != "hit":
-        raise RuntimeError(
-            "second xiaoO peer did not reuse binary analysis: "
-            f"first={first_peer} second={second_peer}"
-        )
-    print(
-        "tls_binary_analysis_cache "
-        f"first_peer={first_peer[0]} first={first_peer[1]} "
-        f"second_peer={second_peer[0]} second=hit "
-        f"entries={second_peer[2]} capacity={capacity}"
-    )
+class TlsObjectReuseAssertion:
+    def __init__(self, daemon_log: Path, binary: Path) -> None:
+        self._daemon_log = daemon_log
+        self._inode = str(binary.stat().st_ino)
 
+    def require(self) -> None:
+        counts = {"analysis started": 0, "cache hit": 0, "attachment ready": 0}
+        for line in self._daemon_log.read_text(encoding="utf-8").splitlines():
+            if self._field(line, "inode") != self._inode:
+                continue
+            if self._field(line, "source") != "Executable":
+                continue
+            for event in counts:
+                if f"TLS direct object {event}" in line:
+                    counts[event] += 1
+        if (counts["analysis started"] != 1 or counts["cache hit"] < 1
+                or counts["attachment ready"] < 2):
+            raise RuntimeError(f"xiaoO TLS object reuse evidence incomplete: {counts}")
+        print(f"tls_object_reuse inode={self._inode} counts={counts}")
 
-def diagnostic_field(line: str, name: str) -> str | None:
-    matched = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|(\S+))', line)
-    if matched is None:
-        return None
-    return matched.group(1) if matched.group(1) is not None else matched.group(2)
+    @staticmethod
+    def _field(line: str, name: str) -> str | None:
+        matched = re.search(rf'(?:^|\s){re.escape(name)}=(?:"([^"]*)"|(\S+))', line)
+        if matched is None:
+            return None
+        return matched.group(1) if matched.group(1) is not None else matched.group(2)
 
 
 def inspect_pid_namespace(name: str) -> str:
@@ -1010,7 +1270,12 @@ def remove_owned_containers(label: str) -> None:
         )
 
 
-def terminate_process(process: subprocess.Popen[str]) -> None:
+def terminate_process(
+    process: subprocess.Popen[str],
+    *,
+    stop_timeout: float = CASE_CONSTANTS.process_stop_timeout_seconds,
+    kill_timeout: float = CASE_CONSTANTS.process_kill_timeout_seconds,
+) -> None:
     if process.poll() is not None:
         return
     try:
@@ -1018,10 +1283,10 @@ def terminate_process(process: subprocess.Popen[str]) -> None:
     except ProcessLookupError:
         return
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=stop_timeout)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=5)
+        process.wait(timeout=kill_timeout)
 
 
 def print_process_stderr(label: str, process: subprocess.Popen[str]) -> None:

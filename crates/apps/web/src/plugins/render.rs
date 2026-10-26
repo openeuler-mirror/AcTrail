@@ -138,6 +138,7 @@ fn hostcall_metrics_value(metrics: &PluginHostcallMetrics) -> Value {
             "not_found": payload.not_found,
             "invalid": payload.invalid,
             "too_large": payload.too_large,
+            "failed": payload.failed,
             "truncated": payload.truncated,
             "latency_total_ns": payload.latency_total_ns,
             "latency_max_ns": payload.latency_max_ns,

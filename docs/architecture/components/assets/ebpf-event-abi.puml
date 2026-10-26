@@ -1,0 +1,45 @@
+@startuml
+title eBPF typed event ABI
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+package "BPF producers" {
+  component "process" as Process
+  component "signal" as Signal
+  component "network" as Network
+  component "FD lifecycle / I/O" as FdProducer
+}
+
+package "Typed transport records" {
+  component "common header\nkind + revision + size\ntrace + ktime\nsubject_observer_namespace_tgid\nsubject_kernel_tgid\nsubject_start_boottime_ns" as Header
+  component "fork / exec / exit" as ProcessRecords
+  component "signal" as SignalRecord
+  component "network lifecycle" as NetworkRecord
+  component "FD I/O / socket release" as FDRecords
+}
+
+queue "ring buffer\n或 perf buffer" as Buffer
+component "typed decoder" as Decoder
+component "RawCollectorEvent" as Projection
+
+Process --> ProcessRecords
+Signal --> SignalRecord
+Network --> NetworkRecord
+FdProducer --> FDRecords
+Header --> ProcessRecords
+Header --> SignalRecord
+Header --> NetworkRecord
+Header --> FDRecords
+ProcessRecords --> Buffer
+SignalRecord --> Buffer
+NetworkRecord --> Buffer
+FDRecords --> Buffer
+Buffer --> Decoder
+Decoder --> Projection
+
+note bottom of Header
+  namespace 修饰 TGID 的坐标系；
+  不表示 namespace owner 自身的 TGID。
+end note
+@enduml

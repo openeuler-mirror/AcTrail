@@ -18,10 +18,10 @@ use trace_runtime::registry::TraceRuntime;
 
 use super::audit::{CommandAuditBuilder, CommandControlDrain, CommandDecisionSource};
 use super::decision::ExecNotificationContext;
-use super::rules::StoredCommandRule;
 use super::service::{CommandControlBackend, CommandControlService};
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::seccomp_notify::DeferredNotification;
+use access_control::policy::command::StoredCommandRule;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ReusableDecisionKey {

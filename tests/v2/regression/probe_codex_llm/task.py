@@ -9,18 +9,20 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 
 from .config import ProbeCodexLLMConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeCodexLLMTask:
-    def __init__(self, config: ProbeCodexLLMConfig, runtime: ActrailRuntime):
+    def __init__(self, config: ProbeCodexLLMConfig):
         self._config = config
-        self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(5)}"
+        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._discovery = AgentBinaryDiscovery(config.repo)
         self._codex = self._resolve_codex()
+        self._native_codex = self._resolve_native_codex()
 
-    def run(self) -> CommandResult:
-        return self._runtime.run(
-            self._command(),
+    def run(self, runtime: ActrailRuntime) -> CommandResult:
+        return runtime.run(
+            self._command(runtime),
             timeout_seconds=self._config.launch_timeout_seconds,
             environment=self.environment(),
         )
@@ -29,9 +31,13 @@ class ProbeCodexLLMTask:
     def binary(self) -> Path:
         return self._codex
 
-    def _command(self) -> list[Path | str]:
+    @property
+    def native_binary(self) -> Path:
+        return self._native_codex
+
+    def _command(self, runtime: ActrailRuntime) -> list[Path | str]:
         return [
-            *self._runtime.control_command("launch"),
+            *runtime.control_command("launch"),
             "--",
             self._codex,
             "exec",
@@ -59,11 +65,14 @@ class ProbeCodexLLMTask:
             )
         return binary
 
+    def _resolve_native_codex(self) -> Path:
+        binary = self._discovery.codex_native_binary_for(self._codex)
+        if binary is None:
+            raise AgentBinaryNotFoundError(
+                "native Codex executable not found; set "
+                "CODEX_E2E_NATIVE_BINARY to its path"
+            )
+        return binary
+
     def environment(self) -> dict[str, str]:
-        environment = self._discovery.environment(self._codex)
-        for parent in self._codex.resolve().parents:
-            if parent.name == ".codex":
-                environment["HOME"] = str(parent.parent)
-                environment["CODEX_HOME"] = str(parent)
-                break
-        return environment
+        return self._discovery.codex_environment(self._codex)

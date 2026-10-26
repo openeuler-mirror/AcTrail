@@ -16,16 +16,29 @@ use storage_factory::{StorageConfig, open_storage_backend};
 
 #[path = "http/alerts.rs"]
 mod alerts;
+#[path = "http/cluster_routes.rs"]
+mod cluster_routes;
+#[path = "http/idle.rs"]
+mod idle;
 #[path = "http/plugins.rs"]
 mod plugins;
 #[path = "http/query.rs"]
 mod query;
+#[path = "http/resources.rs"]
+mod resources;
+#[path = "http/timeline.rs"]
+mod timeline;
+#[path = "http/trace_list.rs"]
+mod trace_list;
+#[path = "http/trace_routes.rs"]
+mod trace_routes;
+use cluster_routes::route_cluster_trace_api;
 use query::{
     parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query, parse_llm_nav_mode,
-    parse_llm_request_content_node_query, parse_llm_request_content_query, parse_llm_rows_query,
-    parse_time_attribution_range_query, parse_time_attribution_rows_query,
+    parse_llm_rows_query, parse_time_attribution_range_query, parse_time_attribution_rows_query,
     parse_token_usage_stats_query, parse_u64, percent_decode,
 };
+use trace_routes::route_trace_api;
 
 const STATUS_OK: &str = "200 OK";
 const STATUS_BAD_REQUEST: &str = "400 Bad Request";
@@ -55,8 +68,8 @@ pub fn run_server(config: WebConfig) -> Result<(), String> {
         );
     } else {
         println!(
-            "actrailweb listening on http://{address} storage={}",
-            config.storage.path().display()
+            "actrailweb listening on http://{address} storage_backend={}",
+            config.storage.backend().as_str()
         );
     }
     println!("actrailweb is running; press Ctrl-C to stop");
@@ -74,6 +87,10 @@ pub fn serve_listener(
         cluster_root: None,
         request_read_timeout,
         alerts: Default::default(),
+        timeline: timeline::TimelineLimits::load()?,
+        idle: idle::IdleLimits::load()?,
+        content: query::ContentLimits::load()?,
+        trace_list: trace_list::TraceListLimits::load()?,
         operator_config_path: None,
         operator_config: None,
     };
@@ -90,6 +107,10 @@ fn serve_listener_with_config(
         cluster_root: config.cluster_root,
         request_read_timeout: config.request_read_timeout,
         alerts: config.alerts,
+        timeline: timeline::TimelineLimits::load()?,
+        idle: idle::IdleLimits::load()?,
+        content: query::ContentLimits::load()?,
+        trace_list: trace_list::TraceListLimits::load()?,
         operator_config_path: config.operator_config_path,
         operator_config: config.operator_config,
     };
@@ -123,6 +144,10 @@ struct WebContext {
     cluster_root: Option<std::path::PathBuf>,
     request_read_timeout: Option<Duration>,
     alerts: config_core::daemon::WebAlertsConfig,
+    timeline: timeline::TimelineLimits,
+    idle: idle::IdleLimits,
+    content: query::ContentLimits,
+    trace_list: trace_list::TraceListLimits,
     operator_config_path: Option<std::path::PathBuf>,
     operator_config: Option<OperatorConfig>,
 }
@@ -136,11 +161,10 @@ fn detach_connection(stream: TcpStream, context: WebContext) {
 }
 
 fn validate_storage(storage: &StorageConfig) -> Result<(), String> {
-    if !storage.path().exists() {
-        return Err(format!(
-            "storage path does not exist: {}",
-            storage.path().display()
-        ));
+    if let Some(path) = storage.path()
+        && !path.exists()
+    {
+        return Err(format!("storage path does not exist: {}", path.display()));
     }
     open_storage_backend(storage, StorageOpenMode::ReadOnly)
         .map(|_| ())
@@ -170,13 +194,54 @@ fn serve_stream(mut stream: TcpStream, context: &WebContext) -> Result<(), Strin
     stream
         .set_read_timeout(context.request_read_timeout)
         .map_err(|error| format!("set request read timeout failed: {error}"))?;
-    let request = read_request(&mut stream)?;
+    let request = match read_request(&mut stream) {
+        Ok(request) => request,
+        // A client that connects and then stalls or hangs up is an ordinary
+        // end to the connection, not a server fault worth logging.
+        Err(RequestReadError::ClientGone) => return Ok(()),
+        Err(RequestReadError::Invalid(message)) => return Err(message),
+    };
     let response = match route(&request, context) {
         Ok(response) => response,
         Err(error) => Response::text(STATUS_INTERNAL_ERROR, error),
     };
     let response = response.with_optional_gzip(request.accepts_gzip);
-    write_response(&mut stream, &response).map_err(|error| error.to_string())
+    match write_response(&mut stream, &response) {
+        Ok(()) => Ok(()),
+        Err(error) if client_disconnected(&error) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn client_disconnected(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+    )
+}
+
+/// Outcome of reading a request head from a freshly accepted socket.
+enum RequestReadError {
+    /// The peer went away or stayed silent past the read timeout.
+    ClientGone,
+    /// The request arrived but is unusable.
+    Invalid(String),
+}
+
+impl RequestReadError {
+    fn from_io(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted => RequestReadError::ClientGone,
+            _ => RequestReadError::Invalid(error.to_string()),
+        }
+    }
 }
 
 fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
@@ -194,26 +259,35 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Resul
     stream.write_all(&response.body)
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
+fn read_request(stream: &mut TcpStream) -> Result<Request, RequestReadError> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
-    reader
+    let read = reader
         .read_line(&mut request_line)
-        .map_err(|error| error.to_string())?;
+        .map_err(RequestReadError::from_io)?;
+    if read == 0 {
+        // The peer opened a socket and closed it without sending anything.
+        return Err(RequestReadError::ClientGone);
+    }
     if request_line.trim().is_empty() {
-        return Err("empty HTTP request".to_string());
+        return Err(RequestReadError::Invalid("empty HTTP request".to_string()));
     }
     let parts = request_line.split_whitespace().collect::<Vec<_>>();
     if parts.len() != 3 {
-        return Err(format!("invalid HTTP request line {request_line:?}"));
+        return Err(RequestReadError::Invalid(format!(
+            "invalid HTTP request line {request_line:?}"
+        )));
     }
     let mut accepts_gzip = false;
     let mut content_length = 0usize;
     loop {
         let mut header = String::new();
-        reader
+        let read = reader
             .read_line(&mut header)
-            .map_err(|error| error.to_string())?;
+            .map_err(RequestReadError::from_io)?;
+        if read == 0 {
+            return Err(RequestReadError::ClientGone);
+        }
         if header == "\r\n" || header == "\n" || header.is_empty() {
             break;
         }
@@ -222,20 +296,19 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             accepts_gzip = true;
         }
         if lower.starts_with("content-length:") {
-            let (_, raw) = header
-                .split_once(':')
-                .ok_or_else(|| format!("invalid Content-Length header {header:?}"))?;
-            content_length = raw
-                .trim()
-                .parse::<usize>()
-                .map_err(|error| format!("invalid Content-Length header: {error}"))?;
+            let (_, raw) = header.split_once(':').ok_or_else(|| {
+                RequestReadError::Invalid(format!("invalid Content-Length header {header:?}"))
+            })?;
+            content_length = raw.trim().parse::<usize>().map_err(|error| {
+                RequestReadError::Invalid(format!("invalid Content-Length header: {error}"))
+            })?;
         }
     }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
-        reader.read_exact(&mut body).map_err(|error| {
-            format!("read HTTP request body failed for {content_length} bytes: {error}")
-        })?;
+        reader
+            .read_exact(&mut body)
+            .map_err(RequestReadError::from_io)?;
     }
     Ok(Request {
         method: parts[0].to_string(),
@@ -289,6 +362,12 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
             .map(Response::static_asset)
             .unwrap_or_else(|| Response::text(STATUS_NOT_FOUND, "not found")));
     }
+    if let Some(response) = resources::ResourceHttp::new(context).route(path, query) {
+        return response;
+    }
+    if let Some(response) = cluster_routes::route_cluster_trace_alerts(path, query, context) {
+        return response;
+    }
     if let Some(response) =
         alerts::AlertHttp::new(&context.storage, context.alerts).route(path, query)
     {
@@ -296,8 +375,14 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
     }
     match path {
         "/api/traces" => match &context.cluster_root {
-            Some(cluster_root) => view::cluster::traces_json(cluster_root).map(Response::json),
-            None => view::traces_json(&context.storage).map(Response::json),
+            Some(cluster_root) => match context.trace_list.parse_cluster(query) {
+                Ok(query) => view::cluster::traces_json(cluster_root, &query).map(Response::json),
+                Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+            },
+            None => match context.trace_list.parse(query) {
+                Ok(query) => view::trace_page_json(&context.storage, &query).map(Response::json),
+                Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
+            },
         },
         "/api/config/current" => view::current_config_json(
             context.operator_config_path.as_deref(),
@@ -314,6 +399,9 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
             context.operator_config.as_ref(),
         )
         .map(Response::json),
+        "/api/daemon/status" => {
+            view::daemon_status_json(context.operator_config.as_ref()).map(Response::json)
+        }
         "/api/stats/token-usage" => match parse_token_usage_stats_query(query) {
             Ok(query) => view::token_usage_stats_json(&context.storage, query).map(Response::json),
             Err(error) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
@@ -344,419 +432,23 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         },
         "/health" => Ok(Response::text(STATUS_OK, "ok")),
         _ => match &context.cluster_root {
-            Some(cluster_root) => route_cluster_trace_api(path, query, cluster_root),
-            None => route_trace_api(path, query, &context.storage),
+            Some(cluster_root) => route_cluster_trace_api(
+                path,
+                query,
+                cluster_root,
+                &context.timeline,
+                &context.idle,
+                &context.content,
+            ),
+            None => route_trace_api(
+                path,
+                query,
+                &context.storage,
+                &context.timeline,
+                &context.idle,
+                &context.content,
+            ),
         },
-    }
-}
-
-fn route_cluster_trace_api(
-    path: &str,
-    query: &str,
-    cluster_root: &std::path::Path,
-) -> Result<Response, String> {
-    let parts = path
-        .strip_prefix("/api/traces/")
-        .map(|suffix| suffix.split('/').collect::<Vec<_>>());
-    let Some(parts) = parts else {
-        return Ok(Response::text(STATUS_NOT_FOUND, "not found"));
-    };
-    match parts.as_slice() {
-        [trace_id] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "summary"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_summary_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "time-attribution"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_time_attribution_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "events"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_events_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "payloads"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_payloads_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "timeline"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_timeline_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "processes"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_processes_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "diagnostics"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::trace_diagnostics_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "action-tree"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::action_tree_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "waterfall"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::waterfall_initial_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "action-tree", "root"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::action_tree_root_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "action-tree", "children", parent_id] => {
-            let trace_id = parse_u64(trace_id);
-            let parent_id = percent_decode(parent_id);
-            let page = parse_action_tree_page(query);
-            match (trace_id, parent_id, page) {
-                (Ok(trace_id), Ok(parent_id), Ok(page)) => {
-                    view::cluster::action_tree_children_json(
-                        cluster_root,
-                        trace_id,
-                        &parent_id,
-                        page,
-                    )
-                    .map(Response::json)
-                    .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "action-tree", "llm-nav"] => {
-            let trace_id = parse_u64(trace_id);
-            let mode = parse_llm_nav_mode(query);
-            match (trace_id, mode) {
-                (Ok(trace_id), Ok(mode)) => view::cluster::action_tree_llm_nav_json(
-                    cluster_root,
-                    trace_id,
-                    mode.0,
-                    mode.1.as_deref(),
-                )
-                .map(Response::json)
-                .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "commands"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::cluster::commands_json(cluster_root, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "actions", action_id] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            match (trace_id, action_id) {
-                (Ok(trace_id), Ok(action_id)) => {
-                    view::cluster::action_detail_json(cluster_root, trace_id, &action_id)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "actions", action_id, "file-path-set"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let page = parse_action_tree_page(query);
-            match (trace_id, action_id, page) {
-                (Ok(trace_id), Ok(action_id), Ok(page)) => {
-                    view::cluster::file_path_set_json(cluster_root, trace_id, &action_id, page)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "actions", action_id, "content", "llm-request"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let max_bytes = parse_llm_request_content_query(query);
-            match (trace_id, action_id, max_bytes) {
-                (Ok(trace_id), Ok(action_id), Ok(max_bytes)) => {
-                    view::cluster::llm_request_content_json(
-                        cluster_root,
-                        trace_id,
-                        &action_id,
-                        max_bytes,
-                    )
-                    .map(Response::json)
-                    .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "actions", action_id, "lineage", "llm-request"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            match (trace_id, action_id) {
-                (Ok(trace_id), Ok(action_id)) => {
-                    view::cluster::llm_request_lineage_json(cluster_root, trace_id, &action_id)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "llm-trajectories", trajectory_id] => {
-            let trace_id = parse_u64(trace_id);
-            let trajectory_id = percent_decode(trajectory_id);
-            match (trace_id, trajectory_id) {
-                (Ok(trace_id), Ok(trajectory_id)) => view::cluster::llm_request_trajectory_json(
-                    cluster_root,
-                    trace_id,
-                    &trajectory_id,
-                )
-                .map(Response::json)
-                .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [
-            trace_id,
-            "actions",
-            action_id,
-            "content",
-            "llm-request",
-            "node",
-        ] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let node = parse_llm_request_content_node_query(query);
-            match (trace_id, action_id, node) {
-                (Ok(trace_id), Ok(action_id), Ok(node)) => {
-                    view::cluster::llm_request_content_node_json(
-                        cluster_root,
-                        trace_id,
-                        &action_id,
-                        node,
-                    )
-                    .map(Response::json)
-                    .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "payloads", segment_id] => {
-            let trace_id = parse_u64(trace_id);
-            let segment_id = parse_u64(segment_id);
-            match (trace_id, segment_id) {
-                (Ok(trace_id), Ok(segment_id)) => {
-                    view::cluster::payload_json(cluster_root, trace_id, segment_id)
-                        .map(Response::json)
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        _ => Ok(Response::text(STATUS_NOT_FOUND, "not found")),
-    }
-}
-
-fn route_trace_api(path: &str, query: &str, storage: &StorageConfig) -> Result<Response, String> {
-    let parts = path
-        .strip_prefix("/api/traces/")
-        .map(|suffix| suffix.split('/').collect::<Vec<_>>());
-    let Some(parts) = parts else {
-        return Ok(Response::text(STATUS_NOT_FOUND, "not found"));
-    };
-    match parts.as_slice() {
-        [trace_id] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "summary"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_summary_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "time-attribution"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_time_attribution_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "events"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_events_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "payloads"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_payloads_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "timeline"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_timeline_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "processes"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_processes_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "diagnostics"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::trace_diagnostics_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "action-tree"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::action_tree_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "waterfall"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::waterfall_initial_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "action-tree", "root"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::action_tree_root_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "action-tree", "children", parent_id] => {
-            let trace_id = parse_u64(trace_id);
-            let parent_id = percent_decode(parent_id);
-            let page = parse_action_tree_page(query);
-            match (trace_id, parent_id, page) {
-                (Ok(trace_id), Ok(parent_id), Ok(page)) => {
-                    view::action_tree_children_json(storage, trace_id, &parent_id, page)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "action-tree", "llm-nav"] => {
-            let trace_id = parse_u64(trace_id);
-            let mode = parse_llm_nav_mode(query);
-            match (trace_id, mode) {
-                (Ok(trace_id), Ok(mode)) => {
-                    view::action_tree_llm_nav_json(storage, trace_id, mode.0, mode.1.as_deref())
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "actions", action_id] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            match (trace_id, action_id) {
-                (Ok(trace_id), Ok(action_id)) => {
-                    view::action_detail_json(storage, trace_id, &action_id)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "actions", action_id, "file-path-set"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let page = parse_action_tree_page(query);
-            match (trace_id, action_id, page) {
-                (Ok(trace_id), Ok(action_id), Ok(page)) => {
-                    view::action_file_path_set_json(storage, trace_id, &action_id, page)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "actions", action_id, "content", "llm-request"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let max_bytes = parse_llm_request_content_query(query);
-            match (trace_id, action_id, max_bytes) {
-                (Ok(trace_id), Ok(action_id), Ok(max_bytes)) => {
-                    view::action_llm_request_content_json(storage, trace_id, &action_id, max_bytes)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "actions", action_id, "lineage", "llm-request"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            match (trace_id, action_id) {
-                (Ok(trace_id), Ok(action_id)) => {
-                    view::action_llm_request_lineage_json(storage, trace_id, &action_id)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "llm-trajectories", trajectory_id] => {
-            let trace_id = parse_u64(trace_id);
-            let trajectory_id = percent_decode(trajectory_id);
-            match (trace_id, trajectory_id) {
-                (Ok(trace_id), Ok(trajectory_id)) => {
-                    view::llm_request_trajectory_json(storage, trace_id, &trajectory_id)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        [trace_id, "actions", action_id, "content", "mcp-jsonrpc"] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let max_bytes = parse_llm_request_content_query(query);
-            match (trace_id, action_id, max_bytes) {
-                (Ok(trace_id), Ok(action_id), Ok(max_bytes)) => {
-                    view::action_mcp_jsonrpc_content_json(storage, trace_id, &action_id, max_bytes)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [
-            trace_id,
-            "actions",
-            action_id,
-            "content",
-            "llm-request",
-            "node",
-        ] => {
-            let trace_id = parse_u64(trace_id);
-            let action_id = percent_decode(action_id);
-            let node = parse_llm_request_content_node_query(query);
-            match (trace_id, action_id, node) {
-                (Ok(trace_id), Ok(action_id), Ok(node)) => {
-                    view::action_llm_request_content_node_json(storage, trace_id, &action_id, node)
-                        .map(Response::json)
-                        .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error)))
-                }
-                (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
-                    Ok(Response::text(STATUS_BAD_REQUEST, error))
-                }
-            }
-        }
-        [trace_id, "commands"] => parse_u64(trace_id)
-            .and_then(|trace_id| view::commands_json(storage, trace_id))
-            .map(Response::json)
-            .or_else(|error| Ok(Response::text(STATUS_BAD_REQUEST, error))),
-        [trace_id, "payloads", segment_id] => {
-            let trace_id = parse_u64(trace_id);
-            let segment_id = parse_u64(segment_id);
-            match (trace_id, segment_id) {
-                (Ok(trace_id), Ok(segment_id)) => {
-                    view::payload_json(storage, trace_id, segment_id).map(Response::json)
-                }
-                (Err(error), _) | (_, Err(error)) => Ok(Response::text(STATUS_BAD_REQUEST, error)),
-            }
-        }
-        _ => Ok(Response::text(STATUS_NOT_FOUND, "not found")),
     }
 }
 
@@ -833,5 +525,24 @@ impl Response {
         self.body = compressed;
         self.content_encoding = Some("gzip");
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_disconnected;
+
+    #[test]
+    fn recognizes_expected_client_disconnects() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+        ] {
+            assert!(client_disconnected(&std::io::Error::from(kind)));
+        }
+        assert!(!client_disconnected(&std::io::Error::from(
+            std::io::ErrorKind::WriteZero,
+        )));
     }
 }

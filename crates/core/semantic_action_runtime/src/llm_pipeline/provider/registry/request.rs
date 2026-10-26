@@ -1,7 +1,7 @@
 //! Request-side LLM protocol parser selection.
 
+use super::request_facts::LlmRequestFacts;
 use semantic_action::LlmProviderMatch;
-use serde_json::Value;
 
 use super::generic_request::GenericJsonRequestParser;
 use crate::llm_pipeline::provider::structured_json::StructuredJsonSseParser;
@@ -11,7 +11,7 @@ static STRUCTURED_JSON_SSE: StructuredJsonSseParser = StructuredJsonSseParser;
 static PARSERS: &[&dyn LlmRequestParser] = &[&STRUCTURED_JSON_SSE, &GENERIC_JSON_REQUEST];
 
 pub(in crate::llm_pipeline) struct LlmRequestParserInput<'a> {
-    pub(in crate::llm_pipeline) json: &'a Value,
+    pub(in crate::llm_pipeline) facts: &'a LlmRequestFacts,
 }
 
 pub(in crate::llm_pipeline) struct ParsedLlmRequest {

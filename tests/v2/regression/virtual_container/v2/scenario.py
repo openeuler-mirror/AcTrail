@@ -20,13 +20,15 @@ from tests.v2.common.kata_runtime.process import (
     CommandTimeoutError,
     SubprocessRunner,
 )
-from tests.v2.common.core import has_failure, TestResult, TestStatus
+from tests.v2.common.core import TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
 
 from .assertions import find_clean_trace, parse_summary_counts, require_markers
 from .config import VirtualContainerConfig
 from .matrix import DATA_CASES, INTERFACE_CASES, TRACE_TITLE_TOKEN, DataCase
 from .prerequisites import ResolvedBackend
+
+from .constants import CASE_CONSTANTS
 
 
 class VirtualContainerScenario:
@@ -72,7 +74,7 @@ class VirtualContainerScenario:
             },
             timeout=self._config.command_timeout_seconds,
         )
-        if has_failure(results["guest_bundle_fixture"]):
+        if results["guest_bundle_fixture"].has_failure():
             return TestResult(
                 TestStatus.COMPOSITE,
                 "virtual-container static and fake-runtime contracts",
@@ -184,7 +186,7 @@ class VirtualContainerScenario:
             },
             timeout=self._config.command_timeout_seconds,
         )
-        if has_failure(results["preflight"]):
+        if results["preflight"].has_failure():
             return TestResult(
                 TestStatus.COMPOSITE,
                 f"{backend.name} virtual-container acceptance",
@@ -214,7 +216,7 @@ class VirtualContainerScenario:
             environment=self._base_environment(),
             timeout=self._config.command_timeout_seconds,
         )
-        if has_failure(results["data_config"]):
+        if results["data_config"].has_failure():
             return TestResult(
                 TestStatus.COMPOSITE,
                 f"{backend.name} virtual-container acceptance",
@@ -349,7 +351,7 @@ class VirtualContainerScenario:
                 (
                     "/bin/sh",
                     "-ec",
-                    "(printf 'SERVER_REPLY_9931\\n'; sleep 10) | "
+                    f"(printf 'SERVER_REPLY_9931\\n'; sleep {CASE_CONSTANTS.tls_server_hold_seconds}) | "
                     "OPENSSL_CONF=/opt/actrail-test/openssl.cnf "
                     "LD_LIBRARY_PATH=/opt/actrail-test/lib "
                     "/opt/actrail-test/openssl s_server -accept 4433 -naccept 1 "
@@ -359,9 +361,9 @@ class VirtualContainerScenario:
                 uid=self._config.workload_uid,
                 gid=self._config.workload_gid,
             )
-            time.sleep(2)
+            time.sleep(CASE_CONSTANTS.server_start_settle_seconds)
             if server.poll() is not None:
-                failed = server.wait(timeout=1)
+                failed = server.wait(timeout=CASE_CONSTANTS.server_exit_timeout_seconds)
                 raise RuntimeError(
                     "TLS server exited before client launch: " + failed.diagnostic
                 )
@@ -388,7 +390,7 @@ class VirtualContainerScenario:
                 + launch.diagnostic
             )
         if server is not None:
-            server_result = server.wait(timeout=30)
+            server_result = server.wait(timeout=CASE_CONSTANTS.server_completion_timeout_seconds)
             if server_result.returncode != 0:
                 raise RuntimeError(
                     f"TLS server failed exit={server_result.returncode}: "
@@ -445,7 +447,7 @@ class VirtualContainerScenario:
             KataMount(Path("/dev/actrail"), "/run/actrail", read_only=True),
         ]
         artifact_directories = [self._workload_bundle]
-        main_command: tuple[str, ...] = ("/bin/sh", "-c", "sleep 600")
+        main_command: tuple[str, ...] = ("/bin/sh", "-c", f"sleep {CASE_CONSTANTS.vm_hold_seconds}")
         if data:
             mounts.append(
                 KataMount(self._guest_bundle, "/opt/actrail-test", read_only=True)
@@ -461,7 +463,7 @@ class VirtualContainerScenario:
                 "-keyout /tmp/actrail-tls/key.pem "
                 "-out /tmp/actrail-tls/cert.pem -days 1 -nodes "
                 "-subj /CN=localhost >/tmp/actrail-tls/cert.log 2>&1; "
-                "sleep 600",
+                f"sleep {CASE_CONSTANTS.vm_hold_seconds}",
             )
         else:
             mounts.append(
@@ -512,10 +514,9 @@ class VirtualContainerScenario:
                 ". /etc/os-release; [ \"${ID:-}\" = openEuler ]; "
                 "command -v /usr/bin/setpriv >/dev/null; "
                 f"{required_asset}"
-                "remaining=180; while [ $remaining -gt 0 ]; do "
-                "[ -S /run/actrail/control.sock ] && "
-                "[ -S /run/actrail/tls-sync.sock ] && exit 0; "
-                "remaining=$((remaining - 1)); sleep 0.5; done; exit 72",
+                f"remaining={CASE_CONSTANTS.guest_ready_attempts}; while [ $remaining -gt 0 ]; do "
+                "[ -S /run/actrail/control.sock ] && exit 0; "
+                f"remaining=$((remaining - 1)); sleep {CASE_CONSTANTS.guest_ready_poll_seconds}; done; exit 72",
             ),
             timeout=self._config.ready_timeout_seconds,
         )
@@ -548,7 +549,7 @@ class VirtualContainerScenario:
                     last_error = str(error)
             else:
                 last_error = traces.diagnostic
-            time.sleep(0.5)
+            time.sleep(CASE_CONSTANTS.wait_for_clean_trace_poll_seconds)
         raise RuntimeError(f"timed out waiting for clean trace {title}: {last_error}")
 
     def _guest_command(

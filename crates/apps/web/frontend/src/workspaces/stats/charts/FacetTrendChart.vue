@@ -186,36 +186,36 @@ function densityPathForFacet(facet, top, bottom) {
 .facet-svg {
   width: 100%;
   height: 100%;
-  min-height: var(--stats-chart-min-height);
+  min-height: var(--ui-chart-min-height);
 }
 
 .facet-title {
-  fill: var(--stats-text);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-title);
-  font-weight: var(--stats-weight-medium);
+  fill: var(--ui-text);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-title);
+  font-weight: var(--ui-weight-medium);
 }
 
 .facet-max,
 .facet-zero,
 .x-axis {
-  fill: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-regular);
+  fill: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-regular);
 }
 
 .facet-grid {
-  stroke: var(--stats-border);
-  stroke-width: var(--stats-chart-grid-width);
+  stroke: var(--ui-border);
+  stroke-width: var(--ui-chart-grid-width);
 }
 
 .facet-grid.baseline {
-  stroke: var(--stats-border-strong);
+  stroke: var(--ui-border-strong);
 }
 
 .facet-line {
   fill: none;
-  stroke-width: var(--stats-chart-line-width);
+  stroke-width: var(--ui-chart-line-width);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -226,12 +226,12 @@ function densityPathForFacet(facet, top, bottom) {
 }
 
 .facet-point {
-  stroke: var(--stats-surface-strong);
-  stroke-width: var(--stats-chart-point-stroke-width);
+  stroke: var(--ui-surface-strong);
+  stroke-width: var(--ui-chart-point-stroke-width);
 }
 
 .facet-bar {
   opacity: 0.34;
-  rx: var(--stats-chart-bar-radius);
+  rx: var(--ui-chart-bar-radius);
 }
 </style>

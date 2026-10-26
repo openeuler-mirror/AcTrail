@@ -2,13 +2,15 @@
 
 use semantic_action::{
     LlmJsonResponseInput, LlmParsedResponse, LlmParsedSseEvent, LlmProviderMatch,
-    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmSseEvent, LlmSseResponseInput,
-    LlmTokenUsage, LlmToolCall, LlmToolFunction,
+    LlmProviderResponseParser, LlmProviderResponseStreamParser, LlmResponseRetention,
+    LlmResponseTermination, LlmSseEvent, LlmSseResponseInput, LlmTokenUsage, LlmToolCall,
+    LlmToolFunction,
 };
 use serde_json::Value;
 
 use crate::llm_pipeline::provider::driver::{
-    ParsedSseResponseAccumulator, extract_token_usage_from_values, qualified_response_tool_name,
+    ParsedSseResponseAccumulator, ToolCallAssembler, extract_token_usage_from_values,
+    qualified_response_tool_name,
 };
 
 const OPENAI_RESPONSES_PROVIDER_ID: &str = "openai-responses";
@@ -34,41 +36,107 @@ impl LlmProviderResponseParser for OpenAiResponsesResponseParser {
         }
     }
 
-    fn parse_json_response(&self, _input: LlmJsonResponseInput<'_>) -> Option<LlmParsedResponse> {
+    fn parse_json_response(
+        &self,
+        _input: LlmJsonResponseInput<'_>,
+        _retention: LlmResponseRetention,
+    ) -> Option<LlmParsedResponse> {
         None
     }
 
-    fn parse_sse_response(&self, input: LlmSseResponseInput<'_>) -> Option<LlmParsedResponse> {
+    fn parse_sse_response(
+        &self,
+        input: LlmSseResponseInput<'_>,
+        retention: LlmResponseRetention,
+    ) -> Option<LlmParsedResponse> {
         if self.match_sse_response(input) == LlmProviderMatch::NoMatch {
             return None;
         }
         let mut accumulator = ParsedSseResponseAccumulator::default();
         for event in input.events {
-            accumulator.observe(&self.parse_sse_event(*event));
+            accumulator.observe(&self.parse_sse_event(*event, retention));
         }
-        accumulator.finish(self.provider_id(), Self::token_usage(input.events), true)
+        accumulator.finish(
+            self.provider_id(),
+            retention
+                .usage
+                .then(|| Self::token_usage(input.events))
+                .flatten(),
+            true,
+        )
     }
 
-    fn parse_sse_event(&self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent {
+    fn parse_sse_event(
+        &self,
+        event: LlmSseEvent<'_>,
+        retention: LlmResponseRetention,
+    ) -> LlmParsedSseEvent {
         let Some(value) = event.json else {
             return LlmParsedSseEvent {
-                done: event.done_marker,
+                termination: event
+                    .done_marker
+                    .then_some(LlmResponseTermination::Completed),
                 ..LlmParsedSseEvent::default()
             };
         };
         let event_type = Self::event_type(event, value);
         let response = value.get("response");
+        let text = (event_type == Some("response.output_text.delta"))
+            .then(|| value.get("delta").and_then(Value::as_str))
+            .flatten()
+            .filter(|delta| !delta.is_empty());
+        let tool_observed = matches!(
+            event_type,
+            Some("response.output_item.done" | "response.output_item.added")
+        ) && value.get("item").is_some_and(|item| {
+            matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            ) && item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty())
+        });
         LlmParsedSseEvent {
+            text_chunk_count: usize::from(text.is_some()),
+            response_observed: text.is_some() || tool_observed,
             model: response
                 .and_then(|response| response.get("model"))
                 .and_then(Value::as_str)
                 .map(ToString::to_string),
-            content_text: (event_type == Some("response.output_text.delta"))
-                .then(|| value.get("delta").and_then(Value::as_str))
-                .flatten()
-                .filter(|delta| !delta.is_empty())
-                .map(ToString::to_string),
-            done: event.done_marker || event_type == Some("response.completed"),
+            content_text: text.filter(|_| retention.content).map(ToString::to_string),
+            termination: match event_type {
+                Some("response.failed")
+                    if response
+                        .and_then(|response| response.get("status"))
+                        .and_then(Value::as_str)
+                        == Some("failed") =>
+                {
+                    Some(LlmResponseTermination::Failed)
+                }
+                Some("response.incomplete")
+                    if response
+                        .and_then(|response| response.get("status"))
+                        .and_then(Value::as_str)
+                        == Some("incomplete") =>
+                {
+                    Some(LlmResponseTermination::Incomplete)
+                }
+                Some("error")
+                    if value.get("message").and_then(Value::as_str).is_some()
+                        || value
+                            .get("error")
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                            .is_some() =>
+                {
+                    Some(LlmResponseTermination::Failed)
+                }
+                Some("response.completed") => Some(LlmResponseTermination::Completed),
+                _ => event
+                    .done_marker
+                    .then_some(LlmResponseTermination::Completed),
+            },
             finish_reason: (event_type == Some("response.completed"))
                 .then(|| {
                     response
@@ -77,13 +145,23 @@ impl LlmProviderResponseParser for OpenAiResponsesResponseParser {
                 })
                 .flatten()
                 .map(ToString::to_string),
-            tool_calls: Self::tool_calls_for_event(event_type, value),
+            tool_calls: if retention.tool_calls {
+                Self::tool_calls_for_event(event_type, value)
+            } else {
+                Vec::new()
+            },
             ..LlmParsedSseEvent::default()
         }
     }
 
-    fn new_stream_parser(&self) -> Box<dyn LlmProviderResponseStreamParser + Send> {
-        Box::new(OpenAiResponsesStreamParser::default())
+    fn new_stream_parser(
+        &self,
+        retention: LlmResponseRetention,
+    ) -> Box<dyn LlmProviderResponseStreamParser + Send> {
+        Box::new(OpenAiResponsesStreamParser {
+            retention,
+            ..Default::default()
+        })
     }
 }
 
@@ -131,6 +209,11 @@ impl OpenAiResponsesResponseParser {
         let Some(item) = value.get("item").and_then(Value::as_object) else {
             return Vec::new();
         };
+        if item.get("type").and_then(Value::as_str) == Some("custom_tool_call") {
+            let mut assembler = ToolCallAssembler::default();
+            assembler.apply_openai_response_custom_tool_call(item);
+            return assembler.into_calls();
+        }
         if item.get("type").and_then(Value::as_str) != Some("function_call") {
             return Vec::new();
         }
@@ -170,6 +253,7 @@ fn build_tool_call(
 
 #[derive(Default)]
 struct OpenAiResponsesStreamParser {
+    retention: LlmResponseRetention,
     accumulator: ParsedSseResponseAccumulator,
     token_usage: Option<LlmTokenUsage>,
 }
@@ -178,12 +262,13 @@ impl LlmProviderResponseStreamParser for OpenAiResponsesStreamParser {
     fn observe_event(&mut self, event: LlmSseEvent<'_>) -> LlmParsedSseEvent {
         if let Some(usage) = event
             .json
+            .filter(|_| self.retention.usage)
             .and_then(|value| value.get("response"))
             .and_then(crate::llm_pipeline::provider::driver::extract_token_usage)
         {
             self.token_usage = Some(usage);
         }
-        let parsed = OpenAiResponsesResponseParser.parse_sse_event(event);
+        let parsed = OpenAiResponsesResponseParser.parse_sse_event(event, self.retention);
         self.accumulator.observe(&parsed);
         parsed
     }

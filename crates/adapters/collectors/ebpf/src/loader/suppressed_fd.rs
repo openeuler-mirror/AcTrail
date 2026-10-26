@@ -1,13 +1,12 @@
 //! Suppressed-fd map ABI and low-kernel inheritance index maintenance.
 
-use std::ffi::OsStr;
-
 use config_core::daemon::EbpfCollectorConfig;
 use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 use model_core::ids::TraceId;
 use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd, SuppressedFdPurpose};
 
 use super::LoaderError;
+use super::object::map_handle;
 
 pub(super) const SUPPRESSED_FD_INDEX_SLOT_MAX: u32 = 64;
 const SUPPRESSED_FD_KEY_SIZE: usize = std::mem::size_of::<SuppressedFdKeyLayout>();
@@ -65,28 +64,57 @@ pub(crate) fn validate_config(config: &EbpfCollectorConfig) -> Result<(), Loader
     Ok(())
 }
 
-pub(crate) fn configure_config_map(
-    object: &Object,
-    config: &EbpfCollectorConfig,
-) -> Result<(), LoaderError> {
-    let map = object
-        .maps()
-        .find(|map| map.name() == OsStr::new("suppressed_fd_config"))
-        .ok_or_else(|| {
-            LoaderError::new(
-                "suppressed_fd_config",
-                "suppressed_fd_config map is missing",
-            )
+pub(super) struct SuppressedFdConfig {
+    map: MapHandle,
+    capacity: u32,
+}
+
+impl SuppressedFdConfig {
+    pub(super) fn new(object: &Object, config: &EbpfCollectorConfig) -> Result<Self, LoaderError> {
+        let map = map_handle(object, "suppressed_fd_config", "suppressed_fd_config")?;
+        map.update(
+            &SUPPRESSED_FD_CONFIG_KEY.to_ne_bytes(),
+            &[0_u8; SUPPRESSED_FD_CONFIG_VALUE_SIZE],
+            MapFlags::ANY,
+        )
+        .map_err(|error| LoaderError::new("suppressed_fd_config", error.to_string()))?;
+        Ok(Self {
+            map,
+            capacity: config.suppressed_fd_index_slots_per_process,
         })
-        .and_then(|map| {
-            MapHandle::try_from(&map)
-                .map_err(|error| LoaderError::new("suppressed_fd_config", error.to_string()))
-        })?;
-    let key = SUPPRESSED_FD_CONFIG_KEY.to_ne_bytes();
-    let mut value = [0_u8; SUPPRESSED_FD_CONFIG_VALUE_SIZE];
-    value[0..4].copy_from_slice(&config.suppressed_fd_index_slots_per_process.to_ne_bytes());
-    map.update(&key, &value, MapFlags::ANY)
-        .map_err(|error| LoaderError::new("suppressed_fd_config", error.to_string()))
+    }
+
+    pub(super) fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// Enable inheritance and cleanup before publishing the first suppressed FD.
+    /// The kernel map remains active for the lifetime of this runtime.
+    pub(super) fn activate(&self) -> Result<(), LoaderError> {
+        let key = SUPPRESSED_FD_CONFIG_KEY.to_ne_bytes();
+        let value = self
+            .map
+            .lookup(&key, MapFlags::ANY)
+            .map_err(|error| LoaderError::new("suppressed_fd_config", error.to_string()))?
+            .ok_or_else(|| {
+                LoaderError::new("suppressed_fd_config", "suppressed fd config is missing")
+            })?;
+        let slots = u32::from_ne_bytes(value.as_slice().try_into().map_err(|_| {
+            LoaderError::new("suppressed_fd_config", "invalid suppressed fd config size")
+        })?);
+        if slots == self.capacity {
+            return Ok(());
+        }
+        if slots != 0 {
+            return Err(LoaderError::new(
+                "suppressed_fd_config",
+                "active suppressed fd capacity differs from the configured capacity",
+            ));
+        }
+        self.map
+            .update(&key, &self.capacity.to_ne_bytes(), MapFlags::ANY)
+            .map_err(|error| LoaderError::new("suppressed_fd_config", error.to_string()))
+    }
 }
 
 pub(crate) fn suppress_fd(

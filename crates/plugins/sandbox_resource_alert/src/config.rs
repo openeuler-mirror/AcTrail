@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct SandboxResourceAlertConfig {
     pub cpu_usage_threshold_basis_points: u16,
     pub memory_available_threshold_bytes: u64,
+    pub memory_pressure_some_avg10_threshold_millipercent: u32,
     pub read_interval_threshold_bytes: u64,
     pub write_interval_threshold_bytes: u64,
     pub source_state_capacity: u32,
@@ -32,6 +33,9 @@ impl SandboxResourceAlertConfig {
         if self.memory_available_threshold_bytes == 0 {
             return Err(SandboxResourceAlertConfigError::ZeroMemoryThreshold);
         }
+        if !(1..=1_000_000).contains(&self.memory_pressure_some_avg10_threshold_millipercent) {
+            return Err(SandboxResourceAlertConfigError::InvalidMemoryPressureThreshold);
+        }
         if self.read_interval_threshold_bytes == 0 {
             return Err(SandboxResourceAlertConfigError::ZeroReadThreshold);
         }
@@ -51,6 +55,7 @@ pub enum SandboxResourceAlertConfigError {
     InvalidJson(String),
     InvalidCpuThreshold,
     ZeroMemoryThreshold,
+    InvalidMemoryPressureThreshold,
     ZeroReadThreshold,
     ZeroWriteThreshold,
     ZeroSourceStateCapacity,
@@ -67,6 +72,9 @@ impl fmt::Display for SandboxResourceAlertConfigError {
                 "CPU usage threshold must be between 1 and 10000 basis points"
             }
             Self::ZeroMemoryThreshold => "memory available threshold must be positive",
+            Self::InvalidMemoryPressureThreshold => {
+                "memory pressure some avg10 threshold must be between 1 and 1000000 millipercent"
+            }
             Self::ZeroReadThreshold => "read interval threshold must be positive",
             Self::ZeroWriteThreshold => "write interval threshold must be positive",
             Self::ZeroSourceStateCapacity => "source state capacity must be positive",

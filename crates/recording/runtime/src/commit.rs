@@ -5,10 +5,9 @@ use model_core::ids::DiagnosticId;
 use storage_core::StorageBackend;
 
 use crate::observed::{ObservedRecordBatch, ObservedRecordRecorder, ObservedRecordWriteSession};
-use crate::semantic::{
-    RecordingError, SemanticActionBatch, SemanticActionExportRecorder, TraceRecordLookup,
-};
+use crate::semantic::{RecordingError, SemanticActionBatch, TraceRecordLookup};
 use crate::transaction::RecordingTransaction;
+use crate::{DeliveryFailureKind, DeliveryReport};
 
 pub(crate) struct ObservedRecordCommitCoordinator<'a> {
     storage: &'a mut dyn StorageBackend,
@@ -32,8 +31,19 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
         traces: &dyn TraceRecordLookup,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
-    ) -> Result<(), RecordingError> {
-        let export_batch = batch.semantic_actions().clone();
+    ) -> DeliveryReport {
+        if !self.storage.retains_observations() {
+            return self.export_without_persistence(
+                batch.into_semantic_actions(),
+                traces,
+                emitted_at,
+                next_diagnostic_id,
+            );
+        }
+        let export_batch = self
+            .export_runtime
+            .has_semantic_consumers()
+            .then(|| batch.semantic_actions().clone());
         let persist_result = match RecordingTransaction::begin(self.storage) {
             Ok(transaction) => {
                 let write_result = ObservedRecordRecorder::new(self.storage).persist_batch(batch);
@@ -43,9 +53,20 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
             }
             Err(error) => Err(error),
         };
-        let export_result = SemanticActionExportRecorder::new(self.storage, self.export_runtime)
-            .publish_batches_by_trace(traces, export_batch, emitted_at, next_diagnostic_id);
-        combine_independent_results(persist_result, export_result)
+        let mut delivery = DeliveryReport::default();
+        delivery.record(DeliveryFailureKind::Storage, persist_result);
+        if let Some(export_batch) = export_batch {
+            delivery.extend(
+                crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
+                    self.export_runtime,
+                    traces,
+                    export_batch,
+                    emitted_at,
+                    next_diagnostic_id,
+                ),
+            );
+        }
+        delivery
     }
 
     pub(crate) fn write_session_then_export(
@@ -56,7 +77,7 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
         export_batch: SemanticActionBatch,
         observe_semantic_flush: impl FnOnce(Duration),
         write: impl FnOnce(&mut ObservedRecordWriteSession<'_>) -> Result<(), RecordingError>,
-    ) -> Result<(), RecordingError> {
+    ) -> DeliveryReport {
         let (persist_result, semantic_flush_elapsed) =
             match RecordingTransaction::begin(self.storage) {
                 Ok(transaction) => {
@@ -80,29 +101,41 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
                 }
                 Err(error) => (Err(error), None),
             };
-        let export_result = SemanticActionExportRecorder::new(self.storage, self.export_runtime)
-            .publish_batches_by_trace(traces, export_batch, emitted_at, next_diagnostic_id);
-        let result = combine_independent_results(persist_result, export_result);
+        let mut delivery = DeliveryReport::default();
+        delivery.record(DeliveryFailureKind::Storage, persist_result);
+        if self.export_runtime.has_semantic_consumers() {
+            delivery.extend(
+                crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
+                    self.export_runtime,
+                    traces,
+                    export_batch,
+                    emitted_at,
+                    next_diagnostic_id,
+                ),
+            );
+        }
         if let Some(elapsed) = semantic_flush_elapsed {
             observe_semantic_flush(elapsed);
         }
-        result
+        delivery
     }
-}
 
-fn combine_independent_results(
-    persist_result: Result<(), RecordingError>,
-    export_result: Result<(), RecordingError>,
-) -> Result<(), RecordingError> {
-    match (persist_result, export_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(persist), Err(export)) => Err(RecordingError::new(
-            "persist_and_export",
-            format!(
-                "persistence failed at {}: {}; export failed at {}: {}",
-                persist.stage, persist.message, export.stage, export.message
-            ),
-        )),
+    fn export_without_persistence(
+        &mut self,
+        batch: SemanticActionBatch,
+        traces: &dyn TraceRecordLookup,
+        emitted_at: SystemTime,
+        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+    ) -> DeliveryReport {
+        if !self.export_runtime.has_semantic_consumers() {
+            return DeliveryReport::default();
+        }
+        crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
+            self.export_runtime,
+            traces,
+            batch,
+            emitted_at,
+            next_diagnostic_id,
+        )
     }
 }

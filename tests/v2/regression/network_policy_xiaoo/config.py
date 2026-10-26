@@ -7,6 +7,8 @@ from pathlib import Path
 
 from tests.v2.common.core import CommonTestConfig, TestCaseInputs
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class NetworkPolicyXiaooConfig(CommonTestConfig):
@@ -31,15 +33,15 @@ class NetworkPolicyXiaooConfig(CommonTestConfig):
         if xiaoo is None:
             raise RuntimeError("real Xiaoo executable is not available")
         plugin_root = Path(
-            os.environ.get("ACTRAIL_PLUGIN_DIR", "~/.actrail/plugins")
+            os.environ.get("ACTRAIL_PLUGIN_DIR", CASE_CONSTANTS.actrail_plugin_dir)
         ).expanduser()
         if not plugin_root.is_absolute():
             raise RuntimeError("ACTRAIL_PLUGIN_DIR must be an absolute path")
         ready_timeout = float(
-            os.environ.get("NETWORK_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS", "15")
+            os.environ.get("NETWORK_POLICY_XIAOO_E2E_READY_TIMEOUT_SECONDS", str(CASE_CONSTANTS.ready_timeout_seconds))
         )
         evidence_timeout = float(
-            os.environ.get("NETWORK_POLICY_XIAOO_E2E_EVIDENCE_TIMEOUT_SECONDS", "15")
+            os.environ.get("NETWORK_POLICY_XIAOO_E2E_EVIDENCE_TIMEOUT_SECONDS", str(CASE_CONSTANTS.evidence_timeout_seconds))
         )
         if ready_timeout <= 0 or evidence_timeout <= 0:
             raise RuntimeError("network-policy Xiaoo timeouts must be positive")
@@ -50,9 +52,9 @@ class NetworkPolicyXiaooConfig(CommonTestConfig):
             plugin_package=(plugin_root / "network-policy-dynamic").resolve(),
             xiaoo_binary=Path(xiaoo).resolve(),
             web_host=os.environ.get(
-                "NETWORK_POLICY_XIAOO_E2E_WEB_HOST", "127.0.0.1"
+                "NETWORK_POLICY_XIAOO_E2E_WEB_HOST", CASE_CONSTANTS.web_host
             ),
-            web_port=int(os.environ.get("NETWORK_POLICY_XIAOO_E2E_WEB_PORT", "0")),
+            web_port=int(os.environ.get("NETWORK_POLICY_XIAOO_E2E_WEB_PORT", str(CASE_CONSTANTS.web_port))),
             ready_timeout_seconds=ready_timeout,
             evidence_timeout_seconds=evidence_timeout,
         )

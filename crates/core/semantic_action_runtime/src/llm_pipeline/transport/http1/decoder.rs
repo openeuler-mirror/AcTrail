@@ -1,5 +1,7 @@
 //! Stateful HTTP/1 wire decoder.
 
+use super::content_decoder::{DecoderFactory, DecoderHandle};
+use std::ops::Range;
 use std::sync::Arc;
 
 const HEADER_END: &[u8] = b"\r\n\r\n";
@@ -15,25 +17,46 @@ pub(in crate::llm_pipeline) enum Http1Direction {
 pub(in crate::llm_pipeline) enum Http1DecodeFailure {
     BufferCapacity,
     InvalidContentLength,
+    InvalidContentEncoding,
     InvalidHead,
     InvalidChunkSize,
     InvalidChunkTerminator,
 }
 
-impl Http1DecodeFailure {
-    pub(in crate::llm_pipeline) const fn as_str(self) -> &'static str {
+#[derive(Clone, Debug)]
+pub(in crate::llm_pipeline) enum DecodedHttp1Body {
+    Shared(Arc<Vec<u8>>),
+    WireRange(Range<usize>),
+}
+
+impl DecodedHttp1Body {
+    pub(in crate::llm_pipeline) fn len(&self) -> usize {
         match self {
-            Self::BufferCapacity => "buffer_capacity",
-            Self::InvalidContentLength => "invalid_content_length",
-            Self::InvalidHead => "invalid_head",
-            Self::InvalidChunkSize => "invalid_chunk_size",
-            Self::InvalidChunkTerminator => "invalid_chunk_terminator",
+            Self::Shared(bytes) => bytes.len(),
+            Self::WireRange(range) => range.len(),
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn bytes<'a>(&'a self, wire: &'a [u8]) -> Option<&'a [u8]> {
+        match self {
+            Self::Shared(bytes) => Some(bytes.as_slice()),
+            Self::WireRange(range) => wire.get(range.clone()),
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn into_shared(self) -> Option<Arc<Vec<u8>>> {
+        match self {
+            Self::Shared(bytes) => Some(bytes),
+            Self::WireRange(_) => None,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub(in crate::llm_pipeline) struct DecodedHttp1Message {
+    pub(in crate::llm_pipeline) framing_failure: Option<Http1DecodeFailure>,
+    pub(in crate::llm_pipeline) content_failure: Option<Http1DecodeFailure>,
+    pub(in crate::llm_pipeline) message_id: Option<String>,
     pub(in crate::llm_pipeline) protocol: &'static str,
     pub(in crate::llm_pipeline) method: Option<String>,
     pub(in crate::llm_pipeline) authority: Option<String>,
@@ -41,7 +64,8 @@ pub(in crate::llm_pipeline) struct DecodedHttp1Message {
     pub(in crate::llm_pipeline) status_code: Option<String>,
     pub(in crate::llm_pipeline) reason: Option<String>,
     pub(in crate::llm_pipeline) headers_text: String,
-    pub(in crate::llm_pipeline) body: Arc<Vec<u8>>,
+    pub(in crate::llm_pipeline) body: DecodedHttp1Body,
+    pub(in crate::llm_pipeline) declared_body_len: Option<usize>,
     pub(in crate::llm_pipeline) encoded_len: usize,
     pub(in crate::llm_pipeline) complete: bool,
     pub(in crate::llm_pipeline) body_boundary_known: bool,
@@ -72,7 +96,9 @@ struct ActiveMessage {
     status_code: Option<String>,
     reason: Option<String>,
     headers_text: String,
-    body: Arc<Vec<u8>>,
+    body: Option<DecoderHandle>,
+    content_failure: Option<Http1DecodeFailure>,
+    max_decoded_bytes: usize,
     body_start: usize,
     wire_cursor: usize,
     framing: BodyFraming,
@@ -92,49 +118,64 @@ enum DecodeState {
 pub(in crate::llm_pipeline) struct Http1Decoder {
     direction: Http1Direction,
     max_buffer_bytes: usize,
+    max_decoded_bytes: usize,
     state: DecodeState,
 }
 
 impl Http1Decoder {
+    /// Confirms the message head before any body consumer runs. The exchange
+    /// owner can supply request semantics (HEAD, CONNECT) at this boundary.
+    pub(in crate::llm_pipeline) fn head(
+        &mut self,
+        wire: &[u8],
+    ) -> Result<Option<DecodedHttp1Message>, Http1DecodeFailure> {
+        if wire.len() > self.max_buffer_bytes {
+            return Err(Http1DecodeFailure::BufferCapacity);
+        }
+        if matches!(self.state, DecodeState::ReadingHead { .. }) {
+            self.advance_head(wire)?;
+        }
+        match &self.state {
+            DecodeState::ReadingBody(active) => Ok(Some(active.snapshot())),
+            DecodeState::ReadingHead { .. } => Ok(None),
+            DecodeState::Failed(failure) => Err(*failure),
+        }
+    }
+
+    pub(in crate::llm_pipeline) fn apply_request_method(&mut self, method: &str) -> bool {
+        let DecodeState::ReadingBody(active) = &mut self.state else {
+            return false;
+        };
+        let status = active
+            .status_code
+            .as_deref()
+            .and_then(|value| value.parse::<u16>().ok());
+        let tunnel = status == Some(101)
+            || (method == "CONNECT" && status.is_some_and(|status| (200..300).contains(&status)));
+        if method == "HEAD" || tunnel {
+            active.framing = BodyFraming::None;
+            active.complete = true;
+            active.content_failure = None;
+        }
+        tunnel
+    }
+
     pub(in crate::llm_pipeline) fn new(direction: Http1Direction, max_buffer_bytes: usize) -> Self {
         Self {
             direction,
             max_buffer_bytes,
+            max_decoded_bytes: max_buffer_bytes,
             state: DecodeState::ReadingHead { scan: 0 },
         }
     }
 
-    pub(in crate::llm_pipeline) fn new_raw_chunked_response(max_buffer_bytes: usize) -> Self {
-        Self {
-            direction: Http1Direction::Response,
-            max_buffer_bytes,
-            state: DecodeState::ReadingBody(ActiveMessage {
-                protocol: "http/1.1",
-                method: None,
-                authority: None,
-                path: None,
-                status_code: None,
-                reason: None,
-                headers_text: String::new(),
-                body: Arc::new(Vec::new()),
-                body_start: 0,
-                wire_cursor: 0,
-                framing: BodyFraming::Chunked,
-                chunk: ChunkState::SizeLine { scan: 0 },
-                complete: false,
-            }),
-        }
+    pub(in crate::llm_pipeline) fn with_decoded_limit(mut self, max_bytes: usize) -> Self {
+        self.max_decoded_bytes = max_bytes;
+        self
     }
 
     pub(in crate::llm_pipeline) fn reset(&mut self) {
         self.state = DecodeState::ReadingHead { scan: 0 };
-    }
-
-    pub(in crate::llm_pipeline) fn snapshot(&self) -> Option<DecodedHttp1Message> {
-        match &self.state {
-            DecodeState::ReadingBody(active) => Some(active.snapshot()),
-            DecodeState::ReadingHead { .. } | DecodeState::Failed(_) => None,
-        }
     }
 
     pub(in crate::llm_pipeline) fn advance(
@@ -154,7 +195,14 @@ impl Http1Decoder {
         let DecodeState::ReadingBody(active) = &mut self.state else {
             return Ok(None);
         };
-        Self::advance_body(active, wire, end_of_stream)?;
+        if let Err(failure) = Self::advance_body(active, wire, end_of_stream) {
+            // Hand the successfully decoded prefix to the consumer before the
+            // session aborts. The last provider event may be in this batch.
+            let mut message = active.snapshot();
+            message.framing_failure = Some(failure);
+            self.state = DecodeState::Failed(failure);
+            return Ok(Some(message));
+        }
         Ok(Some(active.snapshot()))
     }
 
@@ -173,6 +221,16 @@ impl Http1Decoder {
             .map_err(|_| Http1DecodeFailure::InvalidHead)?
             .to_string();
         let parsed = ParsedHead::parse(self.direction, &headers_text)?;
+        let content = DecoderFactory::create(
+            if parsed.framing == BodyFraming::None {
+                ""
+            } else {
+                &headers_text
+            },
+            self.max_decoded_bytes,
+        );
+        let content_failure = content.as_ref().err().copied();
+        let content = content.ok();
         self.state = DecodeState::ReadingBody(ActiveMessage {
             protocol: parsed.protocol,
             method: parsed.method,
@@ -181,7 +239,19 @@ impl Http1Decoder {
             status_code: parsed.status_code,
             reason: parsed.reason,
             headers_text,
-            body: Arc::new(Vec::new()),
+            // Fixed-length requests are projected synchronously from the
+            // caller's wire buffer. Only decoded/chunked bodies and responses
+            // need separate owned storage.
+            body: if self.direction == Http1Direction::Request
+                && matches!(parsed.framing, BodyFraming::Fixed(_))
+                && content.as_ref().is_some_and(DecoderHandle::is_identity)
+            {
+                None
+            } else {
+                content
+            },
+            content_failure,
+            max_decoded_bytes: self.max_decoded_bytes,
             body_start,
             wire_cursor: body_start,
             framing: parsed.framing,
@@ -207,14 +277,22 @@ impl Http1Decoder {
                     .checked_add(expected)
                     .ok_or(Http1DecodeFailure::BufferCapacity)?;
                 let available_end = wire.len().min(expected_end);
-                active.copy_wire_delta(wire, available_end);
+                active.copy_wire_delta(wire, available_end)?;
                 active.complete = active.wire_cursor == expected_end;
             }
             BodyFraming::UntilEof => {
-                active.copy_wire_delta(wire, wire.len());
+                active.copy_wire_delta(wire, wire.len())?;
                 active.complete = end_of_stream;
             }
             BodyFraming::Chunked => Self::advance_chunked(active, wire)?,
+        }
+        if active.complete
+            && let Some(body) = &mut active.body
+        {
+            if let Err(failure) = body.finish() {
+                active.content_failure = Some(failure);
+                active.body = None;
+            }
         }
         Ok(())
     }
@@ -237,15 +315,20 @@ impl Http1Decoder {
                         .trim();
                     let size = match usize::from_str_radix(size_text, 16) {
                         Ok(size) => size,
-                        Err(_) if sse_field_line(&wire[active.wire_cursor..line_end]) => {
+                        Err(_)
+                            if active.body.as_ref().is_none_or(DecoderHandle::is_identity)
+                                && sse_field_line(&wire[active.wire_cursor..line_end]) =>
+                        {
                             // Some L0 sources expose a de-chunked body while
                             // retaining the original Transfer-Encoding header.
                             // Switch only after one complete, decisive SSE
                             // field; an arbitrary malformed chunk stays local.
                             active.framing = BodyFraming::UntilEof;
                             active.wire_cursor = active.body_start;
-                            Arc::make_mut(&mut active.body).clear();
-                            active.copy_wire_delta(wire, wire.len());
+                            if let Some(body) = &mut active.body {
+                                body.clear_identity();
+                            }
+                            active.copy_wire_delta(wire, wire.len())?;
                             return Ok(());
                         }
                         Err(_) => return Err(Http1DecodeFailure::InvalidChunkSize),
@@ -263,7 +346,7 @@ impl Http1Decoder {
                     let available = wire.len().saturating_sub(active.wire_cursor);
                     let copied = available.min(remaining);
                     let end = active.wire_cursor + copied;
-                    active.copy_wire_delta(wire, end);
+                    active.copy_wire_delta(wire, end)?;
                     let remaining = remaining - copied;
                     if remaining != 0 {
                         active.chunk = ChunkState::Data { remaining };
@@ -312,28 +395,32 @@ impl Http1Decoder {
     }
 }
 
-pub(in crate::llm_pipeline) fn raw_chunked_candidate(bytes: &[u8]) -> bool {
-    let Some(line_end) = find_bytes(bytes, LINE_END) else {
-        return false;
-    };
-    let Ok(line) = std::str::from_utf8(&bytes[..line_end]) else {
-        return false;
-    };
-    let size_text = line.split(';').next().unwrap_or_default().trim();
-    !size_text.is_empty() && usize::from_str_radix(size_text, 16).is_ok()
-}
-
 impl ActiveMessage {
-    fn copy_wire_delta(&mut self, wire: &[u8], end: usize) {
+    fn copy_wire_delta(&mut self, wire: &[u8], end: usize) -> Result<(), Http1DecodeFailure> {
         if end <= self.wire_cursor {
-            return;
+            return Ok(());
         }
-        Arc::make_mut(&mut self.body).extend_from_slice(&wire[self.wire_cursor..end]);
+        if self.body.is_none()
+            && self.content_failure.is_none()
+            && end.saturating_sub(self.body_start) > self.max_decoded_bytes
+        {
+            self.content_failure = Some(Http1DecodeFailure::BufferCapacity);
+        }
+        if let Some(body) = &mut self.body {
+            if let Err(failure) = body.append(&wire[self.wire_cursor..end]) {
+                self.content_failure = Some(failure);
+                self.body = None;
+            }
+        }
         self.wire_cursor = end;
+        Ok(())
     }
 
     fn snapshot(&self) -> DecodedHttp1Message {
         DecodedHttp1Message {
+            framing_failure: None,
+            content_failure: self.content_failure,
+            message_id: None,
             protocol: self.protocol,
             method: self.method.clone(),
             authority: self.authority.clone(),
@@ -341,7 +428,16 @@ impl ActiveMessage {
             status_code: self.status_code.clone(),
             reason: self.reason.clone(),
             headers_text: self.headers_text.clone(),
-            body: Arc::clone(&self.body),
+            body: match &self.body {
+                Some(body) => DecodedHttp1Body::Shared(body.snapshot()),
+                None if self.content_failure.is_some() => DecodedHttp1Body::WireRange(0..0),
+                None => DecodedHttp1Body::WireRange(self.body_start..self.wire_cursor),
+            },
+            declared_body_len: match self.framing {
+                BodyFraming::None => Some(0),
+                BodyFraming::Fixed(length) => Some(length),
+                BodyFraming::Chunked | BodyFraming::UntilEof => None,
+            },
             encoded_len: self.wire_cursor,
             complete: self.complete,
             body_boundary_known: !matches!(self.framing, BodyFraming::UntilEof),
@@ -486,10 +582,6 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
-}
-
-pub(in crate::llm_pipeline) fn response_candidate_starts_at(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"HTTP/")
 }
 
 fn sse_field_line(line: &[u8]) -> bool {

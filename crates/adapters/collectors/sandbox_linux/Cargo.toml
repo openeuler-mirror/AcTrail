@@ -9,7 +9,11 @@ build = "build.rs"
 libc = "0.2"
 libbpf-rs = "0.25.0"
 libbpf_tracepoint_attach = { path = "../libbpf_tracepoint" }
+linux_cgroup = { path = "../../../core/linux_cgroup" }
 sandbox_observation = { path = "../../../contracts/sandbox_observation" }
 
 [build-dependencies]
 libbpf-cargo = "0.25.0"
+
+[dev-dependencies]
+tempfile = "3"

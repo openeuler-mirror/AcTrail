@@ -8,6 +8,11 @@ import sys
 import time
 from pathlib import Path
 
+if __package__:
+    from .constants import CASE_CONSTANTS
+else:
+    from constants import CASE_CONSTANTS
+
 
 class NamedAgentRoot:
     _PR_SET_NAME = 15
@@ -36,7 +41,7 @@ class NamedAgentRoot:
         while time.monotonic() < deadline:
             if self._release.is_file():
                 return
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_for_release_poll_seconds)
         raise RuntimeError(f"timed out waiting for child release: {self._release}")
 
     @staticmethod
@@ -48,7 +53,7 @@ class NamedAgentRoot:
 
     @staticmethod
     def _positive_timeout() -> int:
-        raw = os.environ.get("ACTRAIL_HOST_CHILD_TIMEOUT_SECONDS", "90")
+        raw = os.environ.get("ACTRAIL_HOST_CHILD_TIMEOUT_SECONDS", str(CASE_CONSTANTS.actrail_host_child_timeout_seconds))
         value = int(raw)
         if value <= 0:
             raise RuntimeError("ACTRAIL_HOST_CHILD_TIMEOUT_SECONDS must be positive")

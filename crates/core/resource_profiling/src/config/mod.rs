@@ -1,0 +1,2 @@
+mod resource_profiling_config;
+pub use resource_profiling_config::ResourceProfilingConfig;

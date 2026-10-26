@@ -51,6 +51,7 @@ pub(crate) struct WasmHostcallMetrics {
     payload_read_not_found: AtomicU64,
     payload_read_invalid: AtomicU64,
     payload_read_too_large: AtomicU64,
+    payload_read_failed: AtomicU64,
     payload_read_truncated: AtomicU64,
     payload_read_latency_total_ns: AtomicU64,
     payload_read_latency_max_ns: AtomicU64,
@@ -401,6 +402,9 @@ impl WasmHostcallMetrics {
             -4 => {
                 self.payload_read_too_large.fetch_add(1, Ordering::Relaxed);
             }
+            -5 => {
+                self.payload_read_failed.fetch_add(1, Ordering::Relaxed);
+            }
             _ => {}
         }
         if truncated {
@@ -423,6 +427,7 @@ impl PluginHostcallMetricsSource for WasmHostcallMetrics {
                 not_found: self.payload_read_not_found.load(Ordering::Relaxed),
                 invalid: self.payload_read_invalid.load(Ordering::Relaxed),
                 too_large: self.payload_read_too_large.load(Ordering::Relaxed),
+                failed: self.payload_read_failed.load(Ordering::Relaxed),
                 truncated: self.payload_read_truncated.load(Ordering::Relaxed),
                 latency_total_ns: self.payload_read_latency_total_ns.load(Ordering::Relaxed),
                 latency_max_ns: self.payload_read_latency_max_ns.load(Ordering::Relaxed),

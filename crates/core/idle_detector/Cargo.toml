@@ -1,0 +1,11 @@
+[package]
+name = "idle_detector"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+agent_host = { path = "../../adapters/agent_host" }
+model_core = { path = "../model" }
+alert_contract = { path = "../../contracts/alert" }
+serde_json = "1"

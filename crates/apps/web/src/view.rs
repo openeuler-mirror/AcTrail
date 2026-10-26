@@ -1,39 +1,52 @@
 //! Storage-backed API view rendering.
 
-#[path = "view/action_tree_projection.rs"]
-mod action_tree_projection;
+#[path = "view/action_content.rs"]
+mod action_content;
+pub(crate) use action_content::ActionContentView;
 #[path = "view/action_tree_roles.rs"]
 mod action_tree_roles;
 #[path = "view/actions.rs"]
 mod actions;
+#[path = "view/agent_idle.rs"]
+mod agent_idle;
+pub(crate) use agent_idle::IdleView;
 #[path = "view/alerts.rs"]
 mod alerts;
 #[path = "view/cluster.rs"]
 pub(crate) mod cluster;
 #[path = "view/commands.rs"]
 mod commands;
+#[path = "view/daemon_status.rs"]
+mod daemon_status;
 #[path = "view/events.rs"]
 mod events;
+#[path = "view/llm_trajectory.rs"]
+mod llm_trajectory;
 #[path = "view/payloads.rs"]
 mod payloads;
-#[path = "view/projection_cache.rs"]
-mod projection_cache;
 #[path = "view/runtime_config.rs"]
 mod runtime_config;
 #[path = "view/stats.rs"]
 mod stats;
 #[path = "view/time_attribution.rs"]
 mod time_attribution;
+#[path = "view/timeline.rs"]
+mod timeline;
+pub(crate) use timeline::trace_counts_json;
 #[path = "view/topology.rs"]
 mod topology;
 #[path = "view/traces.rs"]
 mod traces;
+pub(crate) use timeline::{TimelineView, trace_metadata_json};
+pub(crate) use traces::trace_page_json;
 
-use model_core::ids::TraceId;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use model_core::ids::{RequestId, TraceId};
 use model_core::payload::PayloadSegmentId;
 use storage_core::{
     PayloadSegmentQuery, SemanticActionChildPageQuery, SnapshotView, StorageBackend,
-    StorageOpenMode, TraceFilter, TraceLeasePurpose,
+    StorageOpenMode, TraceLeasePurpose,
 };
 use storage_factory::{StorageConfig, open_storage_backend};
 
@@ -105,17 +118,21 @@ pub fn runtime_plugin_status_json(
     runtime_config::runtime_plugin_status_json(config_path, operator_config)
 }
 
-pub fn traces_json(storage_config: &StorageConfig) -> Result<String, String> {
-    let storage = open_storage(storage_config)?;
-    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
-    let traces = storage
-        .list_traces(&TraceFilter::default())
-        .map_err(|error| format!("list traces failed: {}: {}", error.stage, error.message))?;
-    let rows = traces
-        .iter()
-        .map(|trace| process_display.render_trace(trace))
-        .collect::<Vec<_>>();
-    Ok(format!("{{\"traces\":[{}]}}", rows.join(",")))
+/// Control-plane liveness as the console sees it: the collector daemon answers
+/// the operator control socket, or it does not.
+pub fn daemon_status_json(
+    operator_config: Option<&config_core::daemon::OperatorConfig>,
+) -> Result<String, String> {
+    daemon_status::daemon_status_json(operator_config)
+}
+
+pub(super) fn web_request_id() -> Result<RequestId, String> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock is before unix epoch; cannot build control request id")?;
+    let millis = u64::try_from(duration.as_millis())
+        .map_err(|_| "system clock millis overflowed request id")?;
+    Ok(RequestId::new(millis))
 }
 
 pub fn token_usage_stats_json(
@@ -164,7 +181,9 @@ pub fn aggregate_time_attribution_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     time_attribution::aggregate_time_attribution_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("time attribution requires SQLite storage")?,
         storage.as_mut(),
         query,
     )
@@ -175,7 +194,13 @@ pub fn time_attribution_rows_json(
     query: TimeAttributionRowsQuery,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
-    time_attribution::time_attribution_rows_json(storage_config.path(), storage.as_mut(), query)
+    time_attribution::time_attribution_rows_json(
+        storage_config
+            .path()
+            .ok_or("time attribution requires SQLite storage")?,
+        storage.as_mut(),
+        query,
+    )
 }
 
 pub fn parse_llm_explore_query(body: &str) -> Result<stats::LlmExploreQuery, String> {
@@ -261,12 +286,12 @@ pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<Strin
 
 pub fn trace_summary_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
-    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let trace_id = TraceId::new(trace_id);
     let trace = storage
         .get_trace(trace_id)
         .map_err(|error| format!("read trace failed: {}: {}", error.stage, error.message))?
         .ok_or_else(|| format!("trace {trace_id} not found"))?;
+    let process_display = traces::ProcessDisplayIndex::for_trace(storage.as_ref(), &trace)?;
     let variant_counts = storage.count_events_by_variant(trace_id).map_err(|error| {
         format!(
             "count events by variant failed: {}: {}",
@@ -305,7 +330,9 @@ pub fn trace_time_attribution_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     time_attribution::trace_time_attribution_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("time attribution requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
     )
@@ -398,26 +425,8 @@ pub fn trace_diagnostics_json(
 }
 
 pub fn clear_cache_json() -> Result<String, String> {
-    let cleared = projection_cache::clear_projection_cache()
-        .saturating_add(time_attribution::clear_time_attribution_cache());
+    let cleared = time_attribution::clear_time_attribution_cache();
     Ok(format!("{{\"cleared\":{cleared}}}"))
-}
-
-pub fn action_tree_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
-    let mut storage = open_storage(storage_config)?;
-    actions::action_tree_json(
-        storage_config.path(),
-        storage.as_mut(),
-        TraceId::new(trace_id),
-    )
-}
-
-pub fn waterfall_initial_json(
-    storage_config: &StorageConfig,
-    trace_id: u64,
-) -> Result<String, String> {
-    let mut storage = open_storage(storage_config)?;
-    actions::waterfall_initial_json(storage.as_mut(), TraceId::new(trace_id))
 }
 
 pub fn action_tree_root_json(
@@ -426,7 +435,9 @@ pub fn action_tree_root_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_root_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
     )
@@ -440,7 +451,9 @@ pub fn action_tree_children_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_children_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
         parent_id,
@@ -456,7 +469,9 @@ pub fn action_tree_llm_nav_json(
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::action_tree_llm_nav_json(
-        storage_config.path(),
+        storage_config
+            .path()
+            .ok_or("action tree projection requires SQLite storage")?,
         storage.as_mut(),
         TraceId::new(trace_id),
         mode,
@@ -516,6 +531,26 @@ pub fn llm_request_trajectory_json(
     actions::llm_request_trajectory_json(storage.as_mut(), TraceId::new(trace_id), trajectory_id)
 }
 
+pub fn llm_trajectory_graph_json(
+    storage_config: &StorageConfig,
+    trace_id: u64,
+) -> Result<String, String> {
+    llm_trajectory_graph_json_for_trace(storage_config, trace_id, trace_id)
+}
+
+pub(crate) fn llm_trajectory_graph_json_for_trace(
+    storage_config: &StorageConfig,
+    local_trace_id: u64,
+    response_trace_id: u64,
+) -> Result<String, String> {
+    let mut storage = open_storage(storage_config)?;
+    llm_trajectory::graph_json(
+        storage.as_mut(),
+        TraceId::new(local_trace_id),
+        response_trace_id,
+    )
+}
+
 pub fn action_mcp_jsonrpc_content_json(
     storage_config: &StorageConfig,
     trace_id: u64,
@@ -531,18 +566,11 @@ pub fn action_mcp_jsonrpc_content_json(
     )
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LlmRequestContentNodeQuery {
-    pub pointer: String,
-    pub offset: usize,
-    pub limit: usize,
-}
-
 pub fn action_llm_request_content_node_json(
     storage_config: &StorageConfig,
     trace_id: u64,
     action_id: &str,
-    query: LlmRequestContentNodeQuery,
+    query: storage_core::ContentNodeQuery,
 ) -> Result<String, String> {
     let mut storage = open_storage(storage_config)?;
     actions::llm_request_content_node_json(

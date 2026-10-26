@@ -5,6 +5,8 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 collector_event = { path = "../../contracts/collector/event" }
 model_core = { path = "../model" }
 policy_evaluate_contract = { path = "../../contracts/policy/evaluate" }

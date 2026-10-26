@@ -5,11 +5,13 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+resource_profiling = { path = "../../../core/resource_profiling" }
 alert_contract = { path = "../../../contracts/alert" }
 bincode = "1"
 model_core = { path = "../../../core/model" }
-rusqlite = { version = "0.31.0", features = ["bundled"] }
+rusqlite = { version = "0.31.0", features = ["bundled", "blob"] }
 semantic_action = { path = "../../../contracts/semantic_action" }
+serde = "1"
 serde_json = "1"
 sha2 = "0.10"
 storage_core = { path = "../../core" }
@@ -19,3 +21,6 @@ store_snapshot_contract = { path = "../../../contracts/store/snapshot" }
 store_tx_contract = { path = "../../../contracts/store/tx" }
 store_write_contract = { path = "../../../contracts/store/write" }
 zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"

@@ -44,7 +44,7 @@ cargo build --release -p daemon --features perf-buffer
 系统配置由已经安装的 binary 生成：
 
 ```bash
-sudo actraild init
+sudo actrailctl init
 ```
 
 `/etc/actrail/actraild.conf` 已存在时不会被自动替换。按 [配置 daemon](../daemon/configure.md) 审查 socket、存储、保留、采集、治理和出口设置。

@@ -8,8 +8,9 @@ use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 use crate::loader::LoaderError;
 
 const SOCKET_PAYLOAD_MAX_SEGMENT_BYTES: u32 = 4_095;
+const SOCKET_PAYLOAD_POLICY_LIMITED_FLAG: u32 = 32;
 const SOCKET_PAYLOAD_CONFIG_KEY: u32 = 0;
-const SOCKET_PAYLOAD_CONFIG_FIELDS: usize = 3;
+const SOCKET_PAYLOAD_CONFIG_FIELDS: usize = 5;
 const SOCKET_PAYLOAD_CONFIG_FIELD_SIZE: usize = std::mem::size_of::<u32>();
 const SOCKET_PAYLOAD_CONFIG_VALUE_SIZE: usize =
     SOCKET_PAYLOAD_CONFIG_FIELDS * SOCKET_PAYLOAD_CONFIG_FIELD_SIZE;
@@ -23,13 +24,13 @@ const SOCKET_PAYLOAD_FD_KNOWN_FLAGS: u32 = SOCKET_PAYLOAD_FD_TLS_OWNED;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SocketPayloadFdState {
-    generation: u32,
+    socket_generation: u32,
     flags: u32,
 }
 
 impl SocketPayloadFdState {
-    pub fn generation(self) -> u32 {
-        self.generation
+    pub fn socket_generation(self) -> u32 {
+        self.socket_generation
     }
 
     pub fn tls_owned(self) -> bool {
@@ -85,7 +86,16 @@ fn payload_socket_config_value(
     let fields = [
         bool_field(config.enabled),
         config.max_segment_bytes,
-        bool_field(config.capture_backend == PayloadSocketCaptureBackend::BpfCopySeccompFallback),
+        config.max_operation_bytes,
+        bool_field(
+            config.enabled
+                && config.capture_backend == PayloadSocketCaptureBackend::BpfCopySeccompFallback,
+        ),
+        if config.enabled && config.capture_backend == PayloadSocketCaptureBackend::BpfCopy {
+            SOCKET_PAYLOAD_POLICY_LIMITED_FLAG
+        } else {
+            0
+        },
     ];
     let mut value = [0_u8; SOCKET_PAYLOAD_CONFIG_VALUE_SIZE];
     for (index, field) in fields.into_iter().enumerate() {
@@ -116,13 +126,13 @@ pub(crate) fn mark_fd_tls_owned(
     map: &MapHandle,
     pid: u32,
     fd: u32,
-    expected_generation: u32,
+    expected_socket_generation: u32,
 ) -> Result<bool, LoaderError> {
     let key = socket_fd_key(pid, fd);
     let Some(mut state) = lookup_fd_state(map, pid, fd)? else {
         return Ok(false);
     };
-    if state.generation != expected_generation {
+    if state.socket_generation != expected_socket_generation {
         return Ok(false);
     }
     if state.tls_owned() {
@@ -150,22 +160,23 @@ impl SocketPayloadFdState {
             ));
         }
         let field_size = std::mem::size_of::<u32>();
-        let generation = u32::from_ne_bytes(value[..field_size].try_into().map_err(|_| {
-            LoaderError::new(
-                "lookup_socket_fd_state",
-                "socket fd generation field is malformed",
-            )
-        })?);
+        let socket_generation =
+            u32::from_ne_bytes(value[..field_size].try_into().map_err(|_| {
+                LoaderError::new(
+                    "lookup_socket_fd_state",
+                    "socket_generation field is malformed",
+                )
+            })?);
         let flags = u32::from_ne_bytes(value[field_size..].try_into().map_err(|_| {
             LoaderError::new(
                 "lookup_socket_fd_state",
                 "socket fd flags field is malformed",
             )
         })?);
-        if generation == 0 {
+        if socket_generation == 0 {
             return Err(LoaderError::new(
                 "lookup_socket_fd_state",
-                "socket fd generation must be non-zero",
+                "socket_generation must be non-zero",
             ));
         }
         if flags & !SOCKET_PAYLOAD_FD_KNOWN_FLAGS != 0 {
@@ -174,13 +185,16 @@ impl SocketPayloadFdState {
                 format!("socket fd state contains unknown flags 0x{flags:x}"),
             ));
         }
-        Ok(Self { generation, flags })
+        Ok(Self {
+            socket_generation,
+            flags,
+        })
     }
 
     fn encode(self) -> [u8; SOCKET_PAYLOAD_FD_STATE_SIZE] {
         let mut value = [0_u8; SOCKET_PAYLOAD_FD_STATE_SIZE];
         let field_size = std::mem::size_of::<u32>();
-        value[..field_size].copy_from_slice(&self.generation.to_ne_bytes());
+        value[..field_size].copy_from_slice(&self.socket_generation.to_ne_bytes());
         value[field_size..].copy_from_slice(&self.flags.to_ne_bytes());
         value
     }

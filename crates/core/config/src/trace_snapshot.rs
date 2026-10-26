@@ -14,6 +14,7 @@ pub struct CaptureProfileSnapshot {
     pub profile_name: ProfileName,
     pub captured_at: SystemTime,
     pub capability_requests: Vec<CapabilityRequest>,
+    pub agent_descendant_observation_depth: i32,
     pub classify_providers: bool,
     pub enable_payload_collectors: bool,
 }
@@ -24,6 +25,7 @@ impl CaptureProfileSnapshot {
             profile_name: profile.name.clone(),
             captured_at,
             capability_requests: profile.capabilities.clone(),
+            agent_descendant_observation_depth: profile.agent_descendant_observation_depth,
             classify_providers: profile.classify_providers,
             enable_payload_collectors: profile.enable_payload_collectors,
         }

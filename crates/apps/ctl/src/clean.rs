@@ -33,13 +33,18 @@ impl CleanArtifacts {
         let mut entries = vec![
             CleanEntry::file_like("socket_path", config.socket_path.clone()),
             CleanEntry::file_like("pid_file", config.pid_file.clone()),
-            CleanEntry::file_like("storage_sqlite_path", config.storage.path().to_path_buf()),
             CleanEntry::file_like("log_path", config.log_path.clone()),
             CleanEntry::directory(
                 "export_directory",
                 config.export_config.output_directory.clone(),
             ),
         ];
+        if let Some(path) = config.storage.path() {
+            entries.push(CleanEntry::file_like(
+                "storage_sqlite_path",
+                path.to_path_buf(),
+            ));
+        }
         if config.payload_config.tls.capture_backend.is_sync() {
             entries.push(CleanEntry::file_like(
                 "payload_tls_sync_event_socket_path",

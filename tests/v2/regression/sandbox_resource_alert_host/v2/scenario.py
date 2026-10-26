@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shlex
 import shutil
 import socket
 import time
@@ -24,10 +25,12 @@ from .config import SandboxResourceAlertHostConfig
 from .oom_assertions import OomAlertAssertions
 from .runtime_state import OwnedProcesses, ScenarioOutcome
 
+from .constants import CASE_CONSTANTS
+
 
 class SandboxResourceAlertHostScenario:
-    _READ_THRESHOLD_BYTES = 786_432
-    _WRITE_THRESHOLD_BYTES = 2_097_152
+    _READ_THRESHOLD_BYTES = CASE_CONSTANTS.read_threshold_bytes
+    _WRITE_THRESHOLD_BYTES = CASE_CONSTANTS.write_threshold_bytes
     _CATEGORIES = (
         "sandbox.resource.oom_risk",
         "sandbox.resource.oom_killed",
@@ -45,7 +48,7 @@ class SandboxResourceAlertHostScenario:
         self._context = context
         self._agent = agent
         self._runner = SubprocessRunner()
-        self._run_dir = config.work_dir / f"run-{secrets.token_hex(8)}"
+        self._run_dir = config.work_dir / f"run-{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._assets = self._run_dir / "assets"
         self._coord = self._run_dir / "coord"
         self._provider_port = 0
@@ -96,10 +99,10 @@ class SandboxResourceAlertHostScenario:
                 if process is None:
                     continue
                 try:
-                    stopped = process.terminate(grace_seconds=3)
+                    stopped = process.terminate(grace_seconds=CASE_CONSTANTS.run_grace_seconds)
                     if "failure" in results and stopped.diagnostic:
                         results["failure"].message += (
-                            f"\n{name} diagnostics:\n" + stopped.diagnostic[-4000:]
+                            f"\n{name} diagnostics:\n" + stopped.diagnostic[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]
                         )
                 except Exception as error:
                     cleanup_errors.append(f"{name}: {error}")
@@ -148,8 +151,8 @@ class SandboxResourceAlertHostScenario:
             web_port=web_port,
             categories=self._CATEGORIES,
             thresholds=SandboxAlertThresholds(
-                cpu_usage_basis_points=10_000,
-                memory_available_bytes=18_446_744_073_709_551_615,
+                cpu_usage_basis_points=CASE_CONSTANTS.cpu_usage_basis_points,
+                memory_available_bytes=CASE_CONSTANTS.start_alert_path_memory_available_bytes,
                 read_interval_bytes=self._READ_THRESHOLD_BYTES,
                 write_interval_bytes=self._WRITE_THRESHOLD_BYTES,
             ),
@@ -258,7 +261,7 @@ class SandboxResourceAlertHostScenario:
             child_release_ms,
             oom_victim_pid,
         )
-        time.sleep(timing.io_poll_seconds * 2 + 0.25)
+        time.sleep(timing.io_poll_seconds * CASE_CONSTANTS.observation_window_poll_count + CASE_CONSTANTS.observation_window_slack_seconds)
         OomAlertAssertions.assert_single(
             alert_path,
             root_marker,
@@ -281,13 +284,13 @@ class SandboxResourceAlertHostScenario:
         sb: ManagedProcess,
         timing: SandboxAgentTiming,
     ) -> None:
-        alert_path.assert_failed_update_preserves_memory_threshold(1)
-        alert_path.update_memory_threshold(1)
-        time.sleep(timing.resource_poll_seconds * 2 + 0.25)
+        alert_path.assert_failed_update_preserves_memory_threshold(CASE_CONSTANTS.updated_memory_threshold_bytes)
+        alert_path.update_memory_threshold(CASE_CONSTANTS.updated_memory_threshold_bytes)
+        time.sleep(timing.resource_poll_seconds * CASE_CONSTANTS.observation_window_poll_count + CASE_CONSTANTS.observation_window_slack_seconds)
         self._require_alive(gateway, "gateway during policy update")
         self._require_alive(sb, "actrail-sb during policy update")
         after_alert_id = self._latest_alert_id(alert_path)
-        alert_path.update_memory_threshold(18_446_744_073_709_551_615)
+        alert_path.update_memory_threshold(CASE_CONSTANTS.start_alert_path_memory_available_bytes)
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
             self._require_alive(gateway, "gateway after policy update")
@@ -297,7 +300,7 @@ class SandboxResourceAlertHostScenario:
             ):
                 if record.category == "sandbox.resource.oom_risk":
                     return
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.verify_dynamic_memory_policy_poll_seconds)
         raise RuntimeError("Web memory threshold did not affect the loaded plugin")
 
     def _verify_disconnect_reconnect(
@@ -312,13 +315,13 @@ class SandboxResourceAlertHostScenario:
             processes.sandbox_agent,
             "actrail-sb",
         )
-        gateway.terminate(grace_seconds=3)
+        gateway.terminate(grace_seconds=CASE_CONSTANTS.verify_disconnect_reconnect_grace_seconds)
         processes.gateway = None
-        time.sleep(timing.sender_io_timeout_seconds + 0.25)
+        time.sleep(timing.sender_io_timeout_seconds + CASE_CONSTANTS.observation_window_slack_seconds)
         disconnected_alert_id = self._latest_alert_id(alert_path)
         disconnected_evidence_count = alert_path.evidence_database.record_count()
         disconnected_window = max(
-            timing.resource_poll_seconds * 2,
+            timing.resource_poll_seconds * CASE_CONSTANTS.observation_window_poll_count,
             timing.reconnect_interval_seconds + timing.resource_poll_seconds,
         )
         self._verify_disconnected_no_storage(
@@ -357,15 +360,13 @@ class SandboxResourceAlertHostScenario:
         controlled_oom_assets = (
             self._config.repo / "tests/v2/common/execution_isolation/assets"
         )
+        shutil.copytree(controlled_oom_assets, self._assets / "oom", ignore=shutil.ignore_patterns("__pycache__"))
         sources = {
             "named-agent-root": Path(__file__).parent / "assets/named_agent_root.py",
+            "constants.py": Path(__file__).parent / "assets/constants.py",
             "workload.sh": Path(__file__).parent / "assets/workload.sh",
-            "oom-cgroup-trigger.sh": (
-                controlled_oom_assets / "oom-cgroup-trigger.sh"
-            ),
-            "oom_trigger.py": controlled_oom_assets / "oom_trigger.py",
             "provider-proxy.py": (
-                self._config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
+                self._config.repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
             ),
         }
         for name, source in sources.items():
@@ -375,16 +376,16 @@ class SandboxResourceAlertHostScenario:
         for name in (
             "named-agent-root",
             "workload.sh",
-            "oom-cgroup-trigger.sh",
-            "oom_trigger.py",
+            "oom/oom-cgroup-trigger.sh",
+            "oom/oom_trigger.py",
         ):
             (self._assets / name).chmod(0o755)
         (self._assets / "xiaoo.toml").write_text(
-            self._xiaoo_config(provider_port),
+            self._config.xiaoo_config(provider_port),
             encoding="utf-8",
         )
         with (self._assets / "task.bin").open("wb") as output:
-            output.truncate(2 * 1024 * 1024)
+            output.truncate(CASE_CONSTANTS.task_file_bytes)
 
     def _write_gateway_config(self, daemon_port: int) -> None:
         self._run_config_init(
@@ -424,7 +425,7 @@ class SandboxResourceAlertHostScenario:
         try:
             self._require_alive(gateway, "gateway")
         except Exception:
-            gateway.terminate(grace_seconds=1)
+            gateway.terminate(grace_seconds=CASE_CONSTANTS.start_gateway_grace_seconds)
             raise
         return gateway
 
@@ -438,11 +439,12 @@ class SandboxResourceAlertHostScenario:
                 "ACTRAIL_HOST_PROVIDER_SCRIPT": str(self._assets / "provider-proxy.py"),
                 "ACTRAIL_HOST_COORD_DIR": str(self._coord),
                 "ACTRAIL_HOST_TASK_FILE": str(self._assets / "task.bin"),
-                "ACTRAIL_HOST_OOM_SCRIPT": str(
-                    self._assets / "oom-cgroup-trigger.sh"
-                ),
-                "ACTRAIL_HOST_OOM_TRIGGER": str(
-                    self._assets / "oom_trigger.py"
+                "ACTRAIL_HOST_OOM_COMMAND": shlex.join(
+                    (
+                        str(self._assets / "oom/oom-cgroup-trigger.sh"),
+                        str(self._assets / "oom/oom_trigger.py"),
+                        str(self._coord),
+                    )
                 ),
                 "ACTRAIL_HOST_ROOT_PID_FILE": str(self._coord / "root.pid"),
                 "ACTRAIL_HOST_CHILD_RELEASE": str(self._coord / "child.release"),
@@ -453,6 +455,14 @@ class SandboxResourceAlertHostScenario:
                     self._config.ready_timeout_seconds
                 ),
                 "ACTRAIL_HOST_PROVIDER_PORT": str(self._provider_port),
+                "ACTRAIL_HOST_PROVIDER_HOST": CASE_CONSTANTS.provider_host,
+                "ACTRAIL_HOST_API_KEY": os.environ.get("ACTRAIL_HOST_API_KEY") or CASE_CONSTANTS.api_key,
+                "ACTRAIL_HOST_REASONING_TOKENS": str(CASE_CONSTANTS.provider_reasoning_tokens),
+                "ACTRAIL_HOST_READ_BYTES": str(CASE_CONSTANTS.workload_read_bytes),
+                "ACTRAIL_HOST_WRITE_BLOCK_BYTES": str(CASE_CONSTANTS.workload_write_block_bytes),
+                "ACTRAIL_HOST_WRITE_BLOCKS": str(CASE_CONSTANTS.workload_write_blocks),
+                "ACTRAIL_HOST_POLL_SECONDS": str(CASE_CONSTANTS.workload_poll_seconds),
+                "ACTRAIL_HOST_MAX_TURNS": str(CASE_CONSTANTS.workload_max_turns),
             }
         )
         return environment
@@ -471,7 +481,7 @@ class SandboxResourceAlertHostScenario:
             observed = {record.category for record in alert_path.database.records()}
             if expected in observed:
                 return
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.wait_memory_baseline_poll_seconds)
         raise RuntimeError("timed out waiting for host memory-risk alert")
 
     def _verify_disconnected_no_storage(
@@ -535,7 +545,7 @@ class SandboxResourceAlertHostScenario:
             for record in records:
                 if record.category == expected:
                     return record
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.wait_reconnected_resource_alert_poll_seconds)
         raise RuntimeError(
             "timed out waiting for a newly sampled resource alert after reconnect"
         )
@@ -566,7 +576,7 @@ class SandboxResourceAlertHostScenario:
             )
             if set(self._CATEGORIES).issubset(selected):
                 return {category: selected[category] for category in self._CATEGORIES}
-            time.sleep(0.1)
+            time.sleep(CASE_CONSTANTS.wait_all_alerts_poll_seconds)
         raise RuntimeError(
             "timed out waiting for host memory-risk, OOM-killed, high-read and "
             f"high-write alerts for named root pid={root_marker[0]}"
@@ -640,21 +650,21 @@ class SandboxResourceAlertHostScenario:
             if path.is_file():
                 return
             if process.poll() is not None:
-                result = process.wait(timeout=1)
+                result = process.wait(timeout=CASE_CONSTANTS.wait_path_timeout)
                 raise RuntimeError(
                     f"process exited before {description}: {result.diagnostic}"
                 )
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_path_poll_seconds)
         raise RuntimeError(f"timed out waiting for {description}")
 
     def _wait_tcp(self, port: int) -> None:
         deadline = time.monotonic() + self._config.ready_timeout_seconds
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                with socket.create_connection((CASE_CONSTANTS.loopback_host, port), timeout=CASE_CONSTANTS.wait_tcp_timeout):
                     return
             except OSError:
-                time.sleep(0.05)
+                time.sleep(CASE_CONSTANTS.wait_tcp_poll_seconds)
         raise RuntimeError("hand-observation listener did not become ready")
 
     def _read_root_marker(self) -> tuple[int, int, str]:
@@ -678,19 +688,7 @@ class SandboxResourceAlertHostScenario:
 
     @staticmethod
     def _require_alive(process: ManagedProcess, name: str) -> None:
-        time.sleep(0.1)
+        time.sleep(CASE_CONSTANTS.require_alive_poll_seconds)
         if process.poll() is not None:
-            result = process.wait(timeout=1)
+            result = process.wait(timeout=CASE_CONSTANTS.require_alive_timeout)
             raise RuntimeError(f"{name} exited early: {result.diagnostic}")
-
-    @staticmethod
-    def _xiaoo_config(provider_port: int) -> str:
-        return f"""[llm]
-provider = "deepseek"
-model = "deepseek-chat"
-api_key_env = "ACTRAIL_VIRTUAL_XIAOO_API_KEY"
-api_base = "http://127.0.0.1:{provider_port}"
-max_tokens = 128
-context_window = 32768
-reasoning_effort = "off"
-"""

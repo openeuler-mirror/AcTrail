@@ -19,13 +19,13 @@
       <div
         v-if="showLlmCallJump"
         class="llm-call-jump-controls"
-        aria-label="Jump between sibling LLM calls"
+        :aria-label="t('actionNode.jumpControls')"
       >
         <button
           type="button"
           :disabled="!llmCallNav?.previous"
-          aria-label="Previous sibling LLM call"
-          title="Previous LLM call"
+          :aria-label="t('actionNode.previousSibling')"
+          :title="t('actionNode.previous')"
           @click.stop="jumpTo(llmCallNav.previous)"
         >
           <span class="jump-triangle up" aria-hidden="true"></span>
@@ -33,8 +33,8 @@
         <button
           type="button"
           :disabled="!llmCallNav?.next"
-          aria-label="Next sibling LLM call"
-          title="Next LLM call"
+          :aria-label="t('actionNode.nextSibling')"
+          :title="t('actionNode.next')"
           @click.stop="jumpTo(llmCallNav.next)"
         >
           <span class="jump-triangle down" aria-hidden="true"></span>
@@ -68,8 +68,8 @@
               class="action-card-toggle"
               type="button"
               :aria-expanded="childrenVisible"
-              :aria-label="childrenVisible ? 'Collapse action children' : 'Expand action children'"
-              :title="childrenVisible ? 'Collapse' : 'Expand'"
+              :aria-label="childrenVisible ? t('actionNode.collapseChildren') : t('actionNode.expandChildren')"
+              :title="childrenVisible ? t('actionNode.collapse') : t('actionNode.expand')"
               @click.stop="toggleExpanded"
             >
               <ChevronDown v-if="childrenVisible" :size="15" />
@@ -125,9 +125,13 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, XCircle } from '@lucide/vue';
 
 import { UI_LIMITS } from '../tabs/core/action-tree/config';
+import { useModuleLocale } from '../locale';
 import DurationBadge from './DurationBadge.vue';
+import strings from './locale';
 
 defineOptions({ name: 'ActionTreeNode' });
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   node: {
@@ -364,7 +368,7 @@ function statusDescriptor(status) {
 }
 
 .llm-call-jump-controls button:hover:not(:disabled) {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
   background: var(--trace-action-jump-hover-bg);
   box-shadow: var(--trace-action-jump-hover-shadow);
   transform: translateX(-2px);
@@ -415,7 +419,7 @@ function statusDescriptor(status) {
   border-left: 4px solid var(--trace-action-card-left-border);
   border-radius: 8px;
   background: var(--trace-action-card-bg);
-  box-shadow: var(--shadow);
+  box-shadow: var(--ui-shadow);
   color: var(--trace-action-card-text);
   font-size: 13px;
   line-height: 1.35;
@@ -431,7 +435,7 @@ function statusDescriptor(status) {
 
 .action-card:hover,
 .action-tree-node.is-selected > .action-tree-branch > .action-card {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
 }
 
 .action-card:hover {
@@ -621,7 +625,7 @@ function statusDescriptor(status) {
 }
 
 .action-card-toggle:hover {
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
   background: var(--trace-action-toggle-hover-bg);
   box-shadow: var(--trace-action-toggle-hover-shadow);
 }
@@ -676,7 +680,7 @@ function statusDescriptor(status) {
 .action-meta-chip.meta-kind,
 .action-meta-chip.meta-summary {
   flex: 0 1 auto;
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 .action-meta-chip.meta-status {
@@ -730,7 +734,7 @@ function statusDescriptor(status) {
   border: 1px dashed var(--trace-action-empty-border);
   border-radius: 8px;
   background: var(--trace-action-empty-bg);
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 12px;
   font-weight: 700;
 }

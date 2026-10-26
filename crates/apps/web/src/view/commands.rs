@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 
 use model_core::ids::TraceId;
+use model_core::process::ProcessIdentity;
+use semantic_action::SemanticAction;
 use storage_core::StorageBackend;
 
 use super::actions;
@@ -26,6 +28,7 @@ pub(super) fn commands_json(
         .iter()
         .map(|action| action.action_id.as_str())
         .collect::<BTreeSet<_>>();
+    let processes = CommandProcessDisplay::load(storage, &actions);
     let links = storage
         .list_semantic_action_links(trace_id)
         .map_err(|error| {
@@ -59,6 +62,55 @@ pub(super) fn commands_json(
     json::field(&mut output, "actions", &format!("[{}]", rows.join(",")));
     output.push(',');
     json::field(&mut output, "links", &format!("[{}]", link_rows.join(",")));
+    output.push(',');
+    json::field(&mut output, "processes", &processes.json());
     output.push('}');
     Ok(output)
+}
+
+struct CommandProcessDisplay {
+    host_pids: Vec<(ProcessIdentity, u32)>,
+}
+
+impl CommandProcessDisplay {
+    fn load(storage: &mut dyn StorageBackend, actions: &[SemanticAction]) -> Self {
+        let identities = actions
+            .iter()
+            .map(|action| action.process)
+            .collect::<BTreeSet<_>>();
+        let mut host_pids = Vec::with_capacity(identities.len());
+        for identity in identities {
+            let record = match storage.get_process_record(identity) {
+                Ok(record) => record,
+                Err(error) => {
+                    eprintln!(
+                        "actrailweb: host PID unavailable for process {}: {}: {}",
+                        identity.get(),
+                        error.stage,
+                        error.message,
+                    );
+                    continue;
+                }
+            };
+            if let Some(host) = record.and_then(|record| record.host) {
+                host_pids.push((identity, host.pid));
+            }
+        }
+        Self { host_pids }
+    }
+
+    fn json(&self) -> String {
+        let rows = self
+            .host_pids
+            .iter()
+            .map(|(identity, pid)| {
+                format!(
+                    "{{\"process_id\":{},\"pid\":{}}}",
+                    json::number(identity.get()),
+                    json::number(*pid),
+                )
+            })
+            .collect::<Vec<_>>();
+        format!("[{}]", rows.join(","))
+    }
 }

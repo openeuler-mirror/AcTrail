@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 
 @dataclass(frozen=True, slots=True)
 class ScenarioGeneratorConfig:
@@ -13,8 +15,8 @@ class ScenarioGeneratorConfig:
     max_depth: int
     max_nodes: int
     random_seed: int
-    loop_exhausted_messages: bool = True
-    lazy_load_size: int = 0
+    loop_exhausted_messages: bool = DEFAULTS.loop_exhausted_messages
+    lazy_load_size: int = DEFAULTS.lazy_load_size
 
     def __post_init__(self) -> None:
         if not self.template_name:

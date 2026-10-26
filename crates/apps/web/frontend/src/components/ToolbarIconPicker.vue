@@ -144,20 +144,23 @@ function initials(label) {
 }
 
 summary {
-  width: 42px;
-  height: 38px;
+  width: var(--ui-floating-control-size, 38px);
+  height: var(--ui-floating-control-size, 38px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   padding: 0;
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-md, 8px);
-  background: var(--stats-surface, var(--surface));
-  color: var(--stats-muted, var(--muted));
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--ui-muted);
   cursor: pointer;
   list-style: none;
-  backdrop-filter: var(--stats-control-filter, none);
+  transition:
+    background var(--ui-duration-fast, 0.15s) var(--ui-ease-out, ease),
+    border-color var(--ui-duration-fast, 0.15s) var(--ui-ease-out, ease),
+    color var(--ui-duration-fast, 0.15s) var(--ui-ease-out, ease);
 }
 
 summary::-webkit-details-marker {
@@ -166,48 +169,49 @@ summary::-webkit-details-marker {
 
 summary:hover,
 .toolbar-icon-picker[open] summary {
-  border-color: var(--stats-accent-soft, var(--teal));
-  color: var(--stats-accent, var(--teal-deep));
+  background: color-mix(in srgb, var(--ui-text) 7%, transparent);
+  color: var(--ui-text);
 }
 
 .picker-menu {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 10px);
   right: 0;
   z-index: 200;
-  min-width: 168px;
+  min-width: 176px;
   display: grid;
   gap: 2px;
   padding: 6px;
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-md, 8px);
-  background: var(--stats-surface-strong, var(--surface));
-  box-shadow: var(--stats-shadow, var(--shadow));
-  backdrop-filter: var(--stats-control-filter, none);
+  border: 1px solid color-mix(in srgb, var(--ui-border) 78%, transparent);
+  border-radius: 14px;
+  background: var(--ui-surface-raised);
+  box-shadow: var(--ui-floating-shadow);
+  backdrop-filter: var(--ui-glass-filter);
 }
 
 .picker-menu button {
   min-width: 0;
-  height: 34px;
+  height: 32px;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) 16px;
   align-items: center;
   gap: 8px;
   padding: 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 9px;
   background: transparent;
-  color: var(--stats-text, var(--text));
+  color: var(--ui-text);
   cursor: pointer;
   font: inherit;
   font-size: 13px;
   text-align: left;
+  transition: background var(--ui-duration-fast, 0.15s) var(--ui-ease-out, ease);
 }
 
 .picker-menu button:hover,
 .picker-menu button.selected {
-  background: var(--stats-accent-muted, var(--surface-muted));
-  color: var(--stats-accent, var(--teal-deep));
+  background: color-mix(in srgb, var(--ui-text) 7%, transparent);
+  color: var(--ui-text);
 }
 
 .picker-menu button span:nth-child(2) {
@@ -224,10 +228,10 @@ summary:hover,
   height: 24px;
   overflow: hidden;
   display: inline-grid;
-  border: 1px solid var(--stats-border, var(--border));
+  border: 1px solid var(--ui-border, var(--ui-border));
   border-radius: 50%;
-  background: var(--stats-surface-soft, var(--surface-muted));
-  color: var(--stats-text, var(--text));
+  background: var(--ui-surface-soft, var(--ui-surface-soft));
+  color: var(--ui-text, var(--ui-text));
   font-size: 10px;
   font-weight: 700;
 }
@@ -241,7 +245,7 @@ summary:hover,
 .picker-flag {
   position: relative;
   border-radius: 50%;
-  background: var(--stats-surface-soft, var(--surface-muted));
+  background: var(--ui-surface-soft, var(--ui-surface-soft));
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 

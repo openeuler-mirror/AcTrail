@@ -201,14 +201,14 @@ const props = defineProps({
 });
 
 const palette = Object.freeze([
-  'var(--stats-chart-1)',
-  'var(--stats-chart-2)',
-  'var(--stats-chart-3)',
-  'var(--stats-chart-4)',
-  'var(--stats-chart-5)',
-  'var(--stats-chart-6)',
-  'var(--stats-chart-7)',
-  'var(--stats-chart-8)',
+  'var(--ui-chart-1)',
+  'var(--ui-chart-2)',
+  'var(--ui-chart-3)',
+  'var(--ui-chart-4)',
+  'var(--ui-chart-5)',
+  'var(--ui-chart-6)',
+  'var(--ui-chart-7)',
+  'var(--ui-chart-8)',
 ]);
 const hiddenKeys = ref(new Set());
 const expanded = ref(false);

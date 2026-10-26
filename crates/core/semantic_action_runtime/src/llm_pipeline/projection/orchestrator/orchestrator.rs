@@ -4,24 +4,15 @@ use config_core::daemon::SemanticRetentionConfig;
 use semantic_action::SemanticAction;
 
 use super::super::ProjectionBatch;
-use super::super::correlation::CorrelationCoordinator;
 use super::super::projector::ActionProjector;
 
 pub(in crate::llm_pipeline) struct ProjectionCoordinator {
-    pub(super) correlation: CorrelationCoordinator,
     pub(super) projector: ActionProjector,
 }
 
 impl ProjectionCoordinator {
-    pub(in crate::llm_pipeline) fn new(
-        config: &SemanticRetentionConfig,
-        max_confirmed_http_exchanges_per_stream: usize,
-    ) -> Self {
+    pub(in crate::llm_pipeline) fn new(config: &SemanticRetentionConfig) -> Self {
         Self {
-            correlation: CorrelationCoordinator::new(
-                max_confirmed_http_exchanges_per_stream,
-                config.l0_llm_call.projection_state,
-            ),
             projector: ActionProjector::new(config),
         }
     }
@@ -34,7 +25,14 @@ impl ProjectionCoordinator {
         let record = self.projector.record_action(&action);
         output.diagnostics.extend(record.diagnostic);
         if record.changed {
-            output.actions.push(action);
+            if record.existing {
+                output
+                    .updates
+                    .push(crate::live::ActionUpdateFactory::lifecycle(&action, None));
+                output.updated_actions.push(action);
+            } else {
+                output.actions.push(action);
+            }
         }
     }
 }

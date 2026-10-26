@@ -8,6 +8,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from .config import ProbeCodexLLMConfig
 from .task import ProbeCodexLLMTask
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeCodexLLMCase(TestCase):
     def __init__(self, config: ProbeCodexLLMConfig):
@@ -17,17 +19,18 @@ class ProbeCodexLLMCase(TestCase):
         results: dict[str, TestResult] = {}
         runtime: ActrailRuntime | None = None
         try:
+            try:
+                task = ProbeCodexLLMTask(self._config)
+            except AgentBinaryNotFoundError as error:
+                return TestResult(TestStatus.SKIPPED, str(error))
             runtime = ActrailRuntime.isolated(
                 self._config.repo,
                 self._config.bin_dir,
                 self._config.command_timeout_seconds,
                 test_context.output,
                 self._config.work_dir,
+                agent_invocation_commands=[task.native_binary],
             )
-            try:
-                task = ProbeCodexLLMTask(self._config, runtime)
-            except AgentBinaryNotFoundError as error:
-                return TestResult(TestStatus.SKIPPED, str(error))
             test_context.report_progress(
                 "agent_availability",
                 "checking codex availability",
@@ -56,15 +59,47 @@ class ProbeCodexLLMCase(TestCase):
                 "agent_launch",
                 "launching codex",
             )
-            launch = task.run()
+            launch = task.run(runtime)
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,
                 "actrailctl launch and Codex exited successfully",
+            )
+            if (
+                self._permission_value(
+                    launch.output,
+                    "deployment_permissions_requested=",
+                )
+                != "host_ebpf:auto,seccomp_notify:auto"
+            ):
+                raise AssertionError(
+                    "Codex launch did not report the default auto "
+                    "deployment permission request"
+                )
+            selected = self._permission_value(
+                launch.output,
+                "deployment_permissions_selected=",
+            )
+            degraded = self._permission_value(
+                launch.output,
+                "deployment_permissions_degraded=",
+            )
+            if (
+                selected != "host_ebpf:enabled,seccomp_notify:disabled"
+                or degraded != "false"
+            ):
+                raise AssertionError(
+                    "Codex launch permissions differ from the default profile; "
+                    f"selected={selected or '<missing>'} "
+                    f"degraded={degraded or '<missing>'}"
+                )
+            results["default_capture"] = TestResult(
+                TestStatus.PASSED,
+                "Codex default launch permissions verified",
             )
 
             test_context.report_progress(
@@ -133,3 +168,11 @@ class ProbeCodexLLMCase(TestCase):
                         TestStatus.FAILED,
                         f"actraild stop exited with {stopped.returncode}",
                     )
+
+    @staticmethod
+    def _permission_value(output: str, prefix: str) -> str:
+        value = ""
+        for line in output.splitlines():
+            if line.startswith(prefix):
+                value = line[len(prefix):].strip()
+        return value

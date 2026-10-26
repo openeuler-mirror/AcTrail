@@ -20,6 +20,9 @@ operator 配置必须启用：
 [seccomp_notify]
 enabled = true
 
+[access_control.command.exec]
+backend = "seccomp"
+
 [command_control]
 enabled = true
 rules_path = "/etc/actrail/command-control.rules"
@@ -46,6 +49,8 @@ launch capture profile 必须同时请求：
 proc-lifecycle
 enforcement-command-execution-seccomp
 ```
+
+同时保留其他已启用控制所需的能力；默认文件控制需要 `enforcement-file-permission-lsm`。
 
 命令治理只支持 `actrailctl launch`。`track-add` 无法为已运行进程补装 seccomp listener，因此请求该 capability 会 fail-fast。
 
@@ -105,14 +110,14 @@ grant 的范围不会改变规则语义。每条实际规则仍精确匹配一�
 | --- | --- | --- |
 | `rule_id` | 新规则可省略 | 省略时按当前实例配置生成稳定的 `command-dynamic-N`。 |
 | `decision` | 必填 | `allow`、`deny` 或 `gray`。 |
-| `executable` | 必填 | tracee namespace 内的精确绝对路径。 |
+| `executable` | 必填 | 声明的绝对可执行文件路径；发布时绑定已有符号链接解析后的路径，目标可以尚未创建。 |
 | `args` | 可省略 | 匹配 `argv[1..]`。省略表示任意参数，空数组只匹配无额外参数；仅末尾 `"*"` 表示任意剩余参数（包括零个）。 |
 | `priority` | 必填 | `i32`；数值越大优先级越高。 |
-| `gray_target` | gray 必填 | 当前 active、非自身的 control-decider 实例 ID 字符串。 |
+| `gray_target` | gray 必填 | 非自身的 control-decider 实例 ID 字符串；允许在目标启动前发布规则，实际请求到达时目标不可用则拒绝。 |
 
 allow/deny 禁止填写 `gray_target`。`"*"` 出现在非末尾位置会拒绝整份配置，其他字符串（包括含 `*` 的字符串）都按字面精确匹配。同一 owner 下 rule ID 和 `(executable, args 逻辑范围)` 都必须唯一；省略 args 与 `["*"]` 是同一逻辑范围。不同 owner 可以发布同一路径；daemon 在 args 匹配的候选中按 priority、更新 sequence 选择有效规则。
 
-先点 **Test configuration**。插件调用 daemon validate；base revision 过期、任一规则非法、grant 越权或 gray target 不可用时整批拒绝。只有 **Update configuration** 的 AON apply 成功后，插件才替换自己的内存配置。
+先点 **Test configuration**。插件调用 daemon validate；base revision 过期、任一规则非法或 grant 越权时整批拒绝。只有 **Update configuration** 的 AON apply 成功后，插件才替换自己的内存配置。
 
 ## Plugin command
 
@@ -235,10 +240,12 @@ sudo target/release/actraild --config /etc/actrail/actraild.conf plugin unload \
 
 ## 路径与 gray 语义
 
-- 绝对 `execve` 做词法规范化；相对路径基于 `/proc/<pid>/cwd`。
+- 规则保留声明路径；启动加载或 upsert 时，在 daemon 文件系统视图中解析已有符号链接并绑定执行路径。
+- A 指向 B 时发布的规则持续治理路径 B；A 改链到 C 后，重新 upsert 才绑定 C。其他规则发布和 owner 卸载不重绑保留规则。
+- 绑定的是路径名，B 处普通文件替换后仍受治理。动态发布要求同一 grant 覆盖声明范围及其解析后的执行范围；精确 A grant 可授权当时绑定的 B，递归 grant 内的链接不能跳出其解析后的范围。
+- 相对 `execve` 路径基于 `/proc/<pid>/cwd`；实际访问按 tracee 的文件系统视图解析。
 - `execveat` 的 `AT_FDCWD` 使用 cwd，其他 dirfd 使用 `/proc/<pid>/fd/<dirfd>`。
 - `AT_EMPTY_PATH` 使用 fd link；已删除或无法映射的目标拒绝。
-- 不把 symlink 解析成最终 inode；别名需要分别配置。
 - 省略 args 的 path-only 候选不需要为本地匹配读取 argv；存在 args 规则时，路由选择前按配置上限复制 argv，失败按 `failure_decision`。
 - 本地 allow/deny 不调用 WASM；gray 复用受限 argv 快照，reusable 缓存键包含 argv digest，不保存明文 argv。
 - timeout、插件错误和过载按 gray fallback；目标在决策期间卸载固定 deny。

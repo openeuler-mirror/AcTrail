@@ -1,17 +1,26 @@
+#[path = "semantic/http.rs"]
+mod http;
+use http::{Http1ProtocolDocument, Http2ProtocolDocument};
+#[path = "semantic/llm.rs"]
+mod llm;
+use llm::L0LlmCallDocument;
+#[path = "semantic/websocket.rs"]
+mod websocket;
+use websocket::{L2WebSocketDocument, LlmWebSocketDocument};
+
 use super::*;
-use crate::daemon::agent::{
-    DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES,
-    DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
-};
+use crate::daemon::agent::DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct SemanticRetentionDocument {
+    pub projection_enabled: bool,
     pub content_owner: String,
     pub l0_llm_call: L0LlmCallDocument,
     pub l0_mcp_call: L0McpCallDocument,
     pub l1_sse: L1SseDocument,
     pub l2_http: L2HttpDocument,
+    pub l2_websocket: L2WebSocketDocument,
     pub l3_http2_frame: L3Http2FrameDocument,
     pub l4_payload: L4PayloadDocument,
 }
@@ -19,11 +28,13 @@ pub(super) struct SemanticRetentionDocument {
 impl Default for SemanticRetentionDocument {
     fn default() -> Self {
         Self {
+            projection_enabled: true,
             content_owner: "highest_consumed".to_string(),
             l0_llm_call: L0LlmCallDocument::default(),
             l0_mcp_call: L0McpCallDocument::default(),
             l1_sse: L1SseDocument::default(),
             l2_http: L2HttpDocument::default(),
+            l2_websocket: L2WebSocketDocument::default(),
             l3_http2_frame: L3Http2FrameDocument::default(),
             l4_payload: L4PayloadDocument::default(),
         }
@@ -33,6 +44,7 @@ impl Default for SemanticRetentionDocument {
 impl SemanticRetentionDocument {
     pub(super) fn from_config(config: &SemanticRetentionConfig) -> Self {
         Self {
+            projection_enabled: config.projection_enabled,
             content_owner: semantic_content_owner_as_str(config.content_owner).to_string(),
             l0_llm_call: L0LlmCallDocument {
                 enabled: config.l0_llm_call.enabled,
@@ -51,6 +63,7 @@ impl SemanticRetentionDocument {
                 .to_string(),
                 tool_calls: llm_tool_call_retention_as_str(config.l0_llm_call.tool_calls)
                     .to_string(),
+                tool_results_enabled: config.l0_llm_call.tool_results_enabled,
                 tool_result_content_export: llm_tool_result_content_export_retention_as_str(
                     config.l0_llm_call.tool_result_content_export,
                 )
@@ -60,9 +73,7 @@ impl SemanticRetentionDocument {
                     .tool_result_content_export_max_bytes,
                 usage: llm_usage_retention_as_str(config.l0_llm_call.usage).to_string(),
                 retain_assembled_payload: config.l0_llm_call.retain_assembled_payload,
-                websocket_max_connections_per_process: config
-                    .l0_llm_call
-                    .websocket_max_connections_per_process,
+                websocket: LlmWebSocketDocument::from_config(config.l0_llm_call.websocket),
                 assembly: LlmAssemblyDocument::from_config(&config.l0_llm_call.assembly),
                 stream_classifier: LlmStreamClassifierDocument::from_config(
                     &config.l0_llm_call.stream_classifier,
@@ -88,12 +99,16 @@ impl SemanticRetentionDocument {
                 event_content: sse_event_content_retention_as_str(config.l1_sse.event_content)
                     .to_string(),
             },
+            l2_websocket: L2WebSocketDocument::from_config(config.l2_websocket),
             l2_http: L2HttpDocument {
                 enabled: config.l2_http.enabled,
+                max_active_directions: config.l2_http.max_active_directions,
                 message_summary: config.l2_http.message_summary,
                 headers: http_headers_retention_as_str(config.l2_http.headers).to_string(),
                 body_content: http_body_retention_as_str(config.l2_http.body_content).to_string(),
                 exchange: HttpExchangeDocument::from_config(&config.l2_http.exchange),
+                http1: Http1ProtocolDocument::from_config(config.l2_http.http1),
+                http2: Http2ProtocolDocument::from_config(config.l2_http.http2),
             },
             l3_http2_frame: L3Http2FrameDocument {
                 enabled: config.l3_http2_frame.enabled,
@@ -114,11 +129,13 @@ impl SemanticRetentionDocument {
 
     pub(super) fn to_config(&self) -> Result<SemanticRetentionConfig, String> {
         Ok(SemanticRetentionConfig {
+            projection_enabled: self.projection_enabled,
             content_owner: parse_value("semantic_retention.content_owner", &self.content_owner)?,
             l0_llm_call: self.l0_llm_call.to_config()?,
             l0_mcp_call: self.l0_mcp_call.to_config()?,
             l1_sse: self.l1_sse.to_config()?,
             l2_http: self.l2_http.to_config()?,
+            l2_websocket: self.l2_websocket.to_config()?,
             l3_http2_frame: self.l3_http2_frame.to_config()?,
             l4_payload: self.l4_payload.to_config()?,
         })
@@ -158,133 +175,19 @@ impl L0McpCallDocument {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub(super) struct L0LlmCallDocument {
-    pub enabled: bool,
-    pub request_content: String,
-    pub request_body_export: String,
-    pub request_body_export_max_bytes: u64,
-    pub response_content: String,
-    pub tool_calls: String,
-    pub tool_result_content_export: String,
-    pub tool_result_content_export_max_bytes: u64,
-    pub usage: String,
-    pub retain_assembled_payload: bool,
-    pub websocket_max_connections_per_process: u32,
-    pub assembly: LlmAssemblyDocument,
-    pub stream_classifier: LlmStreamClassifierDocument,
-    pub projection_state: LlmProjectionStateDocument,
-    pub trajectory: LlmTrajectoryDocument,
-}
-
-impl Default for L0LlmCallDocument {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            request_content: "canonical_blocks".to_string(),
-            request_body_export: "none".to_string(),
-            request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
-            response_content: "assembled_provider".to_string(),
-            tool_calls: "assembled_json".to_string(),
-            tool_result_content_export: "none".to_string(),
-            tool_result_content_export_max_bytes: DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
-            usage: "summary".to_string(),
-            retain_assembled_payload: false,
-            websocket_max_connections_per_process:
-                DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
-            assembly: LlmAssemblyDocument::default(),
-            stream_classifier: LlmStreamClassifierDocument::default(),
-            projection_state: LlmProjectionStateDocument::default(),
-            trajectory: LlmTrajectoryDocument::default(),
-        }
-    }
-}
-
-impl L0LlmCallDocument {
-    pub(super) fn to_config(&self) -> Result<L0LlmCallRetention, String> {
-        let request_content = parse_value(
-            "semantic_retention.l0_llm_call.request_content",
-            &self.request_content,
-        )?;
-        let request_body_export = parse_value(
-            "semantic_retention.l0_llm_call.request_body_export",
-            &self.request_body_export,
-        )?;
-        validate_request_body_export(request_content, request_body_export)?;
-        let assembly = self.assembly.to_config()?;
-        let stream_classifier = self.stream_classifier.to_config()?;
-        if stream_classifier.soft_sniff_max_bytes > assembly.max_buffer_bytes {
-            return Err(format!(
-                "semantic_retention.l0_llm_call.stream_classifier.soft_sniff_max_bytes ({}) must not exceed semantic_retention.l0_llm_call.assembly.max_buffer_bytes ({})",
-                stream_classifier.soft_sniff_max_bytes, assembly.max_buffer_bytes
-            ));
-        }
-        Ok(L0LlmCallRetention {
-            enabled: self.enabled,
-            request_content,
-            request_body_export,
-            request_body_export_max_bytes: require_positive_u64(
-                "semantic_retention.l0_llm_call.request_body_export_max_bytes",
-                self.request_body_export_max_bytes,
-            )?,
-            response_content: parse_value(
-                "semantic_retention.l0_llm_call.response_content",
-                &self.response_content,
-            )?,
-            tool_calls: parse_value(
-                "semantic_retention.l0_llm_call.tool_calls",
-                &self.tool_calls,
-            )?,
-            tool_result_content_export: parse_value(
-                "semantic_retention.l0_llm_call.tool_result_content_export",
-                &self.tool_result_content_export,
-            )?,
-            tool_result_content_export_max_bytes: require_positive_u64(
-                "semantic_retention.l0_llm_call.tool_result_content_export_max_bytes",
-                self.tool_result_content_export_max_bytes,
-            )?,
-            usage: parse_value("semantic_retention.l0_llm_call.usage", &self.usage)?,
-            retain_assembled_payload: self.retain_assembled_payload,
-            websocket_max_connections_per_process: require_positive_u32(
-                "semantic_retention.l0_llm_call.websocket_max_connections_per_process",
-                self.websocket_max_connections_per_process,
-            )?,
-            assembly,
-            stream_classifier,
-            projection_state: self.projection_state.to_config()?,
-            trajectory: self.trajectory.to_config()?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
 pub(super) struct LlmProjectionStateDocument {
-    pub max_pending_requests_per_stream: u32,
-    pub max_pending_responses_per_stream: u32,
     pub max_action_versions_per_trace: u32,
     pub max_pending_trajectory_actions_per_trace: u32,
     pub max_tool_entries_per_trace: u32,
-    pub max_active_response_bindings_per_trace: u32,
-    pub max_damaged_response_bindings_per_trace: u32,
-    pub max_correlation_streams_per_trace: u32,
 }
 
 impl Default for LlmProjectionStateDocument {
     fn default() -> Self {
         Self {
-            max_pending_requests_per_stream: DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
-            max_pending_responses_per_stream:
-                DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
             max_action_versions_per_trace: DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
             max_pending_trajectory_actions_per_trace:
                 DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
             max_tool_entries_per_trace: DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE,
-            max_active_response_bindings_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
-            max_damaged_response_bindings_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
-            max_correlation_streams_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
         }
     }
 }
@@ -292,27 +195,14 @@ impl Default for LlmProjectionStateDocument {
 impl LlmProjectionStateDocument {
     fn from_config(config: &LlmProjectionStateConfig) -> Self {
         Self {
-            max_pending_requests_per_stream: config.max_pending_requests_per_stream,
-            max_pending_responses_per_stream: config.max_pending_responses_per_stream,
             max_action_versions_per_trace: config.max_action_versions_per_trace,
             max_pending_trajectory_actions_per_trace: config
                 .max_pending_trajectory_actions_per_trace,
             max_tool_entries_per_trace: config.max_tool_entries_per_trace,
-            max_active_response_bindings_per_trace: config.max_active_response_bindings_per_trace,
-            max_damaged_response_bindings_per_trace: config.max_damaged_response_bindings_per_trace,
-            max_correlation_streams_per_trace: config.max_correlation_streams_per_trace,
         }
     }
 
     fn to_config(&self) -> Result<LlmProjectionStateConfig, String> {
-        self.validate_usize(
-            "semantic_retention.l0_llm_call.projection_state.max_pending_requests_per_stream",
-            self.max_pending_requests_per_stream,
-        )?;
-        self.validate_usize(
-            "semantic_retention.l0_llm_call.projection_state.max_pending_responses_per_stream",
-            self.max_pending_responses_per_stream,
-        )?;
         self.validate_usize(
             "semantic_retention.l0_llm_call.projection_state.max_action_versions_per_trace",
             self.max_action_versions_per_trace,
@@ -325,27 +215,10 @@ impl LlmProjectionStateDocument {
             "semantic_retention.l0_llm_call.projection_state.max_tool_entries_per_trace",
             self.max_tool_entries_per_trace,
         )?;
-        self.validate_usize(
-            "semantic_retention.l0_llm_call.projection_state.max_active_response_bindings_per_trace",
-            self.max_active_response_bindings_per_trace,
-        )?;
-        self.validate_usize(
-            "semantic_retention.l0_llm_call.projection_state.max_damaged_response_bindings_per_trace",
-            self.max_damaged_response_bindings_per_trace,
-        )?;
-        self.validate_usize(
-            "semantic_retention.l0_llm_call.projection_state.max_correlation_streams_per_trace",
-            self.max_correlation_streams_per_trace,
-        )?;
         Ok(LlmProjectionStateConfig {
-            max_pending_requests_per_stream: self.max_pending_requests_per_stream,
-            max_pending_responses_per_stream: self.max_pending_responses_per_stream,
             max_action_versions_per_trace: self.max_action_versions_per_trace,
             max_pending_trajectory_actions_per_trace: self.max_pending_trajectory_actions_per_trace,
             max_tool_entries_per_trace: self.max_tool_entries_per_trace,
-            max_active_response_bindings_per_trace: self.max_active_response_bindings_per_trace,
-            max_damaged_response_bindings_per_trace: self.max_damaged_response_bindings_per_trace,
-            max_correlation_streams_per_trace: self.max_correlation_streams_per_trace,
         })
     }
 
@@ -565,20 +438,26 @@ impl L1SseDocument {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct L2HttpDocument {
     pub enabled: bool,
+    pub max_active_directions: u32,
     pub message_summary: bool,
     pub headers: String,
     pub body_content: String,
     pub exchange: HttpExchangeDocument,
+    pub http1: Http1ProtocolDocument,
+    pub http2: Http2ProtocolDocument,
 }
 
 impl Default for L2HttpDocument {
     fn default() -> Self {
         Self {
             enabled: true,
+            max_active_directions: L2HttpRetention::default().max_active_directions,
             message_summary: true,
             headers: "metadata".to_string(),
             body_content: "text".to_string(),
             exchange: HttpExchangeDocument::default(),
+            http1: Http1ProtocolDocument::default(),
+            http2: Http2ProtocolDocument::default(),
         }
     }
 }
@@ -587,6 +466,10 @@ impl L2HttpDocument {
     pub(super) fn to_config(&self) -> Result<L2HttpRetention, String> {
         Ok(L2HttpRetention {
             enabled: self.enabled,
+            max_active_directions: require_positive_u32(
+                "semantic_retention.l2_http.max_active_directions",
+                self.max_active_directions,
+            )?,
             message_summary: self.message_summary,
             headers: parse_value("semantic_retention.l2_http.headers", &self.headers)?,
             body_content: parse_value(
@@ -594,6 +477,8 @@ impl L2HttpDocument {
                 &self.body_content,
             )?,
             exchange: self.exchange.to_config()?,
+            http1: self.http1.to_config()?,
+            http2: self.http2.to_config()?,
         })
     }
 }
@@ -601,6 +486,7 @@ impl L2HttpDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct HttpExchangeDocument {
+    pub max_message_facts_per_trace: u32,
     pub max_pending_requests_per_stream: u32,
     pub max_pending_responses_per_stream: u32,
     pub response_lateness: String,
@@ -615,6 +501,7 @@ impl Default for HttpExchangeDocument {
 impl HttpExchangeDocument {
     fn from_config(config: &HttpExchangeConfig) -> Self {
         Self {
+            max_message_facts_per_trace: config.max_message_facts_per_trace,
             max_pending_requests_per_stream: config.max_pending_requests_per_stream,
             max_pending_responses_per_stream: config.max_pending_responses_per_stream,
             response_lateness: duration_as_string(config.response_lateness),
@@ -623,6 +510,10 @@ impl HttpExchangeDocument {
 
     fn to_config(&self) -> Result<HttpExchangeConfig, String> {
         Ok(HttpExchangeConfig {
+            max_message_facts_per_trace: require_positive_u32(
+                "semantic_retention.l2_http.exchange.max_message_facts_per_trace",
+                self.max_message_facts_per_trace,
+            )?,
             max_pending_requests_per_stream: require_positive_u32(
                 "semantic_retention.l2_http.exchange.max_pending_requests_per_stream",
                 self.max_pending_requests_per_stream,

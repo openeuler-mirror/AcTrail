@@ -35,7 +35,6 @@ pub(crate) struct WitComponentObservationConsumer {
     plugin_id: String,
     host_grants: Vec<String>,
     event_families: Vec<ObservationEventFamily>,
-    payload_snapshot_limit: Option<usize>,
     queue_capacity: u32,
     post_trace_enabled: bool,
     post_trace_engine: wasmtime::Engine,
@@ -95,9 +94,12 @@ impl WitComponentObservationConsumer {
         let fuel_per_call = fuel_per_call(manifest);
         let memory_max_bytes = memory_max_bytes(manifest)?;
         let host_limits = host_limits(manifest)?;
-        let payload_snapshot_limit = host_grants
-            .can_read_payload()
-            .then_some(host_limits.payload_segment_max_count);
+        if host_grants.can_read_payload() && post_trace_host.is_none() {
+            return Err(PluginRuntimeError::new(
+                "payload_read_host",
+                "payload read grant requires a host broker",
+            ));
+        }
         let queue_capacity = manifest
             .observation_queue_capacity()
             .unwrap_or(DEFAULT_OBSERVATION_QUEUE_CAPACITY);
@@ -202,7 +204,6 @@ impl WitComponentObservationConsumer {
             plugin_id: manifest.id().to_string(),
             host_grants: host_grant_values,
             event_families,
-            payload_snapshot_limit,
             queue_capacity,
             post_trace_enabled,
             post_trace_engine: engine.clone(),
@@ -243,10 +244,6 @@ impl ObservationConsumer for WitComponentObservationConsumer {
         Some(self.hostcall_metrics.clone())
     }
 
-    fn payload_snapshot_limit(&self) -> Option<usize> {
-        self.payload_snapshot_limit
-    }
-
     fn observation_queue_capacity(&self) -> u32 {
         self.queue_capacity
     }
@@ -278,7 +275,12 @@ impl ObservationConsumer for WitComponentObservationConsumer {
         let lifecycle_transition = (state.previous_lifecycle != Some(batch.trace.lifecycle_state))
             .then_some(batch.trace.lifecycle_state);
         state.previous_lifecycle = Some(batch.trace.lifecycle_state);
-        let input = observation_batch_val(&batch, sequence, lifecycle_transition);
+        let input = observation_batch_val(
+            &batch,
+            sequence,
+            lifecycle_transition,
+            state.store.data().host_limits().payload_segment_max_count,
+        );
         let fuel_per_call = state.fuel_per_call;
         let activity_page_max_count = state.post_trace_limits.activity_page_max_count;
         let activity_total_max_count = state.post_trace_limits.activity_total_max_count;
@@ -292,13 +294,8 @@ impl ObservationConsumer for WitComponentObservationConsumer {
             activity_page_max_count,
             activity_total_max_count,
         );
-        state
-            .store
-            .data_mut()
-            .set_payload_snapshot(batch.payload_segments);
         let result = consume.call(&mut state.store, &[input], &mut results);
         let reevaluate_at = state.store.data_mut().take_requested_reevaluation_at();
-        state.store.data_mut().clear_payload_snapshot();
         state.store.data_mut().clear_observation_trace_context();
         result.map_err(|error| component_call_error(&mut state.store, "consume", error))?;
         let mut parsed = parse_observation_report(

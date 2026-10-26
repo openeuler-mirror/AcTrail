@@ -145,6 +145,7 @@ fn render_span(trace_id: &str, action: &SemanticAction, links: &[SemanticActionL
 fn span_kind(kind: SemanticActionKind) -> &'static str {
     match kind {
         SemanticActionKind::HttpMessage
+        | SemanticActionKind::WebSocketMessage
         | SemanticActionKind::LlmCall
         | SemanticActionKind::LlmRequest
         | SemanticActionKind::LlmResponse => "SPAN_KIND_CLIENT",
@@ -270,12 +271,23 @@ enum ParentRolePriority {
     LlmResponseSseStream,
     SseStreamEvent,
     LlmRequestHttpMessage,
+    LlmRequestWebSocketMessage,
     LlmRequestLlmResponse,
     LlmResponseHttpMessage,
+    LlmResponseWebSocketMessage,
+    HttpRequestHttpResponse,
+    LlmCallHttpResponse,
+    LlmRequestToolResult,
 }
 
 fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
     match role {
+        SemanticActionLinkRole::LlmResponseWebSocketMessage => {
+            ParentRolePriority::LlmResponseWebSocketMessage
+        }
+        SemanticActionLinkRole::LlmRequestWebSocketMessage => {
+            ParentRolePriority::LlmRequestWebSocketMessage
+        }
         SemanticActionLinkRole::AgentInvocationExec => ParentRolePriority::AgentInvocationExec,
         SemanticActionLinkRole::LlmToolCallAgentInvocation => {
             ParentRolePriority::LlmToolCallAgentInvocation
@@ -326,13 +338,18 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::LlmResponseHttpMessage => {
             ParentRolePriority::LlmResponseHttpMessage
         }
+        SemanticActionLinkRole::HttpRequestHttpResponse => {
+            ParentRolePriority::HttpRequestHttpResponse
+        }
+        SemanticActionLinkRole::LlmCallHttpResponse => ParentRolePriority::LlmCallHttpResponse,
+        SemanticActionLinkRole::LlmRequestToolResult => ParentRolePriority::LlmRequestToolResult,
     }
 }
 
 fn render_span_link(trace_id: &str, link: &SemanticActionLink) -> String {
     let attrs = [
         string_attr("actrail.link.role", link.role.as_str()),
-        string_attr("actrail.link.confidence", link.confidence.as_str()),
+        string_attr("actrail.link.origin", link.origin.as_str()),
     ];
     format!(
         "{{\"traceId\":{},\"spanId\":{},\"attributes\":[{}]}}",
@@ -392,7 +409,7 @@ mod tests {
     use model_core::ids::TraceId;
     use model_core::process::ProcessIdentity;
     use semantic_action::{
-        SemanticActionCompleteness, SemanticActionLinkConfidence, SemanticActionStatus,
+        SemanticActionCompleteness, SemanticActionLinkOrigin, SemanticActionStatus,
     };
 
     use super::*;
@@ -417,7 +434,7 @@ mod tests {
             parent_action_id: "tool-call".to_string(),
             child_action_id: action.action_id.clone(),
             role: SemanticActionLinkRole::LlmToolCallResult,
-            confidence: SemanticActionLinkConfidence::Observed,
+            origin: SemanticActionLinkOrigin::Observed,
             valid: true,
             evidence: Vec::new(),
             attributes: BTreeMap::new(),

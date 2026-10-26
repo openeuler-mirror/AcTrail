@@ -3,8 +3,19 @@
 version = 4
 
 [[package]]
+name = "access_control"
+version = "0.8.0"
+dependencies = [
+ "config_core",
+ "libbpf-rs",
+ "plugin_system",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "actrail_plugin_abi"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "addr2line"
@@ -20,6 +31,25 @@ name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
+name = "agent_host"
+version = "0.8.0"
+dependencies = [
+ "agent_lifecycle_contract",
+ "model_core",
+ "serde",
+ "serde_json",
+ "toml",
+ "url",
+]
+
+[[package]]
+name = "agent_lifecycle_contract"
+version = "0.8.0"
+dependencies = [
+ "model_core",
+]
 
 [[package]]
 name = "ahash"
@@ -46,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "alert-delivery-contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -54,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "alert-proxy"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert-delivery-contract",
  "clap",
@@ -69,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "alert_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "serde",
@@ -77,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "alert_forwarding"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert-delivery-contract",
  "arc-swap",
@@ -198,8 +228,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic-waker"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
 name = "attach_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_binding",
  "collector_event",
@@ -222,6 +258,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "bincode"
@@ -419,7 +461,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cluster"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "config_core",
@@ -444,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "collector_binding"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -453,21 +495,21 @@ dependencies = [
 
 [[package]]
 name = "collector_capability"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_event"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_instance"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -479,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "collector_stats"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -492,10 +534,12 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "config_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "idle_detector",
  "model_core",
  "payload_capability",
+ "resource_profiling",
  "serde",
  "storage_factory",
  "toml",
@@ -503,10 +547,21 @@ dependencies = [
 
 [[package]]
 name = "control_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "agent_lifecycle_contract",
  "model_core",
  "plugin_system",
+]
+
+[[package]]
+name = "core-foundation"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
 ]
 
 [[package]]
@@ -683,8 +738,10 @@ dependencies = [
 
 [[package]]
 name = "ctl"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "agent_host",
+ "agent_lifecycle_contract",
  "clap",
  "config_core",
  "control_contract",
@@ -699,8 +756,11 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "access_control",
+ "agent_host",
+ "agent_lifecycle_contract",
  "alert-delivery-contract",
  "alert_contract",
  "alert_forwarding",
@@ -716,6 +776,8 @@ dependencies = [
  "export_core",
  "export_factory",
  "gateway_ingest_runtime",
+ "getrandom 0.3.4",
+ "idle_detector",
  "ingest_runtime",
  "jsonschema",
  "libc",
@@ -729,6 +791,7 @@ dependencies = [
  "provider_evidence",
  "provider_label",
  "recording_runtime",
+ "resource_profiling",
  "rule_set_provider",
  "sandbox_alert_sqlite",
  "sandbox_alert_store",
@@ -745,6 +808,7 @@ dependencies = [
  "sha2",
  "storage_core",
  "storage_factory",
+ "tempfile",
  "tls_payload_core",
  "tls_payload_sync",
  "tls_probe_point_finder",
@@ -785,8 +849,9 @@ dependencies = [
 
 [[package]]
 name = "ebpf_collector"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "access_control",
  "collector_binding",
  "collector_capability",
  "collector_event",
@@ -802,22 +867,6 @@ dependencies = [
  "process_identity",
  "process_tree_snapshot_contract",
  "tls_probe_point_finder",
-]
-
-[[package]]
-name = "ebpf_probe"
-version = "0.7.1"
-dependencies = [
- "config_core",
- "control_contract",
- "daemon",
- "libc",
- "model_core",
- "payload_capability",
- "semantic_action",
- "storage_core",
- "storage_factory",
- "uds_control_transport",
 ]
 
 [[package]]
@@ -874,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "export_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "plugin_system",
@@ -884,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "export_factory"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "export_otel_http",
@@ -896,18 +945,18 @@ dependencies = [
 
 [[package]]
 name = "export_otel_codec"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "opentelemetry-proto",
- "prost",
+ "prost 0.14.4",
  "semantic_action",
  "serde_json",
 ]
 
 [[package]]
 name = "export_otel_http"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -922,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_jsonl"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -1016,6 +1065,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
+name = "form_urlencoded"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+dependencies = [
+ "percent-encoding",
+]
+
+[[package]]
 name = "fraction"
 version = "0.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1032,6 +1090,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
 dependencies = [
  "futures-core",
+ "futures-sink",
 ]
 
 [[package]]
@@ -1050,6 +1109,12 @@ dependencies = [
  "futures-task",
  "futures-util",
 ]
+
+[[package]]
+name = "futures-io"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
 
 [[package]]
 name = "futures-macro"
@@ -1081,16 +1146,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
  "futures-core",
+ "futures-io",
  "futures-macro",
  "futures-sink",
  "futures-task",
+ "memchr",
  "pin-project-lite",
  "slab",
 ]
 
 [[package]]
 name = "gateway_ingest_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
@@ -1154,14 +1221,14 @@ dependencies = [
 
 [[package]]
 name = "graph_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "graph_inspect"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "hashbrown"
@@ -1228,10 +1295,92 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-body"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
+dependencies = [
+ "bytes",
+ "http",
+]
+
+[[package]]
+name = "http-body-util"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "hyper"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "futures-core",
+ "http",
+ "http-body",
+ "httparse",
+ "itoa",
+ "pin-project-lite",
+ "smallvec",
+ "tokio",
+ "want",
+]
+
+[[package]]
+name = "hyper-tls"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tower-service",
+]
+
+[[package]]
+name = "hyper-util"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "futures-channel",
+ "futures-util",
+ "http",
+ "http-body",
+ "httparse",
+ "hyper",
+ "ipnet",
+ "libc",
+ "percent-encoding",
+ "pin-project-lite",
+ "socket2",
+ "tokio",
+ "tower-service",
+ "tracing",
+]
 
 [[package]]
 name = "iana-time-zone"
@@ -1346,6 +1495,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
+name = "idle_detector"
+version = "0.8.0"
+dependencies = [
+ "agent_host",
+ "alert_contract",
+ "model_core",
+ "serde_json",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1380,14 +1539,22 @@ dependencies = [
 
 [[package]]
 name = "ingest_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_event",
  "model_core",
  "policy_evaluate_contract",
  "provider_evidence",
  "provider_label",
+ "serde",
+ "toml",
 ]
+
+[[package]]
+name = "ipnet"
+version = "2.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -1433,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "json_graph_export"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "graph_contract",
  "model_core",
@@ -1523,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "libbpf_tracepoint_attach"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libbpf-rs",
  "libc",
@@ -1559,11 +1726,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "linux_cgroup"
+version = "0.8.0"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "linux_platform"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "config_core",
  "libc",
+ "linux_cgroup",
+ "model_core",
+ "tempfile",
 ]
 
 [[package]]
@@ -1637,11 +1815,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "1.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+dependencies = [
+ "libc",
+ "wasi",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "model_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "process_identity",
  "serde",
+]
+
+[[package]]
+name = "native-tls"
+version = "0.2.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "465500e14ea162429d264d44189adc38b199b62b1c21eea9f69e4b73cb03bbf2"
+dependencies = [
+ "libc",
+ "log",
+ "openssl",
+ "openssl-probe",
+ "openssl-sys",
+ "schannel",
+ "security-framework",
+ "security-framework-sys",
+ "tempfile",
 ]
 
 [[package]]
@@ -1794,6 +2000,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "openssl-probe"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
 name = "openssl-sys"
 version = "0.9.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1826,7 +2038,7 @@ checksum = "56d658ba1faf63f7b9c492cfbe6e0ec365440a16132d3270c1065f7b33f1b638"
 dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
- "prost",
+ "prost 0.14.4",
 ]
 
 [[package]]
@@ -1847,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "otel_export"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_otel_codec",
 ]
@@ -1883,18 +2095,18 @@ dependencies = [
 
 [[package]]
 name = "payload_binding"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "payload_capability"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "payload_event"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -1919,7 +2131,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin_system"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "actrail_plugin_abi",
  "alert_contract",
@@ -1933,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "plugin_wasm_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "model_core",
@@ -1945,7 +2157,7 @@ dependencies = [
 
 [[package]]
 name = "policy_evaluate_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -1997,16 +2209,26 @@ dependencies = [
 
 [[package]]
 name = "process_identity"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "process_tree_snapshot_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
+]
+
+[[package]]
+name = "prost"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
+dependencies = [
+ "bytes",
+ "prost-derive 0.13.5",
 ]
 
 [[package]]
@@ -2016,7 +2238,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.14.4",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
+dependencies = [
+ "anyhow",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2034,11 +2269,11 @@ dependencies = [
 
 [[package]]
 name = "provider_evidence"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "provider_label"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "provider_evidence",
 ]
@@ -2118,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "recording_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "export_core",
  "model_core",
@@ -2216,6 +2451,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "reqwest"
+version = "0.12.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-tls",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "native-tls",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tokio-native-tls",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "resource_profiling"
+version = "0.8.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "libc",
+ "linux_cgroup",
+ "model_core",
+ "prost 0.13.5",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "snap",
+ "tempfile",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2231,7 +2523,7 @@ dependencies = [
 
 [[package]]
 name = "rule_set_provider"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "config_core",
  "provider_evidence",
@@ -2319,8 +2611,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
 name = "sandbox_agent_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_control",
  "sandbox_observation",
@@ -2329,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox_alert_sqlite"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "rusqlite",
  "sandbox_alert_store",
@@ -2338,18 +2636,18 @@ dependencies = [
 
 [[package]]
 name = "sandbox_alert_store"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_control"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "sandbox_control_uds"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "sandbox_control",
@@ -2357,44 +2655,52 @@ dependencies = [
 
 [[package]]
 name = "sandbox_evidence_sqlite"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "rusqlite",
  "sandbox_evidence_store",
+ "sandbox_linux_collector",
+ "sandbox_vsock_contract",
+ "tempfile",
 ]
 
 [[package]]
 name = "sandbox_evidence_store"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_linux_collector"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
  "libbpf_tracepoint_attach",
  "libc",
+ "linux_cgroup",
  "sandbox_observation",
+ "tempfile",
 ]
 
 [[package]]
 name = "sandbox_observation"
-version = "0.7.1"
+version = "0.8.0"
+dependencies = [
+ "sha2",
+]
 
 [[package]]
 name = "sandbox_plugin_delivery"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_resource_alert"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "arc-swap",
  "plugin_system",
@@ -2407,11 +2713,11 @@ dependencies = [
 
 [[package]]
 name = "sandbox_upstream_contract"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "sandbox_upstream_transport"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "gateway_ingest_runtime",
  "sandbox_upstream_contract",
@@ -2420,14 +2726,14 @@ dependencies = [
 
 [[package]]
 name = "sandbox_vsock_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_vsock_transport"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "sandbox_agent_runtime",
@@ -2436,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "sb"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "libc",
@@ -2451,14 +2757,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "schannel"
+version = "0.1.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91c1b7e4904c873ef0710c1f407dde2e6287de2bebc1bbbf7d430bb7cbffd939"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "security-framework"
+version = "3.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
+dependencies = [
+ "bitflags",
+ "core-foundation",
+ "core-foundation-sys",
+ "libc",
+ "security-framework-sys",
+]
+
+[[package]]
+name = "security-framework-sys"
+version = "2.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
 name = "semantic_action"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
  "serde_json",
@@ -2466,17 +2804,22 @@ dependencies = [
 
 [[package]]
 name = "semantic_action_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "base64 0.22.1",
+ "brotli",
  "config_core",
  "flate2",
  "libc",
  "model_core",
  "plugin_system",
  "semantic_action",
+ "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -2542,6 +2885,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_urlencoded"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
+dependencies = [
+ "form_urlencoded",
+ "itoa",
+ "ryu",
+ "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2589,6 +2955,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "snap"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2600,17 +2972,19 @@ dependencies = [
 
 [[package]]
 name = "sqlite_inspect"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "sqlite_storage"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "bincode",
  "model_core",
+ "resource_profiling",
  "rusqlite",
  "semantic_action",
+ "serde",
  "serde_json",
  "sha2",
  "storage_core",
@@ -2619,6 +2993,7 @@ dependencies = [
  "store_snapshot_contract",
  "store_tx_contract",
  "store_write_contract",
+ "tempfile",
  "zstd",
 ]
 
@@ -2630,10 +3005,11 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage_core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "model_core",
+ "resource_profiling",
  "semantic_action",
  "store_read_contract",
  "store_retention_contract",
@@ -2644,40 +3020,52 @@ dependencies = [
 
 [[package]]
 name = "storage_factory"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sqlite_storage",
+ "storage_core",
+ "storage_noop",
+]
+
+[[package]]
+name = "storage_noop"
+version = "0.8.0"
+dependencies = [
+ "alert_contract",
+ "model_core",
+ "resource_profiling",
+ "semantic_action",
  "storage_core",
 ]
 
 [[package]]
 name = "store_read_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_retention_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_snapshot_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_tx_contract"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "store_write_contract"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "model_core",
 ]
@@ -2703,6 +3091,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sync_wrapper"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+dependencies = [
+ "futures-core",
 ]
 
 [[package]]
@@ -2785,11 +3182,11 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_core"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "tls_payload_probe"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "brotli",
  "clap",
@@ -2804,7 +3201,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_probe_sync"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "libc",
@@ -2817,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_sync"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "libc",
  "payload_capability",
@@ -2827,15 +3224,40 @@ dependencies = [
 
 [[package]]
 name = "tls_probe_point_finder"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anstyle",
  "clap",
+ "gimli",
  "memchr",
  "memmap2",
  "model_core",
  "rustc-demangle",
  "sha2",
+]
+
+[[package]]
+name = "tokio"
+version = "1.53.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
+dependencies = [
+ "bytes",
+ "libc",
+ "mio",
+ "pin-project-lite",
+ "socket2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-native-tls"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+dependencies = [
+ "native-tls",
+ "tokio",
 ]
 
 [[package]]
@@ -2880,8 +3302,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
+name = "tower"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "pin-project-lite",
+ "sync_wrapper",
+ "tokio",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "pin-project-lite",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "url",
+]
+
+[[package]]
+name = "tower-layer"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
+
+[[package]]
+name = "tower-service"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
+
+[[package]]
 name = "trace_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -2934,6 +3401,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "try-lock"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2941,7 +3414,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uds_control_client"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "control_contract",
  "libc",
@@ -2950,7 +3423,7 @@ dependencies = [
 
 [[package]]
 name = "uds_control_server"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "control_contract",
  "libc",
@@ -2960,8 +3433,9 @@ dependencies = [
 
 [[package]]
 name = "uds_control_transport"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "agent_lifecycle_contract",
  "control_contract",
  "model_core",
  "plugin_system",
@@ -3003,7 +3477,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "log",
  "percent-encoding",
  "rustls",
@@ -3019,10 +3493,22 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "http",
  "httparse",
  "log",
+]
+
+[[package]]
+name = "url"
+version = "2.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+dependencies = [
+ "form_urlencoded",
+ "idna",
+ "percent-encoding",
+ "serde",
 ]
 
 [[package]]
@@ -3078,17 +3564,19 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "config_core",
  "json_graph_export",
  "model_core",
  "otel_export",
+ "resource_profiling",
  "semantic_action",
  "serde_json",
  "storage_core",
  "storage_factory",
+ "toml",
 ]
 
 [[package]]
@@ -3099,7 +3587,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vsock_gateway"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "libc",
@@ -3111,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "vsock_gateway_runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "sandbox_upstream_contract",
  "sandbox_vsock_contract",
@@ -3126,6 +3614,15 @@ checksum = "aec2f81b75ca063294776b4f7e8da71d1d5ae81c2b1b149c8d89969230265d63"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "want"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec4cdd0dd910afe868b7ef477227d8d538b46b3075031afee8a9f2acb0a2ed0b"
+dependencies = [
+ "try-lock",
 ]
 
 [[package]]
@@ -3154,6 +3651,16 @@ dependencies = [
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.75"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "503b14d284f2c8dac03b819967e155ea753f573586193b2b2c95990cb5d69280"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3504,7 +4011,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alert_contract",
  "config_core",
@@ -3512,14 +4019,26 @@ dependencies = [
  "flate2",
  "model_core",
  "plugin_system",
+ "resource_profiling",
  "rusqlite",
  "semantic_action",
  "serde",
  "serde_json",
+ "sqlite_storage",
  "storage_core",
  "storage_factory",
  "toml",
  "uds_control_client",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.102"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6430a72df5eb332242960fe84b3002a241163998241eb596d4f739b9757061d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

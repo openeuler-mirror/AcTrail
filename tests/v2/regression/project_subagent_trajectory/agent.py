@@ -6,8 +6,12 @@ from pathlib import Path
 
 from tests.v2.common.testing_env import AgentBinaryDiscovery, default_claude_model
 
+from .constants import CASE_CONSTANTS
+
 
 class ProjectSubagentAgent(ABC):
+    DEFAULT_CANDIDATES = ("opencode", "claude", "xiaoo")
+
     def __init__(
         self,
         binary: Path,
@@ -56,18 +60,28 @@ class ProjectSubagentAgent(ABC):
             return None
         return implementation(binary, discovery.environment(binary))
 
+    @classmethod
+    def candidates(cls, configured: str | None) -> tuple[str, ...]:
+        if configured is not None:
+            return (configured,)
+        return cls.DEFAULT_CANDIDATES
+
     def _task_contract(self) -> str:
         return (
-            "The main agent must not call bash, shell, read, glob, grep, find, or git. "
-            "Delegate these independent tasks: (1) use Bash command "
-            "`find crates -mindepth 1 -maxdepth 1 -type d -printf '.\\n' | wc -l`, "
-            "and report the count; (2) use Bash command `git log -1 --format=%cI`, and "
-            "report the timestamp; (3) use Bash command `git branch --show-current`, "
-            "and report the branch. Divide the work exactly as assigned. Each child must run "
-            "only its specified query and return immediately; do not explore unrelated "
-            "files, broaden the task, or inspect another child's result. Only when the "
-            "specified command fails may that child make one minimal corrective attempt. "
-            "After all three children complete, reply with one concise summary."
+            "现在派生2个subagent，一个编写一下冒泡排序，一个编写一个二分排序。"
+            "然后主agent测试哪个速度快。 "
+            "Delegate exactly two independent implementation tasks: (1) one child writes "
+            "`bubble_sort.py` with a tested bubble_sort function; (2) one child writes "
+            "`binary_insertion_sort.py` with a tested binary_insertion_sort function. "
+            "Start both children before waiting for either result. The prompt passed to "
+            "each child must contain more than 200 characters, including "
+            "the implementation requirements, output filename, and self-check instructions. "
+            "After both finish, the "
+            "main agent must read both files, write `benchmark.py`, run a fair benchmark "
+            "on identical deterministic integer inputs of at least three sizes, and report "
+            "which implementation is faster. The main agent must perform the benchmark "
+            "itself and must not rewrite either child's implementation. Keep all work in "
+            "the current directory and do not inspect the AcTrail source repository."
         )
 
 
@@ -90,7 +104,7 @@ class OpenCodeProjectSubagentAgent(ProjectSubagentAgent):
             "--dir",
             repository,
         ]
-        model = os.environ.get("OPENCODE_E2E_MODEL", "").strip()
+        model = os.environ.get("OPENCODE_E2E_MODEL", CASE_CONSTANTS.model).strip()
         if model:
             argv.extend(("--model", model))
         argv.append(prompt)
@@ -98,9 +112,8 @@ class OpenCodeProjectSubagentAgent(ProjectSubagentAgent):
 
     def prompt(self) -> str:
         return (
-            "Inspect the current project using exactly three concurrent task/general "
-            "subagents. Your first assistant response must contain all three task tool "
-            "calls together; do not wait for one child before starting another. "
+            "Use exactly two concurrent task/general subagents for this sorting benchmark. "
+            "Your first assistant response must contain both task tool calls together. "
             + self._task_contract()
         )
 
@@ -139,9 +152,9 @@ class ClaudeProjectSubagentAgent(ProjectSubagentAgent):
 
     def prompt(self) -> str:
         return (
-            "Inspect the current project by launching exactly three general-purpose "
-            "Agent subagents concurrently. Start all three independent Agent calls in "
-            "one assistant response before waiting for their results. "
+            "Run this sorting benchmark by launching exactly two general-purpose Agent "
+            "subagents concurrently. Start both independent Agent calls in one assistant "
+            "response before waiting for their results. "
             + self._task_contract()
         )
 
@@ -157,7 +170,7 @@ class XiaooProjectSubagentAgent(ProjectSubagentAgent):
     def launch_argv(self, repository: Path, prompt: str) -> list[Path | str]:
         max_turns = os.environ.get(
             "PROJECT_SUBAGENT_TRAJECTORY_E2E_XIAOO_MAX_TURNS",
-            "20",
+            str(CASE_CONSTANTS.xiaoo_max_turns),
         ).strip()
         if not max_turns.isdecimal() or int(max_turns) < 1:
             raise ValueError(
@@ -179,11 +192,12 @@ class XiaooProjectSubagentAgent(ProjectSubagentAgent):
 
     def prompt(self) -> str:
         return (
-            "Inspect the current project using exactly three independent subagents. "
-            "Call spawn_subagent three times before calling join_subagent; the main "
-            "agent must only collect and summarize their results. If spawn_subagent "
-            "or join_subagent is unavailable, or any spawn/join invocation fails, do "
-            "not inspect the project or complete the tasks yourself; reply only with "
+            "Run this sorting benchmark using exactly two independent subagents. "
+            "Call spawn_subagent twice before calling join_subagent; the main "
+            "agent must wait for both results before running the benchmark. If "
+            "spawn_subagent or join_subagent is unavailable, or any spawn/join "
+            "invocation fails, do "
+            "not implement the algorithms or benchmark yourself; reply only with "
             "`没有`. "
             + self._task_contract()
         )

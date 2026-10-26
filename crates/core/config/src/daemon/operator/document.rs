@@ -7,20 +7,18 @@ use std::time::Duration;
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::ProfileName;
 use serde::{Deserialize, Serialize};
-use storage_factory::StorageConfig;
+use storage_factory::{
+    EventRecordLayout, SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
+    SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES, StorageConfig,
+};
 
 use super::super::{
-    AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig, ClusterConfig,
-    ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig, DEFAULT_ACTIVE_TRACE_MAX,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
+    AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig,
+    ClusterConfig, ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
     DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
     DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
     DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
-    DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
     DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
     DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
@@ -32,31 +30,32 @@ use super::super::{
     DEFAULT_POST_TRACE_REQUESTS_PER_CYCLE, DEFAULT_POST_TRACE_SHUTDOWN_DRAIN_TIMEOUT_MS,
     DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DEFAULT_WEB_ALERTS_LIMIT,
     DEFAULT_WEB_ALERTS_MAX_LIMIT, DisabledOrPath, EbpfCollectorConfig, EbpfEnabledMode,
-    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy,
-    EnforcementScope, EnforcementSeccompSyscall, FileBulkReadFastPathConfig,
-    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
-    Http2DataContentRetention, HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention,
-    IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
-    L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig, LlmProjectionStateConfig,
-    LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmResponseContentRetention,
-    LlmStreamClassifierConfig, LlmToolCallRetention, LlmToolResultContentExportRetention,
-    LlmTrajectoryConfig, LlmUsageRetention, MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS,
-    McpJsonRpcContentRetention, MemlockRlimit, NetworkControlConfig, NetworkControlSeccompSyscall,
-    PayloadBodyContentRetention, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
-    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
-    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
-    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
-    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig,
-    PluginDiscoveryConfig, PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall,
-    ResourceMetricsConfig, SeccompNotifyConfig, SemanticContentOwner, SemanticRetentionConfig,
-    SocketPermissions, SseDataPolicy, SseEventContentRetention, StartupPluginFailurePolicy,
-    StartupPluginLoadConfig, StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    WebAlertsConfig, WebServerConfig, WorkloadDiagnosticsConfig,
+    EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementMarkStrategy, EnforcementScope,
+    FileBulkReadObservationConfig, FileCollectionConfig, FileIoCollectionConfig,
+    FileIoSummaryConfig, FileMetadataRetention, FileObservationConfig, FileRawEventRetention,
+    FileTtyObservationConfig, FsEnumerateObservationConfig, Http1ProtocolConfig,
+    Http2DataContentRetention, Http2ProtocolConfig, HttpBodyRetention, HttpExchangeConfig,
+    HttpHeadersRetention, IpcLineageConfig, L0LlmCallRetention, L0McpCallRetention, L1SseRetention,
+    L2HttpRetention, L2WebSocketRetention, L3Http2FrameRetention, L4PayloadRetention,
+    LlmAssemblyConfig, LlmProjectionStateConfig, LlmRequestBodyExportRetention,
+    LlmRequestContentRetention, LlmResponseContentRetention, LlmStreamClassifierConfig,
+    LlmToolCallRetention, LlmToolResultContentExportRetention, LlmTrajectoryConfig,
+    LlmUsageRetention, LlmWebSocketConfig, McpJsonRpcContentRetention, MemlockRlimit,
+    NetworkControlConfig, NetworkControlSeccompSyscall, PayloadBodyContentRetention, PayloadConfig,
+    PayloadMcpConfig, PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
+    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
+    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
+    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
+    PayloadTlsSyncRuntimeLibraryPath, PluginAlertRuntimeConfig, PluginDiscoveryConfig,
+    PostTraceRuntimeConfig, ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig,
+    SemanticContentOwner, SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
+    SseEventContentRetention, StartupPluginFailurePolicy, StartupPluginLoadConfig,
+    StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig,
+    WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
-    validate_ipc_lineage_config, validate_resource_metrics_config, validate_seccomp_config,
+    validate_ipc_lineage_config, validate_seccomp_config,
 };
 use crate::capture_profile::CaptureProfile;
 use crate::export::ExportConfig;
@@ -79,6 +78,8 @@ mod file;
 mod hand_observation;
 #[path = "document/helpers.rs"]
 mod helpers;
+#[path = "document/idle_detection.rs"]
+mod idle_detection;
 #[path = "document/network.rs"]
 mod network;
 #[path = "document/payload.rs"]
@@ -102,6 +103,7 @@ use command::*;
 use file::*;
 use hand_observation::*;
 use helpers::*;
+use idle_detection::*;
 use network::*;
 use payload::*;
 use plugin::*;
@@ -110,7 +112,7 @@ use sandbox_alerts::*;
 use sandbox_evidence::*;
 use semantic::*;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct OperatorDocument {
     control: ControlDocument,
@@ -130,10 +132,12 @@ pub(super) struct OperatorDocument {
     process_seccomp: ProcessSeccompDocument,
     agent_invocation: AgentInvocationDocument,
     semantic_retention: SemanticRetentionDocument,
+    idle_detection: IdleDetectionDocument,
     file_observation: FileObservationDocument,
     application: ApplicationDocument,
-    resource_metrics: ResourceMetricsDocument,
+    resource_profiling: toml::Table,
     provider: ProviderDocument,
+    access_control: AccessControlConfig,
     enforcement: EnforcementDocument,
     command_control: CommandControlDocument,
     network_control: NetworkControlDocument,
@@ -160,10 +164,12 @@ impl Default for OperatorDocument {
             process_seccomp: ProcessSeccompDocument::default(),
             agent_invocation: AgentInvocationDocument::default(),
             semantic_retention: SemanticRetentionDocument::default(),
+            idle_detection: IdleDetectionDocument::default(),
             file_observation: FileObservationDocument::default(),
             application: ApplicationDocument::default(),
-            resource_metrics: ResourceMetricsDocument::default(),
+            resource_profiling: toml::Table::new(),
             provider: ProviderDocument::default(),
+            access_control: AccessControlConfig::default(),
             enforcement: EnforcementDocument::default(),
             command_control: CommandControlDocument::default(),
             network_control: NetworkControlDocument::default(),
@@ -176,6 +182,20 @@ impl ConfigModel for OperatorDocument {
     const MODEL_NAME: &'static str = "operator";
 
     fn validate(&self) -> Result<(), ConfigError> {
+        let profiling =
+            resource_profiling::ResourceProfilingConfig::parse(&self.resource_profiling)
+                .map_err(ConfigError::new)?;
+        if !profiling.workload_enabled()
+            && self
+                .capture
+                .capabilities
+                .iter()
+                .any(|capability| capability == "resource-metrics")
+        {
+            return Err(ConfigError::new(
+                "capture requires resource-metrics while resource_profiling.collection.workload is disabled",
+            ));
+        }
         if self.capture.capabilities.is_empty() {
             return Err(ConfigError::new("capture.capabilities must not be empty"));
         }
@@ -189,7 +209,10 @@ impl OperatorDocument {
     }
 
     pub(super) fn default_toml() -> Result<String, String> {
-        Self::default().to_toml().map_err(|error| error.to_string())
+        let mut document = Self::default();
+        document.resource_profiling =
+            resource_profiling::ResourceProfilingConfig::default_document()?;
+        document.to_toml().map_err(|error| error.to_string())
     }
 
     pub(super) fn from_config(config: &OperatorConfig) -> Self {
@@ -206,14 +229,23 @@ impl OperatorDocument {
         }
         let storage = StorageDocument {
             backend: config.storage.backend().as_str().to_string(),
-            sqlite: SqliteStorageDocument {
-                path: config.storage.path().display().to_string(),
-                busy_timeout_ms: config.storage.sqlite_busy_timeout_ms(),
-                cold_field_compression_min_bytes: config
-                    .storage
-                    .sqlite_cold_field_compression_min_bytes(),
-                cold_field_zstd_level: config.storage.sqlite_cold_field_zstd_level(),
-            },
+            sqlite: config
+                .storage
+                .sqlite_config()
+                .map(|sqlite| SqliteStorageDocument {
+                    path: sqlite.path.display().to_string(),
+                    busy_timeout_ms: sqlite.busy_timeout_ms,
+                    cold_field_compression_min_bytes: sqlite.cold_field_compression_min_bytes,
+                    cold_field_zstd_level: sqlite.cold_field_zstd_level,
+                    event_payload_dictionary_cache_bytes: sqlite
+                        .event_payload_dictionary_cache_bytes,
+                    event_path_dictionary_cache_bytes: sqlite.event_path_dictionary_cache_bytes,
+                    event_record_layout: sqlite.event_record_layout.as_str().to_string(),
+                    event_record_block_max_events: sqlite.event_record_block_max_events,
+                    event_record_block_max_uncompressed_bytes: sqlite
+                        .event_record_block_max_uncompressed_bytes,
+                    event_record_block_zstd_level: sqlite.event_record_block_zstd_level,
+                }),
             retention: StorageRetentionDocument::from_config(&config.storage_retention),
         };
         Self {
@@ -299,6 +331,9 @@ impl OperatorDocument {
             sandbox_alerts: SandboxAlertsDocument::from_config(&config.sandbox_alerts),
             capture: CaptureDocument {
                 profile_name: config.capture_profile.name.as_str().to_string(),
+                agent_descendant_observation_depth: config
+                    .capture_profile
+                    .agent_descendant_observation_depth,
                 capabilities: required,
                 opportunistic_capabilities: opportunistic,
                 disabled_capabilities: disabled,
@@ -306,7 +341,6 @@ impl OperatorDocument {
             ebpf: EbpfDocument {
                 enabled: config.ebpf_config.enabled_mode.to_string(),
                 memlock_rlimit: memlock_rlimit_as_str(config.ebpf_config.memlock_rlimit),
-                preflight_link_teardown_workers: config.ebpf_config.preflight_link_teardown_workers,
                 tracked_process_max_entries: config.ebpf_config.tracked_process_max_entries,
                 pending_operation_max_entries: config.ebpf_config.pending_operation_max_entries,
                 fd_per_process_max_entries: config.ebpf_config.fd_per_process_max_entries,
@@ -315,6 +349,7 @@ impl OperatorDocument {
                     .ebpf_config
                     .suppressed_fd_index_slots_per_process,
                 event_ring_buffer_max_bytes: config.ebpf_config.event_ring_buffer_max_bytes,
+                diagnostics_summary_interval_ms: config.ebpf_config.diagnostics_summary_interval_ms,
                 file_path_capture_enabled: config.ebpf_config.file_path_capture_enabled,
                 file_path_max_bytes: config.ebpf_config.file_path_max_bytes,
                 net_send_recv_aggregation: config.ebpf_config.net_send_recv_aggregation,
@@ -336,6 +371,7 @@ impl OperatorDocument {
                     .collect(),
                 max_args: config.process_seccomp.max_args,
                 max_arg_bytes: config.process_seccomp.max_arg_bytes,
+                max_total_arg_bytes: config.process_seccomp.max_total_arg_bytes,
                 pending_max_entries: config.process_seccomp.pending_max_entries,
             },
             agent_invocation: AgentInvocationDocument {
@@ -346,18 +382,7 @@ impl OperatorDocument {
             semantic_retention: SemanticRetentionDocument::from_config(&config.semantic_retention),
             file_observation: FileObservationDocument::from_config(&config.file_observation),
             application: ApplicationDocument::from_config(&config.application_protocol),
-            resource_metrics: ResourceMetricsDocument {
-                enabled: config.resource_metrics.enabled,
-                interval_ms: config.resource_metrics.interval_ms,
-                include_children: config.resource_metrics.include_children,
-                include_system: config.resource_metrics.include_system,
-                cpu_alert_percent_millis: disabled_or_u64_as_string(
-                    config.resource_metrics.cpu_alert_percent_millis,
-                ),
-                memory_alert_rss_kb: disabled_or_u64_as_string(
-                    config.resource_metrics.memory_alert_rss_kb,
-                ),
-            },
+            resource_profiling: config.resource_profiling.clone(),
             provider: ProviderDocument {
                 rules_enabled: config.provider_rule_set.is_some(),
                 rules_path: config
@@ -371,9 +396,9 @@ impl OperatorDocument {
                     .map(|provider| provider.unknown_provider_label.clone())
                     .unwrap_or_else(|| ProviderDocument::default().unknown_provider_label),
             },
+            access_control: config.access_control.clone(),
             enforcement: EnforcementDocument {
                 enabled: config.enforcement.enabled,
-                backend: enforcement_backend_as_str(config.enforcement.backend).to_string(),
                 scope: enforcement_scope_as_str(config.enforcement.scope).to_string(),
                 rules_path: config.enforcement.rules_path.display().to_string(),
                 builtin_rules: config
@@ -387,13 +412,6 @@ impl OperatorDocument {
                     .to_string(),
                 audit_enabled: config.enforcement.audit_enabled,
                 event_buffer_bytes: config.enforcement.event_buffer_bytes,
-                seccomp_syscalls: config
-                    .enforcement
-                    .seccomp_syscalls
-                    .iter()
-                    .map(enforcement_seccomp_syscall_as_str)
-                    .map(str::to_string)
-                    .collect(),
                 seccomp_path_max_bytes: config.enforcement.seccomp_path_max_bytes,
             },
             command_control: CommandControlDocument {
@@ -438,10 +456,19 @@ impl OperatorDocument {
                 shutdown_wait_ms: config.shutdown_wait_ms,
                 poll_interval_ms: config.supervision_poll_interval_ms,
             },
+            idle_detection: IdleDetectionDocument::from_config(&config.idle_detection),
         }
     }
 
     pub(super) fn to_config(&self) -> Result<OperatorConfig, String> {
+        if !self.semantic_retention.projection_enabled
+            && self.capture.agent_descendant_observation_depth()? != -1
+        {
+            return Err(
+                "semantic_retention.projection_enabled=false requires capture.agent_descendant_observation_depth=-1 because agent depth depends on semantic agent identification"
+                    .to_string(),
+            );
+        }
         let capabilities = self.capture.capability_requests()?;
         if capabilities.is_empty() {
             return Err("at least one capability is required".to_string());
@@ -453,7 +480,12 @@ impl OperatorDocument {
             mcp: self.payload.mcp.to_config()?,
         };
         let ebpf_config = self.ebpf.to_config()?;
-        validate_ipc_lineage_config(&ebpf_config.ipc_lineage, &capabilities)?;
+        validate_ipc_lineage_config(
+            &ebpf_config.ipc_lineage,
+            &capabilities,
+            &payload_config,
+            self.semantic_retention.projection_enabled,
+        )?;
         let seccomp_notify = self.seccomp_notify.to_config();
         let process_seccomp = self.process_seccomp.to_config()?;
         let application_protocol = self.application.to_config()?;
@@ -463,13 +495,23 @@ impl OperatorDocument {
             payload_config.socket.enabled,
             &capabilities,
         )?;
-        let resource_metrics = self.resource_metrics.to_config()?;
-        validate_resource_metrics_config(&resource_metrics, &capabilities)?;
         let enforcement = self.enforcement.to_config()?;
         validate_enforcement_config(&enforcement, &capabilities)?;
         let command_control = self.command_control.to_config()?;
         let network_control = self.network_control.to_config()?;
+        let access_control = self.access_control.resolve(
+            enforcement.enabled,
+            command_control.enabled,
+            network_control.enabled,
+        );
+        access_control.validate(&capabilities)?;
+        if access_control.uses_lsm() && ebpf_config.enabled_mode == EbpfEnabledMode::False {
+            return Err(
+                "LSM access control requires host eBPF enabled for kernel identity binding".into(),
+            );
+        }
         validate_seccomp_config(
+            &access_control,
             &seccomp_notify,
             &payload_config.tls,
             &payload_config.socket,
@@ -571,6 +613,9 @@ impl OperatorDocument {
             capture_profile: CaptureProfile::new(
                 ProfileName::new(self.capture.profile_name.clone()),
                 capabilities,
+            )
+            .with_agent_descendant_observation_depth(
+                self.capture.agent_descendant_observation_depth()?,
             ),
             ebpf_config,
             payload_config,
@@ -578,11 +623,13 @@ impl OperatorDocument {
             process_seccomp,
             agent_invocation: self.agent_invocation.to_config(),
             semantic_retention: self.semantic_retention.to_config()?,
+            idle_detection: self.idle_detection.to_config()?,
             file_observation: self.file_observation.to_config()?,
             application_protocol,
-            resource_metrics,
+            resource_profiling: self.resource_profiling.clone(),
             trace_finalization,
             provider_rule_set: self.provider.to_config(),
+            access_control: self.access_control.clone(),
             enforcement,
             command_control,
             network_control,

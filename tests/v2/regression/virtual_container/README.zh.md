@@ -64,6 +64,8 @@ API Token 和私钥不会写入 profile。
 1. base VM 依次执行 `verify`、`deny`、`launch`、`namespace`；
 2. data VM 依次执行 `tls-only`、`ebpf-only`、`combo`。
 
+**采集配置**：Guest 配置由 `actrailctl init` 合并产品默认值与部署设置生成。三个数据场景均使用默认 eBPF 采集，名称表示验收内容。独立的 `guest/tls-only.sh` 覆盖显式 TLS sync 后端。
+
 因此单 backend 共启动约 2 台 VM，最大同时运行 1 台。某个外部 backend/VMM 缺失
 只会使该 backend 为 `SKIPPED`；部署产物过期、配置错误或数据断言失败为 `FAILED`。
 

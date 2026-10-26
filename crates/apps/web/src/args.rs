@@ -7,7 +7,7 @@ use std::time::Duration;
 use config_core::daemon::{DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, WebAlertsConfig};
 use storage_factory::StorageConfig;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WebConfig {
     pub storage: StorageConfig,
     pub cluster_root: Option<PathBuf>,

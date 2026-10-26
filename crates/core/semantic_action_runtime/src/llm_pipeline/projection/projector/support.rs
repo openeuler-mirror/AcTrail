@@ -3,22 +3,17 @@
 use std::collections::BTreeMap;
 
 use config_core::daemon::SemanticRetentionConfig;
-use model_core::payload::{PayloadSegment, PayloadSourceBoundary};
+use model_core::payload::PayloadSourceBoundary;
 use semantic_action::{
-    LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus, SemanticEvidence,
-    attr_keys as attrs, evidence_roles, validated_model_identifier,
+    LlmResponseTermination, LlmTokenUsage, SemanticActionCompleteness, SemanticActionStatus,
+    SemanticEvidence, attr_keys as attrs, evidence_roles, validated_model_identifier,
 };
 
-use crate::llm_pipeline::assembly::router::PayloadStreamGroupKey;
 use crate::llm_pipeline::stream::response::{LlmResponseBody, ProviderStreamUpdate};
 use crate::llm_pipeline::transport::HttpResponseParts;
 use crate::llm_pipeline::transport::evidence::EvidenceSnapshot;
 
 use super::super::retention::{insert_payload_snapshot_attributes, payload_snapshot_evidence};
-
-pub(super) fn http_response_can_evict(http: &HttpResponseParts) -> bool {
-    !http.body_boundary_known || http.complete
-}
 
 pub(super) fn llm_response_attributes(
     config: &SemanticRetentionConfig,
@@ -134,6 +129,34 @@ pub(super) fn raw_llm_response_attributes(
         attrs::llm_response::PAYLOAD_BYTES.to_string(),
         body_bytes.len().to_string(),
     );
+    insert_response_content_attributes(config, body, &mut attributes);
+    attributes.insert(
+        attrs::payload::STREAM_KEY.to_string(),
+        first.stream_key.to_string(),
+    );
+    attributes.insert(
+        attrs::payload::OPERATION_ID.to_string(),
+        first.operation_id.to_string(),
+    );
+    attributes.insert(
+        attrs::payload::SEQUENCE.to_string(),
+        first.sequence.to_string(),
+    );
+    insert_payload_snapshot_attributes(&mut attributes, evidence);
+    attributes.insert(
+        attrs::payload::SOURCE_BOUNDARY.to_string(),
+        format!("{:?}", first.source_boundary),
+    );
+    attributes.insert(attrs::payload::LIBRARY.to_string(), first.library.clone());
+    attributes.insert(attrs::payload::SYMBOL.to_string(), first.symbol.clone());
+    attributes
+}
+
+pub(super) fn insert_response_content_attributes(
+    config: &SemanticRetentionConfig,
+    body: &LlmResponseBody,
+    attributes: &mut BTreeMap<String, String>,
+) {
     attributes.insert(
         attrs::llm_response::STREAM.to_string(),
         body.stream.to_string(),
@@ -142,7 +165,10 @@ pub(super) fn raw_llm_response_attributes(
         attrs::llm_response::BODY_FORMAT.to_string(),
         llm_response_body_format(body).to_string(),
     );
-    attributes.insert(attrs::llm_response::DONE.to_string(), body.done.to_string());
+    attributes.insert(
+        attrs::llm_response::DONE.to_string(),
+        body.termination.is_some().to_string(),
+    );
     attributes.insert(
         attrs::llm_response::CHUNK_COUNT.to_string(),
         body.chunk_count.to_string(),
@@ -179,28 +205,8 @@ pub(super) fn raw_llm_response_attributes(
     if config.llm_response_usage_enabled()
         && let Some(usage) = &body.token_usage
     {
-        insert_token_usage_attributes(&mut attributes, usage);
+        insert_token_usage_attributes(attributes, usage);
     }
-    attributes.insert(
-        attrs::payload::STREAM_KEY.to_string(),
-        first.stream_key.to_string(),
-    );
-    attributes.insert(
-        attrs::payload::OPERATION_ID.to_string(),
-        first.operation_id.to_string(),
-    );
-    attributes.insert(
-        attrs::payload::SEQUENCE.to_string(),
-        first.sequence.to_string(),
-    );
-    insert_payload_snapshot_attributes(&mut attributes, evidence);
-    attributes.insert(
-        attrs::payload::SOURCE_BOUNDARY.to_string(),
-        format!("{:?}", first.source_boundary),
-    );
-    attributes.insert(attrs::payload::LIBRARY.to_string(), first.library.clone());
-    attributes.insert(attrs::payload::SYMBOL.to_string(), first.symbol.clone());
-    attributes
 }
 
 fn insert_token_usage_attributes(attributes: &mut BTreeMap<String, String>, usage: &LlmTokenUsage) {
@@ -289,7 +295,7 @@ pub(super) fn llm_response_status(
         evidence,
         http_complete,
         &ProviderStreamUpdate {
-            done: body.done,
+            termination: body.termination,
             stream: body.stream,
             chunk_count: body.chunk_count,
         },
@@ -301,13 +307,20 @@ pub(super) fn llm_response_status_from_progress(
     http_complete: bool,
     progress: &ProviderStreamUpdate,
 ) -> SemanticActionStatus {
-    if evidence.any_operation_failed {
-        SemanticActionStatus::Error
-    } else if progress.done
-        || http_complete
-        || (!progress.stream && evidence.operation_segments_are_complete())
+    if progress
+        .termination
+        .is_some_and(LlmResponseTermination::is_failure)
     {
+        SemanticActionStatus::Error
+    } else if progress.termination.is_some() {
         SemanticActionStatus::Success
+    } else if evidence.any_operation_failed {
+        SemanticActionStatus::Error
+    } else if !progress.stream && (http_complete || evidence.operation_segments_are_complete()) {
+        SemanticActionStatus::Success
+    } else if http_complete {
+        // SSE success requires provider completion evidence.
+        SemanticActionStatus::Error
     } else {
         SemanticActionStatus::InProgress
     }
@@ -321,9 +334,11 @@ pub(super) fn llm_response_completeness(
     if matches!(
         llm_response_status(evidence, http_complete, body),
         SemanticActionStatus::Success
-    ) && evidence.all_capture_complete
+    ) && (body.termination.is_some() || http_complete || evidence.all_capture_complete)
     {
         SemanticActionCompleteness::Complete
+    } else if evidence.capture_is_policy_limited() {
+        SemanticActionCompleteness::CaptureLimited
     } else {
         SemanticActionCompleteness::Partial
     }
@@ -334,43 +349,4 @@ pub(super) fn llm_response_title(attributes: &BTreeMap<String, String>) -> Strin
         .get(attrs::llm_response::MODEL)
         .map(|model| format!("LLM response {}", model))
         .unwrap_or_else(|| "LLM response".to_string())
-}
-
-pub(super) fn llm_stream_action_id(
-    key: &PayloadStreamGroupKey,
-    message_start: usize,
-    segment: &PayloadSegment,
-    http_stream_id: Option<u32>,
-) -> String {
-    match http_stream_id {
-        Some(stream_id) => format!(
-            "trace:{}:payload-stream:{}:{}:{}:h2:{}:llm.response",
-            segment.trace_id.get(),
-            key.process.get(),
-            key.stream_key,
-            message_start,
-            stream_id
-        ),
-        None => format!(
-            "trace:{}:payload-stream:{}:{}:{}:llm.response",
-            segment.trace_id.get(),
-            key.process.get(),
-            key.stream_key,
-            message_start
-        ),
-    }
-}
-
-pub(super) fn llm_raw_stream_action_id(
-    key: &PayloadStreamGroupKey,
-    message_start: usize,
-    segment: &PayloadSegment,
-) -> String {
-    format!(
-        "trace:{}:payload-stream:{}:{}:{}:raw:llm.response",
-        segment.trace_id.get(),
-        key.process.get(),
-        key.stream_key,
-        message_start
-    )
 }

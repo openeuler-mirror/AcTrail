@@ -217,7 +217,7 @@ examples/plugins/wasm-legacy/llm-codec-qoder/qoder_llm_codec.wasm
 初始化或校验默认配置：
 
 ```bash
-sudo target/release/actraild init
+sudo target/release/actrailctl init
 ```
 
 预期输出显示配置已初始化或校验成功，且 `/etc/actrail/actraild.conf` 存在。默认配置使用以下运行路径：
@@ -482,4 +482,4 @@ cp \
 | `src/lib.rs` | Qoder request body 和 SSE event data 的解码实现。 |
 | `README.zh.md` | 本说明文档。 |
 
-相关接口说明见 [WASM Core Module ABI](../../../../docs/plugins/abi/wasm-core-module.zh.md) 和 [LLM Codec ABI](../../../../docs/plugins/abi/llm-codec.zh.md)。
+相关接口说明见 [WASM Core Module ABI](../../../../docs/reference/plugin-api/wasm-core-module.md) 和 [LLM Codec ABI](../../../../docs/reference/plugin-api/llm-codec.md)。

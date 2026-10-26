@@ -9,9 +9,9 @@ use model_core::event::{
     DomainEvent, EventEnvelope, EventFlags, EventKind, EventPayload, ProcessPayload,
 };
 use model_core::ids::CollectorName;
+use model_core::ids::TraceId;
 use model_core::process::{ExitObservationSource, ExitStatus, MembershipState, ProcessIdentity};
 use model_core::trace::TraceLifecycleState;
-use process_identity::{IdentityLookupError, ProcessIdentityReader};
 use recording_runtime::RecordingWriter;
 use trace_runtime::registry::TraceRuntime;
 
@@ -36,6 +36,7 @@ impl StorageAttachService {
             .map(|trace| trace.trace_id)
             .collect::<Vec<_>>();
         let mut touched_traces = BTreeSet::new();
+        let mut dirty_memberships = BTreeMap::<TraceId, BTreeSet<ProcessIdentity>>::new();
 
         for trace_id in trace_ids {
             let candidates = trace_runtime
@@ -64,6 +65,10 @@ impl StorageAttachService {
                     continue;
                 }
                 let observed_at = SystemTime::now();
+                let lifecycle_before = trace_runtime
+                    .get_trace(trace_id)
+                    .map(|entry| entry.trace.lifecycle_state)
+                    .ok_or_else(|| ControlError::new("reconcile_membership", "trace not found"))?;
                 trace_runtime
                     .mark_process_exited(
                         trace_id,
@@ -77,12 +82,32 @@ impl StorageAttachService {
                     .map_err(|error| {
                         ControlError::new("reconcile_draining_membership", format!("{:?}", error))
                     })?;
+                dirty_memberships
+                    .entry(trace_id)
+                    .or_default()
+                    .insert(identity);
+                if trace_runtime
+                    .get_trace(trace_id)
+                    .is_some_and(|entry| entry.trace.lifecycle_state != lifecycle_before)
+                {
+                    touched_traces.insert(trace_id);
+                }
                 let event = self.reconciled_exit_event(trace_id, identity, observed_at)?;
                 self.persist_observed_event_batch(trace_runtime, vec![event])?;
-                touched_traces.insert(trace_id);
             }
         }
 
+        for (trace_id, membership_ids) in dirty_memberships {
+            if touched_traces.remove(&trace_id) {
+                self.persist_trace_state_with_memberships(
+                    trace_runtime,
+                    trace_id,
+                    &membership_ids,
+                )?;
+            } else {
+                self.persist_memberships(trace_runtime, trace_id, &membership_ids)?;
+            }
+        }
         for trace_id in touched_traces {
             self.persist_trace_state(trace_runtime, trace_id)?;
         }
@@ -124,9 +149,13 @@ impl StorageAttachService {
                 .with_metadata("start_time_ticks", host.start_time_ticks.to_string()),
             None => diagnostic,
         };
-        RecordingWriter::new(self.storage.as_mut())
-            .persist_diagnostic(diagnostic)
-            .map_err(recording_error_to_control)
+        if let Err(error) =
+            RecordingWriter::new(self.storage.as_mut()).persist_diagnostic(diagnostic)
+        {
+            tracing::warn!(trace_id = %trace_id, stage = %error.stage, message = %error.message,
+                "reconciliation diagnostic storage delivery failed locally");
+        }
+        Ok(())
     }
 
     fn reconciled_exit_event(
@@ -166,20 +195,8 @@ impl StorageAttachService {
         let Some(host) = record.host.as_ref() else {
             return false;
         };
-        match self.identity_reader.read_identity(host.pid) {
-            Ok(current) => current
-                .host
-                .as_ref()
-                .is_none_or(|current_host| current_host.start_time_ticks != host.start_time_ticks),
-            Err(IdentityLookupError::NotFound { .. }) => true,
-            Err(IdentityLookupError::PermissionDenied { .. })
-            | Err(IdentityLookupError::Incomplete { .. }) => false,
-        }
+        self.identity_reader.process_is_gone(host)
     }
-}
-
-fn recording_error_to_control(error: recording_runtime::RecordingError) -> ControlError {
-    ControlError::new(error.stage, error.message)
 }
 
 fn terminal_trace(trace_runtime: &TraceRuntime, trace_id: model_core::ids::TraceId) -> bool {

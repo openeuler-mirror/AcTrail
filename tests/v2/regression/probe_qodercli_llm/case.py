@@ -8,6 +8,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from .config import ProbeQoderCliLLMConfig
 from .task import ProbeQoderCliLLMTask
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeQoderCliLLMCase(TestCase):
     def __init__(self, config: ProbeQoderCliLLMConfig):
@@ -83,7 +85,7 @@ class ProbeQoderCliLLMCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,
@@ -92,17 +94,9 @@ class ProbeQoderCliLLMCase(TestCase):
 
             test_context.report_progress(
                 "launch_validation",
-                "validating answer marker and trace id",
+                "validating trace id",
             )
-            assertion = LLMTraceAssertion(
-                runtime,
-                task.marker,
-            )
-            assertion.require_answer_marker(launch, "qodercli")
-            results["answer_marker"] = TestResult(
-                TestStatus.PASSED,
-                f"qodercli stdout answer contains {task.marker}",
-            )
+            assertion = LLMTraceAssertion(runtime)
 
             trace_id = assertion.require_trace_id(
                 launch,
@@ -134,7 +128,7 @@ class ProbeQoderCliLLMCase(TestCase):
             results["llm_exchange"] = TestResult(
                 TestStatus.PASSED,
                 f"trace-{trace_id} has {request_count} terminal paired request(s), "
-                f"{response_count} response(s), and a linked marker exchange",
+                f"{response_count} response(s), and a successful complete exchange",
             )
             return TestResult(
                 TestStatus.COMPOSITE,

@@ -9,10 +9,6 @@ pub(in crate::llm_pipeline) struct CursorBuffer {
 }
 
 impl CursorBuffer {
-    pub(in crate::llm_pipeline) fn from_vec(storage: Vec<u8>) -> Self {
-        Self { storage, head: 0 }
-    }
-
     pub(in crate::llm_pipeline) fn extend_from_slice(&mut self, bytes: &[u8]) {
         self.storage.extend_from_slice(bytes);
     }
@@ -34,16 +30,6 @@ impl CursorBuffer {
             self.head = 0;
         }
         true
-    }
-
-    pub(in crate::llm_pipeline) fn take_remaining(&mut self) -> Vec<u8> {
-        if self.head == 0 {
-            return std::mem::take(&mut self.storage);
-        }
-        let remaining = self.to_vec();
-        self.storage.clear();
-        self.head = 0;
-        remaining
     }
 }
 

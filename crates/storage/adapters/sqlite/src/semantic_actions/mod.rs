@@ -5,6 +5,7 @@ mod attribute_codes;
 pub(crate) mod codebook;
 mod cold_fields;
 mod command_fallback;
+mod evidence;
 mod llm_request_content;
 mod llm_request_lineage;
 mod mcp_jsonrpc_content;
@@ -14,10 +15,11 @@ mod query;
 mod root_tree;
 pub(crate) mod storage_meta;
 mod store;
+mod timeline;
 mod tree;
 mod tree_metadata;
-mod upsert_merge;
 
+pub(crate) use cold_fields::ColdFieldEncoder;
 pub use root_tree::{SemanticActionDisplayRootChildPage, SemanticActionDisplayRootChildRow};
 pub use tree::{
     SemanticActionChildPage, SemanticActionChildPageQuery, SemanticActionChildRow,

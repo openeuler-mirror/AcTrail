@@ -1,9 +1,9 @@
 .chart-panel {
   min-width: 0;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  box-shadow: var(--stats-shadow);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  box-shadow: var(--ui-shadow);
 }
 
 .chart-panel.expanded {
@@ -14,21 +14,21 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-lg) var(--stats-panel-padding) 0;
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-lg) var(--ui-panel-padding) 0;
 }
 
 .chart-head h3 {
   margin: 0;
-  font-size: var(--stats-font-title);
-  font-weight: var(--stats-weight-medium);
-  line-height: var(--stats-line-height-tight);
+  font-size: var(--ui-font-title);
+  font-weight: var(--ui-weight-medium);
+  line-height: var(--ui-line-height-tight);
 }
 
 .chart-head p {
   margin: 4px 0 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .icon-button {
@@ -36,16 +36,16 @@
   height: 32px;
   display: inline-grid;
   place-items: center;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   cursor: pointer;
 }
 
 .chart-controls {
   display: flex;
-  padding: var(--stats-space-sm) var(--stats-panel-padding) 0;
+  padding: var(--ui-space-sm) var(--ui-panel-padding) 0;
 }
 
 .chart-controls :deep(.single-select-control) {
@@ -54,7 +54,7 @@
 
 .chart-body {
   min-width: 0;
-  padding: var(--stats-space-md) var(--stats-panel-padding) var(--stats-panel-padding);
+  padding: var(--ui-space-md) var(--ui-panel-padding) var(--ui-panel-padding);
 }
 
 .time-svg {
@@ -65,8 +65,8 @@
 
 .bar-list {
   display: grid;
-  gap: var(--stats-space-md);
-  padding: var(--stats-space-sm) 0;
+  gap: var(--ui-space-md);
+  padding: var(--ui-space-sm) 0;
 }
 
 .bar-row {
@@ -74,14 +74,14 @@
   display: grid;
   grid-template-columns: minmax(96px, 0.72fr) minmax(140px, 1.9fr) minmax(72px, auto);
   align-items: center;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .bar-name {
   min-width: 0;
   overflow: hidden;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -90,7 +90,7 @@
   height: 10px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--stats-border);
+  background: var(--ui-border);
 }
 
 .bar-fill {
@@ -101,25 +101,25 @@
 }
 
 .bar-value {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
 
 .axis {
-  stroke: var(--stats-border-strong);
+  stroke: var(--ui-border-strong);
 }
 
 .axis-label,
 .x-axis-label {
-  fill: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  fill: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .x-tick {
-  stroke: var(--stats-border-strong);
+  stroke: var(--ui-border-strong);
 }
 
 .time-bar {
@@ -132,28 +132,28 @@
 }
 
 .line-point {
-  stroke: var(--stats-surface-strong);
+  stroke: var(--ui-surface-strong);
   stroke-width: 1.4;
 }
 
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--stats-space-xs);
-  margin-top: var(--stats-space-md);
+  gap: var(--ui-space-xs);
+  margin-top: var(--ui-space-md);
 }
 
 .legend button {
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
+  gap: var(--ui-space-xs);
   min-height: 28px;
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
-  color: var(--stats-text);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text);
   cursor: pointer;
-  font-size: var(--stats-font-sm);
+  font-size: var(--ui-font-sm);
 }
 
 .legend button.muted {
@@ -161,7 +161,7 @@
 }
 
 .legend button.child {
-  margin-left: var(--stats-space-md);
+  margin-left: var(--ui-space-md);
 }
 
 .legend button:disabled {
@@ -178,8 +178,8 @@
   min-height: 180px;
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .chart-empty.compact {

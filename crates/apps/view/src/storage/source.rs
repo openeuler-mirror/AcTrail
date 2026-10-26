@@ -26,11 +26,10 @@ pub(super) fn storage_config(invocation: &ViewInvocation) -> Result<StorageConfi
 }
 
 pub(super) fn open_storage(config: &StorageConfig) -> Result<Box<dyn StorageBackend>, String> {
-    if !config.path().exists() {
-        return Err(format!(
-            "storage path does not exist: {}",
-            config.path().display()
-        ));
+    if let Some(path) = config.path()
+        && !path.exists()
+    {
+        return Err(format!("storage path does not exist: {}", path.display()));
     }
     open_storage_backend(config, StorageOpenMode::ReadOnly)
         .map_err(|error| format!("open storage {}: {}", error.stage, error.message))

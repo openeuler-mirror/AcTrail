@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use config_core::capture_profile::DeploymentPermissions;
 use config_core::daemon::{
-    EnforcementBuiltinRuleConfig, EnforcementConfig, OperatorConfig, OperatorConfigInitStatus,
-    StartupPluginFailurePolicy, StartupPluginLoadConfig,
+    EnforcementBuiltinRuleConfig, EnforcementConfig, OperatorConfig, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig,
 };
 use control_contract::command::{
     ControlCommand, PluginCommandCommand, PluginListCommand, PluginLoadCommand,
@@ -21,18 +21,13 @@ use uds_control_client::{UdsControlClient, UdsSocketTransport};
 use crate::args::{AcTraildCommand, PluginCommand, parse_args};
 use crate::plugin_registry;
 use crate::process::{
-    DaemonProcessState, cleanup_runtime_files, remove_runtime_file, start_daemon, status_daemon,
-    stop_daemon, write_pid_file,
+    DaemonProcessState, cleanup_runtime_files, ensure_runtime_socket_available,
+    remove_runtime_file, start_daemon, status_daemon, stop_daemon, write_pid_file,
 };
 use crate::signals;
 
 pub fn run_from_env() -> Result<(), String> {
     match parse_args(std::env::args().skip(1))? {
-        AcTraildCommand::Init {
-            config_path,
-            force,
-            patch_path,
-        } => initialize_operator_config(&config_path, force, patch_path.as_deref()),
         AcTraildCommand::Run { config_path } => {
             let config = OperatorConfig::load(&config_path)?;
             run_foreground(&config_path, &config)
@@ -86,62 +81,22 @@ pub fn run_from_env() -> Result<(), String> {
     }
 }
 
-fn initialize_operator_config(
-    path: &Path,
-    force: bool,
-    patch_path: Option<&Path>,
-) -> Result<(), String> {
-    match initialize_operator_config_file(path, force, patch_path)? {
-        OperatorConfigInitStatus::Created => println!("initialized config {}", path.display()),
-        OperatorConfigInitStatus::ExistingValid => {
-            println!("config {} already exists and is valid", path.display());
-        }
-        OperatorConfigInitStatus::Overwritten => {
-            println!("overwrote config {}", path.display());
-        }
-    }
-    Ok(())
-}
-
-fn initialize_operator_config_file(
-    path: &Path,
-    force: bool,
-    patch_path: Option<&Path>,
-) -> Result<OperatorConfigInitStatus, String> {
-    let existed = path.exists();
-    if existed && !force {
-        if let Some(patch_path) = patch_path {
-            return Err(format!(
-                "config {} already exists; pass --force to rewrite it with patch {}",
-                path.display(),
-                patch_path.display()
-            ));
-        }
-        OperatorConfig::load(path)
-            .map_err(|error| format!("validate config {}: {error}", path.display()))?;
-        return Ok(OperatorConfigInitStatus::ExistingValid);
-    }
-    let mut config = OperatorConfig::init()?;
-    if let Some(patch_path) = patch_path {
-        config = config.patch_file(patch_path)?;
-    }
-    config.dump_to_path(path, force)?;
-    Ok(if existed {
-        OperatorConfigInitStatus::Overwritten
-    } else {
-        OperatorConfigInitStatus::Created
-    })
-}
-
 fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), String> {
     signals::install_shutdown_handlers()?;
     write_pid_file(&config.pid_file, std::process::id())?;
     let pid_written = true;
+    if let Err(error) = ensure_runtime_socket_available("control", &config.socket_path) {
+        cleanup_pid_file(config, pid_written)?;
+        return Err(error);
+    }
     daemon::host_id::init(config.host_id.clone());
     if let Some(host_id) = daemon::host_id::get() {
         tracing::info!(host_id = %host_id, "actraild host id resolved");
     }
-    let enforcement = enforcement_with_builtin_rules(config_path, config)?;
+    let mut resource_config =
+        resource_profiling::ResourceProfilingConfig::parse(&config.resource_profiling)?;
+    resource_config.resolve_paths(config_path.parent().unwrap_or_else(|| Path::new(".")));
+    let enforcement = enforcement_with_builtin_rules(config_path, config, &resource_config)?;
     let ebpf_resolution = resolve_ebpf_collector_config(config.ebpf_config.clone());
     if let Some(detail) = &ebpf_resolution.degrade_detail {
         tracing::warn!(detail = %detail, "actraild ebpf auto-degraded");
@@ -163,9 +118,10 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.process_seccomp.clone(),
             config.agent_invocation.clone(),
             config.semantic_retention.clone(),
+            config.idle_detection.clone(),
             config.file_observation.clone(),
             config.application_protocol.clone(),
-            config.resource_metrics.clone(),
+            resource_config,
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
             config.alert_forwarding.clone(),
@@ -175,6 +131,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
                 .shutdown_wait_ms
                 .saturating_sub(config.supervision_poll_interval_ms),
             config.workload_diagnostics.clone(),
+            config.access_control.clone(),
             enforcement.clone(),
             config.command_control.clone(),
             config.network_control.clone(),
@@ -191,9 +148,10 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
             config.process_seccomp.clone(),
             config.agent_invocation.clone(),
             config.semantic_retention.clone(),
+            config.idle_detection.clone(),
             config.file_observation.clone(),
             config.application_protocol.clone(),
-            config.resource_metrics.clone(),
+            resource_config,
             config.storage_retention.clone(),
             config.plugin_alert_runtime,
             config.alert_forwarding.clone(),
@@ -203,6 +161,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
                 .shutdown_wait_ms
                 .saturating_sub(config.supervision_poll_interval_ms),
             config.workload_diagnostics.clone(),
+            config.access_control.clone(),
             enforcement.clone(),
             config.command_control.clone(),
             config.network_control.clone(),
@@ -267,12 +226,12 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
                 Some(address) => println!(
                     "daemon listening socket={} storage={} hand_observation={address}",
                     config.socket_path.display(),
-                    config.storage.path().display()
+                    config.storage.backend().as_str()
                 ),
                 None => println!(
                     "daemon listening socket={} storage={} hand_observation=disabled",
                     config.socket_path.display(),
-                    config.storage.path().display()
+                    config.storage.backend().as_str()
                 ),
             }
             Ok(())
@@ -439,27 +398,33 @@ fn run_plugin_command(
 fn enforcement_with_builtin_rules(
     config_path: &Path,
     config: &OperatorConfig,
+    resource_config: &resource_profiling::ResourceProfilingConfig,
 ) -> Result<EnforcementConfig, String> {
     let mut enforcement = config.enforcement.clone();
     append_builtin_rule(&mut enforcement, "actrail.self.config", config_path)?;
     append_builtin_rule(&mut enforcement, "actrail.self.pid", &config.pid_file)?;
     append_builtin_rule(&mut enforcement, "actrail.self.socket", &config.socket_path)?;
     append_builtin_rule(&mut enforcement, "actrail.self.log", &config.log_path)?;
-    append_builtin_rule(
-        &mut enforcement,
-        "actrail.self.storage",
-        config.storage.path(),
-    )?;
-    append_builtin_rule(
-        &mut enforcement,
-        "actrail.self.storage-wal",
-        &path_with_suffix(config.storage.path(), "-wal"),
-    )?;
-    append_builtin_rule(
-        &mut enforcement,
-        "actrail.self.storage-shm",
-        &path_with_suffix(config.storage.path(), "-shm"),
-    )?;
+    if let Some(path) = config.storage.path() {
+        append_builtin_rule(&mut enforcement, "actrail.self.storage", path)?;
+        append_builtin_rule(
+            &mut enforcement,
+            "actrail.self.storage-wal",
+            &path_with_suffix(path, "-wal"),
+        )?;
+        append_builtin_rule(
+            &mut enforcement,
+            "actrail.self.storage-shm",
+            &path_with_suffix(path, "-shm"),
+        )?;
+    }
+    for (index, path) in resource_config.local_files().iter().enumerate() {
+        append_builtin_rule(
+            &mut enforcement,
+            &format!("actrail.self.resource-storage-{index}"),
+            path,
+        )?;
+    }
     append_builtin_rule(
         &mut enforcement,
         "actrail.self.enforcement-rules",
@@ -698,6 +663,7 @@ fn print_plugin_status(status: &PluginInstanceStatus) {
     println!("payload_read_bytes={}", payload_read.bytes);
     println!("payload_read_denied={}", payload_read.denied);
     println!("payload_read_not_found={}", payload_read.not_found);
+    println!("payload_read_failed={}", payload_read.failed);
     println!("payload_read_invalid={}", payload_read.invalid);
     println!("payload_read_too_large={}", payload_read.too_large);
     println!("payload_read_truncated={}", payload_read.truncated);

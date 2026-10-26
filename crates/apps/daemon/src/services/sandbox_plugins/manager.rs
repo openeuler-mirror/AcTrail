@@ -315,6 +315,7 @@ impl SandboxPluginManager {
             PluginSandboxObservationKind::ProcessIo => SandboxObservationKind::ProcessIo,
             PluginSandboxObservationKind::GuestResource => SandboxObservationKind::GuestResource,
             PluginSandboxObservationKind::OomVictim => SandboxObservationKind::OomVictim,
+            PluginSandboxObservationKind::GuestPressure => SandboxObservationKind::GuestPressure,
         }
     }
 

@@ -3,7 +3,7 @@
 use semantic_action::{SemanticAction, attr_keys as attrs};
 use serde_json::Value;
 
-use crate::llm_pipeline::canonical_llm_json;
+use crate::llm_pipeline::canonical_llm_json_text;
 
 #[derive(Clone, Debug)]
 pub(in crate::live::tool) struct DeclaredLlmToolCall {
@@ -12,7 +12,6 @@ pub(in crate::live::tool) struct DeclaredLlmToolCall {
     pub(in crate::live::tool) name: String,
     pub(in crate::live::tool) arguments: Value,
     pub(in crate::live::tool) arguments_json: String,
-    pub(in crate::live::tool) arguments_hash: String,
 }
 
 #[derive(Default)]
@@ -51,7 +50,7 @@ impl DeclaredLlmToolCalls {
                 .or_else(|| tool_call.get("input"))
                 .map(Self::parse_arguments)
                 .unwrap_or(Value::Null);
-            let (arguments_json, arguments_hash) = canonical_llm_json(&arguments);
+            let arguments_json = canonical_llm_json_text(&arguments);
             parsed.calls.push(DeclaredLlmToolCall {
                 ordinal,
                 tool_call_id: tool_call
@@ -63,7 +62,6 @@ impl DeclaredLlmToolCalls {
                 name: name.to_string(),
                 arguments,
                 arguments_json,
-                arguments_hash,
             });
         }
         parsed

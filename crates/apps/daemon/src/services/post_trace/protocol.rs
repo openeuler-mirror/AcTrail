@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
 use plugin_system::{
-    PluginRuntimeError, PostTraceHost, TraceActivityContext, TraceAnalysisActionPage,
-    TraceAnalysisContext, TraceCommandExecutionPage, TraceFileState, TraceLlmExchangePage,
+    PayloadReadResult, PluginRuntimeError, PostTraceHost, TraceActivityContext,
+    TraceAnalysisActionPage, TraceAnalysisContext, TraceCommandExecutionPage, TraceFileState,
+    TraceLlmExchangePage,
 };
 
 #[derive(Clone)]
@@ -79,6 +80,27 @@ impl PostTraceHostClient {
 }
 
 impl PostTraceHost for PostTraceHostClient {
+    fn read_payload(
+        &self,
+        trace_id: TraceId,
+        segment_id: u64,
+        offset: u64,
+        max_bytes: usize,
+    ) -> PayloadReadResult {
+        match self.request(
+            BrokerOperation::ReadPayload {
+                trace_id,
+                segment_id,
+                offset,
+                max_bytes,
+            },
+            self.reply_timeout,
+        ) {
+            Ok(BrokerResponse::ReadPayload(result)) => result,
+            _ => PayloadReadResult::Failed,
+        }
+    }
+
     fn analysis_context(
         &self,
         trace_id: TraceId,
@@ -194,6 +216,12 @@ pub(super) struct BrokerRequest {
 }
 
 pub(super) enum BrokerOperation {
+    ReadPayload {
+        trace_id: TraceId,
+        segment_id: u64,
+        offset: u64,
+        max_bytes: usize,
+    },
     AnalysisContext {
         trace_id: TraceId,
     },
@@ -222,6 +250,7 @@ pub(super) enum BrokerOperation {
 }
 
 pub(super) enum BrokerResponse {
+    ReadPayload(PayloadReadResult),
     AnalysisContext(TraceAnalysisContext),
     SemanticActionsPage(TraceAnalysisActionPage),
     ActivityContext(TraceActivityContext),

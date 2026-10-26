@@ -5,16 +5,20 @@ pub enum SandboxObservationKind {
     ProcessIo,
     GuestResource,
     OomVictim,
+    GuestPressure,
+    WorkloadCgroup,
 }
 
 impl SandboxObservationKind {
-    pub const COUNT: usize = 3;
+    pub const COUNT: usize = 5;
 
     pub const fn index(self) -> usize {
         match self {
             Self::ProcessIo => 0,
             Self::GuestResource => 1,
             Self::OomVictim => 2,
+            Self::GuestPressure => 3,
+            Self::WorkloadCgroup => 4,
         }
     }
 
@@ -23,6 +27,8 @@ impl SandboxObservationKind {
             Observation::ProcessIo(_) => Self::ProcessIo,
             Observation::GuestResource(_) => Self::GuestResource,
             Observation::OomVictim(_) => Self::OomVictim,
+            Observation::GuestPressure(_) => Self::GuestPressure,
+            Observation::WorkloadCgroup(_) => Self::WorkloadCgroup,
         }
     }
 }
@@ -81,5 +87,27 @@ impl SandboxObservationDescriptors {
 
     pub fn is_empty(&self) -> bool {
         self.descriptors.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sandbox_observation::{GuestBootId, GuestPressureSnapshot, PsiAverages};
+
+    #[test]
+    fn guest_pressure_kind_index_and_classification() {
+        let observation = Observation::GuestPressure(GuestPressureSnapshot {
+            guest_boot_id: GuestBootId::new([0; 16]),
+            sampled_at_ms: 1,
+            memory_some: PsiAverages::default(),
+            memory_full: PsiAverages::default(),
+        });
+        assert_eq!(
+            SandboxObservationKind::of(&observation),
+            SandboxObservationKind::GuestPressure
+        );
+        assert_eq!(SandboxObservationKind::GuestPressure.index(), 3);
+        assert_eq!(SandboxObservationKind::COUNT, 5);
     }
 }

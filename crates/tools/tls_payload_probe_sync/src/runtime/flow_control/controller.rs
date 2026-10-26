@@ -399,6 +399,16 @@ fn observe_active(
                 next,
             };
         }
+        // A recognized chunked/EOF HTTP body is not an unknown binary stream.
+        return FlowStep {
+            consumed: payload.len(),
+            emission: StepEmission::Pass,
+            next: FlowState::Active {
+                observed: observed_if_all,
+                prefix,
+                message_size: None,
+            },
+        };
     }
     if let Some(summary) = http2::classify(config, direction, observed_if_all, &prefix) {
         return FlowStep {

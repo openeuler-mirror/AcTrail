@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use semantic_action::SemanticActionKind;
+use semantic_action::{
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionUpdate,
+};
 use storage_core::StorageBackend;
 
 use super::{RecordingError, SemanticActionRecordBatch};
@@ -20,18 +22,15 @@ impl<'a> SemanticActionRecorder<'a> {
         &mut self,
         batch: SemanticActionRecordBatch<'_>,
     ) -> Result<(), RecordingError> {
-        // Persist actions before links so graph edges never race ahead of their nodes.
-        for action in batch
-            .actions()
-            .iter()
-            .filter(|action| Self::persists_action_kind(action.kind))
-            .cloned()
-        {
-            self.storage.upsert_semantic_action(action)?;
-        }
-        for link in batch.links().iter().cloned() {
-            self.storage.upsert_semantic_action_link(link)?;
-        }
+        self.persist_graph(
+            batch
+                .actions()
+                .iter()
+                .filter(|action| Self::persists_action_kind(action.kind))
+                .cloned(),
+            batch.updates().iter().cloned(),
+            batch.links().iter().cloned(),
+        )?;
         self.storage
             .upsert_file_observation_paths(batch.file_observation_paths())?;
         self.storage.upsert_file_path_sets(batch.file_path_sets())?;
@@ -53,6 +52,25 @@ impl<'a> SemanticActionRecorder<'a> {
         }
         self.storage
             .upsert_mcp_jsonrpc_contents(batch.mcp_jsonrpc_contents())?;
+        Ok(())
+    }
+
+    pub(super) fn persist_graph(
+        &mut self,
+        actions: impl IntoIterator<Item = SemanticAction>,
+        updates: impl IntoIterator<Item = SemanticActionUpdate>,
+        links: impl IntoIterator<Item = SemanticActionLink>,
+    ) -> Result<(), RecordingError> {
+        // Persist actions before links so graph edges never race ahead of their nodes.
+        for action in actions {
+            self.storage.insert_semantic_action(action)?;
+        }
+        for update in updates {
+            self.storage.update_semantic_action(update)?;
+        }
+        for link in links {
+            self.storage.upsert_semantic_action_link(link)?;
+        }
         Ok(())
     }
 

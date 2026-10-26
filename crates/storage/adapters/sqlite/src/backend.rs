@@ -13,10 +13,15 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
+use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
     McpJsonRpcContentWrite, SemanticAction, SemanticActionLink, SemanticActionPage,
+    SemanticActionWriteStore,
 };
 use storage_core::{
     PayloadSegmentQuery, RetentionCandidate, SemanticActionChildPage, SemanticActionChildPageQuery,
@@ -56,6 +61,61 @@ impl StorageTransaction for LegacyTransaction {
 }
 
 impl StorageBackend for SqliteStorage {
+    fn action_content_source(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<storage_core::ActionContentSource>, StorageError> {
+        self.read_action_content_source(trace_id, action_id)
+    }
+    fn http_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &storage_core::HttpContentQuery,
+    ) -> Result<Option<storage_core::HttpContentPage>, StorageError> {
+        self.read_http_content_page(trace_id, action_id, query)
+    }
+    fn llm_request_content_node(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &storage_core::ContentNodeQuery,
+    ) -> Result<Option<storage_core::ContentNodePage>, StorageError> {
+        self.read_llm_request_content_node(trace_id, action_id, query)
+            .map_err(StorageError::from)
+    }
+    fn idle_page(
+        &self,
+        query: &storage_core::IdleQuery,
+    ) -> Result<storage_core::IdlePage, StorageError> {
+        self.read_idle_page(query)
+    }
+    fn trace_counts(&self, trace_id: TraceId) -> Result<storage_core::TraceCounts, StorageError> {
+        self.read_trace_counts(trace_id)
+    }
+    fn trace_page(
+        &self,
+        query: &storage_core::TracePageQuery,
+    ) -> Result<storage_core::TracePage, StorageError> {
+        self.read_trace_page(query)
+    }
+    fn timeline_page(
+        &self,
+        query: &storage_core::TimelineQuery,
+    ) -> Result<storage_core::TimelinePage, StorageError> {
+        self.read_timeline_page(query)
+    }
+    fn timeline_bounds(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<storage_core::TimelineBounds, StorageError> {
+        self.read_timeline_bounds(trace_id)
+    }
+    fn retains_observations(&self) -> bool {
+        true
+    }
+
     fn next_trace_id_seed(&self) -> Result<u64, StorageError> {
         SqliteStorage::next_trace_id_seed(self)
             .map_err(|error| StorageError::new("trace_id_seed", error.to_string()))
@@ -140,6 +200,111 @@ impl StorageBackend for SqliteStorage {
 
     fn trace_memberships(&self, trace_id: TraceId) -> Result<Vec<ProcessMembership>, StorageError> {
         SqliteStorage::trace_memberships(self, trace_id).map_err(StorageError::from)
+    }
+
+    fn create_resource_scope(&mut self, scope: TraceResourceScope) -> Result<(), StorageError> {
+        SqliteStorage::create_resource_scope(self, &scope)
+            .map_err(|error| StorageError::new("create_resource_scope", error.to_string()))
+    }
+
+    fn get_resource_scope(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<TraceResourceScope>, StorageError> {
+        SqliteStorage::get_resource_scope(self, trace_id)
+            .map_err(|error| StorageError::new("get_resource_scope", error.to_string()))
+    }
+
+    fn list_resource_scopes(&self) -> Result<Vec<TraceResourceScope>, StorageError> {
+        SqliteStorage::list_resource_scopes(self)
+            .map_err(|error| StorageError::new("list_resource_scopes", error.to_string()))
+    }
+
+    fn update_resource_scope_state(
+        &mut self,
+        trace_id: TraceId,
+        lifecycle_state: ResourceScopeLifecycleState,
+
+        updated_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::update_resource_scope_state(self, trace_id, lifecycle_state, updated_at)
+            .map_err(|error| StorageError::new("update_resource_scope_state", error.to_string()))
+    }
+
+    fn create_external_cgroup_binding(
+        &mut self,
+        binding: ExternalCgroupBinding,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::create_external_cgroup_binding(self, &binding)
+            .map_err(|error| StorageError::new("create_external_cgroup_binding", error.to_string()))
+    }
+
+    fn get_external_cgroup_binding(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<ExternalCgroupBinding>, StorageError> {
+        SqliteStorage::get_external_cgroup_binding(self, trace_id)
+            .map_err(|error| StorageError::new("get_external_cgroup_binding", error.to_string()))
+    }
+
+    fn list_live_external_cgroup_bindings(
+        &self,
+    ) -> Result<Vec<ExternalCgroupBinding>, StorageError> {
+        SqliteStorage::list_live_external_cgroup_bindings(self).map_err(|error| {
+            StorageError::new("list_live_external_cgroup_bindings", error.to_string())
+        })
+    }
+
+    fn record_external_cgroup_success(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::record_external_cgroup_success(self, trace_id, observed_at)
+            .map_err(|error| StorageError::new("record_external_cgroup_success", error.to_string()))
+    }
+
+    fn record_external_cgroup_failure(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: std::time::SystemTime,
+    ) -> Result<u32, StorageError> {
+        SqliteStorage::record_external_cgroup_failure(self, trace_id, observed_at)
+            .map_err(|error| StorageError::new("record_external_cgroup_failure", error.to_string()))
+    }
+
+    fn mark_external_cgroup_stale(
+        &mut self,
+        trace_id: TraceId,
+        reason: ExternalBindingStaleReason,
+        updated_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::mark_external_cgroup_stale(self, trace_id, reason, updated_at)
+            .map_err(|error| StorageError::new("mark_external_cgroup_stale", error.to_string()))
+    }
+
+    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError> {
+        self.connection()
+            .borrow_mut()
+            .execute(
+                "DELETE FROM trace_external_cgroup_bindings
+             WHERE trace_id=?1 AND lifecycle_state IN ('active','stale')
+             AND NOT EXISTS (SELECT 1 FROM traces WHERE trace_id=?1)",
+                rusqlite::params![trace_id.get()],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                StorageError::new("discard_orphan_external_binding", error.to_string())
+            })
+    }
+
+    fn close_external_cgroup_binding(
+        &mut self,
+        trace_id: TraceId,
+        closed_at: std::time::SystemTime,
+    ) -> Result<(), StorageError> {
+        SqliteStorage::close_external_cgroup_binding(self, trace_id, closed_at)
+            .map_err(|e| StorageError::new("close_external_cgroup_binding", e.to_string()))
     }
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError> {
@@ -452,9 +617,15 @@ impl StorageBackend for SqliteStorage {
         AlertReadStore::trace_alerts(self, trace_id, limit)
     }
 
-    fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError> {
-        semantic_action::SemanticActionWriteStore::upsert_semantic_action(self, action)
-            .map_err(StorageError::from)
+    fn insert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError> {
+        SemanticActionWriteStore::insert_semantic_action(self, action).map_err(StorageError::from)
+    }
+
+    fn update_semantic_action(
+        &mut self,
+        update: semantic_action::SemanticActionUpdate,
+    ) -> Result<(), StorageError> {
+        SemanticActionWriteStore::update_semantic_action(self, update).map_err(StorageError::from)
     }
 
     fn upsert_semantic_action_link(
@@ -531,6 +702,14 @@ impl StorageBackend for SqliteStorage {
         action_id: &str,
     ) -> Result<Option<LlmRequestLineage>, StorageError> {
         semantic_action::SemanticActionReadStore::llm_request_lineage(self, trace_id, action_id)
+            .map_err(StorageError::from)
+    }
+
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError> {
+        semantic_action::SemanticActionReadStore::llm_request_lineages(self, trace_id)
             .map_err(StorageError::from)
     }
 

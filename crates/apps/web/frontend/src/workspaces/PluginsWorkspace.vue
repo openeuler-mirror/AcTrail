@@ -3,8 +3,8 @@
     <div class="runtime-content plugins-runtime-content">
       <section class="runtime-hero">
         <div>
-          <span>Installed Plugins</span>
-          <h2>Plugin candidates and loaded instances</h2>
+          <span>{{ t('workspace.kicker') }}</span>
+          <h2>{{ t('workspace.title') }}</h2>
         </div>
         <div class="runtime-source">{{ sourceLabel }}</div>
       </section>
@@ -16,234 +16,129 @@
         </div>
       </section>
 
-      <div v-if="loading && !catalog" class="runtime-panel loading-panel">
-        <span class="loading-spinner" aria-hidden="true"></span>
-        <p>Scanning the plugin directory...</p>
+      <div v-if="loading && !catalog" v-reveal class="runtime-panel plugin-skeleton">
+        <SkeletonBlock width="42%" height="14px" />
+        <SkeletonBlock width="100%" height="64px" radius="var(--ui-radius-md)" />
+        <SkeletonBlock width="100%" height="64px" radius="var(--ui-radius-md)" />
+        <SkeletonBlock width="78%" height="64px" radius="var(--ui-radius-md)" />
       </div>
 
-      <section v-else-if="!catalog?.available" class="runtime-panel runtime-empty">
-        <h2>Plugin discovery unavailable</h2>
-        <p>{{ catalog?.reason ?? error }}</p>
+        <section v-else-if="!catalog?.available" v-reveal class="runtime-panel">
+        <EmptyState :title="t('workspace.discoveryUnavailable')" :description="catalog?.reason ?? error" />
       </section>
 
-      <section v-else class="plugins-layout">
-        <aside class="runtime-panel runtime-side plugins-runtime-side">
-          <section class="runtime-side-section">
-            <div class="runtime-side-heading">Discovery</div>
-            <dl class="runtime-rows">
-              <dt>Directory</dt>
-              <dd>{{ catalog.directory }}</dd>
-              <dt>Packages</dt>
-              <dd>{{ catalog.package_count }}</dd>
-              <dt>Runtime</dt>
-              <dd>{{ catalog.runtime_available ? 'Available' : 'Unavailable' }}</dd>
-            </dl>
-          </section>
+      <template v-else>
+        <section class="plugin-status-strip">
+          <span class="plugin-status-item">
+            <i class="plugin-status-dot" :class="startup?.global_enabled ? 'is-on' : 'is-off'" aria-hidden="true"></i>
+            {{ t('workspace.globalStatus') }}
+            <b>{{ startup?.global_enabled ? t('workspace.enabled') : t('workspace.disabled') }}</b>
+          </span>
+          <span class="plugin-status-item">{{ t('workspace.directory') }} <b>{{ directoryLabel }}</b></span>
+          <span class="plugin-status-item">{{ t('workspace.discovered') }} <b>{{ catalog.package_count ?? 0 }}</b></span>
+          <span class="plugin-status-item">
+            {{ t('workspace.effective') }} <b>{{ startup?.enabled_count ?? 0 }}/{{ startup?.configured_count ?? 0 }}</b>
+          </span>
+        </section>
 
-          <section class="runtime-side-section">
-            <div class="runtime-side-heading">Startup</div>
-            <dl class="runtime-rows">
-              <dt>Global</dt>
-              <dd>{{ startup?.global_enabled ? 'Enabled' : 'Disabled' }}</dd>
-              <dt>Configured</dt>
-              <dd>{{ startup?.configured_count ?? 0 }}</dd>
-              <dt>Effective</dt>
-              <dd>{{ startup?.enabled_count ?? 0 }}</dd>
-            </dl>
-          </section>
+        <section class="plugin-toolbar">
+          <label class="plugin-search">
+            <Search :size="16" aria-hidden="true" />
+            <input v-model="pluginsQuery" type="search" :placeholder="t('workspace.searchPlaceholder')" />
+          </label>
+          <button class="plugin-toolbar-action" type="button" :disabled="loading" @click="refreshPlugins">
+            <RefreshCw :size="15" aria-hidden="true" />
+            <span>{{ t('workspace.refresh') }}</span>
+          </button>
+        </section>
 
-          <details class="startup-plugin-details">
-            <summary>
-              <span>Startup load list</span>
-              <strong>{{ filteredStartupPlugins.length }}</strong>
-            </summary>
-            <div v-if="filteredStartupPlugins.length === 0" class="startup-plugin-empty">None</div>
-            <ul v-else class="startup-plugin-list">
-              <li v-for="plugin in filteredStartupPlugins" :key="plugin.instance_id">
-                <div>
-                  <strong>{{ plugin.instance_id }}</strong>
-                  <span>{{ plugin.effective_enabled ? 'Enabled' : 'Disabled' }}</span>
-                </div>
-                <code>{{ plugin.manifest_path }}</code>
-              </li>
-            </ul>
-          </details>
-        </aside>
-
-        <div class="plugins-main">
-          <section class="runtime-panel plugins-panel">
-            <header class="runtime-panel-header">
-              <div>
-                <span>Loaded plugin instances</span>
-                <strong>{{ runtimeSummary }}</strong>
-              </div>
-            </header>
-            <div v-if="!catalog.runtime_available" class="runtime-inline-empty">
-              <strong>Runtime status unavailable</strong>
-              <span>{{ catalog.runtime_error ?? 'The daemon is unavailable.' }}</span>
+        <section class="runtime-panel plugins-panel">
+          <header class="runtime-panel-header">
+            <div>
+              <span>{{ t('workspace.title') }}</span>
+              <strong>{{ t('workspace.packagesSummary', { count: pluginRows.length, runtime: runtimeSummary }) }}</strong>
             </div>
-            <div v-else-if="filteredRuntimePlugins.length === 0" class="runtime-compact-empty">
-              <strong>No loaded plugin instances</strong>
-              <span>Load a candidate below to create a runtime instance.</span>
-            </div>
-            <div v-else class="plugin-runtime-list">
-              <article
-                v-for="plugin in filteredRuntimePlugins"
-                :key="plugin.instance_id"
-                class="plugin-runtime-item"
-              >
-                <details class="plugin-runtime-disclosure">
-                  <summary class="plugin-runtime-summary">
-                    <span class="plugin-runtime-main">
-                      <small>Instance ID</small>
-                      <strong>{{ plugin.instance_id }}</strong>
-                      <span>Plugin <code>{{ plugin.plugin_id }}</code></span>
-                    </span>
-                    <span class="plugin-runtime-badges">
-                      <span class="plugin-runtime-chip primary">{{ purposeLabel(plugin.purpose) }}</span>
-                      <span class="plugin-runtime-chip">{{ plugin.runtime }}</span>
-                    </span>
-                  </summary>
-                  <dl class="plugin-runtime-details">
-                    <dt>Instance ID</dt>
-                    <dd>{{ plugin.instance_id }}</dd>
-                    <dt>Plugin ID</dt>
-                    <dd>{{ plugin.plugin_id }}</dd>
-                    <dt>Records</dt>
-                    <dd>{{ recordsText(plugin) }}</dd>
-                    <dt>Queue</dt>
-                    <dd>{{ queueText(plugin) }}</dd>
-                    <dt>Host grants</dt>
-                    <dd><PluginGrantList :items="plugin.host_grants" /></dd>
-                    <dt>Payload reads</dt>
-                    <dd>{{ payloadReadText(plugin) }}</dd>
-                    <dt>Last error</dt>
-                    <dd>{{ plugin.last_error ?? 'none' }}</dd>
-                    <dt>Warnings</dt>
-                    <dd>{{ warningText(plugin.warnings) }}</dd>
-                  </dl>
-                  <PluginCommandForm
-                    :instance-id="plugin.instance_id"
-                    :purpose="plugin.purpose"
-                    @completed="refreshPluginConfig(plugin.instance_id)"
-                  />
-                </details>
-                <PluginConfigPanel
-                  :instance-id="plugin.instance_id"
-                  :plugin-id="plugin.plugin_id"
-                  :refresh-nonce="configRefreshNonces[plugin.instance_id] ?? 0"
-                  @updated="refreshPlugins"
-                />
-                <div class="plugin-lifecycle-control">
+          </header>
+
+          <EmptyState
+            v-if="!pluginRows.length"
+            :title="t('workspace.noMatch')"
+            :description="t('workspace.noMatchHint')"
+          />
+
+          <ul v-else class="plugin-manage-list">
+            <li
+              v-for="row in pluginRows"
+              :key="row.key"
+              class="plugin-manage-row"
+              :class="{ 'is-open': detailRow?.key === row.key }"
+            >
+              <button class="plugin-manage-open" type="button" @click="openDetail(row)">
+                <span class="plugin-manage-tile" aria-hidden="true"><Puzzle :size="16" /></span>
+                <span class="plugin-manage-identity">
+                  <strong>{{ row.pluginId }}</strong>
+                  <small>
+                    {{ row.packageKey }}<template v-if="row.purposeLabel"> · {{ row.purposeLabel }}</template>
+                  </small>
+                </span>
+                <span class="plugin-manage-chips">
                   <span
-                    class="plugin-runtime-state"
-                    :class="{ active: plugin.state === 'active' }"
-                  >
-                    <i aria-hidden="true"></i>{{ runtimeStateLabel(plugin.state) }}
-                  </span>
-                  <button
-                    v-if="canUnload(plugin)"
-                    class="plugin-lifecycle-action danger"
-                    type="button"
-                    :disabled="loading || unloadingInstances[plugin.instance_id]"
-                    :aria-label="`Unload plugin instance ${plugin.instance_id}`"
-                    @click="requestUnload(plugin)"
-                  >
-                    {{ unloadingInstances[plugin.instance_id] ? 'Unloading…' : 'Unload' }}
-                  </button>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <section class="runtime-panel plugins-panel">
-            <header class="runtime-panel-header">
-              <div>
-                <span>Plugin candidates</span>
-                <strong>{{ packageSummary }}</strong>
-              </div>
-              <button
-                class="runtime-icon-button runtime-refresh-button"
-                type="button"
-                :disabled="loading"
-                title="Rescan plugin directory"
-                aria-label="Rescan plugin directory"
-                @click="refreshPlugins"
-              >
-                <RefreshCw :size="16" aria-hidden="true" />
-                <span>Refresh</span>
+                    v-for="chip in row.chips"
+                    :key="chip.label"
+                    class="plugin-runtime-chip"
+                    :class="chip.tone"
+                  >{{ chip.label }}</span>
+                </span>
               </button>
-            </header>
-            <div v-if="filteredPackages.length === 0" class="runtime-compact-empty">
-              <strong>No plugin candidates</strong>
-              <span>All discovered packages are loaded, or no packages match the current filter.</span>
+              <span class="plugin-manage-actions">
+                <ToggleSwitch
+                  :checked="row.loaded"
+                  :disabled="loading || (!row.loaded && !row.canLoad)"
+                  :aria-label="`${row.loaded ? t('workspace.unload') : t('workspace.load')} ${row.pluginId}`"
+                  @change="toggleRow(row, $event)"
+                />
+                <button class="plugin-manage-action" type="button" @click="openDetail(row)">
+                  {{ t('workspace.configure') }}
+                </button>
+              </span>
+            </li>
+          </ul>
+        </section>
+
+        <section class="runtime-panel plugins-panel plugins-panel-secondary">
+          <header class="runtime-panel-header">
+            <div>
+              <span>{{ t('workspace.startup') }}</span>
+              <strong>{{ t('workspace.startupConfigured', { count: filteredStartupPlugins.length }) }}</strong>
             </div>
-            <div v-else class="plugin-runtime-list">
-              <article
-                v-for="plugin in filteredPackages"
-                :key="plugin.package_key"
-                class="plugin-runtime-item"
-              >
-                <details class="plugin-runtime-disclosure">
-                  <summary class="plugin-runtime-summary">
-                    <span class="plugin-runtime-main">
-                      <small>Plugin ID</small>
-                      <strong>{{ plugin.plugin_id ?? 'unavailable' }}</strong>
-                      <span>Default instance <code>{{ plugin.plugin_id ?? 'unavailable' }}</code></span>
-                    </span>
-                    <span class="plugin-runtime-badges">
-                      <span v-if="!canLoad(plugin)" class="plugin-runtime-chip">
-                        {{ packageState(plugin) }}
-                      </span>
-                      <span class="plugin-runtime-chip">{{ plugin.package_key }}</span>
-                      <span v-if="plugin.purpose" class="plugin-runtime-chip primary">
-                        {{ purposeLabel(plugin.purpose) }}
-                      </span>
-                      <span v-if="plugin.runtime" class="plugin-runtime-chip">{{ plugin.runtime }}</span>
-                    </span>
-                  </summary>
-                  <dl class="plugin-runtime-details">
-                    <dt>Plugin ID</dt>
-                    <dd>{{ plugin.plugin_id ?? 'unavailable' }}</dd>
-                    <dt>Default instance ID</dt>
-                    <dd>{{ plugin.plugin_id ?? 'unavailable' }}</dd>
-                    <dt>Package path</dt>
-                    <dd>{{ plugin.package_path }}</dd>
-                    <dt>Manifest</dt>
-                    <dd>{{ plugin.manifest_path ?? 'invalid package' }}</dd>
-                    <dt>Config</dt>
-                    <dd>{{ plugin.plugin_config_path ?? 'none' }}</dd>
-                    <dt>Capabilities</dt>
-                    <dd><PluginGrantList :items="plugin.requested_capabilities" /></dd>
-                    <dt>Loaded instances</dt>
-                    <dd>{{ loadedInstanceText(plugin) }}</dd>
-                    <dt>Load availability</dt>
-                    <dd>{{ loadAvailabilityText(plugin) }}</dd>
-                    <dt>Issue</dt>
-                    <dd>{{ plugin.issue ?? 'none' }}</dd>
-                    <dt>Warnings</dt>
-                    <dd>{{ warningText(plugin.warnings) }}</dd>
-                  </dl>
-                </details>
-                <div class="plugin-lifecycle-control">
-                  <span class="plugin-runtime-state inactive"><i aria-hidden="true"></i>Unloaded</span>
-                  <button
-                    class="plugin-lifecycle-action"
-                    type="button"
-                    :disabled="loading || !canLoad(plugin) || loadingPackages[plugin.package_key]"
-                    :title="loadAvailabilityText(plugin)"
-                    :aria-label="`Load ${plugin.plugin_id ?? plugin.package_key}`"
-                    @click="openLoadDialog(plugin)"
-                  >
-                    {{ loadingPackages[plugin.package_key] ? 'Loading…' : loadActionLabel(plugin) }}
-                  </button>
-                </div>
-              </article>
-            </div>
-          </section>
-        </div>
-      </section>
+          </header>
+          <div v-if="!filteredStartupPlugins.length" class="runtime-compact-empty">
+            <strong>{{ t('workspace.startupEmptyTitle') }}</strong>
+            <span>{{ t('workspace.startupEmptyHint') }}</span>
+          </div>
+          <ul v-else class="startup-plugin-list">
+            <li v-for="plugin in filteredStartupPlugins" :key="plugin.instance_id">
+              <div>
+                <strong>{{ plugin.instance_id }}</strong>
+                <span>{{ plugin.effective_enabled ? t('workspace.enabled') : t('workspace.disabled') }}</span>
+              </div>
+              <code>{{ plugin.manifest_path }}</code>
+            </li>
+          </ul>
+        </section>
+      </template>
     </div>
+
+    <PluginDetailPanel
+      v-if="detailRow"
+      :row="detailRow"
+      :instances="detailRow.instances"
+      :config-nonces="configRefreshNonces"
+      @close="detailRow = null"
+      @unload="requestUnload"
+      @config-changed="refreshPluginConfig"
+      @config-updated="refreshPlugins"
+    />
 
     <PluginLoadDialog
       v-if="selectedLoadPlugin"
@@ -267,7 +162,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { RefreshCw } from '@lucide/vue';
+import { Puzzle, RefreshCw, Search } from '@lucide/vue';
 
 import {
   loadDiscoveredPlugin,
@@ -280,6 +175,14 @@ import PluginConfigPanel from './plugins/PluginConfigPanel.vue';
 import PluginGrantList from './plugins/PluginGrantList.vue';
 import PluginLoadDialog from './plugins/PluginLoadDialog.vue';
 import PluginUnloadDialog from './plugins/PluginUnloadDialog.vue';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import ToggleSwitch from '../components/ToggleSwitch.vue';
+import PluginDetailPanel from './plugins/PluginDetailPanel.vue';
+import { useModuleLocale } from '../locale';
+import pluginStrings from './plugins/locale';
+
+const { t } = useModuleLocale(pluginStrings);
 
 const props = defineProps({
   query: {
@@ -313,10 +216,10 @@ function refreshPluginConfig(instanceId) {
 }
 
 const metrics = computed(() => [
-  { label: 'Installed', value: catalog.value?.package_count ?? 0 },
-  { label: 'Candidates', value: candidatePackages.value.length },
-  { label: 'Loadable', value: candidatePackages.value.filter(canLoad).length },
-  { label: 'Loaded instances', value: catalog.value?.runtime_plugin_count ?? 0 },
+  { label: t('workspace.metricInstalled'), value: catalog.value?.package_count ?? 0 },
+  { label: t('workspace.metricCandidates'), value: candidatePackages.value.length },
+  { label: t('workspace.metricLoadable'), value: candidatePackages.value.filter(canLoad).length },
+  { label: t('workspace.metricLoadedInstances'), value: catalog.value?.runtime_plugin_count ?? 0 },
 ]);
 
 const filteredStartupPlugins = computed(() => filterRows(startup.value?.plugins ?? [], [
@@ -346,13 +249,75 @@ const filteredRuntimePlugins = computed(() => filterRows(catalog.value?.runtime_
   'runtime',
 ]));
 
-const sourceLabel = computed(() => catalog.value?.directory ?? 'Scanning');
+const sourceLabel = computed(() => catalog.value?.directory ?? t('workspace.scanning'));
+const directoryLabel = computed(() => catalog.value?.directory ?? t('workspace.scanning'));
+const pluginsQuery = ref('');
+const detailRow = ref(null);
+
+/**
+ * One row per discovered package, with its runtime instances joined in. The
+ * previous two-section split made a plugin jump between panels as it was
+ * loaded; a single row keeps the lifecycle in one place.
+ */
+const pluginRows = computed(() => {
+  const instancesByPlugin = new Map();
+  for (const instance of catalog.value?.runtime_plugins ?? []) {
+    const list = instancesByPlugin.get(instance.plugin_id) ?? [];
+    list.push(instance);
+    instancesByPlugin.set(instance.plugin_id, list);
+  }
+  const query = pluginsQuery.value.trim().toLowerCase();
+  return (catalog.value?.packages ?? [])
+    .map((pkg) => {
+      const instances = instancesByPlugin.get(pkg.plugin_id) ?? [];
+      const chips = [];
+      if (!catalog.value?.runtime_available) {
+        chips.push({ label: t('workspace.chipRuntimeUnavailable'), tone: 'warn' });
+      }
+      if (instances.length) {
+        chips.push({ label: t('workspace.chipLoaded', { count: instances.length }), tone: 'primary' });
+      }
+      if (pkg.runtime) {
+        chips.push({ label: pkg.runtime, tone: '' });
+      }
+      if (pkg.purpose) {
+        chips.push({ label: purposeLabel(pkg.purpose), tone: '' });
+      }
+      if (!pkg.activation_ready) {
+        chips.push({ label: pkg.issue ?? t('workspace.chipNotLoadable'), tone: 'warn' });
+      } else if (!instances.length) {
+        chips.push({ label: t('workspace.chipReady'), tone: '' });
+      }
+      if (pkg.warnings?.length) {
+        chips.push({ label: t('workspace.chipWarnings', { count: pkg.warnings.length }), tone: 'warn' });
+      }
+      return {
+        key: pkg.package_key,
+        packageKey: pkg.package_key,
+        pluginId: pkg.plugin_id ?? pkg.package_key,
+        purposeLabel: pkg.purpose ? purposeLabel(pkg.purpose) : '',
+        package: pkg,
+        instances,
+        loaded: instances.length > 0,
+        canLoad: canLoad(pkg),
+        chips,
+        search: [pkg.package_key, pkg.plugin_id, pkg.purpose, pkg.runtime, ...(pkg.requested_capabilities ?? [])]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase(),
+      };
+    })
+    .filter((row) => !query || row.search.includes(query));
+});
 const packageSummary = computed(() => `${filteredPackages.value.length}/${candidatePackages.value.length} candidates`);
 const runtimeSummary = computed(() => {
   if (!catalog.value?.runtime_available) {
-    return 'Unavailable';
+    return t('workspace.runtimeUnavailableRow');
   }
-  return `${filteredRuntimePlugins.value.length}/${catalog.value.runtime_plugin_count} rows`;
+  return t('workspace.runtimeRows', {
+    filtered: filteredRuntimePlugins.value.length,
+    total: catalog.value.runtime_plugin_count,
+  });
 });
 
 onMounted(refreshPlugins);
@@ -397,6 +362,25 @@ async function refreshPlugins() {
 
 function openLoadDialog(plugin) {
   selectedLoadPlugin.value = plugin;
+}
+
+function openDetail(row) {
+  detailRow.value = row;
+}
+
+/**
+ * The switch mirrors the loaded state: turning it on runs the existing load
+ * flow (which collects grants), turning it off asks for unload confirmation.
+ */
+function toggleRow(row, next) {
+  if (next) {
+    openLoadDialog(row.package);
+    return;
+  }
+  const instance = row.instances[0];
+  if (instance) {
+    requestUnload(instance);
+  }
 }
 
 function requestUnload(plugin) {
@@ -462,64 +446,71 @@ function packageLoaded(plugin) {
 
 function packageState(plugin) {
   if (plugin.issue) {
-    return 'requires attention';
+    return t('workspace.stateRequiresAttention');
   }
   if (!catalog.value?.runtime_available) {
-    return 'runtime unavailable';
+    return t('workspace.chipRuntimeUnavailable');
   }
   if (plugin.parameterized_host_grants?.length) {
-    return 'grant configuration required';
+    return t('workspace.stateGrantRequired');
   }
-  return 'ready to load';
+  return t('workspace.stateReadyToLoad');
 }
 
 function loadAvailabilityText(plugin) {
   if (!plugin.activation_ready) {
-    return plugin.issue ?? 'Plugin package is not loadable';
+    return plugin.issue ?? t('workspace.unavailablePackage');
   }
   if (!catalog.value?.runtime_available) {
-    return catalog.value?.runtime_error ?? 'Daemon plugin runtime is unavailable';
+    return catalog.value?.runtime_error ?? t('workspace.unavailableRuntime');
   }
   if (plugin.parameterized_host_grants?.length) {
-    return 'Configure instance identity and scoped permissions before loading';
+    return t('workspace.grantRequiredHint');
   }
-  return 'Ready to load through actrailweb';
+  return t('workspace.readyToLoadHint');
 }
 
 function loadActionLabel(plugin) {
-  return plugin.parameterized_host_grants?.length ? 'Configure & load' : 'Load plugin';
+  return plugin.parameterized_host_grants?.length ? t('workspace.configureAndLoad') : t('workspace.loadPlugin');
 }
 
 function loadedInstanceText(plugin) {
   if (plugin.loaded_instances == null) {
-    return 'runtime unavailable';
+    return t('workspace.chipRuntimeUnavailable');
   }
-  return plugin.loaded_instances.length ? plugin.loaded_instances.join(', ') : 'none';
+  return plugin.loaded_instances.length ? plugin.loaded_instances.join(', ') : t('workspace.none');
 }
 
 function queueText(plugin) {
-  return `${plugin.queue_depth ?? 'none'}/${plugin.queue_capacity ?? 'none'}`;
+  return `${plugin.queue_depth ?? t('workspace.none')}/${plugin.queue_capacity ?? t('workspace.none')}`;
 }
 
 function recordsText(plugin) {
-  return `${plugin.observed_records ?? 0} observed, ${plugin.dropped_records ?? 0} dropped`;
+  return t('workspace.recordsSummary', {
+    observed: plugin.observed_records ?? 0,
+    dropped: plugin.dropped_records ?? 0,
+  });
 }
 
 function warningText(warnings) {
-  return warnings?.length ? warnings.join('; ') : 'none';
+  return warnings?.length ? warnings.join('; ') : t('workspace.none');
 }
 
 function payloadReadText(plugin) {
   const metrics = plugin.hostcall_metrics?.payload_read ?? {};
-  return `${metrics.calls ?? 0} calls, ${metrics.bytes ?? 0} bytes, ${metrics.truncated ?? 0} truncated`;
+  return t('workspace.payloadReadSummary', {
+    calls: metrics.calls ?? 0,
+    bytes: metrics.bytes ?? 0,
+    truncated: metrics.truncated ?? 0,
+  });
 }
 
 function runtimeStateLabel(state) {
-  if (state === 'active') return 'Active';
-  if (state === 'draining') return 'Draining';
-  if (state === 'stopped') return 'Stopped';
-  if (state === 'failed') return 'Failed';
-  return state ?? 'Unknown';
+  if (state === 'active') return t('workspace.stateActive');
+  if (state === 'draining') return t('workspace.stateDraining');
+  if (state === 'stopped') return t('workspace.stateStopped');
+  if (state === 'failed') return t('workspace.stateFailed');
+  return state ?? t('workspace.stateUnknown');
 }
 
 function canUnload(plugin) {
@@ -528,14 +519,14 @@ function canUnload(plugin) {
 
 function purposeLabel(purpose) {
   if (purpose === 'observation-consumer') {
-    return 'observer';
+    return t('workspace.purposeObserver');
   }
   if (purpose === 'control-decider') {
-    return 'controller';
+    return t('workspace.purposeController');
   }
   if (purpose === 'alert-consumer') {
-    return 'alert forwarding';
+    return t('workspace.purposeAlertForwarding');
   }
-  return purpose ?? 'unknown';
+  return purpose ?? t('workspace.unknown');
 }
 </script>

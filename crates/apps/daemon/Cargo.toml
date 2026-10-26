@@ -9,6 +9,9 @@ default = []
 perf-buffer = ["ebpf_collector/perf-buffer"]
 
 [dependencies]
+access_control = { path = "../../access_control" }
+idle_detector = { path = "../../core/idle_detector" }
+agent_host = { path = "../../adapters/agent_host" }
 alert_contract = { path = "../../contracts/alert" }
 alert_delivery_contract = { package = "alert-delivery-contract", path = "../../contracts/alert_delivery" }
 alert_forwarding = { path = "../../plugins/alert_forwarding" }
@@ -23,7 +26,9 @@ config_core = { path = "../../core/config" }
 ebpf_collector = { path = "../../adapters/collectors/ebpf" }
 export_core = { path = "../../export/core" }
 export_factory = { path = "../../export/factory" }
+getrandom = "0.3"
 ingest_runtime = { path = "../../core/ingest_runtime" }
+agent_lifecycle_contract = { path = "../../contracts/agent_lifecycle" }
 libc = "0.2"
 linux_platform = { path = "../../core/linux_platform" }
 model_core = { path = "../../core/model" }
@@ -40,6 +45,7 @@ sandbox_resource_alert = { path = "../../plugins/sandbox_resource_alert" }
 sandbox_upstream_transport = { path = "../../adapters/sandbox_link/upstream" }
 plugin_wasm_runtime = { path = "../../core/plugin_wasm_runtime" }
 process_identity = { path = "../../core/process_identity" }
+resource_profiling = { path = "../../core/resource_profiling" }
 process_tree_snapshot_contract = { path = "../../contracts/process/tree_snapshot" }
 provider_evidence = { path = "../../contracts/provider_label/evidence" }
 provider_label = { path = "../../contracts/provider_label/label" }
@@ -62,3 +68,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 toml = "0.8"
 uds_control_server = { path = "../../adapters/control/uds/server" }
 uds_control_client = { path = "../../adapters/control/uds/client" }
+
+[dev-dependencies]
+tempfile = "3"

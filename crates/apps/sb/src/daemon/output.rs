@@ -14,6 +14,12 @@ pub(crate) struct SbOutput {
     periodic: Option<PeriodicDiagnostics>,
 }
 
+pub(crate) enum PressureAvailability<'a> {
+    Available,
+    Unavailable { reason: &'a str },
+    Disabled,
+}
+
 pub(super) struct CollectorDiagnostics {
     failures: AtomicU64,
     pending_io_drops: AtomicU64,
@@ -138,6 +144,22 @@ impl SbOutput {
 
     pub(crate) fn startup_error(error: &dyn fmt::Display) {
         Self::stderr(format_args!("actrail-sb: {error}"));
+    }
+
+    pub(crate) fn pressure_status(availability: PressureAvailability) {
+        match availability {
+            PressureAvailability::Available => {
+                Self::stderr(format_args!("actrail-sb pressure available"));
+            }
+            PressureAvailability::Unavailable { reason } => {
+                Self::stderr(format_args!(
+                    "actrail-sb pressure unavailable reason={reason}"
+                ));
+            }
+            PressureAvailability::Disabled => {
+                Self::stderr(format_args!("actrail-sb pressure disabled"));
+            }
+        }
     }
 
     pub(crate) fn config_written(path: &Path) {

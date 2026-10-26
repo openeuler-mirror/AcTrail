@@ -4,7 +4,7 @@
 
 本图是完整部署中的局部视图，只展开 hand-side observation 路径。`actrailweb`、`actrailviewer`、集群上报、OpenTelemetry 和外部告警代理仍按各自部署方式连接可信侧，不在本图重复显示。
 
-![执行隔离部署](assets/execution-isolation-deployment.png)
+[![执行隔离部署](assets/execution-isolation-deployment.png)](assets/execution-isolation-deployment.puml)
 
 Linux 主机上的 `actrail-vsock-gateway` 持有 VMM 暴露的端点，并通过 TCP Hand listener 将 frame 转发给可信侧的 `actraild`。Gateway 只执行会话、配额与转发，不解释 observation。`actraild` 内的 Gateway ingest 和 Sandbox 插件负责校验、兴趣匹配与投递。
 

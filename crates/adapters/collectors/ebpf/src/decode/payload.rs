@@ -9,11 +9,11 @@ use model_core::payload::{
 };
 use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 
-use crate::decode::{DecodeError, resolve_event_observation};
+use crate::decode::{DecodeError, resolve_event_observation, resolve_typed_event_observation};
 use crate::loader::{
-    KernelObservationEvent, KernelSocketPayloadCompletionEvent, KernelSocketPayloadEvent,
-    KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent, KernelTlsCompletionEvent,
-    KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
+    KernelObservationCommon, KernelSocketFdReleasePayload, KernelSocketPayloadCompletionEvent,
+    KernelSocketPayloadEvent, KernelStdioPayloadEvent, KernelTlsCaptureRequestEvent,
+    KernelTlsCompletionEvent, KernelTlsDiagnosticEvent, KernelTlsDirectCaptureEvent,
 };
 use crate::maps::BindingStateMap;
 
@@ -35,6 +35,7 @@ pub const SOCKET_PAYLOAD_SYSCALL_RECVFROM: u32 = 4;
 pub const SOCKET_PAYLOAD_SYSCALL_WRITEV: u32 = 5;
 pub const SOCKET_PAYLOAD_SYSCALL_SENDMSG: u32 = 6;
 const SOCKET_PAYLOAD_FLAG_TRUNCATED: u32 = 1;
+const SOCKET_PAYLOAD_FLAG_POLICY_LIMITED: u32 = 32;
 const TLS_PAYLOAD_COMPLETION_FAILED: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,6 +94,14 @@ pub struct TlsPayloadDirectCapture {
     pub bytes: Vec<u8>,
 }
 
+impl TlsPayloadDirectCapture {
+    pub fn policy_limited(&self) -> bool {
+        // actrail_tls_direct_capture_flags in bpf/abi/payload.h.
+        const POLICY_LIMITED: u32 = 1;
+        self.flags & POLICY_LIMITED != 0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TlsDiagnosticEvent {
     pub reason: u32,
@@ -111,17 +120,20 @@ pub struct TlsDiagnosticEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SocketPayloadCompletion {
-    pub pid: u32,
-    pub tid: u32,
-    pub host_pid: u32,
-    pub host_tid: u32,
+    /// Process and thread coordinates in the observer's PID namespace.
+    pub observer_tgid: u32,
+    pub observer_tid: u32,
+    /// Kernel coordinates used by BPF maps and socket stream identities.
+    pub kernel_tgid: u32,
+    pub kernel_tid: u32,
     pub trace_id: TraceId,
     pub observed_at: SystemTime,
     pub sequence: u64,
+    pub operation_id: u64,
     pub direction: u32,
     pub fd: u32,
     pub syscall: u32,
-    pub fd_generation: u32,
+    pub socket_generation: u32,
     pub pid_generation: u64,
     pub completed_size: u64,
     pub requested_size: u64,
@@ -153,6 +165,7 @@ pub fn decode_stdio_payload(
         original_size: u64::from(event.original_size),
         captured_size: u64::from(event.captured_size),
         operation_id: event.sequence,
+        operation_chunk_index: 0,
         operation_offset: 0,
         operation_original_size: u64::from(event.original_size),
         operation_captured_size: u64::from(event.captured_size),
@@ -186,15 +199,16 @@ pub fn decode_socket_payload(
         direction: socket_direction(event.direction)?,
         stream_key: PayloadStreamKey::new(format!(
             "socket:{}:{}:{}",
-            event.pid, event.fd, event.fd_generation
+            event.pid, event.fd, event.socket_generation
         )),
         sequence: event.sequence,
         original_size: u64::from(event.original_size),
         captured_size: u64::from(event.captured_size),
-        operation_id: event.sequence,
-        operation_offset: 0,
-        operation_original_size: u64::from(event.original_size),
-        operation_captured_size: u64::from(event.captured_size),
+        operation_id: event.operation_id,
+        operation_chunk_index: event.operation_chunk_index,
+        operation_offset: event.operation_offset,
+        operation_original_size: event.operation_original_size,
+        operation_captured_size: event.operation_captured_size,
         operation_completion_state: PayloadOperationCompletionState::Success,
         truncation: socket_truncation(event.flags),
         library: "socket-syscall".to_string(),
@@ -205,24 +219,20 @@ pub fn decode_socket_payload(
 }
 
 pub fn decode_socket_fd_release(
-    event: KernelObservationEvent,
+    common: &KernelObservationCommon,
+    event: &KernelSocketFdReleasePayload,
     bindings: &BindingStateMap,
 ) -> Result<RawPayloadStreamClose, DecodeError> {
-    let identity = resolve_payload_identity(
-        event.trace_id,
-        event.pid,
-        event.host_pid,
-        event.pid_generation,
-        bindings,
-    )?;
+    let identity = resolve_typed_event_observation(common, bindings)
+        .map_err(|error| DecodeError::new("payload_identity", error))?;
     Ok(RawPayloadStreamClose {
-        trace_id: event.trace_id,
-        observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
+        trace_id: common.trace_id,
+        observed_at: super::clock::wall_from_ktime(common.observed_ktime_ns),
         process: identity,
         source_boundary: PayloadSourceBoundary::Syscall,
         stream_key: PayloadStreamKey::new(format!(
             "socket:{}:{}:{}",
-            event.pid, event.fd, event.aux_generation
+            common.subject.observer_namespace_tgid, event.fd, event.socket_generation
         )),
     })
 }
@@ -231,17 +241,18 @@ pub fn decode_socket_payload_completion(
     event: KernelSocketPayloadCompletionEvent,
 ) -> SocketPayloadCompletion {
     SocketPayloadCompletion {
-        pid: event.pid,
-        tid: event.tid,
-        host_pid: event.host_pid,
-        host_tid: event.host_tid,
+        observer_tgid: event.observer_tgid,
+        observer_tid: event.observer_tid,
+        kernel_tgid: event.kernel_tgid,
+        kernel_tid: event.kernel_tid,
         trace_id: event.trace_id,
         observed_at: super::clock::wall_from_ktime(event.observed_ktime_ns),
         sequence: event.sequence,
+        operation_id: event.operation_id,
         direction: event.direction,
         fd: event.fd,
         syscall: event.syscall,
-        fd_generation: event.fd_generation,
+        socket_generation: event.socket_generation,
         pid_generation: event.pid_generation,
         completed_size: event.completed_size,
         requested_size: event.requested_size,
@@ -410,7 +421,11 @@ fn stdio_truncation(flags: u32) -> PayloadTruncationState {
 }
 
 fn socket_truncation(flags: u32) -> PayloadTruncationState {
-    if flags & SOCKET_PAYLOAD_FLAG_TRUNCATED == SOCKET_PAYLOAD_FLAG_TRUNCATED {
+    let truncated = flags & SOCKET_PAYLOAD_FLAG_TRUNCATED == SOCKET_PAYLOAD_FLAG_TRUNCATED;
+    if truncated && flags & SOCKET_PAYLOAD_FLAG_POLICY_LIMITED == SOCKET_PAYLOAD_FLAG_POLICY_LIMITED
+    {
+        PayloadTruncationState::PolicyLimited
+    } else if truncated {
         PayloadTruncationState::Truncated
     } else {
         PayloadTruncationState::Complete

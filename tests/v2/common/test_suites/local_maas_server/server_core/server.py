@@ -30,6 +30,8 @@ from .connection.interface import ConnectionDescription
 from .connection.manager import ConnectionManager
 from .help import HelpMessage, HelpSection
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 if TYPE_CHECKING:
     from config import LocalMaaSConfig
 
@@ -60,7 +62,7 @@ class LocalMaaSServer:
     def status(self) -> LocalMaaSStatus | None:
         return self._status
 
-    def start(self, *, silent: bool = False) -> LocalMaaSStatus:
+    def start(self, *, silent: bool = DEFAULTS.silent_start) -> LocalMaaSStatus:
         if self._connections is not None:
             raise RuntimeError("Local MaaS server is already running")
 

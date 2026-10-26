@@ -42,10 +42,19 @@ impl FileSummaryPathAccumulator {
     }
 
     pub(in crate::live::file) fn record_error(&mut self, result: i32, path: &str) {
-        self.error_count = self.error_count.saturating_add(1);
+        self.record_error_count(result, path, 1);
+    }
+
+    pub(in crate::live::file) fn record_error_count(
+        &mut self,
+        result: i32,
+        path: &str,
+        occurrences: u64,
+    ) {
+        self.error_count = self.error_count.saturating_add(occurrences);
         let reason = syscall_error_reason(result);
         let count = self.error_reason_counts.entry(reason).or_insert(0);
-        *count = count.saturating_add(1);
+        *count = count.saturating_add(occurrences);
         if record_stable_bounded_path(
             &mut self.error_path_order_by_path,
             self.max_paths_per_set,

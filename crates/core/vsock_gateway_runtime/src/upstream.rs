@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use sandbox_upstream_contract::{Frame, FrameCode, FrameDecoder};
+use sandbox_upstream_contract::{Frame, FrameCode, FrameDecoder, GatewayWelcome};
 
 use crate::GatewayConfig;
 
@@ -14,29 +14,39 @@ pub(super) struct UpstreamLink {
     sender: SyncSender<ForwardItem>,
     stop: Arc<AtomicBool>,
     gateway_id: Arc<AtomicU32>,
+    workload_cgroup_observations: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl UpstreamLink {
     pub(super) fn start(config: &GatewayConfig) -> io::Result<Self> {
-        let (stream, gateway_id) = connect_registered(config)?;
+        let (stream, welcome) = connect_registered(config)?;
         let (sender, receiver) = mpsc::sync_channel(config.outbound_queue_capacity);
         let stop = Arc::new(AtomicBool::new(false));
-        let gateway_id_state = Arc::new(AtomicU32::new(gateway_id));
+        let gateway_id_state = Arc::new(AtomicU32::new(welcome.gateway_id));
+        let workload_state = Arc::new(AtomicBool::new(welcome.workload_cgroup_observations));
         let thread_stop = Arc::clone(&stop);
         let thread_gateway_id = Arc::clone(&gateway_id_state);
+        let thread_workload_state = Arc::clone(&workload_state);
         let thread_config = config.clone();
         let handle = thread::Builder::new()
             .name("actrail-gateway-upstream".to_string())
             .stack_size(config.connection_thread_stack_bytes)
             .spawn(move || {
-                UpstreamWorker::new(thread_config, receiver, thread_stop, thread_gateway_id)
-                    .run(stream);
+                UpstreamWorker::new(
+                    thread_config,
+                    receiver,
+                    thread_stop,
+                    thread_gateway_id,
+                    thread_workload_state,
+                )
+                .run(stream);
             })?;
         Ok(Self {
             sender,
             stop,
             gateway_id: gateway_id_state,
+            workload_cgroup_observations: workload_state,
             thread: Some(handle),
         })
     }
@@ -44,6 +54,7 @@ impl UpstreamLink {
     pub(super) fn sender(&self) -> UpstreamSender {
         UpstreamSender {
             inner: self.sender.clone(),
+            workload_cgroup_observations: Arc::clone(&self.workload_cgroup_observations),
         }
     }
 
@@ -147,9 +158,14 @@ struct ForwardItem {
 #[derive(Clone)]
 pub(super) struct UpstreamSender {
     inner: SyncSender<ForwardItem>,
+    workload_cgroup_observations: Arc<AtomicBool>,
 }
 
 impl UpstreamSender {
+    pub(super) fn supports_workload_cgroup_observations(&self) -> bool {
+        self.workload_cgroup_observations.load(Ordering::Acquire)
+    }
+
     pub(super) fn try_send(&self, bytes: Vec<u8>, quota: &SessionForwardQuota) -> io::Result<()> {
         let item = ForwardItem {
             bytes,
@@ -174,6 +190,7 @@ struct UpstreamWorker {
     receiver: Receiver<ForwardItem>,
     stop: Arc<AtomicBool>,
     gateway_id: Arc<AtomicU32>,
+    workload_cgroup_observations: Arc<AtomicBool>,
 }
 
 impl UpstreamWorker {
@@ -182,18 +199,21 @@ impl UpstreamWorker {
         receiver: Receiver<ForwardItem>,
         stop: Arc<AtomicBool>,
         gateway_id: Arc<AtomicU32>,
+        workload_cgroup_observations: Arc<AtomicBool>,
     ) -> Self {
         Self {
             config,
             receiver,
             stop,
             gateway_id,
+            workload_cgroup_observations,
         }
     }
 
     fn run(&self, mut stream: TcpStream) {
         let _id_lifetime = GatewayIdLifetime {
             gateway_id: Arc::clone(&self.gateway_id),
+            workload_cgroup_observations: Arc::clone(&self.workload_cgroup_observations),
         };
         let mut pending = None;
         let mut last_heartbeat = Instant::now();
@@ -222,11 +242,21 @@ impl UpstreamWorker {
                 continue;
             };
             if write_result.is_err() {
+                let previously_supported =
+                    self.workload_cgroup_observations.load(Ordering::Acquire);
                 self.gateway_id.store(0, Ordering::Release);
+                self.workload_cgroup_observations
+                    .store(false, Ordering::Release);
                 match self.reconnect() {
-                    Some((new_stream, id)) => {
+                    Some((new_stream, welcome)) => {
                         stream = new_stream;
-                        self.gateway_id.store(id, Ordering::Release);
+                        if previously_supported && !welcome.workload_cgroup_observations {
+                            pending = None;
+                            while self.receiver.try_recv().is_ok() {}
+                        }
+                        self.gateway_id.store(welcome.gateway_id, Ordering::Release);
+                        self.workload_cgroup_observations
+                            .store(welcome.workload_cgroup_observations, Ordering::Release);
                         last_heartbeat = Instant::now();
                     }
                     None => return,
@@ -235,7 +265,7 @@ impl UpstreamWorker {
         }
     }
 
-    fn reconnect(&self) -> Option<(TcpStream, u32)> {
+    fn reconnect(&self) -> Option<(TcpStream, GatewayWelcome)> {
         while !self.stop.load(Ordering::Acquire) {
             match connect_registered(&self.config) {
                 Ok(registered) => return Some(registered),
@@ -248,23 +278,33 @@ impl UpstreamWorker {
 
 struct GatewayIdLifetime {
     gateway_id: Arc<AtomicU32>,
+    workload_cgroup_observations: Arc<AtomicBool>,
 }
 
 impl Drop for GatewayIdLifetime {
     fn drop(&mut self) {
         self.gateway_id.store(0, Ordering::Release);
+        self.workload_cgroup_observations
+            .store(false, Ordering::Release);
     }
 }
 
-fn connect_registered(config: &GatewayConfig) -> io::Result<(TcpStream, u32)> {
+fn connect_registered(config: &GatewayConfig) -> io::Result<(TcpStream, GatewayWelcome)> {
+    connect_registered_with_capabilities(config, true)
+        .or_else(|_| connect_registered_with_capabilities(config, false))
+}
+
+fn connect_registered_with_capabilities(
+    config: &GatewayConfig,
+    request_workload_cgroup_observations: bool,
+) -> io::Result<(TcpStream, GatewayWelcome)> {
     let mut stream = TcpStream::connect_timeout(&config.daemon_address, config.io_timeout)?;
     stream.set_read_timeout(Some(config.io_timeout))?;
     stream.set_write_timeout(Some(config.io_timeout))?;
     stream.set_nodelay(true)?;
     write_frame(
         &mut stream,
-        &Frame::new(FrameCode::GatewayHello, Vec::new())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+        &Frame::gateway_hello(request_workload_cgroup_observations),
     )?;
     let welcome = read_frame(&mut stream)?;
     if welcome.code != FrameCode::GatewayWelcome {
@@ -273,16 +313,16 @@ fn connect_registered(config: &GatewayConfig) -> io::Result<(TcpStream, u32)> {
             "daemon did not return GatewayWelcome",
         ));
     }
-    let gateway_id = welcome
-        .decode_numeric_id()
+    let welcome = welcome
+        .decode_gateway_welcome()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if gateway_id == 0 {
+    if !request_workload_cgroup_observations && welcome.workload_cgroup_observations {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "daemon assigned reserved gateway ID zero",
+            "daemon advertised an unrequested gateway capability",
         ));
     }
-    Ok((stream, gateway_id))
+    Ok((stream, welcome))
 }
 
 fn write_frame(stream: &mut TcpStream, frame: &Frame) -> io::Result<()> {

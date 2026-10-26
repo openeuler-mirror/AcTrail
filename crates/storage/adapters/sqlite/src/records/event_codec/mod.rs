@@ -13,7 +13,9 @@ use model_core::event::EventPayload;
 
 mod bincode_codec;
 mod blocks;
+mod key_codes;
 mod manual;
+mod value_codes;
 
 pub use blocks::{join_large_fields, split_large_fields};
 
@@ -47,25 +49,8 @@ pub struct PayloadBlock {
 }
 
 pub struct EncodedEventPayload {
-    pub variant: &'static str,
     pub fields: Vec<u8>,
     pub blocks: Vec<PayloadBlock>,
-}
-
-pub fn variant_str(payload: &EventPayload) -> &'static str {
-    match payload {
-        EventPayload::Process(_) => "process",
-        EventPayload::File(_) => "file",
-        EventPayload::Net(_) => "net",
-        EventPayload::Ipc(_) => "ipc",
-        EventPayload::Stdio(_) => "stdio",
-        EventPayload::Application(_) => "application",
-        EventPayload::Resource(_) => "resource",
-        EventPayload::Control(_) => "control",
-        EventPayload::Loss(_) => "loss",
-        EventPayload::Label(_) => "label",
-        EventPayload::Enforcement(_) => "enforcement",
-    }
 }
 
 pub trait EventPayloadCodec: Send + Sync {

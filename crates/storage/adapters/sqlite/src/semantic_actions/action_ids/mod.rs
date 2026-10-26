@@ -1,7 +1,44 @@
-mod hash;
-
 use rusqlite::{OptionalExtension, params};
 use semantic_action::SemanticActionStoreError;
+
+/// Creation normally obtains its key directly from the inserted identity row.
+pub(in crate::semantic_actions) fn create_action_id(
+    connection: &rusqlite::Connection,
+    trace_id: u64,
+    action_id: &str,
+) -> Result<i64, SemanticActionStoreError> {
+    require_non_empty_action_id(action_id)?;
+    if let Some(key) = connection
+        .prepare_cached(
+            "INSERT INTO semantic_action_ids(trace_id, action_id) VALUES (?1, ?2)
+         ON CONFLICT(action_id) DO NOTHING RETURNING action_key",
+        )
+        .and_then(|mut statement| {
+            statement.query_row(params![trace_id, action_id], |row| row.get(0))
+        })
+        .optional()
+        .map_err(|error| {
+            SemanticActionStoreError::new("insert_semantic_action_id", error.to_string())
+        })?
+    {
+        return Ok(key);
+    }
+    let (key, existing_trace): (i64, u64) = connection
+        .prepare_cached("SELECT action_key, trace_id FROM semantic_action_ids WHERE action_id=?1")
+        .and_then(|mut statement| {
+            statement.query_row([action_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        })
+        .map_err(|error| {
+            SemanticActionStoreError::new("read_semantic_action_id", error.to_string())
+        })?;
+    if existing_trace != trace_id {
+        return Err(SemanticActionStoreError::new(
+            "semantic_action_id_collision",
+            "action_id maps to a different trace",
+        ));
+    }
+    Ok(key)
+}
 
 pub(in crate::semantic_actions) fn intern_action_id(
     connection: &mut rusqlite::Connection,
@@ -9,9 +46,8 @@ pub(in crate::semantic_actions) fn intern_action_id(
     action_id: &str,
 ) -> Result<i64, SemanticActionStoreError> {
     require_non_empty_action_id(action_id)?;
-    // Fast path: aggregate actions are upserted once per payload segment with
-    // the same action_id, so the id is almost always already interned. The
-    // action_id column is UNIQUE, so a row matching trace + action_id is ours.
+    // Link endpoints and content records commonly refer to an existing identity.
+    // The action_id column is UNIQUE, so a matching trace + action_id is ours.
     if let Some(action_key) = connection
         .prepare_cached(
             "SELECT action_key FROM semantic_action_ids
@@ -47,19 +83,18 @@ fn intern_action_id_slow(
     trace_id: u64,
     action_id: &str,
 ) -> Result<i64, SemanticActionStoreError> {
-    let action_id_hash = hash::sha256_hash_blob(action_id.as_bytes());
     connection
         .execute(
-            "INSERT OR IGNORE INTO semantic_action_ids (trace_id, action_id, action_id_hash)
-             VALUES (?1, ?2, ?3)",
-            params![trace_id, action_id, &action_id_hash],
+            "INSERT OR IGNORE INTO semantic_action_ids (trace_id, action_id)
+             VALUES (?1, ?2)",
+            params![trace_id, action_id],
         )
         .map_err(|error| {
             SemanticActionStoreError::new("insert_semantic_action_id", error.to_string())
         })?;
     let row = connection
         .query_row(
-            "SELECT action_key, trace_id, action_id_hash
+            "SELECT action_key, trace_id
              FROM semantic_action_ids
              WHERE action_id = ?1",
             params![action_id],
@@ -67,7 +102,6 @@ fn intern_action_id_slow(
                 Ok((
                     row.get::<_, i64>("action_key")?,
                     row.get::<_, u64>("trace_id")?,
-                    row.get::<_, Vec<u8>>("action_id_hash")?,
                 ))
             },
         )
@@ -81,12 +115,12 @@ fn intern_action_id_slow(
                 "action id insert did not materialize a row",
             )
         })?;
-    if row.1 == trace_id && row.2 == action_id_hash {
+    if row.1 == trace_id {
         Ok(row.0)
     } else {
         Err(SemanticActionStoreError::new(
             "semantic_action_id_collision",
-            "action_id maps to a different trace or hash",
+            "action_id maps to a different trace",
         ))
     }
 }

@@ -11,13 +11,14 @@ use crate::probe_detector::contract::selection::DetectionSelector;
 use super::Aarch64RustlsProbeDetectorConfig;
 use super::common_state_pair_48_56::CommonStatePair4856ProbeDetector;
 use super::common_state_pair_52_64::CommonStatePair5264ProbeDetector;
+use super::common_state_pair_52_64_x22::CommonStatePair5264X22ProbeDetector;
 use crate::probe_detector::detector::tls::rustls::static_pattern::PatternPairProbeDetector;
 
 pub(crate) struct Aarch64RustlsProbeDetector {
     path: DetectorPath,
     match_limit: usize,
     selector: DetectionSelector,
-    candidates: [PatternPairProbeDetector; 2],
+    candidates: [PatternPairProbeDetector; 3],
 }
 
 impl Aarch64RustlsProbeDetector {
@@ -36,6 +37,8 @@ impl Aarch64RustlsProbeDetector {
                 CommonStatePair5264ProbeDetector::try_new(config.common_state_pair_52_64)?
                     .into_pattern_pair(),
                 CommonStatePair4856ProbeDetector::try_new(config.common_state_pair_48_56)?
+                    .into_pattern_pair(),
+                CommonStatePair5264X22ProbeDetector::try_new(config.common_state_pair_52_64_x22)?
                     .into_pattern_pair(),
             ],
         })

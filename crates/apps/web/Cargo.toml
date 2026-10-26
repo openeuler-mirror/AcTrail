@@ -10,6 +10,7 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
+resource_profiling = { path = "../../core/resource_profiling" }
 alert_contract = { path = "../../contracts/alert" }
 config_core = { path = "../../core/config" }
 control_contract = { path = "../../contracts/control_plane" }
@@ -24,3 +25,6 @@ rusqlite = { version = "0.31.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+
+[dev-dependencies]
+sqlite_storage = { path = "../../storage/adapters/sqlite" }

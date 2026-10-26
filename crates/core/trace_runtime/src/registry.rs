@@ -213,13 +213,8 @@ impl TraceRuntime {
             .get(parent_identity)
             .cloned()
             .ok_or_else(|| RegistryError::ParentMembershipMissing(parent_identity.clone()))?;
-        if !parent.capture_enabled
-            || !parent.propagation_enabled
-            || matches!(parent.state, MembershipState::IdentityStale)
-        {
-            return Err(RegistryError::PropagationDisabled(parent.identity));
-        }
-
+        // An observed fork records an existing relationship. Later capture or
+        // propagation changes must not reject an event already collected.
         let membership = ProcessMembership::inherited(
             trace_id,
             child_identity,
@@ -286,6 +281,42 @@ impl TraceRuntime {
             .map_err(RegistryError::InvalidStateTransition)
     }
 
+    /// Completes a draining trace only after its managed resource boundary has
+    /// been durably finalized. Open memberships remain intact as evidence and
+    /// degrade trace health instead of blocking the transition indefinitely.
+    pub fn complete_after_resource_barrier(
+        &mut self,
+        trace_id: TraceId,
+        completed_at: SystemTime,
+    ) -> Result<bool, RegistryError> {
+        let entry = self
+            .traces
+            .get_mut(&trace_id)
+            .ok_or(RegistryError::TraceNotFound(trace_id))?;
+        let has_open_memberships = entry.memberships.memberships().any(|membership| {
+            membership.capture_enabled
+                && matches!(
+                    membership.state,
+                    MembershipState::Starting | MembershipState::Active
+                )
+        });
+        if has_open_memberships {
+            state_machine::degrade_trace(&mut entry.trace);
+        }
+        if entry.trace.lifecycle_state == TraceLifecycleState::Draining {
+            state_machine::complete_trace(&mut entry.trace, completed_at)
+                .map_err(RegistryError::InvalidStateTransition)?;
+        } else if !entry.trace.lifecycle_state.is_terminal() {
+            return Err(RegistryError::InvalidStateTransition(
+                state_machine::StateTransitionError {
+                    from: entry.trace.lifecycle_state,
+                    to: TraceLifecycleState::Completed,
+                },
+            ));
+        }
+        Ok(has_open_memberships)
+    }
+
     pub fn get_trace(&self, trace_id: TraceId) -> Option<&TraceEntry> {
         self.traces.get(&trace_id)
     }
@@ -342,30 +373,28 @@ impl TraceRuntime {
             return Ok(());
         }
 
-        let root_identity = entry.trace.root_process_identity.clone();
         let root = entry
             .memberships
-            .get(&root_identity)
+            .get(&entry.trace.root_process_identity)
             .ok_or(RegistryError::RootMembershipMissing(trace_id))?;
-        let active_descendants = entry.memberships.active_descendants_of(&root_identity);
+        let root_exited = matches!(root.state, MembershipState::Exited);
+        if root.capture_enabled && !root_exited {
+            return Ok(());
+        }
 
-        if !root.capture_enabled
-            || matches!(root.state, model_core::process::MembershipState::Exited)
-        {
-            if active_descendants > 0 {
-                if entry.trace.lifecycle_state == TraceLifecycleState::Active {
-                    state_machine::begin_draining(&mut entry.trace, observed_at)
-                        .map_err(RegistryError::InvalidStateTransition)?;
-                }
-            } else if entry.memberships.capturable_members() == 0 {
-                if matches!(root.state, MembershipState::Exited) {
-                    state_machine::exit_trace(&mut entry.trace, observed_at)
-                        .map_err(RegistryError::InvalidStateTransition)?;
-                } else {
-                    state_machine::complete_trace(&mut entry.trace, observed_at)
-                        .map_err(RegistryError::InvalidStateTransition)?;
-                }
+        // The root is no longer capturable, so any capturable member is a
+        // descendant that still needs observation before the trace can end.
+        if entry.memberships.has_capturable_members() {
+            if entry.trace.lifecycle_state == TraceLifecycleState::Active {
+                state_machine::begin_draining(&mut entry.trace, observed_at)
+                    .map_err(RegistryError::InvalidStateTransition)?;
             }
+        } else if root_exited {
+            state_machine::exit_trace(&mut entry.trace, observed_at)
+                .map_err(RegistryError::InvalidStateTransition)?;
+        } else {
+            state_machine::complete_trace(&mut entry.trace, observed_at)
+                .map_err(RegistryError::InvalidStateTransition)?;
         }
 
         Ok(())

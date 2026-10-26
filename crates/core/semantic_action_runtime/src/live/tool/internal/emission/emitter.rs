@@ -6,7 +6,7 @@ use model_core::diagnostics::{LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSe
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    LlmRequestLineageWrite, SemanticAction, SemanticActionLinkConfidence, SemanticActionLinkRole,
+    LlmRequestLineageWrite, SemanticAction, SemanticActionLinkOrigin, SemanticActionLinkRole,
 };
 
 use crate::live::tool::contract::ToolProjectionOutput;
@@ -66,35 +66,65 @@ impl ToolSemanticEmitter {
         response: &SemanticAction,
         action: &SemanticAction,
         changed: bool,
+        existing: bool,
     ) {
         if !changed {
             return;
         }
-        self.output.actions.push(action.clone());
+        if existing {
+            self.output
+                .updates
+                .push(crate::live::ActionUpdateFactory::lifecycle(action, None));
+            self.output.updated_actions.push(action.clone());
+        } else {
+            self.output.actions.push(action.clone());
+        }
         self.output.links.push(action_link(
             response,
             action,
             SemanticActionLinkRole::LlmResponseToolCall,
-            SemanticActionLinkConfidence::Observed,
+            SemanticActionLinkOrigin::Observed,
         ));
     }
 
     pub(in crate::live::tool) fn emit_tool_result(
         &mut self,
+        request: &SemanticAction,
         tool_call: Option<&SemanticAction>,
         action: &SemanticAction,
         changed: bool,
+        existing: bool,
+        state: semantic_action::SemanticToolResultBinding,
     ) {
         if !changed {
             return;
         }
-        self.output.actions.push(action.clone());
+        if existing {
+            self.output
+                .updates
+                .push(crate::live::ActionUpdateFactory::lifecycle(action, None));
+            self.output
+                .updates
+                .push(crate::live::ActionUpdateFactory::update(
+                    action,
+                    semantic_action::SemanticActionChange::ToolResultBinding { state },
+                ));
+            self.output.updated_actions.push(action.clone());
+        } else {
+            self.output.actions.push(action.clone());
+        }
+        self.output.links.push(action_link(
+            request,
+            action,
+            SemanticActionLinkRole::LlmRequestToolResult,
+            SemanticActionLinkOrigin::Observed,
+        ));
         if let Some(tool_call) = tool_call {
             self.output.links.push(action_link(
                 tool_call,
                 action,
                 SemanticActionLinkRole::LlmToolCallResult,
-                SemanticActionLinkConfidence::Observed,
+                SemanticActionLinkOrigin::Observed,
             ));
         }
     }
@@ -108,35 +138,38 @@ impl ToolSemanticEmitter {
             tool_call,
             &invocation,
             SemanticActionLinkRole::LlmToolCallAgentInvocation,
-            SemanticActionLinkConfidence::Observed,
+            SemanticActionLinkOrigin::Observed,
         ));
-        self.output.actions.push(invocation);
-    }
-
-    pub(in crate::live::tool) fn emit_agent_child(
-        &mut self,
-        invocation: &SemanticAction,
-        request: &SemanticAction,
-    ) {
-        self.output.links.push(action_link(
-            invocation,
-            request,
-            SemanticActionLinkRole::AgentInvocationChildLlmRequest,
-            SemanticActionLinkConfidence::Derived,
-        ));
+        if invocation.status == semantic_action::SemanticActionStatus::InProgress {
+            self.output.actions.push(invocation);
+        } else {
+            self.output
+                .updates
+                .push(crate::live::ActionUpdateFactory::lifecycle(
+                    &invocation,
+                    None,
+                ));
+            self.output.updated_actions.push(invocation);
+        }
     }
 
     pub(in crate::live::tool) fn emit_finalized_invocation(
         &mut self,
         finalized: FinalizedInvocation,
     ) {
-        self.output.actions.push(finalized.action.clone());
+        self.output
+            .updates
+            .push(crate::live::ActionUpdateFactory::lifecycle(
+                &finalized.action,
+                Some(semantic_action::SemanticActionFinalizationReason::TraceClosed),
+            ));
+        self.output.updated_actions.push(finalized.action.clone());
         if let Some(tool_call) = finalized.tool_call {
             self.output.links.push(action_link(
                 &tool_call,
                 &finalized.action,
                 SemanticActionLinkRole::LlmToolCallAgentInvocation,
-                SemanticActionLinkConfidence::Observed,
+                SemanticActionLinkOrigin::Observed,
             ));
         }
     }
@@ -215,7 +248,13 @@ impl ToolSemanticEmitter {
             .with_discarded_entries(1),
         );
         if let Some(invocation) = eviction.materialized_invocation {
-            self.output.actions.push(invocation);
+            self.output
+                .updates
+                .push(crate::live::ActionUpdateFactory::lifecycle(
+                    &invocation,
+                    Some(semantic_action::SemanticActionFinalizationReason::CapacityEvicted),
+                ));
+            self.output.updated_actions.push(invocation);
         }
     }
 

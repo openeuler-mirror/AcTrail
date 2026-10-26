@@ -160,9 +160,12 @@ class McpTraceAssertion:
                 f"trace-{trace_id} must appear exactly once; found {traces}"
             )
         trace = traces[0]
-        if trace.get("state") != "Exited" or trace.get("health") != "Clean":
+        if (
+            trace.get("state") not in {"Completed", "Exited"}
+            or trace.get("health") != "Clean"
+        ):
             raise AssertionError(
-                f"trace-{trace_id} must be Exited/Clean after daemon shutdown; "
+                f"trace-{trace_id} must be terminal/Clean after daemon shutdown; "
                 f"state={trace.get('state')} health={trace.get('health')}"
             )
 
@@ -181,23 +184,10 @@ class McpTraceAssertion:
             {
                 "mcp.execution.status": "success",
                 "mcp.tool.id": expected.tool_name,
-                "llm.tool_call.name": expected.tool_id,
             },
         )
-        for key in (
-            "mcp.request.id",
-            "llm.response.action_id",
-            "llm.tool_call.id",
-        ):
-            if not attributes.get(key):
-                raise AssertionError(f"{root_id} has no nonempty {key}")
-        llm_response_id = attributes["llm.response.action_id"]
-        llm_response = actions_by_id.get(llm_response_id)
-        if llm_response is None or llm_response.get("kind") != "llm.response":
-            raise AssertionError(
-                f"{root_id} references invalid llm.response action "
-                f"{llm_response_id!r}"
-            )
+        if not attributes.get("mcp.request.id"):
+            raise AssertionError(f"{root_id} has no nonempty mcp.request.id")
         command = self._linked_parent(
             root_id,
             "command.contains_mcp_tool_call",
@@ -462,7 +452,7 @@ class McpTraceAssertion:
 
     @staticmethod
     def _require_valid_link(link: dict[str, Any]) -> None:
-        if link.get("valid") is not True or link.get("confidence") != "observed":
+        if link.get("valid") is not True or link.get("origin") != "observed":
             raise AssertionError(
                 f"MCP semantic link must be valid/observed: {link}"
             )

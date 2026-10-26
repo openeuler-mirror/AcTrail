@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use alert_contract::{AlertDefinition, AlertDraft, AlertSeverity};
 use control_contract::reply::ControlError;
@@ -15,6 +16,16 @@ const FILE_PAYLOAD_SCHEMA_ID: &str = "actrail.file-access-boundary-violation.pay
 const COMMAND_DEFINITION_KEY: &str = "command-execution-boundary-violation";
 const COMMAND_PAYLOAD_SCHEMA_ID: &str = "actrail.command-execution-boundary-violation.payload.v1";
 
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub(in crate::services) struct BoundaryAlertAggregation {
+    pub backend: &'static str,
+    pub rule_revision: u64,
+    /// Delta since the previous alert; these are received events, not kernel totals.
+    pub received_denials: u64,
+    pub first_observed_at: SystemTime,
+    pub last_observed_at: SystemTime,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum FileAccessDenySource {
@@ -27,7 +38,8 @@ pub(crate) enum FileAccessDenySource {
 pub(crate) struct FileAccessBoundaryAlert {
     operation: String,
     path: String,
-    matched_rule_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched_rule_path: Option<String>,
     rule_id: String,
     policy_owner_instance_id: String,
     process_id: u64,
@@ -36,6 +48,8 @@ pub(crate) struct FileAccessBoundaryAlert {
     decider_plugin_instance_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plugin_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregation: Option<BoundaryAlertAggregation>,
 }
 
 impl FileAccessBoundaryAlert {
@@ -54,14 +68,25 @@ impl FileAccessBoundaryAlert {
         Self {
             operation,
             path,
-            matched_rule_path,
+            matched_rule_path: Some(matched_rule_path),
             rule_id,
             policy_owner_instance_id,
             process_id,
             decision_source,
             decider_plugin_instance_id,
             plugin_reason,
+            aggregation: None,
         }
+    }
+
+    pub(in crate::services) fn with_lsm_aggregation(
+        mut self,
+        aggregation: BoundaryAlertAggregation,
+    ) -> Self {
+        // The kernel supplies the accessed resource, not the matched rule path.
+        self.matched_rule_path = None;
+        self.aggregation = Some(aggregation);
+        self
     }
 
     pub(super) fn into_draft(self) -> Result<AlertDraft, PluginRuntimeError> {
@@ -99,6 +124,8 @@ pub(crate) struct CommandExecutionBoundaryAlert {
     decider_plugin_instance_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plugin_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregation: Option<BoundaryAlertAggregation>,
 }
 
 impl CommandExecutionBoundaryAlert {
@@ -122,7 +149,16 @@ impl CommandExecutionBoundaryAlert {
             decision_source,
             decider_plugin_instance_id,
             plugin_reason,
+            aggregation: None,
         }
+    }
+
+    pub(in crate::services) fn with_lsm_aggregation(
+        mut self,
+        aggregation: BoundaryAlertAggregation,
+    ) -> Self {
+        self.aggregation = Some(aggregation);
+        self
     }
 
     pub(super) fn into_draft(self) -> Result<AlertDraft, PluginRuntimeError> {

@@ -16,6 +16,10 @@ fail() {
 [[ -f "$BUNDLE_DIR/MANIFEST.sha256" ]] \
   || fail "guest bundle is missing; run the virtual_container V2 case first"
 
+[[ -f "$BUNDLE_DIR/tests/guest/runtime-defaults.sh" ]] \
+  || fail "Guest fixture defaults are missing from the bundle"
+sh -n "$BUNDLE_DIR/tests/guest/runtime-defaults.sh"
+
 # Parse the production guest template through the real CLI. This catches
 # stale TOML fields before an image is built.
 LD_LIBRARY_PATH="$BUNDLE_DIR/lib" \
@@ -147,15 +151,14 @@ if grep -Fq -- 'COLLECTOR_HOST' \
   "$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
   fail "installed OTLP/HTTP config retained the bundle placeholder"
 fi
-# Parse the rendered exporter startup fragment through the real CLI. Rewrite
-# only offline-root paths so this checks the candidate rootfs rather than files
-# that may happen to be installed on the test host.
+# Probe the installed exporter with paths into the candidate rootfs.
 rendered_probe_config="$test_dir/rendered-otel-operator.conf"
-sed \
-  -e "s#/usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so#$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so#" \
-  -e "s#/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml#$rootfs/usr/share/actrail/plugins/otel-http/otel-http.plugin.toml#" \
-  -e "s#/etc/actrail/plugins/otel-http/otel-http.config.toml#$rootfs/etc/actrail/plugins/otel-http/otel-http.config.toml#" \
-  "$rootfs/etc/actrail/operator.conf" >"$rendered_probe_config"
+probe_patch="$test_dir/rootfs-paths.patch.toml"
+python3 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/write-rootfs-probe-patch.py" \
+  --rootfs "$rootfs" --bundle "$BUNDLE_DIR" --output "$probe_patch"
+LD_LIBRARY_PATH="$BUNDLE_DIR/lib" \
+  "$BUNDLE_DIR/actrailctl" --config "$rendered_probe_config" init -f \
+    --patch "$rootfs/etc/actrail/operator.conf" --patch "$probe_patch"
 LD_LIBRARY_PATH="$BUNDLE_DIR/lib" \
   "$BUNDLE_DIR/actrailctl" \
   --config "$rendered_probe_config" \

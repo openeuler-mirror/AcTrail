@@ -21,6 +21,8 @@ runner 会先刷新 release 产物。Claude 缺失或外部可用性检查失败
 测例在 case work directory 内生成独立 operator config，隔离 control socket、
 PID、日志、SQLite、TLS-sync socket、export 和 plugin 路径，不会停止默认或其他
 显式配置启动的 daemon。
+配置通过 `actrailctl init -f --patch` 从当前默认值生成，并显式开启
+`[payload.mcp] enabled = true`，以采集本测例要求的 MCP 语义图和诊断。
 
 ## 验证范围
 
@@ -186,6 +188,8 @@ toml_string() {
   printf '\n[payload.tls]\n'
   printf 'sync_event_socket_path = %s\n' \
     "$(toml_string "$TLS_SYNC_SOCKET")"
+  printf '\n[payload.mcp]\n'
+  printf 'enabled = true\n'
   printf '\n[cluster.report]\n'
   printf 'spool_dir = %s\n' \
     "$(toml_string "$RUNTIME_DIR/data/cluster-spool")"
@@ -242,7 +246,7 @@ Unix socket 的 108-byte 上限。probe 参数与当前代码中的
 #### 手动指令
 
 ```bash
-"${DAEMON[@]}" init -f --patch "$OPERATOR_PATCH"
+"${CONTROL[@]}" init -f --patch "$OPERATOR_PATCH"
 "${DAEMON[@]}" stop
 "${CONTROL[@]}" clean
 "${DAEMON[@]}" start
@@ -411,10 +415,7 @@ jq -e \
       and ($roots | length) == 1
       and $roots[0].attributes["mcp.execution.status"] == "success"
       and $roots[0].attributes["mcp.tool.id"] == $tool
-      and ($roots[0].attributes["llm.response.action_id"] | length) > 0
-      and ($roots[0].attributes["llm.tool_call.id"] | length) > 0
-      and $roots[0].attributes["llm.tool_call.name"]
-        == ("mcp__" + $server + "__" + $tool)
+      and ($roots[0].attributes["mcp.request.id"] | length) > 0
       and ($links | length) == 5
       and (([$links[] | .role] | sort) == (
         [
@@ -426,7 +427,7 @@ jq -e \
         ] | sort
       ))
       and ($links | all(
-        .valid == true and .confidence == "observed"
+        .valid == true and .origin == "observed"
       ))
   ' "$CASE_DIR/actions.json" >/dev/null
 
@@ -444,9 +445,7 @@ jq '{
           server: .attributes["mcp.server.name"],
           tool: .attributes["mcp.tool.name"],
           transport: .attributes["mcp.transport"],
-          llm_response: .attributes["llm.response.action_id"],
-          llm_tool_id: .attributes["llm.tool_call.id"],
-          llm_tool_name: .attributes["llm.tool_call.name"]
+          request_id: .attributes["mcp.request.id"]
         }
     ]
   }' "$CASE_DIR/actions.json"

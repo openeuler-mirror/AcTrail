@@ -147,25 +147,27 @@ struct AssemblyLossCounters {
 }
 
 impl AssemblyLossCounters {
-    fn total(self) -> u64 {
-        self.capacity_exhausted
-            .saturating_add(self.duplicate_stage)
-            .saturating_add(self.completion_without_stage)
-            .saturating_add(self.completion_mismatch)
-            .saturating_add(self.abandoned_on_process_exit)
-            .saturating_add(self.abandoned_on_trace_release)
-    }
-
-    fn summary(self) -> String {
-        format!(
-            "stdio payload assembly lost data: capacity_exhausted={}, duplicate_stage={}, completion_without_stage={}, completion_mismatch={}, abandoned_on_process_exit={}, abandoned_on_trace_release={}",
-            self.capacity_exhausted,
-            self.duplicate_stage,
-            self.completion_without_stage,
-            self.completion_mismatch,
-            self.abandoned_on_process_exit,
-            self.abandoned_on_trace_release,
-        )
+    fn counts(self) -> [(&'static str, u64); 6] {
+        [
+            ("stdio_assembly_capacity_exhausted", self.capacity_exhausted),
+            ("stdio_assembly_duplicate_stage", self.duplicate_stage),
+            (
+                "stdio_assembly_completion_without_stage",
+                self.completion_without_stage,
+            ),
+            (
+                "stdio_assembly_completion_mismatch",
+                self.completion_mismatch,
+            ),
+            (
+                "stdio_assembly_abandoned_on_process_exit",
+                self.abandoned_on_process_exit,
+            ),
+            (
+                "stdio_assembly_abandoned_on_trace_release",
+                self.abandoned_on_trace_release,
+            ),
+        ]
     }
 
     fn append_drop_counters(self, dropped: &mut Vec<DropCounter>) {
@@ -311,11 +313,12 @@ impl StdioPayloadAssembler {
         self.losses.append_drop_counters(dropped);
     }
 
-    pub(super) fn take_loss_summaries(&mut self) -> Vec<String> {
-        if self.losses == self.reported_losses || self.losses.total() == 0 {
-            return Vec::new();
+    pub(super) fn take_loss_counts(&mut self) -> [(&'static str, u64); 6] {
+        let mut counts = self.losses.counts();
+        for ((_, count), (_, previous)) in counts.iter_mut().zip(self.reported_losses.counts()) {
+            *count = count.saturating_sub(previous);
         }
         self.reported_losses = self.losses;
-        vec![self.losses.summary()]
+        counts
     }
 }

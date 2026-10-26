@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use storage_factory::StorageConfig;
 
+#[path = "daemon/access_control/config.rs"]
+mod access_control;
 #[path = "daemon/agent.rs"]
 mod agent;
 #[path = "daemon/application.rs"]
@@ -29,8 +31,6 @@ mod operator;
 mod payload;
 #[path = "daemon/process.rs"]
 mod process;
-#[path = "daemon/resource.rs"]
-mod resource;
 #[path = "daemon/finalization/config.rs"]
 mod trace_finalization;
 
@@ -39,16 +39,15 @@ pub use crate::retention::{
     DEFAULT_STORAGE_RETENTION_MIN_TERMINAL_AGE, DEFAULT_STORAGE_RETENTION_SWEEP_INTERVAL,
     DEFAULT_STORAGE_RETENTION_TRACES_PER_SWEEP, StorageRetentionConfig,
 };
+pub use access_control::{
+    AccessControlBackend, AccessControlConfig, FileControlConfig, FileOpenBackend, LsmConfig,
+    LsmDenySignal,
+};
 pub use agent::{
     AgentInvocationConfig, DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS, DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
     DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES, DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
-    DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
-    DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
     DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
     DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES, DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
@@ -57,13 +56,14 @@ pub use agent::{
     DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY,
     DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST,
     DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE,
-    DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM, Http2DataContentRetention,
-    HttpBodyRetention, HttpExchangeConfig, HttpHeadersRetention, L0LlmCallRetention,
-    L0McpCallRetention, L1SseRetention, L2HttpRetention, L3Http2FrameRetention, L4PayloadRetention,
-    LlmAssemblyConfig, LlmProjectionStateConfig, LlmRequestBodyExportRetention,
-    LlmRequestContentRetention, LlmResponseContentRetention, LlmStreamClassifierConfig,
-    LlmToolCallRetention, LlmToolResultContentExportRetention, LlmTrajectoryConfig,
-    LlmUsageRetention, McpJsonRpcContentRetention, PayloadBodyContentRetention,
+    DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM, Http1ProtocolConfig,
+    Http2DataContentRetention, Http2ProtocolConfig, HttpBodyRetention, HttpExchangeConfig,
+    HttpHeadersRetention, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
+    L2WebSocketRetention, L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig,
+    LlmProjectionStateConfig, LlmRequestBodyExportRetention, LlmRequestContentRetention,
+    LlmResponseContentRetention, LlmStreamClassifierConfig, LlmToolCallRetention,
+    LlmToolResultContentExportRetention, LlmTrajectoryConfig, LlmUsageRetention,
+    LlmWebSocketConfig, McpJsonRpcContentRetention, PayloadBodyContentRetention,
     SemanticContentOwner, SemanticRetentionConfig, SseEventContentRetention,
 };
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
@@ -81,16 +81,17 @@ pub use command::{
     DEFAULT_COMMAND_REUSABLE_CACHE_MAX_ENTRIES,
 };
 pub use enforcement::{
-    EnforcementBackend, EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision,
-    EnforcementMarkStrategy, EnforcementScope, EnforcementSeccompSyscall,
+    EnforcementBuiltinRuleConfig, EnforcementConfig, EnforcementDecision, EnforcementMarkStrategy,
+    EnforcementScope, EnforcementSeccompSyscall,
 };
 pub use file_observation::{
-    DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
-    DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
-    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadFastPathConfig, FileBulkReadMode,
-    FileBulkReadObservationConfig, FileMetadataRetention, FileObservationConfig,
-    FileRawEventRetention, FileTtyObservationConfig, FsEnumerateObservationConfig,
+    DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET, DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
+    DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS, FileBulkReadMode, FileBulkReadObservationConfig,
+    FileCollectionConfig, FileIoCollectionConfig, FileIoSummaryConfig, FileMetadataRetention,
+    FileObservationConfig, FileRawEventRetention, FileTtyObservationConfig,
+    FsEnumerateObservationConfig,
 };
+pub use idle_detector::IdleDetectionConfig;
 pub use logging::{
     DEFAULT_WORKLOAD_DIAGNOSTICS_ENABLED, DEFAULT_WORKLOAD_DIAGNOSTICS_INTERVAL_MS,
     DiagnosticLogLevel, WorkloadDiagnosticsConfig,
@@ -110,15 +111,14 @@ pub use operator::{
 pub use payload::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
     DEFAULT_MCP_STDIO_CANDIDATE_MAX_BYTES, DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
-    DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS, DisabledOrPath, PayloadConfig, PayloadMcpConfig,
-    PayloadRedactionPolicy, PayloadSocketCaptureBackend, PayloadSocketConfig,
-    PayloadSocketSeccompSyscall, PayloadStdioConfig, PayloadStdioStorageMode,
-    PayloadTlsCaptureBackend, PayloadTlsConfig, PayloadTlsLibrary, PayloadTlsLibraryPath,
-    PayloadTlsResolver, PayloadTlsSeccompSyscall, PayloadTlsSource,
-    PayloadTlsSyncRuntimeLibraryPath,
+    DEFAULT_TLS_DYNAMIC_DISCOVERY_CAPACITY, DEFAULT_TLS_DYNAMIC_EXEC_PLAN_TIMEOUT_MS,
+    DisabledOrPath, PayloadConfig, PayloadMcpConfig, PayloadRedactionPolicy,
+    PayloadSocketCaptureBackend, PayloadSocketConfig, PayloadSocketSeccompSyscall,
+    PayloadStdioConfig, PayloadStdioStorageMode, PayloadTlsCaptureBackend, PayloadTlsConfig,
+    PayloadTlsLibrary, PayloadTlsLibraryPath, PayloadTlsResolver, PayloadTlsSeccompSyscall,
+    PayloadTlsSource, PayloadTlsSyncRuntimeLibraryPath,
 };
 pub use process::{ProcessSeccompConfig, ProcessSeccompSyscall, SeccompNotifyConfig};
-pub use resource::ResourceMetricsConfig;
 pub use trace_finalization::{
     DEFAULT_POST_TRACE_ADMISSION_TIMEOUT_MS, DEFAULT_POST_TRACE_BROKER_QUEUE_CAPACITY,
     DEFAULT_POST_TRACE_BROKER_REPLY_TIMEOUT_MS, DEFAULT_POST_TRACE_EXECUTION_TIMEOUT_MS,
@@ -130,8 +130,6 @@ pub const DEFAULT_FINALIZATION_TRACES_PER_CYCLE: u32 = 1;
 pub const DEFAULT_FINALIZATION_POLL_INTERVAL_MS: u64 = 100;
 pub const DEFAULT_FINALIZATION_SETTLE_DELAY_MS: u64 = 250;
 pub const DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
-pub const DEFAULT_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS: u32 = 4;
-pub const MAX_EBPF_PREFLIGHT_LINK_TEARDOWN_WORKERS: u32 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraceFinalizationConfig {
@@ -291,7 +289,6 @@ pub struct EbpfCollectorConfig {
     /// set by `resolve_ebpf_collector_config` based on the host probe.
     pub enabled: bool,
     pub memlock_rlimit: MemlockRlimit,
-    pub preflight_link_teardown_workers: u32,
     pub tracked_process_max_entries: u32,
     pub pending_operation_max_entries: u32,
     /// Maximum simultaneously tracked descriptors for one process. This is
@@ -300,6 +297,8 @@ pub struct EbpfCollectorConfig {
     pub suppressed_fd_max_entries: u32,
     pub suppressed_fd_index_slots_per_process: u32,
     pub event_ring_buffer_max_bytes: u32,
+    /// Nonempty collector loss summaries are emitted at most once per interval.
+    pub diagnostics_summary_interval_ms: u32,
     pub file_path_capture_enabled: bool,
     pub file_path_max_bytes: u32,
     /// Aggregate per-connection net send/recv events at the collector (default

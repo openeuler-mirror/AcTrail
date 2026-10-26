@@ -3,6 +3,7 @@ mod input;
 mod output;
 mod payload;
 mod pipeline;
+mod router;
 mod websocket;
 
 pub(crate) use super::projection::links::{LlmHttpRequestLink, LlmHttpResponseLink};

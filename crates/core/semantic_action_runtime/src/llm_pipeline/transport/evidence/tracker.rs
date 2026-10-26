@@ -3,9 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use model_core::payload::{
-    PayloadOperationCompletionState, PayloadSegment, PayloadTruncationState,
-};
+use model_core::payload::{PayloadCaptureState, PayloadOperationCompletionState, PayloadSegment};
 
 #[derive(Default)]
 pub(in crate::llm_pipeline) struct EvidenceTracker {
@@ -35,6 +33,8 @@ pub(in crate::llm_pipeline) struct EvidenceSnapshot {
     pub(in crate::llm_pipeline) operation_ids: BTreeSet<u64>,
     pub(in crate::llm_pipeline) any_operation_failed: bool,
     pub(in crate::llm_pipeline) all_capture_complete: bool,
+    any_capture_policy_limited: bool,
+    any_capture_abnormal: bool,
     seen_segment_ids: BTreeSet<u64>,
     operation_states: BTreeMap<u64, OperationEvidenceState>,
 }
@@ -80,12 +80,15 @@ impl EvidenceSnapshot {
             })
     }
 
+    pub(in crate::llm_pipeline) fn capture_is_policy_limited(&self) -> bool {
+        !self.all_capture_complete && self.any_capture_policy_limited && !self.any_capture_abnormal
+    }
+
     fn observe(&mut self, segment: &PayloadSegment) {
         if !self.seen_segment_ids.insert(segment.segment_id.get()) {
             return;
         }
-        let mut metadata = segment.clone();
-        metadata.bytes.clear();
+        let metadata = EvidenceTracker::segment_metadata(segment);
         if self.first.is_none() {
             self.first = Some(metadata.clone());
         }
@@ -94,9 +97,10 @@ impl EvidenceSnapshot {
         self.operation_ids.insert(segment.operation_id);
         self.any_operation_failed |=
             segment.operation_completion_state == PayloadOperationCompletionState::Failed;
-        self.all_capture_complete &= segment.truncation == PayloadTruncationState::Complete
-            && segment.operation_completion_state == PayloadOperationCompletionState::Success
-            && segment.operation_original_size == segment.operation_captured_size;
+        let capture_state = segment.capture_state();
+        self.any_capture_policy_limited |= capture_state == PayloadCaptureState::PolicyLimited;
+        self.any_capture_abnormal |= capture_state == PayloadCaptureState::Incomplete;
+        self.all_capture_complete &= capture_state == PayloadCaptureState::Complete;
         let operation = self
             .operation_states
             .entry(segment.operation_id)
@@ -116,6 +120,43 @@ impl EvidenceSnapshot {
 }
 
 impl EvidenceTracker {
+    pub(in crate::llm_pipeline) fn capture_tail_complete(&self) -> bool {
+        self.ranges.back().is_none_or(|range| {
+            let segment = &range.segment;
+            segment
+                .operation_offset
+                .saturating_add(segment.captured_size)
+                >= segment.operation_captured_size
+        })
+    }
+
+    fn segment_metadata(segment: &PayloadSegment) -> PayloadSegment {
+        PayloadSegment {
+            segment_id: segment.segment_id,
+            trace_id: segment.trace_id,
+            observed_at: segment.observed_at,
+            process: segment.process,
+            source_boundary: segment.source_boundary,
+            content_state: segment.content_state,
+            direction: segment.direction,
+            stream_key: segment.stream_key.clone(),
+            sequence: segment.sequence,
+            original_size: segment.original_size,
+            captured_size: segment.captured_size,
+            operation_id: segment.operation_id,
+            operation_offset: segment.operation_offset,
+            operation_original_size: segment.operation_original_size,
+            operation_captured_size: segment.operation_captured_size,
+            operation_completion_state: segment.operation_completion_state,
+            truncation: segment.truncation,
+            redaction: segment.redaction,
+            library: segment.library.clone(),
+            symbol: segment.symbol.clone(),
+            protocol_hint: segment.protocol_hint.clone(),
+            bytes: Vec::new(),
+        }
+    }
+
     pub(in crate::llm_pipeline) fn cursor(&self, message_start: usize) -> EvidenceCursor {
         let next_range_id = self
             .ranges
@@ -131,8 +172,7 @@ impl EvidenceTracker {
         end: usize,
         segment: &PayloadSegment,
     ) {
-        let mut metadata = segment.clone();
-        metadata.bytes.clear();
+        let metadata = Self::segment_metadata(segment);
         let id = self.next_range_id;
         self.next_range_id = self.next_range_id.saturating_add(1);
         self.ranges.push_back(EvidenceRange {
@@ -185,24 +225,30 @@ impl EvidenceTracker {
             .collect()
     }
 
-    pub(in crate::llm_pipeline) fn discarded_prefix_stats(&self, end: usize) -> (u64, u64) {
-        let mut discarded_bytes = 0_u64;
-        let mut discarded_entries = 0_u64;
-        for range in self.ranges.iter().take_while(|range| range.start < end) {
-            let overlap_end = range.end.min(end);
-            let overlap = overlap_end.saturating_sub(range.start);
-            if overlap == 0 {
-                continue;
-            }
-            let range_bytes = range.end.saturating_sub(range.start);
-            discarded_bytes = discarded_bytes.saturating_add(if overlap == range_bytes {
-                range.segment.original_size
-            } else {
-                u64::try_from(overlap).unwrap_or(u64::MAX)
-            });
-            discarded_entries = discarded_entries.saturating_add(1);
-        }
-        (discarded_bytes, discarded_entries)
+    /// Transfers a framed suffix with each original capture coordinate intact.
+    pub(in crate::llm_pipeline) fn slice_payloads(
+        &self,
+        start: usize,
+        bytes: &[u8],
+    ) -> Vec<PayloadSegment> {
+        let end = start.saturating_add(bytes.len());
+        self.ranges
+            .iter()
+            .filter_map(|range| {
+                let left = range.start.max(start);
+                let right = range.end.min(end);
+                if left >= right {
+                    return None;
+                }
+                let mut segment = range.segment.clone();
+                segment.operation_offset = segment
+                    .operation_offset
+                    .saturating_add((left - range.start) as u64);
+                segment.bytes = bytes[left - start..right - start].to_vec();
+                segment.captured_size = segment.bytes.len() as u64;
+                Some(segment)
+            })
+            .collect()
     }
 
     pub(in crate::llm_pipeline) fn evict_before(&mut self, global_offset: usize) {
@@ -226,9 +272,5 @@ impl EvidenceTracker {
 
     pub(in crate::llm_pipeline) fn reset(&mut self) {
         self.ranges = VecDeque::new();
-    }
-
-    pub(in crate::llm_pipeline) fn take(&mut self) -> Self {
-        std::mem::take(self)
     }
 }

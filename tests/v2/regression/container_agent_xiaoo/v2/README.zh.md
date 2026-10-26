@@ -12,7 +12,25 @@ sudo -E python3 tests/v2/regression/container_agent_xiaoo/v2/run_e2e.py
 `tail -f /dev/null` 长驻，xiaoO 再通过容器内的 `actrailctl launch` 启动。测试
 验证容器归属、PID namespace、并发 trace、eBPF、文件访问和 LLM response 证据
 不会跨容器串线。
+每轮由公共 `PatchBuilder` 生成随机运行目录对应的 `runtime.patch.toml`，再执行 `actrailctl init -f --patch runtime.patch.toml --patch patch_config.toml`。后一个文件位于本测例目录，声明场景行为。文件观测显式开启
+read/write 的 `observed` 和 `bytes`，关闭 `bulk_read`，以验证独立读写动作及字节数。
 `sudo -E` 保留调用者已经导出的环境，runner、场景进程和 Docker 调用继续继承。
+
+回测用例统一管理本轮 `/tmp/actrail-nested-observer.*` 目录，嵌套 Docker 数据
+和内部 xiaoO 场景的 `scenario/` 目录都位于其中。默认在成功、失败及超时后清理，
+删除失败会使回测报告清理错误。使用 `--no-cleanup` 可保留现场，日志中的
+`nested_observer_runtime=` 给出路径。场景脚本的 `--runtime` 参数用于接收调用者
+管理的目录，其删除职责由调用者承担。
+
+# 运行参数
+
+本目录的 `constants.py` 使用 `ContainerAgentXiaooConstants` dataclass 定义测例默认值。
+修改字段即可调整超时、轮询间隔、容器启动间隔、镜像和本地 LLM provider 参数。
+
+- **进程退出**：`daemon_stop_timeout_seconds` 为 actraild 收到 SIGTERM 后的等待时间，默认 60 秒。超时后发送 SIGKILL，再按 `daemon_kill_timeout_seconds` 等待，默认 30 秒。
+- **整轮执行**：`case_timeout_seconds` 默认 900 秒。整轮超时后的清理宽限由 `case_cleanup_grace_seconds` 控制，默认 120 秒。
+- **参数覆盖**：runner 的 `CONTAINER_AGENT_XIAOO_E2E_TIMEOUT_SECONDS` 和 `CONTAINER_AGENT_XIAOO_E2E_CLEANUP_GRACE_SECONDS` 分别覆盖整轮超时和清理宽限。场景脚本已有的 CLI 参数覆盖对应默认值。
+- **产品配置**：`patch_config.toml` 声明 AcTrail 的场景配置，通过 `actrailctl init --patch` 应用。
 
 # 步骤摘要
 
@@ -40,7 +58,6 @@ test "$(id -u)" -eq 0
 test -x "$BIN_DIR/actraild"
 test -x "$BIN_DIR/actrailctl"
 test -x "$BIN_DIR/actrailviewer"
-test -x "$BIN_DIR/libactrail_tls_payload_probe_sync.so"
 test -x "$XIAOO_BIN"
 docker info --format '{{.ServerVersion}}'
 ```
@@ -67,12 +84,17 @@ sudo -E python3 \
 ### 脚本行为与预期结果
 
 场景仅以缓存布局版本、基础镜像引用和 Dockerfile 内容计算稳定 CRC32 缓存键，
-使用 `actrail/container-agent-xiaoo:runtime-v2-<cache-key>`。`actrailctl`、TLS
-probe、xiaoO 和 workload 不烘入镜像，运行时通过只读 bind mount 注入，因此它们
+使用 `actrail/container-agent-xiaoo:runtime-v2-<cache-key>`。`actrailctl`、
+xiaoO 和 workload 在运行时通过只读 bind mount 注入，因此它们
 更新不会创建新镜像。已有同标签镜像时不执行 build；为上述手动命令追加
 `--rebuild-image` 可强制重建。`run_e2e.py` 套件入口也可通过
 `CONTAINER_AGENT_XIAOO_E2E_REBUILD_IMAGE=1` 请求重建。
 stderr 最后输出保留的 `/tmp/actrail-multi-container-xiaoo.*` 路径。
+
+- **配置生成**：先应用运行路径补丁，再应用本目录的 `patch_config.toml`。场景补丁声明文件读写统计等行为。
+- **采集行为**：TLS、Socket 和启动权限使用产品默认值。验收检查完整 LLM 请求响应、文件读写及容器归属。
+- **已有进程观察**：场景通过 `track-add` 验证已有进程的身份握手，因此关闭主动文件治理。
+- **探针解析复用**：两个容器只读挂载同一个 xiaoO 文件。验收要求该可执行文件解析一次，随后命中缓存并完成两次探针挂载。
 
 ## 步骤3：确认长驻容器与 docker exec 拓扑
 

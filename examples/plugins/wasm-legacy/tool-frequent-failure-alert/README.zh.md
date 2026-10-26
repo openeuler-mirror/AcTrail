@@ -241,4 +241,4 @@ sqlite3 /var/lib/actrail/actrail.sqlite \
    ORDER BY a.created_at DESC LIMIT 10;"
 ```
 
-相关 ABI 说明见 [观测消费者 ABI](../../../../docs/plugins/abi/observation-consumer.zh.md)。
+相关 ABI 说明见 [观测消费者 ABI](../../../../docs/reference/plugin-api/observation-consumer.md)。

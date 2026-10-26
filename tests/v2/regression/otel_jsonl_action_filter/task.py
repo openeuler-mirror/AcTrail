@@ -14,13 +14,15 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import OtelJsonlActionFilterEnvironment
 
+from .constants import CASE_CONSTANTS
+
 
 @dataclass(frozen=True)
 class FilterRound:
     name: str
     exporter: str
     enabled_kinds: frozenset[str]
-    inject_retryable_failure: bool = False
+    inject_retryable_failure: bool = CASE_CONSTANTS.inject_retryable_failure
 
 
 class OtelJsonlActionFilterTask:
@@ -123,10 +125,10 @@ class OtelJsonlActionFilterTask:
         )
         if round_definition.inject_retryable_failure:
             self._environment.fail_next_json_rpc_requests(1)
-            self._environment.delay_next_json_rpc_responses(0.75)
+            self._environment.delay_next_json_rpc_responses(CASE_CONSTANTS.injected_response_delay_seconds)
         marker = (
             f"OTEL_JSONL_FILTER_{round_definition.name}_"
-            f"{secrets.token_hex(6)}"
+            f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
         self._test_context.report_progress(
             "filter_launch",
@@ -136,7 +138,7 @@ class OtelJsonlActionFilterTask:
         if launch.returncode != 0:
             raise AssertionError(
                 f"{round_definition.name}: actrailctl launch exited with "
-                f"{launch.returncode}\n{launch.output[-4000:]}"
+                f"{launch.returncode}\n{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         if marker not in launch.output:
             raise AssertionError(
@@ -227,7 +229,7 @@ class OtelJsonlActionFilterTask:
         if len(trace_ids) != 1:
             raise AssertionError(
                 f"expected one trace id, found {trace_ids}: "
-                f"{launch.output[-4000:]}"
+                f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         return trace_ids[0]
 
@@ -415,7 +417,7 @@ class OtelJsonlActionFilterTask:
         if result.returncode != 0:
             raise AssertionError(
                 f"actrailviewer {' '.join(arguments)} exited with "
-                f"{result.returncode}: {result.stderr[-2000:]}"
+                f"{result.returncode}: {result.stderr[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         try:
             document = json.loads(result.stdout)

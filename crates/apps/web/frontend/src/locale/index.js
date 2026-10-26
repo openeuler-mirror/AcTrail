@@ -41,11 +41,33 @@ export function useLocale() {
   };
 }
 
+/**
+ * Resolve copy from a bundle owned by one module, for example
+ * `workspaces/plugins/locale`. The language stays application-wide so a
+ * language switch updates every module at once; keys the module does not
+ * define fall back to the application dictionary.
+ */
+export function useModuleLocale(bundle) {
+  const context = useLocale();
+  return {
+    ...context,
+    t: (key, params = {}) => {
+      const languageId = context.currentLanguage.value;
+      const value = valueAt(bundle[languageId], key) ?? valueAt(bundle[DEFAULT_LANGUAGE_ID], key);
+      return typeof value === 'string' ? interpolate(value, params) : context.t(key, params);
+    },
+  };
+}
+
 function translate(languageId, key, params) {
   const value = valueAt(dictionaries[languageId], key) ?? valueAt(dictionaries[DEFAULT_LANGUAGE_ID], key);
   if (typeof value !== 'string') {
     return key;
   }
+  return interpolate(value, params);
+}
+
+function interpolate(value, params) {
   return value.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
     Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
   );

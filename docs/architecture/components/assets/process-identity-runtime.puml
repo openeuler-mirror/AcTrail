@@ -1,0 +1,67 @@
+@startuml
+skinparam defaultFontName "WenQuanYi Micro Hei"
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title actraild observer PID 统一与 fork / exec 身份收敛
+
+participant "actraild\n(observer PID namespace)" as Daemon
+participant "eBPF config / maps" as Maps
+participant "parent / child" as Workload
+participant "seccomp user-notify" as Seccomp
+participant "eBPF process hooks" as Hooks
+participant "Identity Runtime" as Identity
+database "Storage" as Storage
+
+== 启动：确定 observer 坐标 ==
+Daemon -> Daemon : stat /proc/self/ns/pid\n取得 pidns dev + ino
+Daemon -> Maps : 下发 observer PID namespace
+note right of Maps
+  eBPF 内部基准：
+  map_pid = raw kernel TGID
+  generation = start_boottime_ns
+end note
+
+== Fork：直接建立双坐标 ==
+Workload -> Hooks : sched_process_fork(parent, child)
+Hooks -> Maps : fork binding[map_pid]\n= trace_id + generation
+Hooks -> Hooks : group_leader → thread_pid → numbers[]\n按 observer inode解析 child observer_pid
+Hooks -> Maps : 首次发现并缓存 observer namespace level
+Hooks -> Maps : observer index[observer_pid] = map_pid
+Hooks -> Daemon : fork(trace_id, observer_pid, map_pid, generation)
+Daemon -> Identity : 立即解析唯一 ProcessIdentity
+note over Hooks, Maps
+  首次发现：bounded O(namespace depth)
+  稳态：numbers[cached_level]，O(1)
+  每次快路径核验 namespace inode
+end note
+
+== Seccomp：按 observer PID完成控制 ==
+Workload -> Seccomp : child execve(...)
+Seccomp -> Daemon : notification(observer_pid)
+Daemon -> Identity : observer pidns + observer_pid\n父 membership
+Identity --> Daemon : ProcessIdentity + TraceId
+Daemon -> Daemon : command policy decision
+Daemon --> Seccomp : allow / deny
+note over Daemon, Identity
+  command-control 基准是 ProcessIdentity；
+  不读取、对账或补全 eBPF fork map。
+end note
+
+alt allow：完成 exec
+  Seccomp --> Workload : resume
+  Workload -> Hooks : sched_process_exec(child current)
+  Hooks -> Daemon : exec(trace_id, map_pid, generation)
+  Daemon -> Identity : 按 map_pid命中 fork 已建立的身份
+  Identity --> Daemon : 同一个 ProcessIdentity
+  Daemon -> Storage : 按 fork → exec 顺序持久化
+else deny / exec 前退出
+  Hooks -> Maps : 退出时清理 raw binding 与 observer index
+end
+
+note over Daemon, Storage
+  上层唯一身份基准：ProcessIdentity
+  上层统一 PID 坐标：actraild observer PID
+  raw kernel TGID仅用于 eBPF 内部 map 与 lineage
+end note
+@enduml

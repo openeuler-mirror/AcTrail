@@ -9,16 +9,13 @@ use payload_event::RawPayloadSegment;
 pub(in crate::services::payload) struct PayloadPolicyConfig {
     pub(in crate::services::payload) tls_enabled: bool,
     pub(in crate::services::payload) tls_redaction_policy: PayloadRedactionPolicy,
-    pub(in crate::services::payload) tls_retention_max_bytes_per_trace: u64,
     pub(in crate::services::payload) stdio_enabled: bool,
     pub(in crate::services::payload) stdio_redaction_policy: PayloadRedactionPolicy,
-    pub(in crate::services::payload) stdio_retention_max_bytes_per_trace: u64,
     pub(in crate::services::payload) stdio_stdin_storage_mode: PayloadStdioStorageMode,
     pub(in crate::services::payload) stdio_stdout_storage_mode: PayloadStdioStorageMode,
     pub(in crate::services::payload) stdio_stderr_storage_mode: PayloadStdioStorageMode,
     pub(in crate::services::payload) socket_enabled: bool,
     pub(in crate::services::payload) socket_redaction_policy: PayloadRedactionPolicy,
-    pub(in crate::services::payload) socket_retention_max_bytes_per_trace: u64,
 }
 
 impl PayloadPolicyConfig {
@@ -36,7 +33,6 @@ impl PayloadPolicyConfig {
                 }
                 Ok(PayloadProcessingPolicy {
                     redaction: self.tls_redaction_policy,
-                    retention_max_bytes_per_trace: self.tls_retention_max_bytes_per_trace,
                     stdio_storage_mode: PayloadStdioStorageMode::Full,
                 })
             }
@@ -49,7 +45,6 @@ impl PayloadPolicyConfig {
                 }
                 Ok(PayloadProcessingPolicy {
                     redaction: self.stdio_redaction_policy,
-                    retention_max_bytes_per_trace: self.stdio_retention_max_bytes_per_trace,
                     stdio_storage_mode: self.stdio_storage_mode(raw)?,
                 })
             }
@@ -62,7 +57,6 @@ impl PayloadPolicyConfig {
                 }
                 Ok(PayloadProcessingPolicy {
                     redaction: self.socket_redaction_policy,
-                    retention_max_bytes_per_trace: self.socket_retention_max_bytes_per_trace,
                     stdio_storage_mode: PayloadStdioStorageMode::Full,
                 })
             }
@@ -91,7 +85,6 @@ impl PayloadPolicyConfig {
 
 pub(in crate::services::payload) struct PayloadProcessingPolicy {
     pub(in crate::services::payload) redaction: PayloadRedactionPolicy,
-    pub(in crate::services::payload) retention_max_bytes_per_trace: u64,
     pub(in crate::services::payload) stdio_storage_mode: PayloadStdioStorageMode,
 }
 

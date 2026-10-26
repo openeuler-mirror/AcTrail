@@ -11,6 +11,8 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import ActivityAnomalyEnvironment, PLUGIN_ID
 
+from .constants import CASE_CONSTANTS
+
 
 EXPECTED_DEFINITIONS = {
     "llm-request-growth": ("llm.request.growth", "llm.request", "request"),
@@ -34,8 +36,8 @@ class ActivityAnomalyTask:
         self._test_context = test_context
 
     def run(self) -> dict[str, TestResult]:
-        marker = f"ACTRAIL_ACTIVITY_RESPONSE_{secrets.token_hex(8).upper()}"
-        trace_name = f"activity-anomaly-{secrets.token_hex(4)}"
+        marker = f"ACTRAIL_ACTIVITY_RESPONSE_{secrets.token_hex(CASE_CONSTANTS.response_marker_random_bytes).upper()}"
+        trace_name = f"activity-anomaly-{secrets.token_hex(CASE_CONSTANTS.trace_random_bytes)}"
         self._test_context.report_progress(
             "real_agent",
             "running deterministic three-turn activity through real Xiaoo",
@@ -153,10 +155,142 @@ class ActivityAnomalyTask:
             raise AssertionError(
                 "captured LLM actions have no complete call/request/response link"
             )
+        self._assert_capture_outcomes(actions)
         serialized = json.dumps(actions, ensure_ascii=False)
         for evidence in (marker, "ACTRAIL_ACTIVITY_WARMUP", "long-running-command.sh"):
             if evidence not in serialized:
                 raise AssertionError(f"captured actions omitted scenario evidence {evidence}")
+
+    @staticmethod
+    def _assert_capture_outcomes(actions: list[dict[str, Any]]) -> None:
+        http_messages = [
+            action for action in actions if action.get("kind") == "http.message"
+        ]
+        complete_probe = next(
+            (
+                action
+                for action in http_messages
+                if isinstance(action.get("attributes"), dict)
+                and action["attributes"].get("method") == "GET"
+                and action["attributes"].get("target")
+                == "/v1/chat/completions/models"
+            ),
+            None,
+        )
+        if complete_probe is None:
+            raise AssertionError("complete capture omitted the provider probe")
+        probe_attributes = complete_probe["attributes"]
+        if (
+            complete_probe.get("status") != "success"
+            or complete_probe.get("completeness") != "complete"
+            or probe_attributes.get("source_boundary") != "Syscall"
+            or any(
+                key in probe_attributes
+                for key in (
+                    "payload.capture_incomplete",
+                    "payload.operation_original_size",
+                    "payload.operation_captured_size",
+                    "payload.truncation",
+                )
+            )
+        ):
+            raise AssertionError(
+                "fully captured provider probe was not retained as Complete"
+            )
+        provider_posts = [
+            action
+            for action in http_messages
+            if isinstance(action.get("attributes"), dict)
+            and action["attributes"].get("method") == "POST"
+            and action["attributes"].get("target") == "/v1/chat/completions"
+        ]
+        if len(provider_posts) < 3:
+            raise AssertionError(
+                "expected three provider requests, found "
+                f"{len(provider_posts)}"
+            )
+        for request in provider_posts:
+            attributes = request["attributes"]
+            try:
+                content_length = int(str(attributes["content_length"]))
+            except (KeyError, TypeError, ValueError) as error:
+                raise AssertionError(
+                    "provider request has no declared content length"
+                ) from error
+            if (
+                request.get("status") != "success"
+                or request.get("completeness") != "complete"
+                or attributes.get("source_boundary") != "Syscall"
+                or content_length <= 0
+                or any(
+                    key in attributes
+                    for key in (
+                        "payload.capture_incomplete",
+                        "payload.operation_original_size",
+                        "payload.operation_captured_size",
+                        "payload.truncation",
+                    )
+                )
+            ):
+                raise AssertionError(
+                    "provider request was not assembled in full from retained bytes"
+                )
+        requests = [action for action in actions if action.get("kind") == "llm.request"]
+        responses = [action for action in actions if action.get("kind") == "llm.response"]
+        calls = [action for action in actions if action.get("kind") == "llm.call"]
+        if not requests or not responses or not calls:
+            raise AssertionError("captured LLM exchange is incomplete")
+        for request in requests:
+            if (
+                request.get("status") != "success"
+                or request.get("completeness") != "complete"
+            ):
+                raise AssertionError(
+                    "LLM request did not retain success/complete semantics"
+                )
+            attributes = request.get("attributes")
+            if not isinstance(attributes, dict):
+                raise AssertionError("LLM request has no attributes")
+            try:
+                payload_bytes = int(str(attributes["llm.request.payload_bytes"]))
+                raw_payload_bytes = int(
+                    str(attributes["llm.request.raw_payload_bytes"])
+                )
+                block_count = int(str(attributes["llm.request.block_count"]))
+                content_format_version = int(
+                    str(attributes["llm.request.content_format_version"])
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise AssertionError(
+                    "LLM request has no valid content evidence"
+                ) from error
+            if payload_bytes <= 0 or raw_payload_bytes < payload_bytes:
+                raise AssertionError(
+                    "LLM request did not retain declared and raw payload lengths"
+                )
+            if (
+                attributes.get("llm.request.content_state") != "canonical_blocks"
+                or block_count < 0
+                or content_format_version <= 0
+            ):
+                raise AssertionError(
+                    "LLM request did not retain canonical block content"
+                )
+        if any(
+            call.get("status") != "unknown"
+            or call.get("completeness") != "inferred"
+            or call.get("end_time_unix_nanos") is not None
+            for call in calls
+        ):
+            raise AssertionError("llm.call did not remain a lightweight connector")
+        if any(
+            response.get("status") != "success"
+            or response.get("completeness") != "complete"
+            for response in responses
+        ):
+            raise AssertionError(
+                "fully captured response was not retained as Complete"
+            )
 
     def _wait_for_stable_alerts(
         self,
@@ -188,7 +322,7 @@ class ActivityAnomalyTask:
                     return api_alerts, database_alerts
             else:
                 stable_since = None
-            time.sleep(min(0.2, self._environment.activity_config.drain_interval_seconds))
+            time.sleep(min(CASE_CONSTANTS.wait_for_stable_alerts_poll_seconds, self._environment.activity_config.drain_interval_seconds))
         raise AssertionError(
             f"expected three stable activity alerts for trace-{trace_id}, found {last_keys}"
         )

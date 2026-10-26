@@ -87,6 +87,11 @@
 import { ref, watch } from 'vue';
 import { ChevronRight } from '@lucide/vue';
 
+import { useModuleLocale } from '../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
+
 const props = defineProps({
   insight: {
     type: Object,
@@ -200,7 +205,7 @@ function updateItemLimit(block, event) {
 }
 
 function itemLimitSummary(block) {
-  return `Showing ${itemLimit(block)} of ${block.items.length}`;
+  return t('insight.showing', { shown: itemLimit(block), total: block.items.length });
 }
 
 function itemKey(block, item, index) {
@@ -251,7 +256,7 @@ function clampItemLimit(raw, block) {
 }
 
 .insight-chip small {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
@@ -259,7 +264,7 @@ function clampItemLimit(raw, block) {
 
 .insight-chip strong {
   min-width: 0;
-  color: var(--text);
+  color: var(--ui-text);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -273,7 +278,7 @@ function clampItemLimit(raw, block) {
   min-width: 0;
   padding: 11px;
   border: 1px solid var(--trace-insight-block-border);
-  border-left: 4px solid var(--teal);
+  border-left: 4px solid var(--ui-accent);
   border-radius: 8px;
   background: var(--trace-insight-block-bg);
   box-shadow: var(--trace-insight-block-shadow);
@@ -316,7 +321,7 @@ function clampItemLimit(raw, block) {
 }
 
 .insight-block header span {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
@@ -350,7 +355,7 @@ function clampItemLimit(raw, block) {
 }
 
 .insight-block-toggle small {
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
   font-weight: 900;
   text-transform: uppercase;
@@ -425,7 +430,7 @@ function clampItemLimit(raw, block) {
 }
 
 .insight-block-rows dt {
-  color: var(--muted);
+  color: var(--ui-muted);
 }
 
 .insight-block-rows dd {
@@ -440,7 +445,7 @@ function clampItemLimit(raw, block) {
   justify-content: space-between;
   gap: 8px;
   margin: 8px 0 0;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -459,14 +464,14 @@ function clampItemLimit(raw, block) {
   border: 1px solid var(--trace-insight-input-border);
   border-radius: 7px;
   background: var(--trace-insight-input-bg);
-  color: var(--text);
+  color: var(--ui-text);
   font-size: 12px;
   font-weight: 700;
 }
 
 .insight-item-controls input:focus {
   outline: 2px solid var(--trace-insight-focus-outline);
-  border-color: var(--teal);
+  border-color: var(--ui-accent);
 }
 
 .insight-item-list {
@@ -500,7 +505,7 @@ function clampItemLimit(raw, block) {
 
 .insight-item-list span {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--ui-muted);
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;

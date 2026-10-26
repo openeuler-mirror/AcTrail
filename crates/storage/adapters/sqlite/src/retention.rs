@@ -53,6 +53,9 @@ impl RetentionStore for SqliteStorage {
                 "active trace lease blocks purge",
             ));
         }
+        self.payload_retention
+            .borrow_mut()
+            .forget_trace(trace_id.get());
         let mut connection = self.connection().borrow_mut();
         let transaction = connection
             .transaction()
@@ -73,10 +76,74 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("insert_tombstone", error.to_string()))?;
         transaction
             .execute(
+                "DELETE FROM event_policy_details WHERE event_id IN (
+                    SELECT event_id FROM events WHERE trace_id = ?1
+                )",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_event_policy_details", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM event_payload_blocks WHERE event_id IN (
+                    SELECT event_id FROM events WHERE trace_id = ?1
+                )",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_event_payload_blocks", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "INSERT INTO event_id_claim_words (word_id, claimed_bits)
+                 SELECT event_id / 63, SUM(1 << (event_id % 63))
+                 FROM events
+                 WHERE trace_id = ?1
+                 GROUP BY event_id / 63
+                 ON CONFLICT(word_id) DO UPDATE SET
+                    claimed_bits = event_id_claim_words.claimed_bits | excluded.claimed_bits",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("preserve_event_id_claims", error.to_string()))?;
+        transaction
+            .execute(
                 "DELETE FROM events WHERE trace_id = ?1",
                 params![trace_id.get()],
             )
             .map_err(|error| RetentionError::new("delete_events", error.to_string()))?;
+        transaction
+            .execute(
+                "DELETE FROM event_record_blocks WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_event_record_blocks", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM event_record_pending WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_event_record_pending", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM event_record_pending_state WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_event_record_pending_state", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM event_payload_dictionary WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_event_payload_dictionary", error.to_string())
+            })?;
         transaction
             .execute(
                 "DELETE FROM llm_pipeline_diagnostics WHERE trace_id = ?1",
@@ -87,26 +154,10 @@ impl RetentionStore for SqliteStorage {
             })?;
         transaction
             .execute(
-                "DELETE FROM event_payload_blocks WHERE trace_id = ?1",
-                params![trace_id.get()],
-            )
-            .map_err(|error| {
-                RetentionError::new("delete_event_payload_blocks", error.to_string())
-            })?;
-        transaction
-            .execute(
                 "DELETE FROM payload_segments WHERE trace_id = ?1",
                 params![trace_id.get()],
             )
             .map_err(|error| RetentionError::new("delete_payload_segments", error.to_string()))?;
-        transaction
-            .execute(
-                "DELETE FROM semantic_action_link_evidence WHERE trace_id = ?1",
-                params![trace_id.get()],
-            )
-            .map_err(|error| {
-                RetentionError::new("delete_semantic_action_link_evidence", error.to_string())
-            })?;
         transaction
             .execute(
                 "DELETE FROM semantic_action_link_cold_fields WHERE trace_id = ?1",
@@ -123,6 +174,27 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| {
                 RetentionError::new("delete_semantic_action_links", error.to_string())
             })?;
+        for table in ["semantic_action_state", "semantic_action_evidence"] {
+            transaction
+                .execute(
+                    &format!(
+                        "DELETE FROM {table} WHERE action_key IN (
+                SELECT action_key FROM semantic_actions WHERE trace_id=?1)"
+                    ),
+                    params![trace_id.get()],
+                )
+                .map_err(|error| {
+                    RetentionError::new("delete_semantic_action_facts", error.to_string())
+                })?;
+        }
+        transaction
+            .execute(
+                "DELETE FROM semantic_action_state_revisions WHERE trace_id=?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_semantic_action_state_revision", error.to_string())
+            })?;
         transaction
             .execute(
                 "DELETE FROM semantic_action_cold_fields WHERE owner_key IN (
@@ -132,16 +204,6 @@ impl RetentionStore for SqliteStorage {
             )
             .map_err(|error| {
                 RetentionError::new("delete_semantic_action_cold_fields", error.to_string())
-            })?;
-        transaction
-            .execute(
-                "DELETE FROM semantic_action_evidence WHERE action_key IN (
-                    SELECT action_key FROM semantic_actions WHERE trace_id = ?1
-                )",
-                params![trace_id.get()],
-            )
-            .map_err(|error| {
-                RetentionError::new("delete_semantic_action_evidence", error.to_string())
             })?;
         transaction
             .execute(
@@ -264,12 +326,44 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("delete_memberships", error.to_string()))?;
         transaction
             .execute(
+                "DELETE FROM trace_cgroup_v1_bindings WHERE trace_id=?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| RetentionError::new("delete_cgroup_v1_binding", error.to_string()))?;
+        transaction
+            .execute(
+                "DELETE FROM trace_external_cgroup_bindings WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_trace_external_cgroup_binding", error.to_string())
+            })?;
+        transaction
+            .execute(
+                "DELETE FROM trace_resource_scopes WHERE trace_id = ?1",
+                params![trace_id.get()],
+            )
+            .map_err(|error| {
+                RetentionError::new("delete_trace_resource_scope", error.to_string())
+            })?;
+        transaction
+            .execute(
                 "DELETE FROM traces WHERE trace_id = ?1",
                 params![trace_id.get()],
             )
             .map_err(|error| RetentionError::new("delete_trace", error.to_string()))?;
-        transaction
+        let result = transaction
             .commit()
-            .map_err(|error| RetentionError::new("commit_purge", error.to_string()))
+            .map_err(|error| RetentionError::new("commit_purge", error.to_string()));
+        drop(connection);
+        if result.is_ok() {
+            self.event_payload_dictionary()
+                .borrow_mut()
+                .remove_trace(trace_id.get());
+            self.event_path_dictionary()
+                .borrow_mut()
+                .remove_trace(trace_id.get());
+        }
+        result
     }
 }

@@ -6,7 +6,7 @@
 
 ## 本地节点
 
-![AcTrail 本地节点运行时](assets/runtime-containers.png)
+[![AcTrail 本地节点运行时](assets/runtime-containers.png)](assets/runtime-containers.puml)
 
 - `actraild` 接收内核事件与 TLS 明文，完成身份和 trace 关联、语义投影、治理、插件执行、持久化及已配置的导出。
 - `actrailctl` 通过本地 control socket 管理 daemon，并启动或挂接 brain-side 工作负载。
@@ -20,12 +20,12 @@
 
 同一个 `actrailcluster` 可执行程序以 center 角色接收 bundle，将索引、bundle、JSON graph 和 SQLite snapshot 写入 cluster root。`actrailweb cluster` 从该目录提供集群只读视图。集群上报与集群 Web 不改变本地节点的主存储。
 
-![AcTrail 集群运行时](assets/cluster-containers.png)
+[![AcTrail 集群运行时](assets/cluster-containers.png)](assets/cluster-containers.puml)
 
 ## 执行隔离路径
 
 `actrail-sb` 在 Guest 内采集进程 I/O、资源快照与 OOM 事件。`actrail-vsock-gateway` 只转发有界 frame，不解释 observation；daemon 接收 frame 后，将 observation 投递给匹配的 Sandbox 插件，或在没有匹配使用方时写入 Sandbox Evidence DB。Sandbox 插件提交的告警写入独立的 Sandbox Alert DB。
 
-![AcTrail 执行隔离运行时](assets/execution-isolation-containers.png)
+[![AcTrail 执行隔离运行时](assets/execution-isolation-containers.png)](assets/execution-isolation-containers.puml)
 
 主存储、cluster reporter 状态、cluster root、Sandbox Evidence DB 和 Sandbox Alert DB 拥有独立的 schema 与生命周期，互不充当后备目标。

@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agent_host::{AgentHostConfig, AgentLaunchIntegration};
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
@@ -20,19 +21,20 @@ use crate::clean::CleanArtifacts;
 use crate::launch::permission_policy::{DeploymentPermissionPolicy, PermissionMode};
 use crate::process_ref::process_ref;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CtlInvocation {
     pub socket_path: Option<PathBuf>,
     pub request_id: RequestId,
     pub command: CtlCommand,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CtlCommand {
     Init {
         config_path: PathBuf,
         force: bool,
-        patch_path: Option<PathBuf>,
+        patch_paths: Vec<PathBuf>,
+        mode: Option<InitMode>,
     },
     TrackAdd {
         root: ProcessRef,
@@ -55,6 +57,7 @@ pub enum CtlCommand {
         agent_invocation_commands: Vec<String>,
         supervision_poll_interval_ms: u64,
         ebpf_seccomp_policy: DeploymentPermissionPolicy,
+        agent_integration: AgentLaunchIntegration,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -67,6 +70,17 @@ pub enum CtlCommand {
         artifacts: CleanArtifacts,
     },
     Doctor,
+    WorkLifecycle {
+        trace_id: TraceId,
+        session_id: String,
+        task_id: String,
+        kind: agent_lifecycle_contract::WorkKind,
+        state: agent_lifecycle_contract::WorkState,
+    },
+    SessionClosed {
+        trace_id: TraceId,
+        session_id: String,
+    },
     Probe {
         operator_config: Option<OperatorConfig>,
         json: bool,
@@ -166,6 +180,26 @@ enum CtlCommandArgs {
     Clean,
     #[command(about = "Check daemon control-plane readiness")]
     Doctor,
+    #[command(about = "Record an agent session closure at the current observation time")]
+    SessionClosed {
+        #[arg(long, value_parser = parse_trace_id)]
+        trace_id: TraceId,
+        #[arg(long)]
+        session_id: String,
+    },
+    #[command(about = "Report a model or tool execution transition")]
+    WorkLifecycle {
+        #[arg(long, value_parser = parse_trace_id)]
+        trace_id: TraceId,
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        task_id: String,
+        #[arg(long, value_parser = ["model", "tool"])]
+        kind: String,
+        #[arg(long, value_parser = ["started", "completed"])]
+        state: String,
+    },
     #[command(about = "Probe local launch prerequisites and optional daemon readiness")]
     Probe(ProbeArgs),
     #[command(about = "Inspect daemon-side TLS launch plan resolution")]
@@ -183,7 +217,8 @@ impl CtlCommandArgs {
             Self::Init(args) => Ok(CtlCommand::Init {
                 config_path: init_config_path(args.output_path, config_path, explicit_config)?,
                 force: args.force,
-                patch_path: args.patch_path,
+                patch_paths: args.patch_paths,
+                mode: args.mode,
             }),
             Self::TrackAdd(args) => {
                 let root_pid = args.root_pid;
@@ -225,6 +260,13 @@ impl CtlCommandArgs {
                         })?
                         .supervision_poll_interval_ms,
                     ebpf_seccomp_policy: ebpf_seccomp_policy(args.host_ebpf, args.seccomp_notify),
+                    agent_integration: AgentLaunchIntegration::prepare(
+                        &match args.agent_host_config {
+                            Some(path) => AgentHostConfig::load(&path)?,
+                            None => AgentHostConfig::default(),
+                        },
+                        &args.argv,
+                    )?,
                     argv: args.argv,
                 })
             }
@@ -240,6 +282,38 @@ impl CtlCommandArgs {
                 ),
             }),
             Self::Doctor => Ok(CtlCommand::Doctor),
+            Self::WorkLifecycle {
+                trace_id,
+                session_id,
+                task_id,
+                kind,
+                state,
+            } => {
+                if session_id.trim().is_empty() || task_id.trim().is_empty() {
+                    return Err("--session-id and --task-id must not be empty".to_string());
+                }
+                Ok(CtlCommand::WorkLifecycle {
+                    trace_id,
+                    session_id,
+                    task_id,
+                    kind: agent_lifecycle_contract::WorkKind::parse(&kind)
+                        .ok_or_else(|| "invalid work kind".to_string())?,
+                    state: agent_lifecycle_contract::WorkState::parse(&state)
+                        .ok_or_else(|| "invalid work state".to_string())?,
+                })
+            }
+            Self::SessionClosed {
+                trace_id,
+                session_id,
+            } => {
+                if session_id.trim().is_empty() {
+                    return Err("--session-id must not be empty".to_string());
+                }
+                Ok(CtlCommand::SessionClosed {
+                    trace_id,
+                    session_id,
+                })
+            }
             Self::Probe(args) => {
                 if args.suggest_config && args.json {
                     return Err("--suggest-config and --json are mutually exclusive".to_string());
@@ -270,11 +344,32 @@ struct InitArgs {
     #[arg(long = "output", value_name = "PATH")]
     output_path: Option<PathBuf>,
 
-    #[arg(long = "patch", value_name = "PATH")]
-    patch_path: Option<PathBuf>,
+    #[arg(
+        long = "patch",
+        value_name = "PATH",
+        help = "Apply a TOML patch; repeat in order, with later values taking precedence"
+    )]
+    patch_paths: Vec<PathBuf>,
 
     #[arg(short = 'f', long = "force")]
     force: bool,
+
+    #[arg(
+        long,
+        value_enum,
+        ignore_case = true,
+        help = "Configuration preset: C/complete (default) or P/profile; --patch overrides it"
+    )]
+    mode: Option<InitMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum InitMode {
+    #[default]
+    #[value(alias = "c")]
+    Complete,
+    #[value(alias = "p")]
+    Profile,
 }
 
 fn launch_agent_commands(config: Option<&OperatorConfig>) -> Vec<String> {
@@ -307,7 +402,11 @@ fn launch_seccomp_config(config: Option<&OperatorConfig>) -> Result<LaunchSeccom
         payload_socket_max_segment_bytes: config.payload_config.socket.max_segment_bytes,
         process_syscalls: config.process_seccomp.syscalls.clone(),
         network_syscalls: config.network_control.syscalls.clone(),
-        file_enforcement_syscalls: config.enforcement.seccomp_syscalls.clone(),
+        file_enforcement_syscalls: if config.enforcement.enabled {
+            config.access_control.file.seccomp_syscalls()
+        } else {
+            Vec::new()
+        },
         reserved_listener_fd: config.seccomp_notify.reserved_listener_fd,
     })
 }
@@ -411,6 +510,12 @@ impl From<PermissionModeArg> for PermissionMode {
 
 #[derive(Clone, Debug, Args)]
 struct LaunchArgs {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Independent agent host integration config; omitted means no injection"
+    )]
+    agent_host_config: Option<PathBuf>,
     #[arg(long = "name", value_name = "NAME")]
     name: Option<String>,
 
@@ -446,6 +551,9 @@ fn ebpf_seccomp_policy(
 ) -> DeploymentPermissionPolicy {
     DeploymentPermissionPolicy {
         host_ebpf: host_ebpf.map(Into::into).unwrap_or(PermissionMode::Auto),
+        // Default to auto so an agent launch can use seccomp user-notify when the
+        // platform provides it; the socket payload fallback backend needs it to
+        // read a whole write operation instead of a 4095 byte prefix.
         seccomp_notify: seccomp_notify
             .map(Into::into)
             .unwrap_or(PermissionMode::Auto),

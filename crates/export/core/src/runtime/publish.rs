@@ -1,10 +1,11 @@
 use model_core::ids::TraceId;
-use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
 use std::time::Duration;
 
-use plugin_system::{ObservationConsumer, PluginInstanceStatus, PluginRuntimeError, PostTraceTask};
+use plugin_system::{
+    ObservationConsumer, PayloadReference, PluginInstanceStatus, PluginRuntimeError, PostTraceTask,
+};
 
 use crate::ExportError;
 
@@ -18,7 +19,7 @@ pub struct SemanticActionExportBatch<'a> {
     pub actions: &'a [SemanticAction],
     pub links: &'a [SemanticActionLink],
     pub file_observation_paths: &'a [FileObservationPath],
-    pub payload_segments: &'a [PayloadSegment],
+    pub payload_refs: &'a [PayloadReference],
 }
 
 pub struct ExportRuntime {
@@ -44,6 +45,10 @@ impl ExportRuntime {
         self.subscriptions.consumer_instance_ids()
     }
 
+    pub fn has_semantic_consumers(&self) -> bool {
+        self.subscriptions.has_semantic_consumers()
+    }
+
     pub fn post_trace_instance_ids(&self) -> Vec<String> {
         self.subscriptions.post_trace_instance_ids()
     }
@@ -66,10 +71,6 @@ impl ExportRuntime {
 
     pub fn plugin_statuses(&self) -> Vec<PluginInstanceStatus> {
         self.subscriptions.plugin_statuses()
-    }
-
-    pub fn payload_snapshot_limit(&self) -> Option<usize> {
-        self.subscriptions.payload_snapshot_limit()
     }
 
     pub fn add_observation_consumer(

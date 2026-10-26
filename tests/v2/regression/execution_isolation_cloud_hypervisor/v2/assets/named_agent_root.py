@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from constants import CASE_CONSTANTS
+
 
 _PR_SET_NAME = 15
 _ROOT_COMM = b"actrail-root"
@@ -47,7 +49,7 @@ class NamedAgentRoot:
         while time.monotonic() < deadline:
             if self._child_release.is_file():
                 return
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.child_release_poll_seconds)
         raise RuntimeError(
             f"timed out waiting for child release: {self._child_release}"
         )

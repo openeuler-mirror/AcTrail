@@ -8,11 +8,12 @@ use model_core::ids::TraceId;
 use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 use crate::decode::{
-    self, decode_file_path, decode_observation, decode_socket_fd_release, decode_socket_payload,
+    self, decode_file_path, decode_observation, decode_process_exec_failure,
+    decode_process_fork_result, decode_socket_fd_release, decode_socket_payload,
     decode_socket_payload_completion, decode_tls_capture_request, decode_tls_completion,
     decode_tls_diagnostic, decode_tls_direct_capture,
 };
-use crate::loader::{KernelEvent, KernelObservationEvent};
+use crate::loader::{KernelEvent, KernelObservationEvent, KernelObservationPayload};
 
 use super::collector_net_aggregation::ObserveOutcome;
 use super::{EbpfCollector, loader_error};
@@ -20,18 +21,20 @@ use super::{EbpfCollector, loader_error};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExitRetire {
     trace_id: TraceId,
-    map_pid: u32,
+    binding_tgid: u32,
     generation: u64,
 }
 
 impl ExitRetire {
     fn from_event(event: &KernelEvent) -> Option<Self> {
         match event {
-            KernelEvent::Observation(event) if event.kind == decode::PROC_EVENT_EXIT => {
+            KernelEvent::Observation(event)
+                if matches!(event.payload, KernelObservationPayload::Exit(_)) =>
+            {
                 Some(Self {
-                    trace_id: event.trace_id,
-                    map_pid: decode::event_map_pid(event.pid, event.host_pid),
-                    generation: event.pid_generation,
+                    trace_id: event.common.trace_id,
+                    binding_tgid: event.common.subject.binding_tgid(),
+                    generation: event.common.subject.start_boottime_ns,
                 })
             }
             _ => None,
@@ -73,7 +76,7 @@ impl EbpfCollector {
             if let KernelEvent::Observation(observation) = &event {
                 self.promote_pending_launch_after_exec(observation)?;
             }
-            self.handle_control_event(event);
+            self.handle_control_event(event)?;
         }
         Ok(())
     }
@@ -93,18 +96,31 @@ impl EbpfCollector {
             payload_stream_closes: Vec::new(),
         };
         batch.observations.append(&mut self.net_aggregation_backlog);
+        batch
+            .observations
+            .append(&mut self.file_io_summaries.backlog);
         let mut exit_retires = Vec::new();
+        let mut exit_events = Vec::new();
         for event in raw_events {
-            let exit_retire = ExitRetire::from_event(&event);
-            self.handle_batch_event(event, &mut batch)?;
-            if let Some(exit_retire) = exit_retire {
-                exit_retires.push(exit_retire);
+            if let Some(retire) = ExitRetire::from_event(&event) {
+                exit_retires.push(retire);
+                exit_events.push(event);
+            } else {
+                self.handle_batch_event(event, &mut batch)?;
             }
+        }
+        let exited = exit_retires
+            .iter()
+            .map(|exit| (exit.trace_id, exit.binding_tgid, exit.generation))
+            .collect();
+        self.collect_file_io_summaries(&exited, None, None, &mut batch.observations);
+        for event in exit_events {
+            self.handle_batch_event(event, &mut batch)?;
         }
         for exit_retire in exit_retires {
             let _ = self.bindings.remove_event_pid(
                 exit_retire.trace_id,
-                exit_retire.map_pid,
+                exit_retire.binding_tgid,
                 exit_retire.generation,
             );
             batch
@@ -117,10 +133,25 @@ impl EbpfCollector {
         Ok(batch)
     }
 
-    fn handle_control_event(&mut self, event: KernelEvent) {
+    fn handle_control_event(&mut self, event: KernelEvent) -> Result<(), CollectorError> {
         match event {
             KernelEvent::TlsCompletion(event) => {
                 self.tls_completions.push(decode_tls_completion(event));
+            }
+            KernelEvent::TlsMapping(event) => {
+                let config = &self.loader.payload_config().tls;
+                if config.enabled
+                    && config.direct_dynamic_discovery_enabled
+                    && config.capture_backend
+                        == config_core::daemon::PayloadTlsCaptureBackend::BpfCopy
+                    && self.tls_mapping_events.len() < config.dynamic_discovery_capacity as usize
+                    && self.bindings.trace_has_capability(
+                        event.common.trace_id,
+                        &model_core::capability::Capability::TlsPlaintextPayload,
+                    )
+                {
+                    self.tls_mapping_events.push(event);
+                }
             }
             KernelEvent::TlsCaptureRequest(event) => {
                 self.tls_capture_requests
@@ -141,8 +172,19 @@ impl EbpfCollector {
                 self.socket_completions
                     .push(decode_socket_payload_completion(event));
             }
+            KernelEvent::ProcessExecAttempt(event) => {
+                self.seed_pending_launch_from_exec_attempt(&event)?;
+                self.process_exec.observe_attempt(event);
+            }
+            KernelEvent::ProcessExecArg(event) => {
+                self.process_exec.observe_arg(event);
+            }
+            KernelEvent::ProcessForkAttempt(event) => {
+                self.process_fork.observe_attempt(event);
+            }
             _ => {}
         }
+        Ok(())
     }
 
     fn handle_batch_event(
@@ -151,24 +193,42 @@ impl EbpfCollector {
         batch: &mut CollectorPollBatch,
     ) -> Result<(), CollectorError> {
         match event {
-            KernelEvent::Observation(event) => {
+            KernelEvent::Observation(mut event) => {
+                if let KernelObservationPayload::Exec(payload) = &mut event.payload {
+                    payload.exec_attempt = self.process_exec.take_success(
+                        event.common.trace_id,
+                        event.common.subject.binding_tgid(),
+                        payload.attempt_id,
+                    );
+                }
                 self.promote_pending_launch_after_exec(&event)?;
                 if self.is_superseded_fork_event(&event) {
                     return Ok(());
                 }
                 self.maybe_attach_go_tls_after_exec(&event)?;
-                if event.kind == decode::SOCKET_FD_RELEASE_EVENT {
+                if let KernelObservationPayload::SocketFdRelease(release) = &event.payload {
                     batch.payload_stream_closes.push(
-                        decode_socket_fd_release(event.clone(), &self.bindings)
+                        decode_socket_fd_release(&event.common, release, &self.bindings)
                             .map_err(|error| CollectorError::new(error.stage, error.message))?,
                     );
                 }
-                let lifecycle_event = event.clone();
-                self.apply_file_lifecycle_before_decode(&lifecycle_event)?;
-                let descriptor_generation = lifecycle_event.aux_generation;
+                self.apply_file_lifecycle_before_decode(&event)?;
+                let descriptor_generation = match &event.payload {
+                    KernelObservationPayload::Network(payload) => payload.fd_object_generation,
+                    KernelObservationPayload::FdIo(payload) => payload.fd_object_generation,
+                    KernelObservationPayload::SocketFdRelease(payload) => {
+                        payload.fd_object_generation
+                    }
+                    _ => 0,
+                };
                 if let Some(event) =
-                    decode_observation(event, &mut self.bindings, &mut self.file_tracker)
-                        .map_err(|error| CollectorError::new(error.stage, error.message))?
+                    decode_observation(&event, &mut self.bindings, &mut self.file_tracker, {
+                        let config = &self.loader.payload_config().tls;
+                        config.enabled
+                            && config.capture_backend
+                                == config_core::daemon::PayloadTlsCaptureBackend::BpfCopy
+                    })
+                    .map_err(|error| CollectorError::new(error.stage, error.message))?
                 {
                     if let Some((transport, local, remote, fd)) = net_flush_identity(&event) {
                         batch
@@ -188,7 +248,7 @@ impl EbpfCollector {
                         ObserveOutcome::Flushed(event) => batch.observations.push(event),
                     }
                 }
-                self.apply_file_lifecycle_after_decode(&lifecycle_event)?;
+                self.apply_file_lifecycle_after_decode(&event)?;
                 batch
                     .observations
                     .extend(self.file_tracker.take_stdio_bundle_events());
@@ -220,12 +280,88 @@ impl EbpfCollector {
                 }
             }
             KernelEvent::SocketPayload(event) => {
+                if event.flags & 2 != 0 {
+                    self.socket_total_limit_partials =
+                        self.socket_total_limit_partials.saturating_add(1);
+                }
+                if event.flags & 4 != 0 {
+                    self.socket_chunk_limit_partials =
+                        self.socket_chunk_limit_partials.saturating_add(1);
+                }
+                if event.flags & 8 != 0 {
+                    self.socket_iovec_limit_partials =
+                        self.socket_iovec_limit_partials.saturating_add(1);
+                }
                 batch.payload_segments.push(
                     decode_socket_payload(event, &self.bindings)
                         .map_err(|error| CollectorError::new(error.stage, error.message))?,
                 );
             }
-            other => self.handle_control_event(other),
+            KernelEvent::ProcessExecAttempt(event) => {
+                self.seed_pending_launch_from_exec_attempt(&event)?;
+                self.process_exec.observe_attempt(event);
+            }
+            KernelEvent::ProcessExecArg(event) => {
+                self.process_exec.observe_arg(event);
+            }
+            KernelEvent::ProcessExecResult(event) => {
+                let attempt = self.process_exec.take_failure(&event);
+                batch.observations.push(
+                    decode_process_exec_failure(event, attempt, &self.bindings)
+                        .map_err(|error| CollectorError::new(error.stage, error.message))?,
+                );
+            }
+            KernelEvent::ProcessForkAttempt(event) => {
+                self.process_fork.observe_attempt(event);
+            }
+            KernelEvent::ProcessForkResult(event) => {
+                let attempt = self.process_fork.take_result(&event);
+                batch.observations.push(
+                    decode_process_fork_result(event, attempt, &self.bindings)
+                        .map_err(|error| CollectorError::new(error.stage, error.message))?,
+                );
+            }
+            other => self.handle_control_event(other)?,
+        }
+        Ok(())
+    }
+
+    fn seed_pending_launch_from_exec_attempt(
+        &mut self,
+        event: &crate::loader::KernelProcessExecAttemptEvent,
+    ) -> Result<(), CollectorError> {
+        let Some(pending) = self.pending_launches.get(&event.trace_id) else {
+            return Ok(());
+        };
+        if event.host_pid == 0 {
+            return Err(CollectorError::new(
+                "pending_launch_exec_attempt",
+                format!(
+                    "trace {} exec attempt did not report kernel TGID",
+                    event.trace_id
+                ),
+            ));
+        }
+        if event.pid_generation == 0 || event.pid_generation != pending.generation {
+            return Err(CollectorError::new(
+                "pending_launch_exec_attempt",
+                format!(
+                    "trace {} exec attempt generation {} does not match armed generation {}",
+                    event.trace_id, event.pid_generation, pending.generation
+                ),
+            ));
+        }
+        if self
+            .bindings
+            .tracked_event_observation(event.trace_id, event.host_pid, event.pid_generation)
+            .is_none()
+        {
+            self.bindings.track_with_kernel_tgid(
+                event.trace_id,
+                pending.root_observation.clone(),
+                event.host_pid,
+                event.pid_generation,
+            );
         }
         Ok(())
     }
@@ -234,52 +370,67 @@ impl EbpfCollector {
         &mut self,
         event: &KernelObservationEvent,
     ) -> Result<(), CollectorError> {
-        if event.kind != decode::PROC_EVENT_EXEC {
+        if !matches!(event.payload, KernelObservationPayload::Exec(_)) {
             return Ok(());
         }
-        let Some(pending) = self.pending_launches.get(&event.trace_id) else {
+        let common = &event.common;
+        let Some(pending) = self.pending_launches.get(&common.trace_id) else {
             return Ok(());
         };
-        if event.host_pid == 0 {
+        if common.subject.kernel_tgid == 0 {
             return Err(CollectorError::new(
                 "pending_launch_exec",
                 format!(
                     "trace {} exec promotion did not report kernel PID K",
-                    event.trace_id
+                    common.trace_id
                 ),
             ));
         }
-        if event.pid_generation == 0 || event.pid_generation != pending.generation {
+        if common.subject.start_boottime_ns == 0
+            || common.subject.start_boottime_ns != pending.generation
+        {
             return Err(CollectorError::new(
                 "pending_launch_exec",
                 format!(
                     "trace {} exec generation {} does not match armed generation {}",
-                    event.trace_id, event.pid_generation, pending.generation
+                    common.trace_id, common.subject.start_boottime_ns, pending.generation
                 ),
             ));
         }
 
         let root_observation = pending.root_observation.clone();
-        let root_working_directory = pending.root_working_directory.clone();
+        let consumers = self
+            .file_tracker
+            .context_consumers(common.trace_id, &self.bindings);
+        let root_working_directory = consumers
+            .file_paths
+            .then(|| pending.root_working_directory.clone())
+            .flatten();
         let initial_suppressed_fds = pending.initial_suppressed_fds.clone();
-        self.bindings.track_with_map_pid(
-            event.trace_id,
+        self.bindings.track_with_kernel_tgid(
+            common.trace_id,
             root_observation.clone(),
-            event.host_pid,
-            event.pid_generation,
+            common.subject.kernel_tgid,
+            common.subject.start_boottime_ns,
         );
-        self.file_tracker
-            .seed_process(event.trace_id, root_observation, root_working_directory);
+        if consumers.any() {
+            self.file_tracker.seed_process(
+                common.trace_id,
+                root_observation,
+                root_working_directory,
+                consumers,
+            );
+        }
         let process = KernelProcessCoordinates {
-            pid: event.host_pid,
-            start_time: event.pid_generation,
+            pid: common.subject.kernel_tgid,
+            start_time: common.subject.start_boottime_ns,
         };
         self.suppressed_fds
             .extend(
                 initial_suppressed_fds
                     .into_iter()
                     .map(|initial| super::TraceSuppressedFd {
-                        trace_id: event.trace_id,
+                        trace_id: common.trace_id,
                         fd: ProcessSuppressedFd {
                             process,
                             fd: initial.fd,
@@ -287,51 +438,42 @@ impl EbpfCollector {
                         },
                     }),
             );
-        self.pending_launches.remove(&event.trace_id);
+        self.pending_launches.remove(&common.trace_id);
         Ok(())
     }
 
     fn is_superseded_fork_event(&self, event: &KernelObservationEvent) -> bool {
-        event.kind == decode::PROC_EVENT_FORK
-            && event.aux_host_pid != 0
+        matches!(event.payload, KernelObservationPayload::Fork(_))
+            && event.common.subject.kernel_tgid != 0
             && self
                 .bindings
-                .by_host_pid(event.aux_host_pid)
-                .is_some_and(|binding| binding.trace_id != event.trace_id)
+                .by_host_pid(event.common.subject.kernel_tgid)
+                .is_some_and(|binding| binding.trace_id != event.common.trace_id)
     }
 
     fn apply_file_lifecycle_before_decode(
         &mut self,
         event: &KernelObservationEvent,
     ) -> Result<(), CollectorError> {
-        match event.kind {
-            decode::PROC_EVENT_EXIT => {
+        match &event.payload {
+            KernelObservationPayload::Exit(_) => {
+                let common = &event.common;
+                let binding_tgid = common.subject.binding_tgid();
+                let generation = common.subject.start_boottime_ns;
                 self.stdio_payloads.release_process(
-                    event.trace_id,
-                    event.host_pid,
-                    event.pid_generation,
+                    common.trace_id,
+                    common.subject.kernel_tgid,
+                    generation,
                 );
-                let map_pid = decode::event_map_pid(event.pid, event.host_pid);
                 if decode::resolve_bound_event_observation(
-                    event.trace_id,
-                    map_pid,
-                    event.pid_generation,
+                    common.trace_id,
+                    binding_tgid,
+                    generation,
                     &self.bindings,
                 )
                 .is_ok()
                 {
-                    self.cleanup_suppressed_fds_for_process(map_pid, event.pid_generation)?;
-                    if let Some(runtime) = self.runtime.as_ref() {
-                        runtime
-                            .unmark_file_bulk_read_fast_process(map_pid, event.pid_generation)
-                            .map_err(loader_error)?;
-                        runtime
-                            .sweep_file_bulk_read_fast_fds_for_process(
-                                map_pid,
-                                event.pid_generation,
-                            )
-                            .map_err(loader_error)?;
-                    }
+                    self.cleanup_suppressed_fds_for_process(binding_tgid, generation)?;
                 } else {
                     self.record_exit_lifecycle_binding_gap();
                 }
@@ -345,92 +487,75 @@ impl EbpfCollector {
         &mut self,
         event: &KernelObservationEvent,
     ) -> Result<(), CollectorError> {
-        match event.kind {
-            decode::PROC_EVENT_FORK => {
+        if !matches!(
+            &event.payload,
+            KernelObservationPayload::Fork(_)
+                | KernelObservationPayload::Exec(_)
+                | KernelObservationPayload::Exit(_)
+        ) {
+            return Ok(());
+        }
+        let consumers = self
+            .file_tracker
+            .context_consumers(event.common.trace_id, &self.bindings);
+        if !consumers.any() {
+            return Ok(());
+        }
+        match &event.payload {
+            KernelObservationPayload::Fork(_) => {
                 let parent = decode::fork_parent_observation(event, &self.bindings)
                     .map_err(|error| CollectorError::new(error.stage, error.message))?;
                 let child = decode::fork_child_observation(event, &self.bindings)
                     .map_err(|error| CollectorError::new(error.stage, error.message))?;
                 self.file_tracker
-                    .inherit_process(event.trace_id, &parent, child);
+                    .inherit_process(event.common.trace_id, &parent, child, consumers);
             }
-            decode::PROC_EVENT_EXEC => {
-                let map_pid = decode::event_map_pid(event.pid, event.host_pid);
+            KernelObservationPayload::Exec(_) => {
+                let common = &event.common;
+                let binding_tgid = common.subject.binding_tgid();
                 let process = decode::resolve_bound_event_observation(
-                    event.trace_id,
-                    map_pid,
-                    event.pid_generation,
+                    common.trace_id,
+                    binding_tgid,
+                    common.subject.start_boottime_ns,
                     &self.bindings,
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_exec", error))?;
-                self.file_tracker
-                    .exec_process(event.trace_id, process, event.observed_ktime_ns);
-                self.configure_file_bulk_read_fast_process(event)?;
+                self.file_tracker.exec_process(
+                    common.trace_id,
+                    process,
+                    common.observed_ktime_ns,
+                    consumers,
+                );
             }
-            decode::PROC_EVENT_EXIT => {
-                let map_pid = event.pid;
+            KernelObservationPayload::Exit(_) => {
+                let common = &event.common;
                 let process = decode::resolve_bound_event_observation(
-                    event.trace_id,
-                    map_pid,
-                    event.pid_generation,
+                    common.trace_id,
+                    common.subject.binding_tgid(),
+                    common.subject.start_boottime_ns,
                     &self.bindings,
                 )
                 .map_err(|error| CollectorError::new("file_lifecycle_exit", error))?;
-                self.file_tracker
-                    .exit_process(event.trace_id, process, event.observed_ktime_ns);
+                self.file_tracker.exit_process(
+                    common.trace_id,
+                    process,
+                    common.observed_ktime_ns,
+                    consumers,
+                );
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn configure_file_bulk_read_fast_process(
-        &mut self,
-        event: &KernelObservationEvent,
-    ) -> Result<(), CollectorError> {
-        let Some(runtime) = self.runtime.as_ref() else {
-            return Ok(());
-        };
-        let map_pid = decode::event_map_pid(event.pid, event.host_pid);
-        runtime
-            .unmark_file_bulk_read_fast_process(map_pid, event.pid_generation)
-            .map_err(loader_error)?;
-        if !self.file_bulk_read_fast_path.enabled {
-            return Ok(());
-        }
-        let Some(exec_filename) = &event.exec_filename else {
-            return Ok(());
-        };
-        if exec_filename.truncated {
-            return Ok(());
-        }
-        let Some(command) = std::path::Path::new(&exec_filename.path)
-            .file_name()
-            .and_then(|value| value.to_str())
-        else {
-            return Ok(());
-        };
-        if !self
-            .file_bulk_read_fast_path
-            .scanner_commands
-            .iter()
-            .any(|candidate| candidate == command)
-        {
-            return Ok(());
-        }
-        runtime
-            .mark_file_bulk_read_fast_process(map_pid, event.pid_generation, event.trace_id)
-            .map_err(loader_error)
-    }
-
     fn maybe_attach_go_tls_after_exec(
         &mut self,
         event: &KernelObservationEvent,
     ) -> Result<(), CollectorError> {
-        if event.kind != decode::PROC_EVENT_EXEC {
+        let KernelObservationPayload::Exec(exec) = &event.payload else {
             return Ok(());
-        }
-        let Some(exec_filename) = &event.exec_filename else {
+        };
+        let Some(exec_filename) = &exec.filename else {
             return Ok(());
         };
         if exec_filename.truncated {

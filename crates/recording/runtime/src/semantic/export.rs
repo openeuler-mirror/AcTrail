@@ -1,17 +1,17 @@
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
+use crate::DeliveryFailureKind;
 use export_core::{ExportRuntime, SemanticActionExportBatch};
 use model_core::ids::{DiagnosticId, TraceId};
-use model_core::payload::PayloadSegment;
 use model_core::trace::TraceRecord;
 use semantic_action::{
     FileObservationPath, SemanticAction, SemanticActionKind, SemanticActionLink,
 };
-use storage_core::StorageBackend;
-use storage_core::{PayloadRowLimit, PayloadSegmentQuery};
 
-use super::{RecordingError, SemanticActionBatch, SemanticActionRecordBatch};
+use super::{
+    RecordingError, SemanticActionBatch, SemanticActionPublication, SemanticActionRecordBatch,
+};
 
 const LIVE_EXPORT_STAGE: &str = "live_export";
 
@@ -20,19 +20,12 @@ pub trait TraceRecordLookup {
 }
 
 pub(crate) struct SemanticActionExportRecorder<'a> {
-    storage: &'a mut dyn StorageBackend,
     export_runtime: &'a ExportRuntime,
 }
 
 impl<'a> SemanticActionExportRecorder<'a> {
-    pub(crate) fn new(
-        storage: &'a mut dyn StorageBackend,
-        export_runtime: &'a ExportRuntime,
-    ) -> Self {
-        Self {
-            storage,
-            export_runtime,
-        }
+    pub(crate) fn new(export_runtime: &'a ExportRuntime) -> Self {
+        Self { export_runtime }
     }
 
     pub(crate) fn publish_batch(
@@ -42,23 +35,25 @@ impl<'a> SemanticActionExportRecorder<'a> {
         trace_finalized: bool,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
-    ) -> Result<(), RecordingError> {
-        if batch.actions().is_empty() && !trace_finalized {
-            return Ok(());
+    ) -> SemanticActionPublication {
+        let mut delivery = SemanticActionPublication::default();
+        if !self.export_runtime.has_semantic_consumers() {
+            return delivery;
         }
-        let exportable_actions = exportable_actions(batch.actions());
+        if batch.action_views().next().is_none() && !trace_finalized {
+            return delivery;
+        }
+        let exportable_actions = exportable_actions(batch.action_views());
         if exportable_actions.is_empty() && !trace_finalized {
-            return Ok(());
+            return delivery;
         }
         let exportable_links = exportable_links(&exportable_actions, batch.links());
         let exportable_paths =
             exportable_paths(&exportable_actions, batch.file_observation_paths());
-        let payload_snapshot = if exportable_actions.is_empty() {
-            Ok(Vec::new())
-        } else {
-            self.payload_segments_for_export(trace.trace_id)
-        };
-        let payload_segments = payload_snapshot.as_deref().unwrap_or_default();
+        let payload_refs = SemanticActionPublication::payload_references(
+            &exportable_actions,
+            batch.payload_segments(),
+        );
         let publish_result = self
             .export_runtime
             .publish_semantic_actions(SemanticActionExportBatch {
@@ -67,38 +62,24 @@ impl<'a> SemanticActionExportRecorder<'a> {
                 actions: &exportable_actions,
                 links: &exportable_links,
                 file_observation_paths: &exportable_paths,
-                payload_segments,
+                payload_refs: &payload_refs,
             })
-            .map_err(RecordingError::from)
-            .and_then(|report| {
+            .map_err(RecordingError::from);
+        match publish_result {
+            Ok(report) => {
                 // Export backpressure is recorded after publish so collection can continue visibly.
-                crate::writer::RecordingWriter::new(self.storage).persist_export_drop_report(
+                match crate::diagnostics::export_drop_diagnostics(
                     report,
                     emitted_at,
                     next_diagnostic_id,
-                )
-            });
-        combine_snapshot_and_publish(payload_snapshot.map(|_| ()), publish_result)
-    }
-
-    fn payload_segments_for_export(
-        &self,
-        trace_id: TraceId,
-    ) -> Result<Vec<PayloadSegment>, RecordingError> {
-        let Some(limit) = self.export_runtime.payload_snapshot_limit() else {
-            return Ok(Vec::new());
-        };
-        self.storage
-            .list_payload_segments(
-                trace_id,
-                PayloadSegmentQuery {
-                    segment_id: None,
-                    direction: None,
-                    limit: Some(PayloadRowLimit::Head(limit)),
-                    include_bytes: true,
-                },
-            )
-            .map_err(|error| RecordingError::new(error.stage, error.message))
+                ) {
+                    Ok(diagnostics) => delivery.diagnostics.extend(diagnostics),
+                    Err(error) => delivery.record(DeliveryFailureKind::Runtime, Err(error)),
+                }
+            }
+            Err(error) => delivery.record(DeliveryFailureKind::Consumer, Err(error)),
+        }
+        delivery
     }
 
     pub(crate) fn publish_batch_for_trace(
@@ -107,16 +88,32 @@ impl<'a> SemanticActionExportRecorder<'a> {
         batch: SemanticActionRecordBatch<'_>,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
-    ) -> Result<(), RecordingError> {
-        if batch.actions().is_empty() {
-            return Ok(());
+    ) -> SemanticActionPublication {
+        let mut delivery = SemanticActionPublication::default();
+        if !self.export_runtime.has_semantic_consumers() {
+            return delivery;
         }
-        let trace_id = batch
-            .trace_id()?
-            .ok_or_else(|| RecordingError::new(LIVE_EXPORT_STAGE, "empty semantic action batch"))?;
-        let trace = traces
-            .trace_record(trace_id)
-            .ok_or_else(|| RecordingError::new(LIVE_EXPORT_STAGE, "trace not found"))?;
+        if batch.action_views().next().is_none() {
+            return delivery;
+        }
+        let trace_id = match batch.trace_id().and_then(|trace_id| {
+            trace_id.ok_or_else(|| {
+                RecordingError::new(LIVE_EXPORT_STAGE, "empty semantic action batch")
+            })
+        }) {
+            Ok(trace_id) => trace_id,
+            Err(error) => {
+                delivery.record(DeliveryFailureKind::Runtime, Err(error));
+                return delivery;
+            }
+        };
+        let Some(trace) = traces.trace_record(trace_id) else {
+            delivery.record(
+                DeliveryFailureKind::Runtime,
+                Err(RecordingError::new(LIVE_EXPORT_STAGE, "trace not found")),
+            );
+            return delivery;
+        };
         self.publish_batch(trace, batch, false, emitted_at, next_diagnostic_id)
     }
 
@@ -127,18 +124,37 @@ impl<'a> SemanticActionExportRecorder<'a> {
         batch: SemanticActionRecordBatch<'_>,
         emitted_at: SystemTime,
         next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
-    ) -> Result<(), RecordingError> {
-        if let Some(batch_trace_id) = batch.trace_id()?
+    ) -> SemanticActionPublication {
+        let mut delivery = SemanticActionPublication::default();
+        if !self.export_runtime.has_semantic_consumers() {
+            return delivery;
+        }
+        let batch_trace_id = match batch.trace_id() {
+            Ok(trace_id) => trace_id,
+            Err(error) => {
+                delivery.record(DeliveryFailureKind::Runtime, Err(error));
+                return delivery;
+            }
+        };
+        if let Some(batch_trace_id) = batch_trace_id
             && batch_trace_id != trace_id
         {
-            return Err(RecordingError::new(
-                LIVE_EXPORT_STAGE,
-                "final semantic action batch trace_id does not match finalized trace",
-            ));
+            delivery.record(
+                DeliveryFailureKind::Runtime,
+                Err(RecordingError::new(
+                    LIVE_EXPORT_STAGE,
+                    "final semantic action batch trace_id does not match finalized trace",
+                )),
+            );
+            return delivery;
         }
-        let trace = traces
-            .trace_record(trace_id)
-            .ok_or_else(|| RecordingError::new(LIVE_EXPORT_STAGE, "trace not found"))?;
+        let Some(trace) = traces.trace_record(trace_id) else {
+            delivery.record(
+                DeliveryFailureKind::Runtime,
+                Err(RecordingError::new(LIVE_EXPORT_STAGE, "trace not found")),
+            );
+            return delivery;
+        };
         self.publish_batch(trace, batch, true, emitted_at, next_diagnostic_id)
     }
 
@@ -148,39 +164,31 @@ impl<'a> SemanticActionExportRecorder<'a> {
         semantic_actions: SemanticActionBatch,
         emitted_at: SystemTime,
         mut next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
-    ) -> Result<(), RecordingError> {
-        let mut errors = Vec::new();
+    ) -> SemanticActionPublication {
+        let mut delivery = SemanticActionPublication::default();
+        if !self.export_runtime.has_semantic_consumers() {
+            return delivery;
+        }
         for batch in semantic_actions.split_by_trace() {
-            if let Err(error) = self.publish_batch_for_trace(
+            delivery.extend(self.publish_batch_for_trace(
                 traces,
                 batch.as_record_batch(),
                 emitted_at,
                 &mut next_diagnostic_id,
-            ) {
-                errors.push(error);
-            }
+            ));
         }
-        if errors.is_empty() {
-            return Ok(());
-        }
-        Err(RecordingError::new(
-            LIVE_EXPORT_STAGE,
-            errors
-                .into_iter()
-                .map(|error| format!("{}: {}", error.stage, error.message))
-                .collect::<Vec<_>>()
-                .join("; "),
-        ))
+        delivery
     }
 }
 
-fn action_exportable(action: &SemanticAction) -> bool {
+pub(super) fn action_exportable(action: &SemanticAction) -> bool {
     action.kind != SemanticActionKind::FileTtyIo
 }
 
-fn exportable_actions(actions: &[SemanticAction]) -> Vec<SemanticAction> {
+fn exportable_actions<'a>(
+    actions: impl Iterator<Item = &'a SemanticAction>,
+) -> Vec<SemanticAction> {
     actions
-        .iter()
         .filter(|action| action_exportable(action))
         .cloned()
         .collect()
@@ -214,21 +222,4 @@ fn exportable_paths(
         .filter(|path| exportable_action_ids.contains(path.action_id.as_str()))
         .cloned()
         .collect()
-}
-
-fn combine_snapshot_and_publish(
-    snapshot_result: Result<(), RecordingError>,
-    publish_result: Result<(), RecordingError>,
-) -> Result<(), RecordingError> {
-    match (snapshot_result, publish_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(snapshot), Err(publish)) => Err(RecordingError::new(
-            LIVE_EXPORT_STAGE,
-            format!(
-                "payload snapshot failed at {}: {}; publish failed at {}: {}",
-                snapshot.stage, snapshot.message, publish.stage, publish.message
-            ),
-        )),
-    }
 }

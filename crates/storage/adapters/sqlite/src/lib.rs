@@ -1,10 +1,14 @@
 //! SQLite-backed storage adapter.
 
+mod action_content;
 pub mod alerts;
 pub mod backend;
 pub mod config;
+mod external_cgroups;
+mod payload;
 pub mod query;
 pub mod records;
+mod resource_scopes;
 pub mod retention;
 pub mod schema;
 pub mod semantic_actions;
@@ -24,18 +28,40 @@ use model_core::process::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 
 pub use config::{
-    SQLITE_DEFAULT_BUSY_TIMEOUT_MS, SQLITE_STORAGE_CONFIG_PREFIX, SqliteStorageConfig,
+    EventRecordLayout, SQLITE_DEFAULT_BUSY_TIMEOUT_MS,
+    SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+    SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
+    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL, SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
+    SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES, SQLITE_STORAGE_CONFIG_PREFIX,
+    SqliteStorageConfig,
 };
 pub use semantic_actions::storage_meta::ColdFieldCompression;
 
 #[derive(Clone)]
 pub struct SqliteStorage {
+    payload_retention: Rc<RefCell<payload::PayloadRetentionState>>,
     connection: Rc<RefCell<Connection>>,
     trace_leases: Rc<RefCell<crate::query::TraceLeaseRegistry>>,
-    cold_field_compression: ColdFieldCompression,
+    cold_field_encoder: semantic_actions::ColdFieldEncoder,
+    event_payload_dictionary: Rc<RefCell<crate::records::EventPayloadDictionary>>,
+    event_path_dictionary: Rc<RefCell<crate::records::PathInterner>>,
+    event_record_blocks: Rc<RefCell<crate::records::EventRecordBlockWriter>>,
 }
 
 impl SqliteStorage {
+    pub fn with_payload_retention_limits(
+        self,
+        limits: storage_core::PayloadRetentionLimits,
+        max_cached_traces: usize,
+    ) -> Self {
+        self.payload_retention
+            .borrow_mut()
+            .configure(limits, max_cached_traces);
+        self
+    }
+
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         Self::open_with_compression(path, None, ColdFieldCompression::DEFAULT)
     }
@@ -52,13 +78,59 @@ impl SqliteStorage {
         busy_timeout: Option<Duration>,
         cold_field_compression: ColdFieldCompression,
     ) -> Result<Self, rusqlite::Error> {
+        Self::open_with_options(
+            path,
+            busy_timeout,
+            cold_field_compression,
+            SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
+            SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+            EventRecordLayout::Rows,
+            SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+            SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+            SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
+        )
+    }
+
+    pub fn open_with_options(
+        path: &Path,
+        busy_timeout: Option<Duration>,
+        cold_field_compression: ColdFieldCompression,
+        event_payload_dictionary_cache_bytes: usize,
+        event_path_dictionary_cache_bytes: usize,
+        event_record_layout: EventRecordLayout,
+        event_record_block_max_events: usize,
+        event_record_block_max_uncompressed_bytes: usize,
+        event_record_block_zstd_level: i32,
+    ) -> Result<Self, rusqlite::Error> {
+        validate_event_record_options(
+            event_record_block_max_events,
+            event_record_block_max_uncompressed_bytes,
+            event_record_block_zstd_level,
+        )?;
         let connection = Connection::open(path)?;
         configure_file_connection(&connection, busy_timeout)?;
         schema::initialize(&connection)?;
+        let event_id_high_water = read_event_id_high_water(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
+            payload_retention: Rc::new(RefCell::new(payload::PayloadRetentionState::default())),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-            cold_field_compression,
+            cold_field_encoder: semantic_actions::ColdFieldEncoder::new(cold_field_compression)?,
+            event_payload_dictionary: Rc::new(RefCell::new(
+                crate::records::EventPayloadDictionary::new(event_payload_dictionary_cache_bytes),
+            )),
+            event_path_dictionary: Rc::new(RefCell::new(crate::records::PathInterner::new(
+                event_path_dictionary_cache_bytes,
+            ))),
+            event_record_blocks: Rc::new(RefCell::new(
+                crate::records::EventRecordBlockWriter::new(
+                    event_record_layout,
+                    event_record_block_max_events,
+                    event_record_block_max_uncompressed_bytes,
+                    event_record_block_zstd_level,
+                    event_id_high_water,
+                ),
+            )),
         })
     }
 
@@ -67,8 +139,22 @@ impl SqliteStorage {
         schema::validate_read_schema(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
+            payload_retention: Rc::new(RefCell::new(payload::PayloadRetentionState::default())),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-            cold_field_compression: ColdFieldCompression::DEFAULT,
+            cold_field_encoder: semantic_actions::ColdFieldEncoder::for_read_only(),
+            event_payload_dictionary: Rc::new(RefCell::new(
+                crate::records::EventPayloadDictionary::new(0),
+            )),
+            event_path_dictionary: Rc::new(RefCell::new(crate::records::PathInterner::new(0))),
+            event_record_blocks: Rc::new(RefCell::new(
+                crate::records::EventRecordBlockWriter::new(
+                    EventRecordLayout::Rows,
+                    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+                    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+                    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
+                    0,
+                ),
+            )),
         })
     }
 
@@ -77,8 +163,28 @@ impl SqliteStorage {
         schema::initialize(&connection)?;
         Ok(Self {
             connection: Rc::new(RefCell::new(connection)),
+            payload_retention: Rc::new(RefCell::new(payload::PayloadRetentionState::default())),
             trace_leases: Rc::new(RefCell::new(crate::query::TraceLeaseRegistry::new())),
-            cold_field_compression: ColdFieldCompression::DEFAULT,
+            cold_field_encoder: semantic_actions::ColdFieldEncoder::new(
+                ColdFieldCompression::DEFAULT,
+            )?,
+            event_payload_dictionary: Rc::new(RefCell::new(
+                crate::records::EventPayloadDictionary::new(
+                    SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
+                ),
+            )),
+            event_path_dictionary: Rc::new(RefCell::new(crate::records::PathInterner::new(
+                SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+            ))),
+            event_record_blocks: Rc::new(RefCell::new(
+                crate::records::EventRecordBlockWriter::new(
+                    EventRecordLayout::Rows,
+                    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+                    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+                    SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
+                    0,
+                ),
+            )),
         })
     }
 
@@ -100,7 +206,10 @@ impl SqliteStorage {
     }
 
     pub fn next_event_id_seed(&self) -> Result<u64, rusqlite::Error> {
-        next_id_seed(&self.connection().borrow(), "events", "event_id")
+        let connection = self.connection().borrow();
+        read_event_id_high_water(&connection)?
+            .checked_add(1)
+            .ok_or(rusqlite::Error::InvalidQuery)
     }
 
     pub fn next_diagnostic_id_seed(&self) -> Result<u64, rusqlite::Error> {
@@ -230,6 +339,48 @@ impl SqliteStorage {
     pub(crate) fn trace_leases(&self) -> &Rc<RefCell<crate::query::TraceLeaseRegistry>> {
         &self.trace_leases
     }
+
+    pub(crate) fn event_payload_dictionary(
+        &self,
+    ) -> &Rc<RefCell<crate::records::EventPayloadDictionary>> {
+        &self.event_payload_dictionary
+    }
+
+    pub(crate) fn event_path_dictionary(&self) -> &Rc<RefCell<crate::records::PathInterner>> {
+        &self.event_path_dictionary
+    }
+
+    pub(crate) fn event_record_blocks(
+        &self,
+    ) -> &Rc<RefCell<crate::records::EventRecordBlockWriter>> {
+        &self.event_record_blocks
+    }
+}
+
+fn read_event_id_high_water(connection: &Connection) -> Result<u64, rusqlite::Error> {
+    connection.query_row(
+        "SELECT last_event_id FROM event_id_high_water WHERE singleton = 1",
+        [],
+        |row| row.get::<_, u64>(0),
+    )
+}
+
+fn validate_event_record_options(
+    max_events: usize,
+    max_uncompressed_bytes: usize,
+    zstd_level: i32,
+) -> Result<(), rusqlite::Error> {
+    if max_events == 0
+        || max_events > SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS
+        || max_uncompressed_bytes == 0
+        || max_uncompressed_bytes > SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES
+        || !(-7..=22).contains(&zstd_level)
+    {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "invalid event record block limits".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 struct ProcessRecordCodec;
@@ -324,3 +475,5 @@ fn next_id_seed(
         .checked_add(1)
         .ok_or(rusqlite::Error::InvalidQuery)
 }
+
+mod cgroup_v1;

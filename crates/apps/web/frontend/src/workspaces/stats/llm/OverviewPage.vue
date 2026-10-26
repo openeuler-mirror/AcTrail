@@ -160,14 +160,14 @@ function latencyDetail(distribution) {
 .overview-page {
   min-width: 0;
   display: grid;
-  gap: var(--stats-section-gap);
+  gap: var(--ui-section-gap);
 }
 
 .metrics {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .charts {
@@ -176,7 +176,7 @@ function latencyDetail(distribution) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: stretch;
   grid-auto-rows: 1fr;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 .charts :deep(.distribution-panel:not(.expanded)) {

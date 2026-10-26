@@ -2,10 +2,10 @@
 
 use super::{
     ActionCompletenessCodes, ActionKindCodes, ActionStatusCodes, EvidenceKindCodes,
-    LinkConfidenceCodes, LinkRoleCodes, SemanticActionCodebook,
+    LinkOriginCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 26;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 42;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
@@ -21,6 +21,7 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             file_bulk_read: 106,
             fs_enumerate: 107,
             http_message: 108,
+            websocket_message: 128,
             llm_call: 109,
             llm_request: 110,
             llm_response: 111,
@@ -48,6 +49,7 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             complete: 301,
             partial: 302,
             inferred: 303,
+            capture_limited: 304,
         },
         evidence_kind: EvidenceKindCodes {
             event: 401,
@@ -69,12 +71,17 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             llm_request_trajectory_fork: 523,
             llm_call_request: 510,
             llm_call_response: 511,
+            llm_call_http_response: 528,
+            llm_request_tool_result: 529,
             llm_response_tool_call: 524,
             llm_tool_call_result: 525,
             llm_tool_call_agent_invocation: 526,
+            http_request_http_response: 527,
             llm_request_http_message: 512,
             llm_request_llm_response: 513,
             llm_response_http_message: 514,
+            llm_request_websocket_message: 530,
+            llm_response_websocket_message: 531,
             llm_response_sse_stream: 515,
             sse_stream_event: 516,
             mcp_tool_call_request: 518,
@@ -82,8 +89,8 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             mcp_request_stdout: 520,
             mcp_response_stdin: 521,
         },
-        link_confidence: LinkConfidenceCodes {
-            observed: 601,
-            derived: 602,
+        link_origin: LinkOriginCodes {
+            observed: 0,
+            derived: 1,
         },
     };

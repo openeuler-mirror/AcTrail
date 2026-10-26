@@ -153,21 +153,21 @@ function isSelected(optionId) {
 .multi-select-filter {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .filter-title {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 .filter-title span {
@@ -175,48 +175,48 @@ header {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--stats-text);
-  font-size: var(--stats-font-ui);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-text);
+  font-size: var(--ui-font-ui);
+  font-weight: var(--ui-weight-medium);
 }
 
 .filter-title strong {
   flex: 0 0 auto;
-  padding: var(--stats-filter-count-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  padding: var(--ui-filter-count-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   font-variant-numeric: tabular-nums;
 }
 
 .bulk-actions {
   display: inline-flex;
   flex: 0 0 auto;
-  gap: var(--stats-space-2xs);
-  padding: var(--stats-space-2xs);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface);
+  gap: var(--ui-space-2xs);
+  padding: var(--ui-space-2xs);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
 }
 
 .bulk-actions button {
-  width: var(--stats-control-height-sm);
-  height: calc(var(--stats-control-height-sm) - 4px);
+  width: var(--ui-control-height-sm);
+  height: calc(var(--ui-control-height-sm) - 4px);
   display: inline-grid;
   place-items: center;
   border: 0;
-  border-radius: calc(var(--stats-radius-sm) - 2px);
+  border-radius: calc(var(--ui-radius-sm) - 2px);
   background: transparent;
-  color: var(--stats-muted);
+  color: var(--ui-muted);
   cursor: pointer;
 }
 
 .bulk-actions button:hover:not(:disabled) {
-  background: var(--stats-accent-muted);
-  color: var(--stats-accent);
+  background: var(--ui-accent-muted);
+  color: var(--ui-accent);
 }
 
 .bulk-actions button:disabled {
@@ -225,11 +225,11 @@ header {
 }
 
 .option-list {
-  max-height: var(--stats-model-list-max-height);
+  max-height: var(--ui-model-list-max-height);
   overflow: auto;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--stats-space-sm);
+  gap: var(--ui-space-sm);
 }
 
 .align-start .option-list {
@@ -242,7 +242,7 @@ header {
 
 .align-stretch .option-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--stats-filter-option-min-width), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(var(--ui-filter-option-min-width), 1fr));
 }
 
 .option-pill {
@@ -250,14 +250,14 @@ header {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
-  padding: var(--stats-chip-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-surface-strong);
-  color: var(--stats-text);
+  gap: var(--ui-space-xs);
+  padding: var(--ui-chip-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-strong);
+  color: var(--ui-text);
   cursor: pointer;
-  font-size: var(--stats-font-md);
+  font-size: var(--ui-font-md);
 }
 
 .align-stretch .option-pill {
@@ -265,14 +265,14 @@ header {
 }
 
 .option-pill.selected {
-  border-color: var(--stats-accent-soft);
-  background: var(--stats-accent-muted);
+  border-color: var(--ui-accent-soft);
+  background: var(--ui-accent-muted);
 }
 
 .option-pill:focus-within {
   box-shadow:
-    0 0 0 2px var(--stats-accent),
-    0 0 0 4px var(--stats-bg-base);
+    0 0 0 2px var(--ui-accent),
+    0 0 0 4px var(--ui-bg-base);
 }
 
 .option-pill input {
@@ -283,21 +283,21 @@ header {
 }
 
 .option-check {
-  width: var(--stats-filter-check-size);
-  height: var(--stats-filter-check-size);
+  width: var(--ui-filter-check-size);
+  height: var(--ui-filter-check-size);
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
-  border: 1px solid var(--stats-border-strong);
-  border-radius: var(--stats-radius-sm);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-sm);
   color: transparent;
-  background: var(--stats-surface);
+  background: var(--ui-surface);
 }
 
 .option-pill.selected .option-check {
-  border-color: var(--stats-accent);
-  background: var(--stats-accent);
-  color: var(--stats-on-accent);
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-on-accent);
 }
 
 .option-label {
@@ -307,7 +307,7 @@ header {
 }
 
 .filter-empty {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-md);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-md);
 }
 </style>

@@ -2,6 +2,8 @@ target/
 *.log 
 # Local config
 config.toml 
+!/.cargo/config.toml
+/develop
 
 logs/* 
 .DS_Store 
@@ -53,3 +55,6 @@ local/
 skills-lock.json
 
 **/adr/**
+
+temp/**
+recordings/**

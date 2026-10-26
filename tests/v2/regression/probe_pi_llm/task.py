@@ -10,12 +10,14 @@ from tests.v2.common.core import AgentBinaryNotFoundError
 
 from .config import ProbePiLLMConfig
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbePiLLMTask:
     def __init__(self, config: ProbePiLLMConfig, runtime: ActrailRuntime):
         self._config = config
         self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(5)}"
+        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._pi = self._resolve_pi()
 
     def run(self) -> CommandResult:

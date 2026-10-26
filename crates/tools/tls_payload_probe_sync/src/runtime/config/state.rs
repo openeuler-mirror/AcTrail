@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use tls_payload_core::{
     CoreError, Decision, EqualLenRewriteProcessor, PayloadContext, PayloadDirection, RewriteRule,
@@ -36,15 +37,19 @@ pub(super) struct RuntimeConfigParts {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum EventTransportConfig {
     InheritedFd {
+        timeout: Duration,
         fd: i32,
         reconnect_path: Option<PathBuf>,
         pending_byte_budget: usize,
         write_buffer_bytes: usize,
+        max_frame_bytes: usize,
     },
     Socket {
+        timeout: Duration,
         path: PathBuf,
         pending_byte_budget: usize,
         write_buffer_bytes: usize,
+        max_frame_bytes: usize,
     },
 }
 
@@ -52,34 +57,53 @@ impl EventTransportConfig {
     fn connect(&self, reconnect: bool) -> Result<EventClient, String> {
         match self {
             Self::InheritedFd {
+                timeout,
                 fd,
                 reconnect_path,
                 pending_byte_budget,
                 write_buffer_bytes,
+                max_frame_bytes,
             } => {
                 if reconnect {
                     let path = reconnect_path.as_ref().ok_or_else(|| {
                         "forked sync runtime requires TLS_PAYLOAD_SYNC_EVENT_SOCKET to reconnect"
                             .to_string()
                     })?;
-                    EventClient::connect(path, *pending_byte_budget, *write_buffer_bytes).map_err(
-                        |error| format!("reconnect sync event socket {}: {error}", path.display()),
+                    EventClient::connect(
+                        path,
+                        *pending_byte_budget,
+                        *write_buffer_bytes,
+                        *max_frame_bytes,
+                        *timeout,
                     )
+                    .map_err(|error| {
+                        format!("reconnect sync event socket {}: {error}", path.display())
+                    })
                 } else {
                     EventClient::connect_inherited_fd(
                         *fd,
                         *pending_byte_budget,
                         *write_buffer_bytes,
+                        *max_frame_bytes,
+                        *timeout,
                     )
                     .map_err(|error| format!("connect inherited sync event fd {fd}: {error}"))
                 }
             }
             Self::Socket {
+                timeout,
                 path,
                 pending_byte_budget,
                 write_buffer_bytes,
-            } => EventClient::connect(path, *pending_byte_budget, *write_buffer_bytes)
-                .map_err(|error| format!("connect sync event socket {}: {error}", path.display())),
+                max_frame_bytes,
+            } => EventClient::connect(
+                path,
+                *pending_byte_budget,
+                *write_buffer_bytes,
+                *max_frame_bytes,
+                *timeout,
+            )
+            .map_err(|error| format!("connect sync event socket {}: {error}", path.display())),
         }
     }
 }
@@ -174,8 +198,8 @@ impl RuntimeConfig {
         let current_pid = std::process::id();
         let mut client = self
             .event_client
-            .lock()
-            .map_err(|_| "sync event client mutex poisoned".to_string())?;
+            .try_lock()
+            .map_err(|_| "sync event client is busy or poisoned".to_string())?;
         let previous_pid = self.event_client_pid.load(Ordering::Acquire);
         let reconnect = previous_pid != 0 && previous_pid != current_pid;
         if reconnect {
@@ -209,15 +233,19 @@ impl RuntimeConfig {
     }
 
     pub(in crate::runtime) fn close_event_client(&self) -> Result<(), String> {
+        // A forked child cannot join the parent's worker or acquire its inherited locks.
+        if self.event_client_pid.load(Ordering::Acquire) != std::process::id() {
+            return Ok(());
+        }
         let client = self
             .event_client
-            .lock()
-            .map_err(|_| "sync event client mutex poisoned".to_string())?
+            .try_lock()
+            .map_err(|_| "sync event client is busy or poisoned".to_string())?
             .take();
         let Some(client) = client else {
             return Ok(());
         };
-        client.close_and_join().map_err(|error| error.to_string())
+        client.close().map_err(|error| error.to_string())
     }
 
     pub(in crate::runtime) fn redact_payload(&self, payload: &[u8]) -> String {

@@ -54,7 +54,7 @@ class VirtualContainerXiaooConcurrencyCaseTest(unittest.TestCase):
                 encoding="utf-8",
             )
             for relative in (
-                "tests/support/llm-http-proxy/provider_proxy.py",
+                "tests/v2/common/llm-http-proxy/provider_proxy.py",
                 "tests/v2/regression/virtual_container/"
                 "validate-runtime-config.py",
             ):

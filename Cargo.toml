@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/access_control",
     "crates/apps/daemon",
     "crates/apps/ctl",
     "crates/apps/cluster",
@@ -10,7 +11,11 @@ members = [
     "crates/apps/sb",
     "crates/core/model",
     "crates/core/linux_platform",
+    "crates/core/linux_cgroup",
     "crates/core/config",
+    "crates/core/resource_profiling",
+    "crates/core/idle_detector",
+    "crates/adapters/agent_host",
     "crates/core/semantic_action_runtime",
     "crates/core/trace_runtime",
     "crates/core/attach_runtime",
@@ -47,6 +52,7 @@ members = [
     "crates/storage/core",
     "crates/contracts/semantic_action",
     "crates/contracts/alert",
+    "crates/contracts/agent_lifecycle",
     "crates/contracts/alert_delivery",
     "crates/contracts/sandbox_observation",
     "crates/contracts/sandbox_control",
@@ -77,7 +83,7 @@ members = [
     "crates/adapters/storage/sandbox_alert",
     "crates/storage/factory",
     "crates/storage/adapters/sqlite",
-    "crates/tools/ebpf_probe",
+    "crates/storage/adapters/noop",
     "crates/tools/tls_probe_point_finder",
     "crates/tools/tls_payload_core",
     "crates/tools/tls_payload_probe",
@@ -88,5 +94,5 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.0"
 rust-version = "1.90"

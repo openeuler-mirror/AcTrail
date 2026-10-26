@@ -2,28 +2,20 @@
 
 use std::str::FromStr;
 
-pub const DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS: u32 = 16;
 pub const DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FILE_BULK_READ_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
-pub const DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX: u32 = 256;
-pub const DEFAULT_FILE_BULK_READ_FAST_PATH_PROCESS_MAX_ENTRIES: u32 = 4096;
-pub const DEFAULT_FILE_BULK_READ_FAST_PATH_FD_MAX_ENTRIES: u32 = 8192;
-pub const DEFAULT_FILE_BULK_READ_FAST_PATH_PENDING_OP_MAX_ENTRIES: u32 = 8192;
 pub const DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS: u32 = 2;
 pub const DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET: u32 = 4096;
 pub const DEFAULT_FS_ENUMERATE_PATH_SET_CHUNK_MAX_PATHS: u32 = 256;
-pub const DEFAULT_FILE_TTY_SUMMARY_FLUSH_INTERVAL_MS: u32 = 5000;
 
 const DEFAULT_TTY_PATHS: &[&str] = &["/dev/tty", "/dev/pts/*", "/dev/ptmx"];
-const DEFAULT_TTY_OPERATIONS: &[&str] = &[
-    "open", "close", "read", "readv", "write", "writev", "truncate",
-];
-const DEFAULT_FILE_BULK_READ_FAST_PATH_SCANNER_COMMANDS: &[&str] =
-    &["grep", "egrep", "fgrep", "rg", "find"];
+const DEFAULT_TTY_OPERATIONS: &[&str] = &["read", "readv", "write", "writev"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileObservationConfig {
     pub enabled: bool,
+    pub collection: FileCollectionConfig,
+    pub summary: FileIoSummaryConfig,
     pub metadata_retention: FileMetadataRetention,
     pub tty: FileTtyObservationConfig,
     pub bulk_read: FileBulkReadObservationConfig,
@@ -34,11 +26,65 @@ impl Default for FileObservationConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            collection: FileCollectionConfig::default(),
+            summary: FileIoSummaryConfig::default(),
             metadata_retention: FileMetadataRetention::Compact,
             tty: FileTtyObservationConfig::default(),
             bulk_read: FileBulkReadObservationConfig::default(),
             enumerate: FsEnumerateObservationConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileIoSummaryConfig {
+    pub flush_interval_ms: u32,
+    pub max_entries: u32,
+    pub object_max_entries: u32,
+}
+
+impl Default for FileIoSummaryConfig {
+    fn default() -> Self {
+        Self {
+            flush_interval_ms: 100,
+            max_entries: 16384,
+            object_max_entries: 16384,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileCollectionConfig {
+    pub writable_open: bool,
+    pub path_mutations: bool,
+    pub fd_mutations: bool,
+    pub read: FileIoCollectionConfig,
+    pub write: FileIoCollectionConfig,
+}
+
+impl Default for FileCollectionConfig {
+    fn default() -> Self {
+        Self {
+            writable_open: true,
+            path_mutations: true,
+            fd_mutations: false,
+            read: FileIoCollectionConfig::default(),
+            write: FileIoCollectionConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FileIoCollectionConfig {
+    pub observed: bool,
+    pub counts: bool,
+    pub bytes: bool,
+    pub errors: bool,
+}
+
+impl FileIoCollectionConfig {
+    pub const fn enabled(&self) -> bool {
+        self.observed || self.counts || self.bytes || self.errors
     }
 }
 
@@ -123,13 +169,12 @@ pub struct FileTtyObservationConfig {
     pub paths: Vec<String>,
     pub operations: Vec<String>,
     pub raw_event_retention: FileRawEventRetention,
-    pub summary_flush_interval_ms: u32,
 }
 
 impl Default for FileTtyObservationConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             paths: DEFAULT_TTY_PATHS
                 .iter()
                 .map(|value| value.to_string())
@@ -139,7 +184,6 @@ impl Default for FileTtyObservationConfig {
                 .map(|value| value.to_string())
                 .collect(),
             raw_event_retention: FileRawEventRetention::Summary,
-            summary_flush_interval_ms: DEFAULT_FILE_TTY_SUMMARY_FLUSH_INTERVAL_MS,
         }
     }
 }
@@ -167,20 +211,8 @@ pub struct FileBulkReadObservationConfig {
     pub enabled: bool,
     pub mode: FileBulkReadMode,
     pub raw_event_retention: FileRawEventRetention,
-    pub min_unique_paths: u32,
     pub max_paths_per_set: u32,
     pub path_set_chunk_max_paths: u32,
-    pub pending_event_max: u32,
-    pub fast_path: FileBulkReadFastPathConfig,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileBulkReadFastPathConfig {
-    pub enabled: bool,
-    pub scanner_commands: Vec<String>,
-    pub process_max_entries: u32,
-    pub fd_max_entries: u32,
-    pub pending_op_max_entries: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +227,7 @@ pub struct FsEnumerateObservationConfig {
 impl Default for FsEnumerateObservationConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             raw_event_retention: FileRawEventRetention::ErrorsOnly,
             min_unique_paths: DEFAULT_FS_ENUMERATE_MIN_UNIQUE_PATHS,
             max_paths_per_set: DEFAULT_FS_ENUMERATE_MAX_PATHS_PER_SET,
@@ -210,26 +242,8 @@ impl Default for FileBulkReadObservationConfig {
             enabled: true,
             mode: FileBulkReadMode::PathSet,
             raw_event_retention: FileRawEventRetention::ErrorsOnly,
-            min_unique_paths: DEFAULT_FILE_BULK_READ_MIN_UNIQUE_PATHS,
             max_paths_per_set: DEFAULT_FILE_BULK_READ_MAX_PATHS_PER_SET,
             path_set_chunk_max_paths: DEFAULT_FILE_BULK_READ_PATH_SET_CHUNK_MAX_PATHS,
-            pending_event_max: DEFAULT_FILE_BULK_READ_PENDING_EVENT_MAX,
-            fast_path: FileBulkReadFastPathConfig::default(),
-        }
-    }
-}
-
-impl Default for FileBulkReadFastPathConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            scanner_commands: DEFAULT_FILE_BULK_READ_FAST_PATH_SCANNER_COMMANDS
-                .iter()
-                .map(|value| value.to_string())
-                .collect(),
-            process_max_entries: DEFAULT_FILE_BULK_READ_FAST_PATH_PROCESS_MAX_ENTRIES,
-            fd_max_entries: DEFAULT_FILE_BULK_READ_FAST_PATH_FD_MAX_ENTRIES,
-            pending_op_max_entries: DEFAULT_FILE_BULK_READ_FAST_PATH_PENDING_OP_MAX_ENTRIES,
         }
     }
 }

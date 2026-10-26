@@ -33,10 +33,12 @@ from tests.v2.regression.virtual_container.v2.assertions import (
 
 from .config import VirtualContainerXiaooConcurrencyConfig
 
+from .constants import CASE_CONSTANTS
 
-DUAL_VM_INSTANCES = ("a", "b")
-OPENCODE_GUEST_PROXY_PORT = 14080
-OPENCODE_VSOCK_PORT = 43181
+
+DUAL_VM_INSTANCES = CASE_CONSTANTS.dual_vm_instances
+OPENCODE_GUEST_PROXY_PORT = CASE_CONSTANTS.opencode_guest_proxy_port
+OPENCODE_VSOCK_PORT = CASE_CONSTANTS.opencode_vsock_port
 
 
 class DualKataXiaooScenario:
@@ -52,7 +54,7 @@ class DualKataXiaooScenario:
         self._guest = GuestConsole(self._runner)
         self._case_dir = Path(__file__).resolve().parent
         self._provider_source = (
-            config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
+            config.repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         )
         self._connect_proxy = self._case_dir / "connect_proxy.py"
         self._guest_bridge = (
@@ -187,7 +189,7 @@ class DualKataXiaooScenario:
             for instance in DUAL_VM_INSTANCES:
                 process_result = processes[instance].wait(
                     timeout=self._config.runtime_timeout_seconds,
-                    terminate_grace_seconds=5,
+                    terminate_grace_seconds=CASE_CONSTANTS.workload_stop_timeout_seconds,
                 )
                 output = process_result.stdout + process_result.stderr
                 outputs[instance] = output
@@ -269,7 +271,7 @@ class DualKataXiaooScenario:
                     cleanup_errors.append(f"{instance}: {error}")
             for service in reversed(host_services):
                 try:
-                    service.terminate(grace_seconds=2)
+                    service.terminate(grace_seconds=CASE_CONSTANTS.service_stop_timeout_seconds)
                 except Exception as error:
                     cleanup_errors.append(f"host service: {error}")
             results["cleanup"] = TestResult(
@@ -325,7 +327,7 @@ class DualKataXiaooScenario:
         )
         return builder.build(
             name_prefix=f"xiaoo-{self._config.backend}-{instance}",
-            command=("/bin/sh", "-c", "sleep 600"),
+            command=("/bin/sh", "-c", f"sleep {CASE_CONSTANTS.vm_hold_seconds}"),
             mounts=(
                 KataMount(
                     self._workload_bundle,
@@ -373,9 +375,9 @@ class DualKataXiaooScenario:
             + opencode_check
             + "/opt/actrail-xiaoo/xiaoo --help >/dev/null; "
             "python3 /opt/actrail-xiaoo/provider_proxy.py --help >/dev/null; "
-            "remaining=180; while [ $remaining -gt 0 ]; do "
+            f"remaining={CASE_CONSTANTS.guest_ready_attempts}; while [ $remaining -gt 0 ]; do "
             "[ -S /run/actrail/control.sock ] && exit 0; "
-            "remaining=$((remaining - 1)); sleep 0.5; done; exit 72"
+            f"remaining=$((remaining - 1)); sleep {CASE_CONSTANTS.guest_ready_poll_seconds}; done; exit 72"
         )
         result = vm.exec(
             (
@@ -419,14 +421,18 @@ class DualKataXiaooScenario:
             "ACTRAIL_XIAOO_PROVIDER_SCRIPT": (
                 "/opt/actrail-xiaoo/provider_proxy.py"
             ),
+            "ACTRAIL_XIAOO_PROVIDER_PORT": str(CASE_CONSTANTS.provider_port),
+            "ACTRAIL_VIRTUAL_XIAOO_API_KEY": CASE_CONSTANTS.local_api_key,
+            "ACTRAIL_XIAOO_POLL_SECONDS": str(CASE_CONSTANTS.guest_poll_seconds),
             "ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS": str(
                 self._config.ready_timeout_seconds
             ),
-            "ACTRAIL_XIAOO_PROVIDER_DELAY_SECONDS": "1.0",
+            "ACTRAIL_XIAOO_PROVIDER_DELAY_SECONDS": str(CASE_CONSTANTS.provider_delay_seconds),
         }
         if self._config.opencode_free_model is not None:
             environment.update(
                 {
+                    "ACTRAIL_OPENCODE_TIMEOUT_SECONDS": str(CASE_CONSTANTS.opencode_timeout_seconds),
                     "ACTRAIL_OPENCODE_FREE_MODEL": (
                         self._config.opencode_free_model
                     ),
@@ -475,15 +481,15 @@ class DualKataXiaooScenario:
                     str(OPENCODE_VSOCK_PORT),
                 )
             )
-            time.sleep(0.2)
+            time.sleep(CASE_CONSTANTS.start_opencode_egress_poll_seconds)
             if bridge.poll() is not None:
-                result = bridge.wait(timeout=1)
+                result = bridge.wait(timeout=CASE_CONSTANTS.start_opencode_egress_timeout_seconds)
                 raise RuntimeError(
                     "OpenCode Host VSOCK bridge exited before readiness: "
                     + result.diagnostic
                 )
         except Exception:
-            proxy.terminate(grace_seconds=1)
+            proxy.terminate(grace_seconds=CASE_CONSTANTS.start_opencode_egress_grace_seconds)
             raise
         return proxy, bridge
 
@@ -492,17 +498,17 @@ class DualKataXiaooScenario:
         last_error = "not attempted"
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                result = process.wait(timeout=1)
+                result = process.wait(timeout=CASE_CONSTANTS.process_exit_timeout_seconds)
                 raise RuntimeError(
                     "OpenCode Host CONNECT proxy exited before readiness: "
                     + result.diagnostic
                 )
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                with socket.create_connection(("127.0.0.1", port), timeout=CASE_CONSTANTS.tcp_connect_timeout_seconds):
                     return
             except OSError as error:
                 last_error = str(error)
-                time.sleep(0.05)
+                time.sleep(CASE_CONSTANTS.wait_host_tcp_poll_seconds)
         raise RuntimeError(
             f"OpenCode Host CONNECT proxy readiness timed out: {last_error}"
         )
@@ -575,7 +581,7 @@ class DualKataXiaooScenario:
                     last_error = str(error)
             else:
                 last_error = traces.diagnostic
-            time.sleep(0.5)
+            time.sleep(CASE_CONSTANTS.validate_trace_poll_seconds)
         if trace_id is None:
             raise RuntimeError(
                 f"timed out waiting for VM {instance} trace: {last_error}"
@@ -610,24 +616,24 @@ class DualKataXiaooScenario:
                 return
             for instance, process in processes.items():
                 if process.poll() is not None:
-                    result = process.wait(timeout=1)
+                    result = process.wait(timeout=CASE_CONSTANTS.wait_for_paths_timeout_seconds)
                     raise RuntimeError(
                         f"xiaoO {instance} exited before {description}: "
                         + result.diagnostic
                     )
-            time.sleep(0.05)
+            time.sleep(CASE_CONSTANTS.wait_for_paths_poll_seconds)
         raise RuntimeError(f"timed out waiting for {description}")
 
     @staticmethod
     def _xiaoo_config() -> str:
-        return """[llm]
-provider = "deepseek"
-model = "deepseek-chat"
+        return f"""[llm]
+provider = "{CASE_CONSTANTS.llm_provider}"
+model = "{CASE_CONSTANTS.llm_model}"
 api_key_env = "ACTRAIL_VIRTUAL_XIAOO_API_KEY"
-api_base = "http://127.0.0.1:18098"
-max_tokens = 128
-context_window = 32768
-reasoning_effort = "off"
+api_base = "http://{CASE_CONSTANTS.provider_host}:{CASE_CONSTANTS.provider_port}"
+max_tokens = {CASE_CONSTANTS.llm_max_tokens}
+context_window = {CASE_CONSTANTS.llm_context_window}
+reasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"
 """
 
     @staticmethod

@@ -35,31 +35,14 @@ impl MembershipIndex {
         }
     }
 
-    pub fn active_descendants_of(&self, root_identity: &ProcessIdentity) -> usize {
-        self.by_identity
-            .values()
-            .filter(|membership| {
-                membership.identity != *root_identity
-                    && matches!(
-                        membership.state,
-                        MembershipState::Starting | MembershipState::Active
-                    )
-                    && membership.capture_enabled
-            })
-            .count()
-    }
-
-    pub fn capturable_members(&self) -> usize {
-        self.by_identity
-            .values()
-            .filter(|membership| {
-                membership.capture_enabled
-                    && matches!(
-                        membership.state,
-                        MembershipState::Starting | MembershipState::Active
-                    )
-            })
-            .count()
+    pub(super) fn has_capturable_members(&self) -> bool {
+        self.by_identity.values().any(|membership| {
+            membership.capture_enabled
+                && matches!(
+                    membership.state,
+                    MembershipState::Starting | MembershipState::Active
+                )
+        })
     }
 
     pub fn memberships(&self) -> impl Iterator<Item = &ProcessMembership> {

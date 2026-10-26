@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 
 from request import ContainerRequest
 
+from tests.v2.common.test_suites.constants import CONTAINER_DEFAULTS as DEFAULTS
+
 
 class TestContainer:
     """Owns one long-lived container and runs short tasks through docker exec."""
@@ -110,7 +112,7 @@ class TestContainer:
                     return
                 if status in {"dead", "exited"}:
                     break
-            time.sleep(0.05)
+            time.sleep(DEFAULTS.ready_poll_seconds)
         raise RuntimeError(
             f"container did not become ready: {self.request.name} {last_state}"
         )

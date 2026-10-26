@@ -65,10 +65,6 @@ impl IncrementalSseFramer {
         Ok(events)
     }
 
-    pub(in crate::llm_pipeline) fn safe_consumed(&self) -> usize {
-        self.event_start
-    }
-
     fn parse_event(
         &mut self,
         block: &[u8],

@@ -30,28 +30,28 @@ defineProps({
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: var(--stats-space-sm);
-  padding: var(--stats-panel-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-sm);
-  background: var(--stats-surface-strong);
-  box-shadow: var(--stats-shadow);
+  gap: var(--ui-space-sm);
+  padding: var(--ui-panel-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-strong);
+  box-shadow: var(--ui-shadow);
 }
 
 .metric-card span {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .metric-card strong {
-  color: var(--stats-text);
-  font-size: var(--stats-font-display-md);
-  font-weight: var(--stats-weight-medium);
-  line-height: var(--stats-line-height-tight);
+  color: var(--ui-text);
+  font-size: var(--ui-font-display-md);
+  font-weight: var(--ui-weight-medium);
+  line-height: var(--ui-line-height-tight);
 }
 
 .metric-card small {
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
 }
 </style>

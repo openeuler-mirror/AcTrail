@@ -47,7 +47,7 @@ const ariaLabel = computed(() =>
 function segmentStyle(category) {
   return {
     width: `${Number(category.percentage_bps ?? 0) / 100}%`,
-    background: ATTRIBUTION_COLORS[category.key] ?? 'var(--stats-muted)',
+    background: ATTRIBUTION_COLORS[category.key] ?? 'var(--ui-muted)',
   };
 }
 
@@ -62,9 +62,9 @@ function segmentTitle(category) {
   min-height: 42px;
   display: flex;
   overflow: hidden;
-  border: 1px solid var(--stats-border, var(--border));
-  border-radius: var(--stats-radius-md, 10px);
-  background: var(--stats-surface, var(--surface));
+  border: 1px solid var(--ui-border, var(--ui-border));
+  border-radius: var(--ui-radius-md, 10px);
+  background: var(--ui-surface, var(--ui-surface));
 }
 
 .attribution-bar-segment {
@@ -77,7 +77,7 @@ function segmentTitle(category) {
   color: #fff;
   cursor: pointer;
   font: inherit;
-  font-size: var(--stats-font-xs, 12px);
+  font-size: var(--ui-font-xs, 12px);
   font-weight: 600;
   text-shadow: 0 1px 2px rgb(0 0 0 / 35%);
   transition: filter 120ms ease;
@@ -90,7 +90,7 @@ function segmentTitle(category) {
 .attribution-bar-segment:focus-visible {
   position: relative;
   z-index: 1;
-  outline: 2px solid var(--stats-text, #fff);
+  outline: 2px solid var(--ui-text, #fff);
   outline-offset: -3px;
 }
 </style>

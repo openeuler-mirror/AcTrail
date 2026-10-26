@@ -18,6 +18,8 @@ from .runtime_config import (
 )
 from .image import firecracker_workload_reference
 
+from .constants import DEFAULTS
+
 
 _MANIFEST_LINE = re.compile(r"^([0-9a-fA-F]{64})[ \t]+(.+)$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -72,9 +74,9 @@ class DeploymentArtifacts:
         bin_dir: Path,
         expected_backend: str,
         expected_runtime: str,
-        require_xiaoo: bool = False,
-        require_preinstalled_xiaoo: bool = False,
-        require_sandbox_observer: bool = False,
+        require_xiaoo: bool = DEFAULTS.require_xiaoo,
+        require_preinstalled_xiaoo: bool = DEFAULTS.require_preinstalled_xiaoo,
+        require_sandbox_observer: bool = DEFAULTS.require_sandbox_observer,
     ) -> DeploymentArtifacts:
         if not manifest.is_absolute():
             raise ValueError(f"artifact manifest path must be absolute: {manifest}")
@@ -558,10 +560,10 @@ def validate_release_bundle_consistency(
 @dataclass
 class DirectoryManifestRequirement:
     directory: Path
-    manifest_name: str = "MANIFEST.sha256"
+    manifest_name: str = DEFAULTS.manifest_name
     prepare_command: tuple[str, ...] | None = None
     runner: CommandRunner | None = None
-    timeout_seconds: float = 600
+    timeout_seconds: float = DEFAULTS.artifact_timeout_seconds
     _digest: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:

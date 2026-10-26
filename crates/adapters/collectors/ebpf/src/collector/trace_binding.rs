@@ -3,15 +3,58 @@
 use super::*;
 
 impl EbpfCollector {
+    pub fn set_agent_descendant_observation_depth(
+        &mut self,
+        trace_id: TraceId,
+        observer_tgid: u32,
+        expected_start_boottime_ns: Option<u64>,
+        expected_start_time_ticks: u64,
+        remaining_depth: i32,
+    ) -> Result<(), CollectorError> {
+        if remaining_depth == -1 {
+            return Ok(());
+        }
+        if remaining_depth < -1 {
+            return Err(CollectorError::new(
+                "agent_observation_depth",
+                format!("remaining depth must be -1 or non-negative, got {remaining_depth}"),
+            ));
+        }
+        let tracked = self.bindings.by_host_pid(observer_tgid).ok_or_else(|| {
+            CollectorError::new(
+                "agent_observation_depth",
+                format!("observer TGID {observer_tgid} is not tracked"),
+            )
+        })?;
+        let generation_matches = match expected_start_boottime_ns {
+            Some(expected) => tracked.kernel_start_time == expected,
+            None if expected_start_time_ticks != 0 => {
+                tracked.observation.host.as_ref().is_some_and(|host| {
+                    host.start_time_ticks != 0 && host.start_time_ticks == expected_start_time_ticks
+                })
+            }
+            None => false,
+        };
+        if tracked.trace_id != trace_id || !generation_matches {
+            return Err(CollectorError::new(
+                "agent_observation_depth",
+                format!(
+                    "observer TGID {observer_tgid} no longer identifies trace {trace_id} generation boot={expected_start_boottime_ns:?} ticks={expected_start_time_ticks}"
+                ),
+            ));
+        }
+        let kernel_tgid = tracked.kernel_tgid;
+        self.runtime_ref()?
+            .set_process_observation_depth(kernel_tgid, tracked.kernel_start_time, remaining_depth)
+            .map_err(loader_error)
+    }
+
     pub fn fork_trace_lookup(&self, host_pid: u32) -> Result<ForkTraceLookup, CollectorError> {
         let Some(runtime) = self.runtime.as_ref() else {
             return Ok(ForkTraceLookup::Unavailable);
         };
-        if !runtime.is_attached() {
-            return Ok(ForkTraceLookup::Unavailable);
-        }
         let binding = runtime.fork_trace_binding(host_pid).map_err(loader_error)?;
-        let Some(binding) = binding else {
+        let Some((kernel_tgid, binding)) = binding else {
             let failed_publications = runtime
                 .fork_identity_publish_failures()
                 .map_err(loader_error)?;
@@ -29,23 +72,8 @@ impl EbpfCollector {
                 "sysconf(_SC_CLK_TCK) did not return a positive value",
             )
         })?;
-        let start_time_ticks = u64::try_from(
-            u128::from(binding.child_start_boottime_ns)
-                .saturating_mul(u128::from(clock_ticks_per_second))
-                / 1_000_000_000_u128,
-        )
-        .map_err(|_| {
-            CollectorError::new(
-                "fork_trace_identity",
-                "fork start generation does not fit procfs clock ticks",
-            )
-        })?;
-        Ok(ForkTraceLookup::Bound(KernelForkTraceBinding {
-            trace_id: binding.trace_id,
-            host_pid,
-            start_boottime_ns: binding.child_start_boottime_ns,
-            start_time_ticks,
-        }))
+        KernelForkTraceBinding::from_runtime(kernel_tgid, binding, clock_ticks_per_second)
+            .map(ForkTraceLookup::Bound)
     }
 
     pub fn bind_launch_trace(
@@ -63,11 +91,8 @@ impl EbpfCollector {
             ));
         }
         if let Some(unsupported_required) = request.requested_capabilities.iter().find(|request| {
-            !supported_required_capability(
-                &request.capability,
-                self.loader.config(),
-                self.loader.payload_config(),
-            ) && request.mode == RequestMode::Required
+            !supported_required_capability(&request.capability, self.loader.payload_config())
+                && request.mode == RequestMode::Required
         }) {
             return Err(CollectorError::new(
                 "bind_launch_trace",
@@ -80,7 +105,12 @@ impl EbpfCollector {
 
         self.ensure_runtime_for_requests(&request.requested_capabilities)?;
         let generation = kernel_start_time(&request.root_observation)?;
-        let host_pid = self.map_pid_for_observation(&request.root_observation)?;
+        let observer_tgid = request
+            .root_observation
+            .host
+            .as_ref()
+            .map(|host| host.pid)
+            .ok_or_else(|| CollectorError::new("observer_tgid", "observer TGID is missing"))?;
         let root_pid_namespace = request
             .root_observation
             .namespace
@@ -93,7 +123,7 @@ impl EbpfCollector {
         self.register_trace_pid_namespace(request.trace_id, &request.root_observation)?;
         let armed_binding = match self.runtime_ref()?.arm_launch_binding(
             pidfd,
-            host_pid,
+            observer_tgid,
             request.trace_id,
             generation,
             &request.initial_suppressed_fds,
@@ -118,11 +148,19 @@ impl EbpfCollector {
         );
         self.bindings
             .set_trace_pid_namespace(request.trace_id, root_pid_namespace);
-        let root_working_directory = request
-            .root_observation
-            .host
-            .as_ref()
-            .and_then(|host| crate::procfs::read_process_cwd(host.pid));
+        let consumers = self
+            .file_tracker
+            .context_consumers(request.trace_id, &self.bindings);
+        let root_working_directory = consumers
+            .file_paths
+            .then(|| {
+                request
+                    .root_observation
+                    .host
+                    .as_ref()
+                    .and_then(|host| crate::procfs::read_process_cwd(host.pid))
+            })
+            .flatten();
         self.pending_launches.insert(
             request.trace_id,
             PendingLaunchBinding {
@@ -145,6 +183,7 @@ impl EbpfCollector {
         trace_id: TraceId,
         records: impl IntoIterator<Item = ProcessRecord>,
     ) -> Result<(), CollectorError> {
+        let mut seeds = Vec::new();
         for record in records {
             if self
                 .pending_launches
@@ -154,110 +193,82 @@ impl EbpfCollector {
                 continue;
             }
             let observation = observation_from_record(&record)?;
-            let map_pid = self.map_pid_for_observation(&observation)?;
-            let kernel_start_time = kernel_start_time(&observation)?;
+            let host = observation.host.as_ref().ok_or_else(|| {
+                CollectorError::new("observer_tgid", "observer identity is missing")
+            })?;
+            let observer_tgid = host.pid;
+            let start_time_ticks = host.start_time_ticks;
+            seeds.push((observation, observer_tgid, start_time_ticks));
+        }
+        let requests = seeds
+            .iter()
+            .map(
+                |(_, observer_tgid, start_time_ticks)| ProcessIdentityResolutionRequest {
+                    observer_tgid: *observer_tgid,
+                    start_time_ticks: *start_time_ticks,
+                },
+            )
+            .collect::<Vec<_>>();
+        let resolutions = self
+            .runtime_mut()?
+            .resolve_process_identities(&requests)
+            .map_err(loader_error)?;
+        let consumers = self
+            .file_tracker
+            .context_consumers(trace_id, &self.bindings);
+        for ((observation, observer_tgid, _), resolution) in seeds.into_iter().zip(resolutions) {
             self.runtime_mut()?
-                .track_pid(map_pid, kernel_start_time, trace_id)
+                .track_pid(
+                    resolution.kernel_tgid,
+                    resolution.start_boottime_ns,
+                    observer_tgid,
+                    trace_id,
+                )
                 .map_err(loader_error)?;
-            self.file_tracker.seed_process(
+            if consumers.any() {
+                let cwd = consumers
+                    .file_paths
+                    .then(|| {
+                        observation
+                            .host
+                            .as_ref()
+                            .and_then(|host| crate::procfs::read_process_cwd(host.pid))
+                    })
+                    .flatten();
+                self.file_tracker
+                    .seed_process(trace_id, observation.clone(), cwd, consumers);
+            }
+            self.bindings.track_with_kernel_tgid(
                 trace_id,
-                observation.clone(),
-                observation
-                    .host
-                    .as_ref()
-                    .and_then(|host| crate::procfs::read_process_cwd(host.pid)),
+                observation,
+                resolution.kernel_tgid,
+                resolution.start_boottime_ns,
             );
-            self.bindings
-                .track_with_map_pid(trace_id, observation, map_pid, kernel_start_time);
         }
-        Ok(())
-    }
-
-    /// Seed userspace identity for a child that still has its kernel fork binding.
-    ///
-    /// The fork binding remains authoritative until the queued exec event promotes
-    /// it. Replacing it with a procfs tick generation here would split the child
-    /// from the descriptor lineage carried by the queued fork event.
-    pub fn seed_fork_bound_membership(
-        &mut self,
-        trace_id: TraceId,
-        record: ProcessRecord,
-    ) -> Result<(), CollectorError> {
-        let observation = observation_from_record(&record)?;
-        let map_pid = self.map_pid_for_observation(&observation)?;
-        let binding = match self.fork_trace_lookup(map_pid)? {
-            ForkTraceLookup::Bound(binding) => binding,
-            ForkTraceLookup::Unbound => {
-                return Err(CollectorError::new(
-                    "fork_trace_identity",
-                    format!("host PID {map_pid} has no fork-time trace binding"),
-                ));
-            }
-            ForkTraceLookup::Unavailable => {
-                return Err(CollectorError::new(
-                    "fork_trace_identity",
-                    "fork-time trace lookup is unavailable",
-                ));
-            }
-            ForkTraceLookup::IntegrityFailure {
-                failed_publications,
-            } => {
-                return Err(CollectorError::new(
-                    "fork_trace_identity",
-                    format!(
-                        "fork-time trace identity is compromised after {failed_publications} publication failure(s)"
-                    ),
-                ));
-            }
-        };
-        if binding.trace_id() != trace_id {
-            return Err(CollectorError::new(
-                "fork_trace_identity",
-                format!(
-                    "host PID {map_pid} belongs to fork trace {}, not listener trace {}",
-                    binding.trace_id().get(),
-                    trace_id.get(),
-                ),
-            ));
-        }
-        let observation = binding.validate_and_enrich(observation)?;
-        let kernel_start_time = kernel_start_time(&observation)?;
-        self.file_tracker.seed_process(
-            trace_id,
-            observation.clone(),
-            observation
-                .host
-                .as_ref()
-                .and_then(|host| crate::procfs::read_process_cwd(host.pid)),
-        );
-        self.bindings
-            .track_with_map_pid(trace_id, observation, map_pid, kernel_start_time);
         Ok(())
     }
 
     pub fn stop_tracking_process(&mut self, pid: u32) -> Result<(), CollectorError> {
         let tracked = self.bindings.by_host_pid(pid).cloned();
-        let map_pid = self
-            .bindings
-            .remove_pid(pid)
-            .map(|tracked| tracked.map_pid)
-            .unwrap_or(pid);
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_host_pid(pid).map_err(loader_error)?;
             if let Some(tracked) = tracked.as_ref() {
+                let kernel_tgid = tracked.kernel_tgid;
                 runtime
-                    .sweep_suppressed_fds_for_process(map_pid, tracked.kernel_start_time)
+                    .sweep_suppressed_fds_for_process(kernel_tgid, tracked.kernel_start_time)
                     .map_err(loader_error)?;
-                runtime
-                    .unmark_file_bulk_read_fast_process(map_pid, tracked.kernel_start_time)
-                    .map_err(loader_error)?;
-                runtime
-                    .sweep_file_bulk_read_fast_fds_for_process(map_pid, tracked.kernel_start_time)
-                    .map_err(loader_error)?;
+                cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, kernel_tgid)?;
+                runtime.untrack_pid(kernel_tgid).map_err(loader_error)?;
             }
-            cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, map_pid)?;
-            runtime.untrack_pid(map_pid).map_err(loader_error)?;
         }
+        if let Some(tracked) = tracked {
+            self.finish_file_io_process((
+                tracked.trace_id,
+                tracked.kernel_tgid,
+                tracked.kernel_start_time,
+            ));
+        }
+        self.bindings.remove_pid(pid);
         Ok(())
     }
 
@@ -277,25 +288,23 @@ impl EbpfCollector {
             self.cancel_pending_launch(trace_id)?;
         }
         let tracked = self.bindings.by_host_pid(pid).cloned();
-        let map_pid = tracked
-            .as_ref()
-            .map(|tracked| tracked.map_pid)
-            .unwrap_or(pid);
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_host_pid(pid).map_err(loader_error)?;
             if let Some(tracked) = tracked.as_ref() {
+                let kernel_tgid = tracked.kernel_tgid;
                 runtime
-                    .sweep_suppressed_fds_for_process(map_pid, tracked.kernel_start_time)
+                    .sweep_suppressed_fds_for_process(kernel_tgid, tracked.kernel_start_time)
                     .map_err(loader_error)?;
-                runtime
-                    .unmark_file_bulk_read_fast_process(map_pid, tracked.kernel_start_time)
-                    .map_err(loader_error)?;
-                runtime
-                    .sweep_file_bulk_read_fast_fds_for_process(map_pid, tracked.kernel_start_time)
-                    .map_err(loader_error)?;
+                cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, kernel_tgid)?;
+                runtime.untrack_pid(kernel_tgid).map_err(loader_error)?;
             }
-            cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, map_pid)?;
-            runtime.untrack_pid(map_pid).map_err(loader_error)?;
+        }
+        if let Some(tracked) = tracked {
+            self.finish_file_io_process((
+                tracked.trace_id,
+                tracked.kernel_tgid,
+                tracked.kernel_start_time,
+            ));
         }
         Ok(())
     }
@@ -304,12 +313,12 @@ impl EbpfCollector {
         &mut self,
         trace_id: TraceId,
         root_start_time: u64,
-        root_map_pid: u32,
+        root_kernel_tgid: u32,
         initial_fds: &[InitialSuppressedFd],
     ) -> Result<(), CollectorError> {
         for initial in initial_fds {
             let map_identity = KernelProcessCoordinates {
-                pid: root_map_pid,
+                pid: root_kernel_tgid,
                 start_time: root_start_time,
             };
             let fd = ProcessSuppressedFd {
@@ -341,17 +350,6 @@ impl EbpfCollector {
             )
             .map_err(loader_error)?;
         Ok(())
-    }
-
-    pub(super) fn map_pid_for_observation(
-        &self,
-        observation: &ProcessObservation,
-    ) -> Result<u32, CollectorError> {
-        observation
-            .host
-            .as_ref()
-            .map(|host| host.pid)
-            .ok_or_else(|| CollectorError::new("host_pid", "host PID is missing"))
     }
 
     pub(super) fn cleanup_suppressed_fds_for_process(

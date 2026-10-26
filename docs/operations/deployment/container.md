@@ -23,20 +23,31 @@ flowchart LR
 
 ## 前置条件
 
-- 主机已经按 [主机部署](host.md) 启动 daemon；
-- workload 镜像包含 `actrailctl` 和需要的 TLS sync runtime library；
-- Agent、模型配置与密钥由镜像分层、只读挂载或 secrets 注入；
-- 主机和容器使用兼容的 release 产物与 operator config。
+- **主机服务**：主机已经按 [主机部署](host.md) 启动 daemon。
+- **容器镜像**：workload 镜像包含 `actrailctl`。显式选择 `tls-sync` 时还需包含 TLS sync runtime library。
+- **模型与认证**：Agent、模型配置与密钥由镜像分层、只读挂载或 secrets 注入。
+- **构建与配置**：主机和容器使用兼容的 release 产物与 operator config。
 
 ## 1. 选择 Docker seccomp 模式
 
-| 模式 | `--seccomp-notify auto` | 用途 |
+| 模式 | seccomp-notify 行为 | 用途 |
 | --- | --- | --- |
-| Docker 默认 profile | notify 不可用时明确降级，TLS sync 仍可用 | 最小权限 |
+| Docker 默认 profile | 默认 eBPF 观测不安装 AcTrail seccomp-notify listener | 默认观测 |
 | `deploy/container-auto/seccomp/actrail-notify.json` | 启用 notify，同时保留 Docker 外层 syscall 过滤 | 需要完整 launch-time seccomp 的推荐模式 |
 | `seccomp=unconfined` | notify 可用，但关闭 Docker 外层过滤 | 仅限可信排障环境 |
 
-`auto` 允许该权限轴降级；`required` 在能力不可用时失败；`disabled` 保证不启用它。严格证据覆盖需要使用 `required`，自动降级不代表完整采集。
+默认启动等价于 `--seccomp-notify disabled`。启用 notify 需要 operator 配置和 CLI 同时显式 opt-in：
+
+```toml
+[seccomp_notify]
+enabled = true
+```
+
+通过 `--seccomp-notify` 选择启动行为：
+
+- **`auto`**：seccomp-notify 不可用时允许继续启动，此时依赖 notify 的采集和治理能力不可用。
+- **`required`**：seccomp-notify 不可用时启动失败。需要确保安装 notify listener 时使用此值。
+- **`disabled`**：关闭 seccomp-notify。
 
 ## 2. 创建 workload 容器
 
@@ -54,7 +65,7 @@ docker run -d --name actrail-agent \
   "$ACTRAIL_WORKLOAD_IMAGE" sleep infinity
 ```
 
-模型密钥不得写入这一命令，应通过 Docker secrets 或受控 env file 提供。
+模型密钥通过 Docker secrets 或受控环境变量文件提供。
 
 ## 3. 探测实际权限
 
@@ -62,11 +73,12 @@ docker run -d --name actrail-agent \
 docker exec actrail-agent actrailctl probe \
   --config /etc/actrail/actraild.conf \
   --host-ebpf auto \
-  --seccomp-notify auto \
+  --seccomp-notify disabled \
   --json
 ```
 
-该命令同时检查本地 launch 前置条件和 daemon readiness。`--skip-daemon` 只能提供本地预览，不是最终 profile 决策。
+- **完整探测**：该命令同时检查本地启动条件和 daemon 就绪状态。
+- **本地探测**：`--skip-daemon` 仅检查本地条件。实际启动所用能力还需由 daemon 确认。
 
 ## 4. 启动受观测工作负载
 
@@ -76,11 +88,13 @@ docker exec actrail-agent actrailctl \
   launch \
   --name container-agent \
   --host-ebpf auto \
-  --seccomp-notify auto \
+  --seccomp-notify disabled \
   -- \
   /usr/local/bin/agent-runtime
 ```
 
-每个容器中的每次 Agent 运行都应单独调用 `launch`。多个容器可以挂载同一 `/run/actrail`；同一 socket 不得由第二个 daemon 重复绑定。
+- **启动单位**：每个容器中的每次 Agent 运行都应单独调用 `launch`。
+- **共享连接**：多个容器可以挂载同一 `/run/actrail`，连接负责该 socket 的主机 daemon。
 
-Trace 由主机上的 `actrailviewer` 查看。容器看不到 socket 或出现 `pidfd_getfd ... Operation not permitted` 时，按 [部署故障排查](../troubleshooting/deployment.md) 处理。
+- **查看结果**：Trace 由主机上的 `actrailviewer` 查看。
+- **故障排查**：容器看不到 socket 或出现 `pidfd_getfd ... Operation not permitted` 时，按 [部署故障排查](../troubleshooting/deployment.md) 处理。

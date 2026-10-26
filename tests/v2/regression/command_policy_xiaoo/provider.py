@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import TextIO
 
+from .constants import CASE_CONSTANTS
+
 
 class LocalXiaooProvider:
     """Deterministic streaming provider that asks real Xiaoo for one Bash call."""
@@ -18,7 +20,7 @@ class LocalXiaooProvider:
         marker: Path,
         ready_timeout_seconds: float,
     ):
-        self._proxy = repo / "tests/support/llm-http-proxy/provider_proxy.py"
+        self._proxy = repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         self._stderr_path = work_dir / "provider.stderr.log"
         self._marker = marker
         self._ready_timeout_seconds = ready_timeout_seconds
@@ -37,13 +39,13 @@ class LocalXiaooProvider:
                 "--mode",
                 "local-stream",
                 "--bind-host",
-                "127.0.0.1",
+                CASE_CONSTANTS.loopback_host,
                 "--bind-port",
-                "0",
+                str(CASE_CONSTANTS.bind_port),
                 "--local-stream-response-text",
                 "ACTRAIL_XIAOO_COMMAND_POLICY_OK",
                 "--local-stream-reasoning-tokens",
-                "1",
+                str(CASE_CONSTANTS.local_stream_reasoning_tokens),
                 "--local-tool-command",
                 f"printf ACTRAIL_XIAOO_COMMAND_OK > {self._marker}",
             ],
@@ -76,10 +78,10 @@ class LocalXiaooProvider:
             if self._process.poll() is None:
                 self._process.terminate()
                 try:
-                    self._process.wait(timeout=10)
+                    self._process.wait(timeout=CASE_CONSTANTS.stop_timeout)
                 except subprocess.TimeoutExpired:
                     self._process.kill()
-                    self._process.wait(timeout=10)
+                    self._process.wait(timeout=CASE_CONSTANTS.stop_timeout)
             if self._process.returncode not in (0, -15):
                 failure = f"provider exited with {self._process.returncode}"
             if self._process.stdout is not None:

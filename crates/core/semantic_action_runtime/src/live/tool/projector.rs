@@ -37,6 +37,7 @@ impl ToolInteractionProjector {
         for response in batch
             .actions
             .iter()
+            .chain(batch.updated_actions.iter())
             .filter(|action| action.kind == SemanticActionKind::LlmResponse)
         {
             self.project_response(response, &mut emitter);
@@ -45,6 +46,7 @@ impl ToolInteractionProjector {
         let requests = batch
             .actions
             .iter()
+            .chain(batch.updated_actions.iter())
             .filter(|action| action.kind == SemanticActionKind::LlmRequest)
             .map(|action| (action.action_id.as_str(), action))
             .collect::<BTreeMap<_, _>>();
@@ -58,17 +60,6 @@ impl ToolInteractionProjector {
                 continue;
             };
             self.project_result(request, result, &mut emitter);
-        }
-        for request in requests.values() {
-            let continuing_trajectory = batch.request_lineages.iter().any(|lineage| {
-                lineage.action_id == request.action_id && lineage.parent_action_id.is_some()
-            });
-            if let Some(invocation) =
-                self.correlator
-                    .link_agent_child(&mut self.state, request, continuing_trajectory)
-            {
-                emitter.emit_agent_child(&invocation, request);
-            }
         }
         emitter.finish()
     }
@@ -106,7 +97,11 @@ impl ToolInteractionProjector {
         }
         for declared in declared_calls.calls {
             let action = emitter.tool_call_action(response, &declared);
-            let StateMutation { changed, eviction } = self
+            let StateMutation {
+                changed,
+                existing,
+                eviction,
+            } = self
                 .state
                 .record_tool_call(action.clone(), declared.tool_call_id.clone());
             emitter.emit_capacity_eviction(
@@ -115,7 +110,7 @@ impl ToolInteractionProjector {
                 action.start_time,
                 eviction,
             );
-            emitter.emit_tool_call(response, &action, changed);
+            emitter.emit_tool_call(response, &action, changed, existing);
             if self.correlator.projects_invocation(&declared.name) {
                 self.project_agent_invocation(&action, &declared, emitter);
             }
@@ -135,14 +130,11 @@ impl ToolInteractionProjector {
             return;
         }
         let invocation = emitter.agent_invocation_action(tool_call, declared);
-        let (prompt_message_hashes, prompt_preview) =
-            self.correlator.invocation_prompt_key(declared);
-        let StateMutation { changed, eviction } = self.state.record_agent_invocation(
-            &tool_call.action_id,
-            &invocation,
-            prompt_message_hashes,
-            prompt_preview,
-        );
+        let StateMutation {
+            changed, eviction, ..
+        } = self
+            .state
+            .record_agent_invocation(&tool_call.action_id, &invocation);
         emitter.emit_capacity_eviction(
             invocation.trace_id,
             &invocation.process,
@@ -179,14 +171,26 @@ impl ToolInteractionProjector {
             emitter.diagnose_lifecycle_gap(request, code);
         }
         let action = emitter.tool_result_action(request, result, binding.state.as_str());
-        let StateMutation { changed, eviction } = self.state.record_tool_result(action.clone());
+        let StateMutation {
+            changed,
+            existing,
+            eviction,
+        } = self.state.record_tool_result(action.clone());
         emitter.emit_capacity_eviction(
             action.trace_id,
             &action.process,
             action.start_time,
             eviction,
         );
-        self.emit_bound_result(request, result.is_error, action, changed, binding, emitter);
+        self.emit_bound_result(
+            request,
+            result.is_error,
+            action,
+            changed,
+            existing,
+            binding,
+            emitter,
+        );
     }
 
     fn emit_bound_result(
@@ -195,6 +199,7 @@ impl ToolInteractionProjector {
         is_error: bool,
         result_action: SemanticAction,
         changed: bool,
+        existing: bool,
         binding: ToolResultBinding,
         emitter: &mut ToolSemanticEmitter,
     ) {
@@ -202,7 +207,14 @@ impl ToolInteractionProjector {
             .tool_call_action_id
             .as_deref()
             .and_then(|action_id| self.state.tool_call_action(request.trace_id, action_id));
-        emitter.emit_tool_result(tool_call.as_ref(), &result_action, changed);
+        emitter.emit_tool_result(
+            request,
+            tool_call.as_ref(),
+            &result_action,
+            changed,
+            existing,
+            binding.state.semantic(),
+        );
         let Some(tool_call_action_id) = binding.tool_call_action_id else {
             return;
         };

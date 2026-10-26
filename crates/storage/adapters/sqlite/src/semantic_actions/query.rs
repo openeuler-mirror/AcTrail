@@ -10,8 +10,8 @@ use crate::semantic_actions::codebook::sqlite::{
     action_kind_code_from_str, link_role_code_from_str,
 };
 use crate::semantic_actions::store::{
-    ACTION_SELECT_COLUMNS, LINK_SELECT_COLUMNS, action_cold_field_join, action_from_row,
-    action_link_from_row, link_cold_field_join, read_evidence_shared, resolve_file_paths,
+    ACTION_SELECT_COLUMNS, ActionReadHydrator, LINK_SELECT_COLUMNS, action_cold_field_join,
+    action_from_row, action_link_from_row, link_cold_field_join,
 };
 
 impl SqliteStorage {
@@ -46,8 +46,9 @@ impl SqliteStorage {
         if kinds.is_empty() {
             return Ok(Vec::new());
         }
+        let action_columns = ACTION_SELECT_COLUMNS;
         let query = format!(
-            "SELECT {ACTION_SELECT_COLUMNS}
+            "SELECT {action_columns}
              FROM semantic_actions action
              JOIN semantic_action_ids ids
                ON ids.action_key = action.action_key
@@ -76,18 +77,15 @@ impl SqliteStorage {
             })?;
         let mut actions = Vec::new();
         for row in rows {
-            let mut action = row.map_err(|error| {
+            let action = row.map_err(|error| {
                 SemanticActionStoreError::new(
                     "map_semantic_actions_matching_kinds",
                     error.to_string(),
                 )
             })?;
-            if hydrate_related {
-                action.evidence = read_evidence_shared(&connection, &action.action_id)?;
-                resolve_file_paths(&connection, &mut action)?;
-            }
             actions.push(action);
         }
+        ActionReadHydrator::hydrate(&connection, actions.iter_mut(), hydrate_related)?;
         Ok(actions)
     }
 
@@ -115,7 +113,6 @@ impl SqliteStorage {
              {}
              WHERE link.trace_id = ?
                AND link.valid = 1
-               AND link.link_valid_code = 1
                AND link.role_code IN ({})
              ORDER BY parent_ids.action_id ASC, child_ids.action_id ASC, link.role_code ASC",
             link_cold_field_join(),

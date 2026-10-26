@@ -7,12 +7,14 @@ use std::time::{Duration, Instant, SystemTime};
 use config_core::daemon::PostTraceRuntimeConfig;
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;
+use model_core::payload::PayloadSegmentId;
 use plugin_system::{
-    PluginManifest, PluginRuntimeError, TraceActivityContext, TraceAnalysisActionPage,
-    TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus, TraceLlmExchangePage,
+    PayloadReadResult, PluginHostGrants, PluginManifest, PluginRuntimeError, TraceActivityContext,
+    TraceAnalysisActionPage, TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus,
+    TraceLlmExchangePage,
 };
 use semantic_action::{SemanticActionKind, SemanticActionStatus};
-use storage_core::StorageBackend;
+use storage_core::{PayloadRowLimit, PayloadSegmentQuery, StorageBackend};
 
 use super::facts::{
     activity_context as project_activity_context, analysis_context, observed_host_path,
@@ -65,6 +67,7 @@ impl PostTraceBroker {
         &mut self,
         instance_id: &str,
         manifest: &PluginManifest,
+        host_grants: &PluginHostGrants,
     ) -> Result<Arc<PostTraceHostClient>, ControlError> {
         if self.registrations.contains_key(instance_id) {
             return Err(ControlError::new(
@@ -76,6 +79,8 @@ impl PostTraceBroker {
             instance_id.to_string(),
             RegisteredPlugin {
                 plugin_id: manifest.id().to_string(),
+                host_grants: host_grants.clone(),
+                payload_read_max_bytes: manifest.hostcall_limits.payload.read_max_bytes,
             },
         );
         let file_state_timeout = Duration::from_millis(
@@ -142,8 +147,20 @@ impl PostTraceBroker {
         scope: &PluginScope,
         operation: BrokerOperation,
     ) -> Result<BrokerResponse, PluginRuntimeError> {
+        if let BrokerOperation::ReadPayload {
+            trace_id,
+            segment_id,
+            offset,
+            max_bytes,
+        } = operation
+        {
+            return Ok(BrokerResponse::ReadPayload(self.read_payload(
+                storage, scope, trace_id, segment_id, offset, max_bytes,
+            )));
+        }
         self.registration(scope)?;
         match operation {
+            BrokerOperation::ReadPayload { .. } => unreachable!("payload request handled above"),
             BrokerOperation::AnalysisContext { trace_id } => storage
                 .get_trace(trace_id)
                 .map_err(storage_runtime_error)?
@@ -199,6 +216,82 @@ impl PostTraceBroker {
         Ok(registration)
     }
 
+    fn read_payload(
+        &self,
+        storage: &dyn StorageBackend,
+        scope: &PluginScope,
+        trace_id: TraceId,
+        segment_id: u64,
+        offset: u64,
+        max_bytes: usize,
+    ) -> PayloadReadResult {
+        let Ok(registration) = self.registration(scope) else {
+            return PayloadReadResult::Denied;
+        };
+        if !registration.host_grants.can_read_payload() {
+            return PayloadReadResult::Denied;
+        }
+        let query = PayloadSegmentQuery {
+            segment_id: Some(PayloadSegmentId::new(segment_id)),
+            direction: None,
+            limit: Some(PayloadRowLimit::Head(1)),
+            include_bytes: false,
+        };
+        let metadata = match storage.list_payload_segments(trace_id, query) {
+            Ok(mut rows) => match rows.pop() {
+                Some(row) => row,
+                None => return PayloadReadResult::NotFound,
+            },
+            Err(_) => return PayloadReadResult::Failed,
+        };
+        if metadata.trace_id != trace_id
+            || metadata.segment_id.get() != segment_id
+            || !registration
+                .host_grants
+                .can_read_payload_source(metadata.source_boundary)
+        {
+            return PayloadReadResult::Denied;
+        }
+        // This explicit host call reads one stored segment. Its response is bounded;
+        // the existing storage interface may load that segment's complete body.
+        let segment = match storage.list_payload_segments(
+            trace_id,
+            PayloadSegmentQuery {
+                include_bytes: true,
+                ..query
+            },
+        ) {
+            Ok(mut rows) => match rows.pop() {
+                Some(row) => row,
+                None => return PayloadReadResult::NotFound,
+            },
+            Err(_) => return PayloadReadResult::Failed,
+        };
+        if segment.trace_id != trace_id
+            || segment.segment_id.get() != segment_id
+            || !registration
+                .host_grants
+                .can_read_payload_source(segment.source_boundary)
+        {
+            return PayloadReadResult::Denied;
+        }
+        let limit = registration
+            .payload_read_max_bytes
+            .map(|limit| limit as usize)
+            .unwrap_or(max_bytes)
+            .min(max_bytes);
+        let total_bytes = segment.bytes.len();
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(total_bytes);
+        let end = start.saturating_add(limit).min(total_bytes);
+        PayloadReadResult::Chunk {
+            bytes: segment.bytes[start..end].to_vec(),
+            total_bytes,
+            truncated: end < total_bytes,
+        }
+    }
+
     fn analysis_action_page(
         &self,
         storage: &mut dyn StorageBackend,
@@ -206,10 +299,6 @@ impl PostTraceBroker {
         offset: usize,
         limit: usize,
     ) -> Result<TraceAnalysisActionPage, PluginRuntimeError> {
-        storage
-            .get_trace(trace_id)
-            .map_err(storage_runtime_error)?
-            .ok_or_else(|| trace_missing(trace_id))?;
         let page = storage
             .semantic_actions_page(trace_id, offset, limit)
             .map_err(storage_runtime_error)?;
@@ -245,10 +334,6 @@ impl PostTraceBroker {
         offset: usize,
         limit: usize,
     ) -> Result<TraceLlmExchangePage, PluginRuntimeError> {
-        storage
-            .get_trace(trace_id)
-            .map_err(storage_runtime_error)?
-            .ok_or_else(|| trace_missing(trace_id))?;
         let actions = storage
             .semantic_actions_matching_kinds(
                 trace_id,
@@ -280,10 +365,6 @@ impl PostTraceBroker {
         offset: usize,
         limit: usize,
     ) -> Result<TraceCommandExecutionPage, PluginRuntimeError> {
-        storage
-            .get_trace(trace_id)
-            .map_err(storage_runtime_error)?
-            .ok_or_else(|| trace_missing(trace_id))?;
         let actions = storage
             .semantic_actions_matching_kinds(
                 trace_id,
@@ -377,4 +458,6 @@ impl PostTraceBroker {
 
 struct RegisteredPlugin {
     plugin_id: String,
+    host_grants: PluginHostGrants,
+    payload_read_max_bytes: Option<u32>,
 }

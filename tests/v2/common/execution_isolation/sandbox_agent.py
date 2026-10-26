@@ -8,6 +8,8 @@ from pathlib import Path
 
 from tests.v2.common.process import CommandResult, ManagedProcess, SubprocessRunner
 
+from .constants import DEFAULTS
+
 
 @dataclass(frozen=True)
 class SandboxAgentTiming:
@@ -138,14 +140,14 @@ class SandboxAgentProfile:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                result = process.wait(timeout=1)
+                result = process.wait(timeout=DEFAULTS.agent_exit_timeout_seconds)
                 raise RuntimeError(
                     "actrail-sb exited before control readiness: " + result.diagnostic
                 )
             try:
                 mode = self.control_socket.stat().st_mode
             except FileNotFoundError:
-                time.sleep(0.05)
+                time.sleep(DEFAULTS.poll_seconds)
                 continue
             if stat.S_ISSOCK(mode):
                 return

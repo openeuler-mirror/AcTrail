@@ -1,4 +1,5 @@
 import { chip, compactChips, compactRows, firstPresent } from '../detail/insight.js';
+import { CommandLaunchDisplay } from './launchDisplay.js';
 
 export function buildCommandDetailInsight(detail) {
   const action = detail?.raw ?? null;
@@ -44,9 +45,9 @@ export function buildCommandDetailInsight(detail) {
     kind: action.kind,
     heading: action.kind === 'process.exec' ? 'Process Exec' : 'Command',
     chips: compactChips([
-      chip('status', action.status),
+      chip('start', new CommandLaunchDisplay(action).status),
       chip('exit', exitCode),
-      chip('pid', action.process?.pid),
+      chip('pid', detail.rows?.pid ?? action.process?.pid),
       chip('cwd', attrs.cwd),
     ]),
     blocks,

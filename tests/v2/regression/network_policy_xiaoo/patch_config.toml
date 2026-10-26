@@ -1,0 +1,49 @@
+[storage.retention]
+enabled = false
+
+[payload.tls]
+enabled = false
+
+[payload.stdio]
+enabled = false
+
+[payload.socket]
+enabled = false
+
+[capture]
+profile_name = "network-policy-xiaoo-regression"
+capabilities = ["proc-exec-context", "enforcement-network-connect-seccomp"]
+
+[ebpf]
+enabled = false
+
+[seccomp_notify]
+enabled = true
+reserved_listener_fd = 253
+
+[process_seccomp]
+enabled = true
+
+[access_control.network.connect]
+backend = "seccomp"
+
+[enforcement]
+enabled = false
+
+[network_control]
+enabled = true
+syscalls = ["connect"]
+default_decision = "allow"
+failure_decision = "deny"
+audit_enabled = true
+audit_default_allow = false
+pending_decision_max = 64
+reusable_cache_max_entries = 4096
+
+[plugins.discovery]
+max_packages = 4
+manifest_max_bytes = 262144
+
+[plugins.startup]
+enabled = false
+failure_policy = "fail-fast"

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct SbDaemonConfig {
     collector: CollectorSection,
     sampler: SamplerSection,
+    pressure: PressureSection,
     observation_queue: ObservationQueueSection,
     sender: SenderSection,
     control: ControlSection,
@@ -37,6 +38,15 @@ struct CollectorSection {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SamplerSection {
+    poll_interval_ms: u64,
+    #[serde(default)]
+    workload_cgroups: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PressureSection {
+    enabled: bool,
     poll_interval_ms: u64,
 }
 
@@ -76,7 +86,10 @@ struct DiagnosticsSection {
 pub(crate) struct ValidatedSbDaemonConfig {
     pub(crate) linux: SandboxLinuxConfig,
     pub(crate) resource_procfs_root: PathBuf,
+    pub(crate) pressure_enabled: bool,
+    pub(crate) pressure_procfs_root: PathBuf,
     pub(crate) runtime: SandboxAgentConfig,
+    pub(crate) workload_cgroups: bool,
     pub(crate) sender_io_timeout: Duration,
     pub(crate) control: ValidatedControlConfig,
     pub(crate) diagnostics_interval: Option<Duration>,
@@ -149,6 +162,7 @@ impl SbDaemonConfig {
                 ))
             })
             .map(|config| config.with_initial_root_required(self.collector.require_initial_root))
+            .map(|config| config.with_pressure_enabled(self.pressure.enabled))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 
         let diagnostics_interval = (self.diagnostics.interval_ms > 0)
@@ -156,6 +170,8 @@ impl SbDaemonConfig {
         let runtime = SandboxAgentConfig {
             io_poll_interval: Duration::from_millis(self.collector.poll_interval_ms),
             resource_poll_interval: Duration::from_millis(self.sampler.poll_interval_ms),
+            workload_poll_interval: Duration::from_millis(self.sampler.poll_interval_ms),
+            pressure_poll_interval: Duration::from_millis(self.pressure.poll_interval_ms),
             max_silence_interval: Duration::from_millis(self.sender.max_silence_interval_ms),
             reconnect_interval: Duration::from_millis(self.sender.reconnect_interval_ms),
             control_request_timeout: Duration::from_millis(self.control.request_timeout_ms),
@@ -199,8 +215,11 @@ impl SbDaemonConfig {
 
         Ok(ValidatedSbDaemonConfig {
             linux,
-            resource_procfs_root: self.collector.procfs_root,
+            resource_procfs_root: self.collector.procfs_root.clone(),
+            pressure_enabled: self.pressure.enabled,
+            pressure_procfs_root: self.collector.procfs_root,
             runtime,
+            workload_cgroups: self.sampler.workload_cgroups,
             sender_io_timeout,
             control: ValidatedControlConfig {
                 socket_path: self.control.socket_path,
@@ -263,6 +282,11 @@ impl SbDaemonConfig {
                 poll_interval_ms: 1_000,
             },
             sampler: SamplerSection {
+                poll_interval_ms: 1_000,
+                workload_cgroups: false,
+            },
+            pressure: PressureSection {
+                enabled: true,
                 poll_interval_ms: 1_000,
             },
             observation_queue: ObservationQueueSection { capacity: 1_024 },

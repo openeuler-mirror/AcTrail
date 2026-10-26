@@ -1,0 +1,13 @@
+base = "cases/storage/P.toml"
+
+[[cases]]
+name = "P-noop"
+parent = "0"
+patch = "cases/storage/noop.toml"
+description = "P bpf-copy collection with 65535-byte TLS limits, daemon-side dynamic TLS discovery and MCP/stdio disabled, and NoOp storage."
+
+[[cases]]
+name = "P-sqlite"
+parent = "P-noop"
+patch = "cases/storage/sqlite.toml"
+description = "Change only the storage backend to SQLite; retain the same collection and P retention settings."

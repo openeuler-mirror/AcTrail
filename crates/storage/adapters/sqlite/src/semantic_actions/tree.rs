@@ -14,13 +14,14 @@ use storage_core::SemanticActionTraceRevision;
 use crate::SqliteStorage;
 use crate::semantic_actions::action_ids::resolve_action_key;
 use crate::semantic_actions::codebook::sqlite::{
-    action_kind_code, action_kind_code_from_str, decode_link_confidence, decode_link_role,
+    action_kind_code, action_kind_code_from_str, decode_link_origin, decode_link_role,
     link_role_code_from_str,
 };
 use crate::semantic_actions::cold_fields::decode_attributes_from_row_with_prefix;
+use crate::semantic_actions::evidence;
 use crate::semantic_actions::store::{
-    ACTION_SELECT_COLUMNS, action_cold_field_join, action_from_row, link_cold_field_join,
-    read_evidence_shared, resolve_file_paths,
+    ACTION_SELECT_COLUMNS, ActionReadHydrator, action_cold_field_join, action_from_row,
+    link_cold_field_join,
 };
 use crate::semantic_actions::tree_metadata::{
     child_count_for_parent, effective_incoming_link_absence_predicate, effective_link_value_count,
@@ -121,7 +122,12 @@ impl SqliteStorage {
             .map_err(|error| {
                 SemanticActionStoreError::new("revision_semantic_action_links", error.to_string())
             })?;
+        let state_revision = connection.query_row(
+            "SELECT COALESCE((SELECT revision FROM semantic_action_state_revisions WHERE trace_id=?1), 0)",
+            params![trace_id.get()], |row| row.get(0),
+        ).map_err(|error| SemanticActionStoreError::new("revision_semantic_action_state", error.to_string()))?;
         Ok(SemanticActionTraceRevision {
+            state_revision,
             action_count,
             action_max_key,
             link_count,
@@ -260,8 +266,7 @@ impl SqliteStorage {
         let mut action = action_from_row(row).map_err(|error| {
             SemanticActionStoreError::new("map_semantic_action_for_process_kind", error.to_string())
         })?;
-        action.evidence = read_evidence_shared(&connection, &action.action_id)?;
-        resolve_file_paths(&connection, &mut action)?;
+        ActionReadHydrator::hydrate(&connection, std::iter::once(&mut action), true)?;
         Ok(Some(action))
     }
 
@@ -317,8 +322,9 @@ impl SqliteStorage {
                     parent_ids.action_id AS parent_action_id,
                     ids.action_id AS child_action_id,
                     link.role_code AS role_code,
-                    link.confidence_code AS confidence_code,
+                    link.origin_code AS origin_code,
                     link.valid AS valid,
+                    link.evidence_blob AS link_evidence_blob,
                     link_attrs.encoding_code AS link_attributes_encoding_code,
                     link_attrs.uncompressed_bytes AS link_attributes_uncompressed_bytes,
                     link_attrs.payload AS link_attributes_payload
@@ -333,7 +339,7 @@ impl SqliteStorage {
              {link_cold_join}
              WHERE link.trace_id = ?
                AND link.parent_action_key = ?
-               AND link.link_valid_code = 1
+               AND link.valid = 1
                AND link.role_code IN ({})
                {}
              ORDER BY action.start_time ASC, ids.action_id ASC, link.role_code ASC{}",
@@ -351,12 +357,7 @@ impl SqliteStorage {
             SemanticActionStoreError::new("prepare_semantic_action_children", error.to_string())
         })?;
         let rows = statement
-            .query_map(params_from_iter(values), |row| {
-                let mut child = child_row_from_row(row)?;
-                resolve_file_paths(&connection, &mut child.action)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
-                Ok(child)
-            })
+            .query_map(params_from_iter(values), |row| child_row_from_row(row))
             .map_err(|error| {
                 SemanticActionStoreError::new("query_semantic_action_children", error.to_string())
             })?;
@@ -368,17 +369,18 @@ impl SqliteStorage {
             })?;
             if invalidated_action_attrs(&child.action.attributes)
                 || !child.link.valid
-                || invalidated_link_attrs(
-                    &child.link.attributes,
-                    child.link.role,
-                    &child.action.attributes,
-                )
+                || invalidated_link_attrs(child.link.role, &child.action.attributes)
                 || !seen.insert(child.action.action_id.clone())
             {
                 continue;
             }
             children.push(child);
         }
+        ActionReadHydrator::hydrate(
+            &connection,
+            children.iter_mut().map(|child| &mut child.action),
+            true,
+        )?;
         Ok(children)
     }
 
@@ -452,9 +454,9 @@ fn child_row_from_row(row: &Row<'_>) -> Result<SemanticActionChildRow, rusqlite:
         parent_action_id: row.get("parent_action_id")?,
         child_action_id: row.get("child_action_id")?,
         role: decode_link_role(row.get::<_, i64>("role_code")?)?,
-        confidence: decode_link_confidence(row.get::<_, i64>("confidence_code")?)?,
+        origin: decode_link_origin(row.get::<_, i64>("origin_code")?)?,
         valid: row.get("valid")?,
-        evidence: Vec::new(),
+        evidence: evidence::decode(&row.get::<_, Vec<u8>>("link_evidence_blob")?)?,
         attributes: decode_attributes_from_row_with_prefix(row, "link_attributes")?,
     };
     Ok(SemanticActionChildRow {
@@ -485,16 +487,16 @@ fn query_observed_agent_identity(
         .map_err(|error| {
             SemanticActionStoreError::new("prepare_observed_agent_identity", error.to_string())
         })?;
-    let mut action = statement
+    statement
         .query_row(params![trace_id.get()], action_from_row)
         .optional()
         .map_err(|error| {
             SemanticActionStoreError::new("query_observed_agent_identity", error.to_string())
-        })?;
-    if let Some(action) = &mut action {
-        action.evidence = read_evidence_shared(connection, &action.action_id)?;
-    }
-    Ok(action)
+        })
+        .and_then(|mut action| {
+            ActionReadHydrator::hydrate(connection, action.iter_mut(), true)?;
+            Ok(action)
+        })
 }
 
 fn query_observed_agent_process_exec(
@@ -519,7 +521,7 @@ fn query_observed_agent_process_exec(
         .map_err(|error| {
             SemanticActionStoreError::new("prepare_observed_agent_process_exec", error.to_string())
         })?;
-    let mut action = statement
+    statement
         .query_row(
             params![
                 trace_id.get(),
@@ -531,11 +533,11 @@ fn query_observed_agent_process_exec(
         .optional()
         .map_err(|error| {
             SemanticActionStoreError::new("query_observed_agent_process_exec", error.to_string())
-        })?;
-    if let Some(action) = &mut action {
-        action.evidence = read_evidence_shared(connection, &action.action_id)?;
-    }
-    Ok(action)
+        })
+        .and_then(|mut action| {
+            ActionReadHydrator::hydrate(connection, action.iter_mut(), true)?;
+            Ok(action)
+        })
 }
 
 fn role_and_kind_query_values(

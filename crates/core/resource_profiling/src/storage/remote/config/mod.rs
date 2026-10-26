@@ -1,0 +1,2 @@
+mod remote_resource_storage_config;
+pub use remote_resource_storage_config::{RemoteResourceProtocol, RemoteResourceStorageConfig};

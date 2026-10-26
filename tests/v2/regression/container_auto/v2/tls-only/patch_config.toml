@@ -1,0 +1,5 @@
+[ebpf]
+enabled = false
+
+[payload.tls]
+capture_backend = "tls-sync"

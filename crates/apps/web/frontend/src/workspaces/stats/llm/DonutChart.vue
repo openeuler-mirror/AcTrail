@@ -83,7 +83,7 @@ const positiveSeries = computed(() =>
       key: String(series.key ?? index),
       label: String(series.label ?? series.key ?? t('stats.llm.chartPanel.seriesFallback', { index: index + 1 })),
       total: Math.max(0, Number(series.total ?? series.value ?? 0)),
-      color: series.color ?? 'var(--stats-chart-total)',
+      color: series.color ?? 'var(--ui-chart-total)',
     })),
 );
 const sliceTotal = computed(() => positiveSeries.value.reduce((sum, series) => sum + series.total, 0));

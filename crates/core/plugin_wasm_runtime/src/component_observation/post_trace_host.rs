@@ -315,8 +315,8 @@ fn llm_exchange_val(exchange: &plugin_system::TraceLlmExchange) -> Result<Val, P
             option_u64(exchange.request_raw_bytes),
         ),
         (
-            "request-complete".to_string(),
-            Val::Bool(exchange.request_complete),
+            "request-completeness".to_string(),
+            llm_action_completeness_val(exchange.request_completeness),
         ),
         (
             "response-body-bytes".to_string(),
@@ -327,8 +327,13 @@ fn llm_exchange_val(exchange: &plugin_system::TraceLlmExchange) -> Result<Val, P
             option_u64(exchange.response_raw_bytes),
         ),
         (
-            "response-complete".to_string(),
-            Val::Bool(exchange.response_complete),
+            "response-completeness".to_string(),
+            Val::Option(
+                exchange
+                    .response_completeness
+                    .map(llm_action_completeness_val)
+                    .map(Box::new),
+            ),
         ),
         (
             "response-status".to_string(),
@@ -395,6 +400,18 @@ fn command_execution_val(
 
 fn option_string(value: Option<String>) -> Val {
     Val::Option(value.map(Val::String).map(Box::new))
+}
+
+fn llm_action_completeness_val(value: semantic_action::SemanticActionCompleteness) -> Val {
+    Val::Enum(
+        match value {
+            semantic_action::SemanticActionCompleteness::Complete => "complete",
+            semantic_action::SemanticActionCompleteness::CaptureLimited => "capture-limited",
+            semantic_action::SemanticActionCompleteness::Partial => "partial",
+            semantic_action::SemanticActionCompleteness::Inferred => "inferred",
+        }
+        .to_string(),
+    )
 }
 
 fn option_time(value: Option<std::time::SystemTime>) -> Result<Val, PluginRuntimeError> {

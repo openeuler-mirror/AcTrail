@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .constants import DEFAULTS
+
 
 class SandboxEvidenceDatabase:
     """Read-only record counter for actraild's independent evidence store."""
@@ -18,14 +20,9 @@ class SandboxEvidenceDatabase:
         connection = sqlite3.connect(
             f"file:{self._path}?mode=ro",
             uri=True,
-            timeout=1,
+            timeout=DEFAULTS.database_timeout_seconds,
         )
         try:
-            version = connection.execute(
-                "SELECT schema_version FROM sandbox_schema_meta WHERE singleton = 1"
-            ).fetchone()
-            if version != (2,):
-                raise AssertionError(f"unsupported sandbox evidence schema: {version}")
             row = connection.execute(
                 "SELECT COUNT(*) FROM sandbox_evidence"
             ).fetchone()

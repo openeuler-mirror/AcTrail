@@ -26,8 +26,7 @@
 6. Web 把配置清回空规则后，dry-run 回到 allow 且 source revision 再次递增；
    第三次真实 Xiaoo 恢复成功并重新创建 marker。
 
-grant 越权、selector 重叠、gray/cache/timeout/overload、owner 或 decider 卸载由
-`tests/plugins/network-policy-dynamic/run_e2e.py` 覆盖。本测例证明精确 endpoint
+本测例证明精确 endpoint
 规则控制真实 Xiaoo connect，但不把同 IP 的第二端口排他性、域名、CIDR、DNS、
 TLS SNI、代理最终目标、`sendto(2)`、AF_UNIX 或继承连接误写成当前覆盖。
 
@@ -57,7 +56,7 @@ sudo -E python3 tests/v2/regression/test_all.py --case network_policy_xiaoo
 执行。若 release 或官方插件尚未安装，先从仓库根目录运行
 `scripts/install-release.sh`。
 
-> `actraild init -f` 会覆盖默认 operator config，`actrailctl clean` 会清理
+> `actrailctl init -f` 会覆盖默认 operator config，`actrailctl clean` 会清理
 > 默认 AcTrail 数据；共享或生产环境不得执行以下流程。
 
 ### 步骤 1：检查前提并启动 AcTrail
@@ -87,7 +86,7 @@ test -f "$PLUGIN_ROOT/network-policy-dynamic/component-network-policy-dynamic.wa
 mkdir -p "$REPO/temp"
 rm -f "$MARKER" "$XIAOO_CONFIG"
 
-actraild init -f
+actrailctl init -f
 actraild stop
 actrailctl clean
 actraild start
@@ -106,7 +105,7 @@ actrailctl doctor
 sudo -E bash
 REPO="$(pwd -P)"
 MARKER="$REPO/temp/network-policy-xiaoo-manual.marker"
-python3 tests/support/llm-http-proxy/provider_proxy.py \
+python3 tests/v2/common/llm-http-proxy/provider_proxy.py \
   --mode local-stream --bind-host 127.0.0.1 --bind-port 0 \
   --local-stream-response-text ACTRAIL_XIAOO_NETWORK_POLICY_OK \
   --local-stream-reasoning-tokens 1 \

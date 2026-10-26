@@ -12,6 +12,8 @@ mod image;
 mod raw;
 #[path = "elf/scan.rs"]
 mod scan;
+#[path = "elf/source.rs"]
+mod source;
 #[path = "elf/symbols.rs"]
 mod symbols;
 
@@ -20,3 +22,5 @@ pub(crate) use dynamic::DynamicInfo;
 pub(crate) use image::{Arch, ElfImage};
 pub(crate) use scan::DEFAULT_LOW_MEMORY_CHUNK_BYTES;
 pub use scan::ScanMode;
+
+pub use source::ProbeFileSource;

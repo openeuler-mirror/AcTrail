@@ -7,10 +7,15 @@
 mod assembly;
 pub(crate) mod config;
 mod facade;
+mod http;
+mod http1;
+mod http2;
 mod projection;
 mod provider;
 mod stream;
 mod transport;
+mod websocket;
+mod websocket_source;
 
 pub(crate) use model_core::diagnostics::{
     LlmPipelineDiagnostic, LlmPipelineDiagnosticCode, LlmPipelineDiagnosticSeverity,
@@ -20,7 +25,7 @@ pub(crate) use model_core::diagnostics::{
 pub(super) use facade::{
     ActionBatch, LlmActionPipeline, LlmHttpRequestLink, LlmHttpResponseLink, PipelineEvent,
 };
-pub(crate) use projection::{ProjectedLlmToolResult, canonical_llm_json};
+pub(crate) use projection::{ProjectedLlmToolResult, canonical_llm_json_text};
 pub use provider::codec::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecPluginStatus, LlmCodecRegistry,
     LlmCodecRequest, LlmCodecSseEvent,

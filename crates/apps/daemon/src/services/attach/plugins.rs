@@ -137,23 +137,25 @@ impl StorageAttachService {
                 } else {
                     None
                 };
-                let post_trace_host = if manifest.has_post_trace_analyzer() {
-                    match self
-                        .post_trace_broker
-                        .register_plugin(&command.instance_id, &manifest)
-                    {
-                        Ok(host) => Some(host),
-                        Err(error) => {
-                            if alert_registered {
-                                self.close_and_drain_alert_instance_impl(&command.instance_id)?;
-                                self.unregister_alert_instance_impl(&command.instance_id)?;
+                let post_trace_host =
+                    if manifest.has_post_trace_analyzer() || host_grants.can_read_payload() {
+                        match self.post_trace_broker.register_plugin(
+                            &command.instance_id,
+                            &manifest,
+                            &host_grants,
+                        ) {
+                            Ok(host) => Some(host),
+                            Err(error) => {
+                                if alert_registered {
+                                    self.close_and_drain_alert_instance_impl(&command.instance_id)?;
+                                    self.unregister_alert_instance_impl(&command.instance_id)?;
+                                }
+                                return Err(error);
                             }
-                            return Err(error);
                         }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
                 let host = post_trace_host
                     .clone()
                     .map(|host| host as Arc<dyn plugin_system::PostTraceHost>);
@@ -193,23 +195,32 @@ impl StorageAttachService {
                 }
             }
             PluginPurpose::ControlDecider => {
-                let file_policy_host = self
-                    .enforcement
-                    .file_policy_host(self.control_plugins.clone());
-                let command_policy_host = self
-                    .command_control
-                    .command_policy_host(self.control_plugins.clone());
-                let network_policy_host = self
-                    .network_control
-                    .network_policy_host(self.control_plugins.clone());
+                let file_policy_host: Arc<dyn plugin_system::FilePolicyHost> =
+                    Arc::new(self.enforcement.file_policy_host());
+                let command_policy_host: Arc<dyn plugin_system::CommandPolicyHost> = match self
+                    .lsm_access_control
+                    .as_ref()
+                    .filter(|controller| controller.command_enabled())
+                {
+                    Some(controller) => controller.clone(),
+                    None => Arc::new(self.command_control.command_policy_host()),
+                };
+                let network_policy_host: Arc<dyn plugin_system::NetworkPolicyHost> = match self
+                    .lsm_access_control
+                    .as_ref()
+                    .filter(|controller| controller.network_enabled())
+                {
+                    Some(controller) => controller.clone(),
+                    None => Arc::new(self.network_control.network_policy_host()),
+                };
                 let decider = build_control_decider_from_manifest(
                     &command.instance_id,
                     &manifest,
                     plugin_config_raw.as_deref(),
                     host_grants,
-                    Some(std::sync::Arc::new(file_policy_host)),
-                    Some(std::sync::Arc::new(command_policy_host)),
-                    Some(std::sync::Arc::new(network_policy_host)),
+                    Some(file_policy_host),
+                    Some(command_policy_host),
+                    Some(network_policy_host),
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
@@ -351,12 +362,12 @@ impl StorageAttachService {
                 .export_runtime
                 .remove_observation_consumer(instance_id)
                 .map_err(|error| ControlError::new(error.code, error.message))?;
+            self.post_trace_broker.unregister_plugin(instance_id);
             self.persist_export_drop_report(removal.drop_report)?;
             if alert_registered {
                 self.close_and_drain_alert_instance_impl(instance_id)?;
                 self.unregister_alert_instance_impl(instance_id)?;
             }
-            self.post_trace_broker.unregister_plugin(instance_id);
             return Ok(removal.status);
         }
         if self
@@ -365,6 +376,11 @@ impl StorageAttachService {
             .iter()
             .any(|status| status.instance_id == instance_id)
         {
+            if let Some(controller) = &self.lsm_access_control {
+                controller
+                    .remove_owner(instance_id)
+                    .map_err(|message| ControlError::new("lsm_policy_remove_owner", message))?;
+            }
             self.enforcement.remove_plugin_policy_owner(instance_id)?;
             self.command_control
                 .remove_plugin_policy_owner(instance_id)?;

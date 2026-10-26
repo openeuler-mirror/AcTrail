@@ -8,6 +8,8 @@ from tests.v2.common.llm_trace_assertion import LLMTraceAssertion
 from .config import ProbeXiaooLLMConfig
 from .task import ProbeXiaooLLMTask
 
+from .constants import CASE_CONSTANTS
+
 
 class ProbeXiaooLLMCase(TestCase):
     def __init__(self, config: ProbeXiaooLLMConfig):
@@ -59,7 +61,7 @@ class ProbeXiaooLLMCase(TestCase):
             if launch.returncode != 0:
                 raise AssertionError(
                     f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-4000:]}"
+                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
                 )
             results["launch"] = TestResult(
                 TestStatus.PASSED,
@@ -70,10 +72,7 @@ class ProbeXiaooLLMCase(TestCase):
                 "launch_validation",
                 "validating answer marker and trace id",
             )
-            assertion = LLMTraceAssertion(
-                runtime,
-                task.marker,
-            )
+            assertion = LLMTraceAssertion(runtime, task.marker)
             assertion.require_answer_marker(launch, "xiaoO")
             results["answer_marker"] = TestResult(
                 TestStatus.PASSED,

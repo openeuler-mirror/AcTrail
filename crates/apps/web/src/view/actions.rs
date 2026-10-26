@@ -1,108 +1,38 @@
-//! Semantic action tree JSON for the web UI.
+//! Semantic action details and bounded content pages for the web UI.
 
 use std::path::Path;
 
 use model_core::ids::TraceId;
 use semantic_action::{
     FilePathSetPath, FilePathSetPathPage, LlmRequestContentPage, LlmRequestLineage,
-    McpJsonRpcContentPage, SemanticAction, SemanticActionLink, SemanticEvidence,
+    McpJsonRpcContentPage, SemanticAction,
 };
 use serde_json::{Value, json as json_value};
 use storage_core::{
     SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
 };
 
-use super::action_tree_projection::{ActionDisplayProjection, DisplayChild};
+use super::LlmNavMode;
 use super::action_tree_roles::{DISPLAY_PARENT_ROLES, NODE_ID_AGENT, ROOT_LINK_ROLES};
-use super::projection_cache;
-use super::{LlmNavMode, LlmRequestContentNodeQuery};
 use crate::json;
 
-const HEAVY_ATTRIBUTE_KEYS: &[&str] = &[
-    "http.request.body_text",
-    "http.request.body_json",
-    "http.response.body_text",
-    "http.response.body_json",
-];
-const HEAVY_ATTRIBUTE_SUFFIXES: &[&str] = &[
-    ".payload_text",
-    ".body_text",
-    ".body_json",
-    ".output_text",
-    ".content_text",
-    ".reasoning_text",
-];
+#[path = "actions/serialization.rs"]
+mod serialization;
 
-const WATERFALL_INITIAL_ACTION_KINDS: &[&str] = &[
-    "command.invocation",
-    "agent.invocation",
-    "llm.call",
-    "llm.request",
-    "llm.response",
-];
-const WATERFALL_INITIAL_LINK_ROLES: &[&str] = &[
-    "agent.performed_action",
-    "agent.invocation.exec",
-    "agent.invocation.child_llm_request",
-    "command.contains_command_invocation",
-    "command.contains_llm_call",
-    "llm.call.request",
-    "llm.call.response",
-    "llm.request.llm_response",
-];
+use serialization::link_json;
+pub(super) use serialization::{action_json, action_json_lite};
 
-pub(super) fn action_tree_json(
-    storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-) -> Result<String, String> {
-    projection_cache::sync_trace_revision(storage, storage_path, trace_id);
-    let projection =
-        projection_cache::cached_action_display_projection(storage_path, trace_id, || {
-            ActionDisplayProjection::load(storage, trace_id)
-        })?;
-    let roots = projection
-        .root_action_ids
-        .iter()
-        .map(|action_id| json::string(action_id))
-        .collect::<Vec<_>>();
-    let actions = projection
-        .actions
-        .iter()
-        .map(action_json_lite)
-        .collect::<Vec<_>>();
-    let links = projection
-        .links
-        .iter()
-        .map(link_json_lite)
-        .collect::<Vec<_>>();
-    Ok(format!(
-        "{{\"roots\":[{}],\"actions\":[{}],\"links\":[{}]}}",
-        roots.join(","),
-        actions.join(","),
-        links.join(",")
-    ))
-}
+#[path = "actions/llm_call_display.rs"]
+mod llm_call_display;
+#[path = "actions/llm_tool_display.rs"]
+mod llm_tool_display;
+use llm_call_display::LlmCallDisplay;
+use llm_tool_display::LlmToolDisplay;
 
-pub(super) fn waterfall_initial_json(
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-) -> Result<String, String> {
-    let actions = storage
-        .semantic_actions_matching_kinds_lite(trace_id, WATERFALL_INITIAL_ACTION_KINDS)
-        .map_err(|error| storage_error("read waterfall actions", error))?;
-    let links = storage
-        .semantic_action_links_matching_roles(trace_id, WATERFALL_INITIAL_LINK_ROLES)
-        .map_err(|error| storage_error("read waterfall links", error))?;
-    let selected = actions.len();
-    let actions = actions.iter().map(action_json_lite).collect::<Vec<_>>();
-    let links = links.iter().map(link_json_lite).collect::<Vec<_>>();
-    Ok(format!(
-        "{{\"actions\":[{}],\"links\":[{}],\"selected_actions\":{},\"partial\":true}}",
-        actions.join(","),
-        links.join(","),
-        json::number(selected)
-    ))
+struct DisplayChild {
+    action: SemanticAction,
+    link: Option<semantic_action::SemanticActionLink>,
+    child_count: usize,
 }
 
 pub(super) fn action_tree_root_json(
@@ -142,7 +72,7 @@ pub(super) fn action_tree_children_json(
     page: SemanticActionChildPageQuery,
 ) -> Result<String, String> {
     let display_roles = display_parent_role_names();
-    let (rows, total) = if parent_id == NODE_ID_AGENT {
+    let (mut rows, total) = if parent_id == NODE_ID_AGENT {
         let root_roles = ROOT_LINK_ROLES
             .iter()
             .map(|role| role.as_str())
@@ -181,6 +111,10 @@ pub(super) fn action_tree_children_json(
             .collect::<Vec<DisplayChild>>();
         (rows, result.total_count)
     };
+    for row in &mut rows {
+        LlmCallDisplay::normalize_one(storage, &mut row.action)?;
+        LlmToolDisplay::normalize_one(storage, &mut row.action);
+    }
     let actions = rows
         .iter()
         .map(|row| action_json_lite(&row.action))
@@ -255,10 +189,12 @@ pub(super) fn action_detail_json(
     trace_id: TraceId,
     action_id: &str,
 ) -> Result<String, String> {
-    let action = storage
+    let mut action = storage
         .semantic_action_by_id(trace_id, action_id)
         .map_err(|error| storage_error("read semantic action", error))?
         .ok_or_else(|| format!("semantic action {action_id} not found"))?;
+    LlmCallDisplay::normalize_one(storage, &mut action)?;
+    LlmToolDisplay::normalize_one(storage, &mut action);
     Ok(action_json(&action))
 }
 
@@ -359,136 +295,71 @@ pub(super) fn llm_request_content_node_json(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
     action_id: &str,
-    query: LlmRequestContentNodeQuery,
+    query: storage_core::ContentNodeQuery,
 ) -> Result<String, String> {
     let content = storage
-        .llm_request_content_page(trace_id, action_id, usize::MAX)
+        .llm_request_content_node(trace_id, action_id, &query)
         .map_err(|error| storage_error("read LLM request content node", error))?;
     let Some(content) = content else {
-        return Ok("{\"content\":null}".to_string());
+        return Ok("{\"content\":null}".into());
     };
-    let body = serde_json::from_str::<Value>(&content.body_json)
-        .map_err(|error| format!("parse canonical LLM request body failed: {error}"))?;
-    let node = body
-        .pointer(&query.pointer)
-        .ok_or_else(|| format!("JSON Pointer not found: {}", query.pointer))?;
-    let node_json = llm_request_node_json(node, &query);
     serde_json::to_string(&json_value!({
         "content": {
             "action_id": content.action_id,
             "format_version": content.format_version,
-            "canonical_body_hash": content.canonical_body_hash,
             "canonical_body_bytes": content.canonical_body_bytes,
-            "pointer": query.pointer,
-            "node": node_json,
+            "pointer": content.pointer,
+            "node": ContentNodeJson::render(content.node),
         }
     }))
     .map_err(|error| format!("serialize LLM request content node failed: {error}"))
 }
 
-fn llm_request_node_json(node: &Value, query: &LlmRequestContentNodeQuery) -> Value {
-    match node {
-        Value::Object(object) => {
-            let total = object.len();
-            let children = object
-                .iter()
-                .skip(query.offset)
-                .take(query.limit)
-                .map(|(key, value)| {
-                    llm_request_child_json(key, &json_pointer_child(&query.pointer, key), value)
-                })
-                .collect::<Vec<_>>();
-            branch_node_json("object", total, children, query)
+struct ContentNodeJson;
+
+impl ContentNodeJson {
+    fn render(node: storage_core::ContentNode) -> Value {
+        use storage_core::{ContentNode, ContentNodeKind};
+        match node {
+            ContentNode::Branch {
+                kind,
+                total_children,
+                offset,
+                limit,
+                next_offset,
+                children,
+            } => {
+                let children = children.into_iter().map(|child| json_value!({
+                    "token":child.token, "pointer":child.pointer, "type":child.kind.as_str(),
+                    "expandable":matches!(child.kind, ContentNodeKind::Array | ContentNodeKind::Object),
+                    "child_count":child.child_count,
+                })).collect::<Vec<_>>();
+                json_value!({"type":kind.as_str(), "expandable":true, "total_children":total_children,
+                    "offset":offset, "limit":limit, "next_offset":next_offset,
+                    "has_more":next_offset.is_some(), "children":children})
+            }
+            ContentNode::Leaf {
+                value,
+                value_bytes,
+                returned_bytes,
+                offset,
+                next_offset,
+                truncated,
+            } => {
+                let kind = match &value {
+                    Value::Null => "null",
+                    Value::Bool(_) => "boolean",
+                    Value::Number(_) => "number",
+                    Value::String(_) => "string",
+                    Value::Array(_) => "array",
+                    Value::Object(_) => "object",
+                };
+                json_value!({"type":kind, "expandable":false, "value":value,
+                    "offset":offset, "next_offset":next_offset, "has_more":next_offset.is_some(),
+                    "value_bytes":value_bytes, "returned_bytes":returned_bytes, "truncated":truncated})
+            }
         }
-        Value::Array(array) => {
-            let total = array.len();
-            let children = array
-                .iter()
-                .enumerate()
-                .skip(query.offset)
-                .take(query.limit)
-                .map(|(index, value)| {
-                    let token = index.to_string();
-                    llm_request_child_json(
-                        &token,
-                        &json_pointer_child(&query.pointer, &token),
-                        value,
-                    )
-                })
-                .collect::<Vec<_>>();
-            branch_node_json("array", total, children, query)
-        }
-        Value::Null => json_value!({
-            "type": "null",
-            "expandable": false,
-            "value": Value::Null,
-        }),
-        Value::Bool(value) => leaf_node_json("boolean", Value::Bool(*value)),
-        Value::Number(value) => leaf_node_json("number", Value::Number(value.clone())),
-        Value::String(value) => leaf_node_json("string", Value::String(value.clone())),
     }
-}
-
-fn branch_node_json(
-    kind: &str,
-    total: usize,
-    children: Vec<Value>,
-    query: &LlmRequestContentNodeQuery,
-) -> Value {
-    let returned = children.len();
-    let next_offset = query.offset.saturating_add(returned);
-    let has_more = next_offset < total;
-    json_value!({
-        "type": kind,
-        "expandable": true,
-        "total_children": total,
-        "offset": query.offset,
-        "limit": query.limit,
-        "next_offset": has_more.then_some(next_offset),
-        "has_more": has_more,
-        "children": children,
-    })
-}
-
-fn leaf_node_json(kind: &str, value: Value) -> Value {
-    json_value!({
-        "type": kind,
-        "expandable": false,
-        "value": value,
-    })
-}
-
-fn llm_request_child_json(token: &str, pointer: &str, value: &Value) -> Value {
-    json_value!({
-        "token": token,
-        "pointer": pointer,
-        "type": json_value_type(value),
-        "expandable": matches!(value, Value::Object(_) | Value::Array(_)),
-        "child_count": json_value_child_count(value),
-    })
-}
-
-fn json_value_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-fn json_value_child_count(value: &Value) -> Option<usize> {
-    match value {
-        Value::Array(array) => Some(array.len()),
-        Value::Object(object) => Some(object.len()),
-        _ => None,
-    }
-}
-
-fn json_pointer_child(parent: &str, token: &str) -> String {
-    format!("{parent}/{}", token.replace('~', "~0").replace('/', "~1"))
 }
 
 fn display_parent_role_names() -> Vec<&'static str> {
@@ -508,55 +379,6 @@ fn next_offset_json(page: SemanticActionChildPageQuery, total: usize) -> String 
     } else {
         "null".to_string()
     }
-}
-
-pub(super) fn action_json(action: &SemanticAction) -> String {
-    render_action_json(action, false)
-}
-
-pub(super) fn action_json_lite(action: &SemanticAction) -> String {
-    render_action_json(action, true)
-}
-
-fn render_action_json(action: &SemanticAction, lite: bool) -> String {
-    let attributes = if lite {
-        action
-            .attributes
-            .iter()
-            .filter(|(key, _)| !is_heavy_attribute(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
-    } else {
-        action.attributes.clone()
-    };
-    let evidence = if lite {
-        "[]".to_string()
-    } else {
-        evidence_json(&action.evidence)
-    };
-    format!(
-        "{{\"id\":{},\"kind\":{},\"title\":{},\"start_time\":{},\"start_time_unix_nanos\":{},\"end_time\":{},\"end_time_unix_nanos\":{},\"duration\":{},\"process\":{},\"status\":{},\"completeness\":{},\"attributes\":{},\"evidence\":{}}}",
-        json::string(&action.action_id),
-        json::string(action.kind.as_str()),
-        json::string(&action.title),
-        json::time(action.start_time),
-        json::time_nanos(action.start_time),
-        action
-            .end_time
-            .map(json::time)
-            .unwrap_or_else(|| "null".to_string()),
-        json::optional_time_nanos(action.end_time),
-        action
-            .end_time
-            .and_then(|end| end.duration_since(action.start_time).ok())
-            .map(|duration| json::string(&json::duration_micros(duration.as_micros() as u64)))
-            .unwrap_or_else(|| "null".to_string()),
-        json::process(&action.process),
-        json::string(action.status.as_str()),
-        json::string(action.completeness.as_str()),
-        json::map(&attributes),
-        evidence
-    )
 }
 
 fn file_path_set_page_json(
@@ -595,10 +417,9 @@ fn file_path_set_path_json(path: &FilePathSetPath) -> String {
 
 fn llm_request_content_page_json(content: LlmRequestContentPage) -> String {
     format!(
-        "{{\"action_id\":{},\"format_version\":{},\"canonical_body_hash\":{},\"canonical_body_bytes\":{},\"returned_bytes\":{},\"truncated\":{},\"body_json\":{}}}",
+        "{{\"action_id\":{},\"format_version\":{},\"canonical_body_bytes\":{},\"returned_bytes\":{},\"truncated\":{},\"body_json\":{}}}",
         json::string(&content.action_id),
         json::number(content.format_version),
-        json::string(&content.canonical_body_hash),
         json::number(content.canonical_body_bytes),
         json::number(content.returned_bytes),
         bool_json(content.truncated),
@@ -639,57 +460,6 @@ fn mcp_jsonrpc_content_page_json(content: McpJsonRpcContentPage) -> String {
         bool_json(content.truncated),
         json::string(&content.canonical_json)
     )
-}
-
-fn is_heavy_attribute(key: &str) -> bool {
-    HEAVY_ATTRIBUTE_KEYS.contains(&key)
-        || HEAVY_ATTRIBUTE_SUFFIXES
-            .iter()
-            .any(|suffix| key.ends_with(suffix))
-}
-
-fn link_json(link: &SemanticActionLink) -> String {
-    let evidence = if link.evidence.is_empty() {
-        "[]".to_string()
-    } else {
-        evidence_json(&link.evidence)
-    };
-    format!(
-        "{{\"parent\":{},\"child\":{},\"role\":{},\"confidence\":{},\"valid\":{},\"attributes\":{},\"evidence\":{}}}",
-        json::string(&link.parent_action_id),
-        json::string(&link.child_action_id),
-        json::string(link.role.as_str()),
-        json::string(link.confidence.as_str()),
-        json::boolean(link.valid),
-        json::map(&link.attributes),
-        evidence
-    )
-}
-
-fn link_json_lite(link: &SemanticActionLink) -> String {
-    format!(
-        "{{\"parent\":{},\"child\":{},\"role\":{},\"confidence\":{},\"valid\":{}}}",
-        json::string(&link.parent_action_id),
-        json::string(&link.child_action_id),
-        json::string(link.role.as_str()),
-        json::string(link.confidence.as_str()),
-        json::boolean(link.valid)
-    )
-}
-
-fn evidence_json(evidence: &[SemanticEvidence]) -> String {
-    let rows = evidence
-        .iter()
-        .map(|evidence| {
-            format!(
-                "{{\"kind\":{},\"id\":{},\"role\":{}}}",
-                json::string(evidence.kind.as_str()),
-                json::number(evidence.id),
-                json::string(&evidence.role)
-            )
-        })
-        .collect::<Vec<_>>();
-    format!("[{}]", rows.join(","))
 }
 
 fn child_state_json(action: &SemanticAction, child_count: usize) -> String {

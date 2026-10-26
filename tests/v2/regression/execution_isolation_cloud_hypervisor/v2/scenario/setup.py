@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..constants import CASE_CONSTANTS
+
 import json
 import os
 import shutil
@@ -60,11 +62,12 @@ class CloudHypervisorScenarioSetup:
             "xiaoo-root": source_assets / "named_agent_root.py",
             "provider_proxy.py": (
                 self._config.repo
-                / "tests/support/llm-http-proxy/provider_proxy.py"
+                / "tests/v2/common/llm-http-proxy/provider_proxy.py"
             ),
             "workload.sh": source_assets / "workload.sh",
             "oom-trigger.sh": source_assets / "oom-trigger.sh",
             "oom_trigger.py": source_assets / "oom_trigger.py",
+            "constants.py": source_assets.parent / "constants.py",
         }
         for name, source in sources.items():
             if not source.is_file():
@@ -164,7 +167,7 @@ class CloudHypervisorScenarioSetup:
             name_prefix = self._config.IDENTITY.CASE
         return builder.build(
             name_prefix=name_prefix,
-            command=("/bin/sh", "-c", "sleep 600"),
+            command=("/bin/sh", "-c", f"sleep {CASE_CONSTANTS.vm_hold_seconds}"),
             mounts=mounts,
             artifact_directories=artifact_directories,
             labels=(("io.actrail.test.case", self._config.IDENTITY.CASE),),
@@ -281,6 +284,9 @@ class CloudHypervisorScenarioSetup:
             "ACTRAIL_XIAOO_PROVIDER_SCRIPT": (
                 "/opt/actrail-execution/provider_proxy.py"
             ),
+            "ACTRAIL_XIAOO_PROVIDER_PORT": str(CASE_CONSTANTS.provider_port),
+            "ACTRAIL_VIRTUAL_XIAOO_API_KEY": CASE_CONSTANTS.local_api_key,
+            "ACTRAIL_XIAOO_POLL_SECONDS": str(CASE_CONSTANTS.guest_poll_seconds),
             "ACTRAIL_XIAOO_READY_TIMEOUT_SECONDS": str(
                 self._config.ready_timeout_seconds
             ),
@@ -336,7 +342,7 @@ class CloudHypervisorScenarioSetup:
                 "command -v python3 >/dev/null; "
                 f"{mounted_assets}"
             ),
-            timeout=self._config.ready_timeout_seconds + 2,
+            timeout=self._config.ready_timeout_seconds + CASE_CONSTANTS.command_timeout_slack_seconds,
         )
         if result.returncode == 0:
             return RequirementCheck.ready_check()
@@ -375,11 +381,11 @@ class CloudHypervisorScenarioSetup:
         document = json.loads(default_config.read_text(encoding="utf-8"))
         document.update(
             {
-                "cpu_usage_threshold_basis_points": 1,
+                "cpu_usage_threshold_basis_points": CASE_CONSTANTS.resource_alert_cpu_basis_points,
                 "memory_available_threshold_bytes": 18_446_744_073_709_551_615,
-                "read_interval_threshold_bytes": 1,
-                "write_interval_threshold_bytes": 1,
-                "source_state_capacity": 64,
+                "read_interval_threshold_bytes": CASE_CONSTANTS.resource_alert_io_threshold_bytes,
+                "write_interval_threshold_bytes": CASE_CONSTANTS.resource_alert_io_threshold_bytes,
+                "source_state_capacity": CASE_CONSTANTS.resource_alert_source_capacity,
             }
         )
         (self._run_dir / "sandbox-resource-alert.json").write_text(

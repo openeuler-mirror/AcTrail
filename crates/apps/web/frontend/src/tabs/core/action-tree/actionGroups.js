@@ -7,6 +7,9 @@ const NON_GROUPABLE_KINDS = new Set([
   'llm.call',
   'llm.request',
   'llm.response',
+  'llm.tool_call',
+  'llm.tool_result',
+  'mcp.tool_call',
   'mcp.stdin',
   'mcp.stdout',
 ]);
@@ -26,7 +29,7 @@ export function groupActionNodes(nodes) {
       grouped.push(node);
       continue;
     }
-    if (run.length && run[0].kind !== node.kind) {
+    if (run.length && !sameGroupKey(run[0], node)) {
       flushRun(grouped, run, minActions);
       run = [];
     }
@@ -105,7 +108,7 @@ function actionGroupNode(children) {
     kindClass: kindClass(GROUP_KIND),
     visualClass: 'action-group',
     groupRule: SAME_KIND_RULE,
-    groupKey: childKind,
+    groupKey: groupCandidateKey(first),
     title,
     meta: compactMeta([childKind, timeRange(started, ended), status]),
     metaItems: compactMetaItems([
@@ -149,7 +152,7 @@ function actionGroupNode(children) {
 
 function sameKindCandidate(node) {
   return (
-    node.nodeType === TREE_NODE_TYPES.action &&
+    node?.nodeType === TREE_NODE_TYPES.action &&
     node.kind !== GROUP_KIND &&
     !NON_GROUPABLE_KINDS.has(node.kind)
   );
@@ -165,7 +168,7 @@ function groupCandidateKey(node) {
     return node.groupKey;
   }
   if (sameKindCandidate(node)) {
-    return node.kind;
+    return JSON.stringify([node.kind, node.semanticLabel, node.status]);
   }
   return '';
 }

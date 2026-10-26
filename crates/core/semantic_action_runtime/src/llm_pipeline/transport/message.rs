@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HttpRequestParts {
+pub(crate) struct HttpRequestParts<'a> {
+    pub(crate) message_id: String,
     pub(crate) protocol: &'static str,
     pub(crate) scheme: &'static str,
     pub(crate) method: Option<String>,
@@ -12,12 +13,15 @@ pub(crate) struct HttpRequestParts {
     pub(crate) stream_id: Option<u32>,
     pub(crate) headers_text: Option<String>,
     pub(crate) headers_hpack_base64: Option<String>,
-    pub(crate) body: Arc<Vec<u8>>,
+    pub(crate) body: &'a [u8],
+    pub(crate) declared_body_len: Option<usize>,
     pub(crate) encoded_len: usize,
+    pub(crate) complete: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HttpResponseParts {
+    pub(crate) message_id: String,
     pub(crate) protocol: &'static str,
     pub(crate) scheme: &'static str,
     pub(crate) status_code: Option<String>,

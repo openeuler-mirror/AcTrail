@@ -12,7 +12,7 @@ from .common import FAIL, PASS, WARN, Check, last_line, read_text, run_command
 
 
 SUPPORTED_ARCHITECTURES = {"x86_64", "aarch64"}
-RELEASE_BINARIES = ("actraild", "actrailctl", "actrailviewer", "ebpf_probe")
+RELEASE_BINARIES = ("actraild", "actrailctl", "actrailviewer")
 TLS_SYNC_LIBRARY = "libactrail_tls_payload_probe_sync.so"
 RELEASE_ARTIFACTS = RELEASE_BINARIES + (TLS_SYNC_LIBRARY,)
 OPENSSL_REQUIRED_SYMBOLS = ("SSL_read", "SSL_write", "SSL_read_ex", "SSL_write_ex")

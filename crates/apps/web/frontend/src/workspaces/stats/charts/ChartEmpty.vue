@@ -13,12 +13,12 @@ defineProps({
 
 <style scoped>
 .chart-empty {
-  min-height: var(--stats-empty-min-height);
+  min-height: var(--ui-empty-min-height);
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-regular);
+  color: var(--ui-muted);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-regular);
 }
 </style>

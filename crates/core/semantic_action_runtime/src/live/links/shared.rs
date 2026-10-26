@@ -2,24 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use model_core::ids::TraceId;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkConfidence,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
     SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
 };
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(super) struct SemanticActionKey {
-    pub(super) trace_id: TraceId,
-    pub(super) action_id: String,
-}
-
-impl From<&SemanticAction> for SemanticActionKey {
-    fn from(action: &SemanticAction) -> Self {
-        Self {
-            trace_id: action.trace_id,
-            action_id: action.action_id.clone(),
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ActionLinkKey {
@@ -46,7 +31,7 @@ pub(super) fn invalidate_child_links(
             parent_action_id: key.parent_action_id.clone(),
             child_action_id: key.child_action_id.clone(),
             role,
-            confidence: SemanticActionLinkConfidence::Derived,
+            origin: SemanticActionLinkOrigin::Derived,
             valid: false,
             evidence: evidence.to_vec(),
             attributes: BTreeMap::new(),

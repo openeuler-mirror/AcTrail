@@ -2,11 +2,11 @@
 
 use collector_capability::CollectorDescriptor;
 use config_core::daemon::{
-    AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig, CommandControlConfig,
-    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
-    NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig, ProcessSeccompConfig,
-    ResourceMetricsConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
-    TraceFinalizationConfig,
+    AccessControlConfig, AgentInvocationConfig, AlertForwardingConfig, ApplicationProtocolConfig,
+    CommandControlConfig, DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig,
+    FileObservationConfig, IdleDetectionConfig, NetworkControlConfig, PayloadConfig,
+    PluginAlertRuntimeConfig, ProcessSeccompConfig, SeccompNotifyConfig, SemanticRetentionConfig,
+    StorageRetentionConfig, TraceFinalizationConfig,
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::reply::ControlError;
@@ -27,12 +27,13 @@ use super::alert_forwarding::AlertForwardingService;
 use super::application_protocol::COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME;
 use super::attach::StorageAttachService;
 use super::enforcement::{
-    COLLECTOR_NAME as ENFORCEMENT_COLLECTOR_NAME, FanotifyEnforcementService,
-    enforcement_descriptor,
+    COLLECTOR_NAME as ENFORCEMENT_COLLECTOR_NAME, FileEnforcementService, enforcement_descriptor,
 };
 use super::network_control::NetworkControlService;
 use super::process_seccomp::PROCESS_SECCOMP_COLLECTOR_NAME;
-use super::resource_metrics::COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME;
+use super::resource_profiling::{
+    COLLECTOR_NAME as RESOURCE_METRICS_COLLECTOR_NAME, ResourceProfilingAdapter,
+};
 use super::workload_diagnostics::WorkloadDiagnostics;
 
 const TLS_SYNC_COLLECTOR_NAME: &str = "tls-sync";
@@ -48,15 +49,17 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    idle_detection: IdleDetectionConfig,
     file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
+    resource_metrics: resource_profiling::ResourceProfilingConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
     shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
+    access_control: AccessControlConfig,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
     network_control: NetworkControlConfig,
@@ -72,6 +75,7 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
         process_seccomp,
         agent_invocation,
         semantic_retention,
+        idle_detection,
         file_observation,
         application_protocol,
         resource_metrics,
@@ -81,6 +85,7 @@ pub(crate) fn build_runtime_wiring_with_storage_retention(
         trace_finalization,
         shutdown_runtime_timeout_ms,
         workload_diagnostics,
+        access_control,
         enforcement,
         command_control,
         network_control,
@@ -99,15 +104,17 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    idle_detection: IdleDetectionConfig,
     file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
+    resource_metrics: resource_profiling::ResourceProfilingConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
     shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
+    access_control: AccessControlConfig,
     enforcement: EnforcementConfig,
     command_control: CommandControlConfig,
     network_control: NetworkControlConfig,
@@ -127,6 +134,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
         process_seccomp,
         agent_invocation,
         semantic_retention,
+        idle_detection,
         file_observation,
         application_protocol,
         resource_metrics,
@@ -136,6 +144,7 @@ pub(crate) fn build_runtime_wiring_with_provider_rule_set_and_storage_retention(
         trace_finalization,
         shutdown_runtime_timeout_ms,
         workload_diagnostics,
+        access_control,
         enforcement,
         command_control,
         network_control,
@@ -154,35 +163,50 @@ fn build_runtime_wiring_with_attach_service(
     process_seccomp: ProcessSeccompConfig,
     agent_invocation: AgentInvocationConfig,
     semantic_retention: SemanticRetentionConfig,
+    idle_detection: IdleDetectionConfig,
     file_observation: FileObservationConfig,
     application_protocol: ApplicationProtocolConfig,
-    resource_metrics: ResourceMetricsConfig,
+    resource_metrics: resource_profiling::ResourceProfilingConfig,
     storage_retention: StorageRetentionConfig,
     plugin_alert_runtime: PluginAlertRuntimeConfig,
     alert_forwarding_config: AlertForwardingConfig,
     trace_finalization: TraceFinalizationConfig,
     shutdown_runtime_timeout_ms: u64,
     workload_diagnostics: WorkloadDiagnostics,
+    access_control_config: AccessControlConfig,
     enforcement_config: EnforcementConfig,
     command_control_config: CommandControlConfig,
     network_control_config: NetworkControlConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
-    let storage = open_storage_backend(storage_config, StorageOpenMode::ReadWrite)
+    let storage_config = storage_config.clone().with_payload_retention_limits(
+        storage_core::PayloadRetentionLimits {
+            tls: payload_config.tls.retention_max_bytes_per_trace,
+            socket: payload_config.socket.retention_max_bytes_per_trace,
+            stdio: payload_config.stdio.retention_max_bytes_per_trace,
+        },
+        active_trace_max as usize,
+    );
+    let mut storage = open_storage_backend(&storage_config, StorageOpenMode::ReadWrite)
         .map_err(|error| ControlError::new(error.stage, error.message))?;
     let trace_id_seed = storage
         .next_trace_id_seed()
         .map_err(|error| ControlError::new(error.stage, error.message))?;
-    let event_id_seed = storage
-        .next_event_id_seed()
-        .map_err(|error| ControlError::new(error.stage, error.message))?;
-    let diagnostic_id_seed = storage
-        .next_diagnostic_id_seed()
-        .map_err(|error| ControlError::new(error.stage, error.message))?;
     let payload_segment_id_seed = storage
         .next_payload_segment_id_seed()
         .map_err(|error| ControlError::new(error.stage, error.message))?;
-    let enforcement = FanotifyEnforcementService::new(enforcement_config.clone())?;
+    let access_control_config = &access_control_config.resolve(
+        enforcement_config.enabled,
+        command_control_config.enabled,
+        network_control_config.enabled,
+    );
+    // Open internal files before fanotify starts intercepting permission events.
+    let resource_service =
+        ResourceProfilingAdapter::new(resource_metrics.clone(), storage.as_mut())?;
+    let enforcement = FileEnforcementService::new(
+        enforcement_config.clone(),
+        access_control_config.file.clone(),
+    )?;
     let export_runtime = ExportRuntime::new(Vec::new());
     let alert_forwarding = AlertForwardingService::start(alert_forwarding_config)?;
     let sandbox_alert_forwarding = alert_forwarding.plugin();
@@ -198,15 +222,18 @@ fn build_runtime_wiring_with_attach_service(
             process_seccomp.clone(),
             agent_invocation.clone(),
             semantic_retention.clone(),
+            idle_detection.clone(),
             file_observation.clone(),
             application_protocol.clone(),
-            resource_metrics.clone(),
+            resource_service,
             storage_retention.clone(),
             plugin_alert_runtime,
             alert_forwarding.clone(),
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
+            access_control_config.clone(),
+            enforcement_config.clone(),
             enforcement,
             command_control_config.clone(),
             network_control_config.clone(),
@@ -224,24 +251,40 @@ fn build_runtime_wiring_with_attach_service(
             process_seccomp.clone(),
             agent_invocation.clone(),
             semantic_retention.clone(),
+            idle_detection.clone(),
             file_observation.clone(),
             application_protocol.clone(),
-            resource_metrics.clone(),
+            resource_service,
             storage_retention,
             plugin_alert_runtime,
             alert_forwarding.clone(),
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics.clone(),
+            access_control_config.clone(),
+            enforcement_config.clone(),
             enforcement,
             command_control_config.clone(),
             network_control_config.clone(),
             export_runtime,
         )?,
     };
+    // Startup recovery may have persisted lifecycle records and diagnostics.
+    // Seed the live allocator after constructing the service to avoid reusing IDs.
+    let event_id_seed = attach_service
+        .storage
+        .next_event_id_seed()
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
+    let diagnostic_id_seed = attach_service
+        .storage
+        .next_diagnostic_id_seed()
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     attach_service.set_id_seeds(event_id_seed, diagnostic_id_seed);
     attach_service.set_payload_segment_id_seed(payload_segment_id_seed);
     attach_service.preflight_host_ebpf();
+    if access_control_config.uses_lsm() {
+        attach_service.require_lsm_preflight()?;
+    }
     let mut available_collectors = Vec::new();
     if ebpf_config.enabled
         && attach_service.collector_ready()
@@ -255,16 +298,20 @@ fn build_runtime_wiring_with_attach_service(
     if application_protocol.enabled {
         available_collectors.push(APPLICATION_PROTOCOL_COLLECTOR_NAME.to_string());
     }
-    if resource_metrics.enabled {
+    if resource_metrics.workload_enabled() {
         available_collectors.push(RESOURCE_METRICS_COLLECTOR_NAME.to_string());
     }
-    if enforcement_config.enabled && attach_service.enforcement.enabled() {
+    if access_control_config.file.open.is_fanotify()
+        || !access_control_config.file.seccomp_syscalls().is_empty()
+    {
         available_collectors.push(ENFORCEMENT_COLLECTOR_NAME.to_string());
     }
-    if process_seccomp.enabled || command_control_config.enabled {
+    if process_seccomp.enabled
+        || (command_control_config.enabled && access_control_config.command.exec.is_seccomp())
+    {
         available_collectors.push(PROCESS_SECCOMP_COLLECTOR_NAME.to_string());
     }
-    if network_control_config.enabled {
+    if network_control_config.enabled && access_control_config.network.connect.is_seccomp() {
         available_collectors.push(
             NetworkControlService::descriptor()
                 .name
@@ -274,10 +321,21 @@ fn build_runtime_wiring_with_attach_service(
     }
 
     let mut collector_descriptors = Vec::new();
-    if process_seccomp.enabled || command_control_config.enabled {
+    if access_control_config.uses_lsm() {
+        available_collectors
+            .push(super::access_control::LsmAccessControl::COLLECTOR_NAME.to_string());
+        collector_descriptors.push(super::access_control::LsmAccessControl::descriptor(
+            access_control_config.file.uses_lsm(),
+            access_control_config.command.exec.is_lsm(),
+            access_control_config.network.connect.is_lsm(),
+        ));
+    }
+    if process_seccomp.enabled
+        || (command_control_config.enabled && access_control_config.command.exec.is_seccomp())
+    {
         collector_descriptors.push(process_seccomp_descriptor(
             process_seccomp.enabled,
-            command_control_config.enabled,
+            command_control_config.enabled && access_control_config.command.exec.is_seccomp(),
         ));
     }
     if ebpf_config.enabled {
@@ -289,13 +347,15 @@ fn build_runtime_wiring_with_attach_service(
     if application_protocol.enabled {
         collector_descriptors.push(application_protocol_descriptor(&application_protocol));
     }
-    if resource_metrics.enabled {
+    if resource_metrics.workload_enabled() {
         collector_descriptors.push(resource_metrics_descriptor());
     }
-    if enforcement_config.enabled {
-        collector_descriptors.push(enforcement_descriptor());
+    if access_control_config.file.open.is_fanotify()
+        || !access_control_config.file.seccomp_syscalls().is_empty()
+    {
+        collector_descriptors.push(enforcement_descriptor(&access_control_config.file));
     }
-    if network_control_config.enabled {
+    if network_control_config.enabled && access_control_config.network.connect.is_seccomp() {
         collector_descriptors.push(NetworkControlService::descriptor());
     }
 

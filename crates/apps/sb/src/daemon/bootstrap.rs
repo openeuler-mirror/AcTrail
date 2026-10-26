@@ -4,19 +4,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sandbox_agent_runtime::{
-    GuestResourceSource, ProcessIoSource, SandboxAgentDaemon, SandboxTransportFactory,
+    GuestPressureSource, GuestResourceSource, ProcessIoSource, SandboxAgentDaemon,
+    SandboxTransportFactory, WorkloadCgroupSource,
 };
 use sandbox_control_uds::{
     SandboxControlCodec, SandboxControlConnectionLimits, SandboxControlServerHandle,
     SandboxControlUdsServer, SandboxControlUdsServerConfig,
 };
-use sandbox_linux_collector::{LinuxResourceReader, SandboxProcessIoCollector};
+use sandbox_linux_collector::{
+    LinuxResourceReader, PsiReader, SandboxProcessIoCollector, WorkloadCgroupCollector,
+};
+use sandbox_observation::WorkloadCgroupResourceSnapshot;
 use sandbox_vsock_transport::{VsockTransportConfig, VsockTransportFactory};
 
 use super::SbDaemonConfig;
 use super::config::{ValidatedControlConfig, ValidatedSbDaemonConfig};
 use super::instance_lock::InstanceLock;
-use super::output::{CollectorDiagnostics, SbOutput};
+use super::output::{CollectorDiagnostics, PressureAvailability, SbOutput};
 
 pub struct SandboxAgentDaemonBootstrap;
 
@@ -42,10 +46,44 @@ impl SandboxAgentDaemonBootstrap {
             })?);
         let control_server = Self::control_server(&config.control)?;
         let instance_lock = InstanceLock::acquire(&config.instance_lock_path)?;
+        let workload_source = if config.workload_cgroups {
+            let collector = WorkloadCgroupCollector::start(
+                config.resource_procfs_root.clone(),
+                config.linux.root_process_names().to_vec(),
+            )
+            .map_err(|error| io::Error::other(error.to_string()))?;
+            Some(Box::new(WorkloadSource { collector }) as Box<dyn WorkloadCgroupSource>)
+        } else {
+            None
+        };
         let io_collector = SandboxProcessIoCollector::start(config.linux)
             .map_err(|error| io::Error::other(error.to_string()))?;
         let resource_reader = LinuxResourceReader::open(config.resource_procfs_root)
             .map_err(|error| io::Error::other(error.to_string()))?;
+        let pressure_source: Option<Box<dyn GuestPressureSource>> = if config.pressure_enabled {
+            match PsiReader::open(config.pressure_procfs_root) {
+                Ok(Some(reader)) => {
+                    SbOutput::pressure_status(PressureAvailability::Available);
+                    Some(Box::new(PressureSource { reader }))
+                }
+                Ok(None) => {
+                    SbOutput::pressure_status(PressureAvailability::Unavailable {
+                        reason: "kernel has no memory PSI",
+                    });
+                    None
+                }
+                Err(error) => {
+                    let reason = error.to_string();
+                    SbOutput::pressure_status(PressureAvailability::Unavailable {
+                        reason: &reason,
+                    });
+                    None
+                }
+            }
+        } else {
+            SbOutput::pressure_status(PressureAvailability::Disabled);
+            None
+        };
         let agent = SandboxAgentDaemon::start(
             config.runtime,
             Box::new(IoSource {
@@ -53,6 +91,8 @@ impl SandboxAgentDaemonBootstrap {
                 diagnostics: collector_diagnostics,
             }),
             Box::new(ResourceSource { resource_reader }),
+            pressure_source,
+            workload_source,
             transport,
         )?;
         let control_server = control_server
@@ -195,6 +235,30 @@ struct ResourceSource {
 impl GuestResourceSource for ResourceSource {
     fn sample(&mut self) -> io::Result<sandbox_observation::GuestResourceSnapshot> {
         self.resource_reader
+            .sample()
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+}
+
+struct PressureSource {
+    reader: PsiReader,
+}
+
+impl GuestPressureSource for PressureSource {
+    fn sample(&mut self) -> io::Result<sandbox_observation::GuestPressureSnapshot> {
+        self.reader
+            .sample()
+            .map_err(|error| io::Error::other(error.to_string()))
+    }
+}
+
+struct WorkloadSource {
+    collector: WorkloadCgroupCollector,
+}
+
+impl WorkloadCgroupSource for WorkloadSource {
+    fn sample(&mut self) -> io::Result<Vec<WorkloadCgroupResourceSnapshot>> {
+        self.collector
             .sample()
             .map_err(|error| io::Error::other(error.to_string()))
     }

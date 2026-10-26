@@ -1,3 +1,7 @@
+#[path = "query/content.rs"]
+mod content;
+pub(super) use content::ContentLimits;
+
 use storage_core::SemanticActionChildPageQuery;
 
 use crate::view;
@@ -18,33 +22,6 @@ pub(super) fn parse_llm_nav_mode(
     let after = optional_query_param(query, "after")?;
     let mode = view::LlmNavMode::parse(&mode, after.clone())?;
     Ok((mode, after))
-}
-
-pub(super) fn parse_llm_request_content_query(query: &str) -> Result<usize, String> {
-    let max_bytes = required_query_usize(query, "max_bytes")?;
-    if max_bytes == usize::default() {
-        return Err("invalid query parameter max_bytes: value must be positive".to_string());
-    }
-    Ok(max_bytes)
-}
-
-pub(super) fn parse_llm_request_content_node_query(
-    query: &str,
-) -> Result<view::LlmRequestContentNodeQuery, String> {
-    let pointer = optional_query_param(query, "pointer")?.unwrap_or_default();
-    if !pointer.is_empty() && !pointer.starts_with('/') {
-        return Err("invalid query parameter pointer: JSON Pointer must start with /".to_string());
-    }
-    let offset = required_query_usize(query, "offset")?;
-    let limit = required_query_usize(query, "limit")?;
-    if limit == usize::default() {
-        return Err("invalid query parameter limit: value must be positive".to_string());
-    }
-    Ok(view::LlmRequestContentNodeQuery {
-        pointer,
-        offset,
-        limit,
-    })
 }
 
 pub(super) fn parse_token_usage_stats_query(

@@ -5,8 +5,6 @@ pub mod actrail {
     pub const ACTION_VALID: &str = "actrail.action.valid";
     pub const ACTION_VALID_FALSE_MARKER: &str = "actrail.action.valid=false";
     pub const LINK_SOURCE: &str = "actrail.link.source";
-    pub const LINK_VALID: &str = "actrail.link.valid";
-    pub const LINK_VALID_FALSE_MARKER: &str = "actrail.link.valid=false";
 }
 
 pub mod agent {
@@ -120,6 +118,7 @@ pub mod file_tty {
 }
 
 pub mod http {
+    pub const MESSAGE_ID: &str = "http.message_id";
     pub const OPERATION: &str = "http.operation";
 }
 
@@ -165,13 +164,8 @@ pub mod llm_call {
 pub mod llm_request {
     pub const BACKGROUND_KIND: &str = "llm.request.background_kind";
     pub const BLOCK_COUNT: &str = "llm.request.block_count";
-    pub const CANONICAL_BODY_BYTES: &str = "llm.request.canonical_body_bytes";
     pub const CANONICAL_BODY_EXPORT_STATE: &str = "llm.request.canonical_body_export_state";
-    pub const CANONICAL_BODY_HASH: &str = "llm.request.canonical_body_hash";
-    /// The whole canonical request body, present only when body export is
-    /// enabled. Distinct from the removed inline `body_json`, which carried
-    /// the raw request body: this is the canonicalised content the
-    /// [`CANONICAL_BODY_HASH`] is computed over.
+    /// Complete canonical request JSON, serialized only for explicit bounded export.
     pub const CANONICAL_BODY_JSON: &str = "llm.request.canonical_body_json";
     pub const CLASSIFIER_ID: &str = "llm.request.classifier_id";
     pub const CONTENT_FORMAT_VERSION: &str = "llm.request.content_format_version";
@@ -183,6 +177,7 @@ pub mod llm_request {
     pub const PAYLOAD_TEXT: &str = "llm.request.payload_text";
     pub const PROTOCOL_ID: &str = "llm.request.protocol_id";
     pub const RAW_PAYLOAD_BYTES: &str = "llm.request.raw_payload_bytes";
+    pub const TOOL_RESULT_COUNT: &str = "llm.request.tool_result_count";
     pub const TRAJECTORY_ID: &str = "llm.request.trajectory_id";
     pub const TRAJECTORY_INFERENCE_VERSION: &str = "llm.request.trajectory_inference_version";
     pub const USER_MESSAGE_COUNT: &str = "llm.request.user_message_count";
@@ -235,7 +230,6 @@ pub mod llm_tool_call {
 pub mod llm_tool_result {
     pub const BINDING_STATE: &str = "llm.tool_result.binding_state";
     pub const CONTENT_BYTES: &str = "llm.tool_result.content_bytes";
-    pub const CONTENT_HASH: &str = "llm.tool_result.content_hash";
     pub const CONTENT_JSON: &str = "llm.tool_result.content_json";
     pub const CONTENT_EXPORT_STATE: &str = "llm.tool_result.content_export_state";
     pub const ID: &str = "llm.tool_result.id";
@@ -325,4 +319,11 @@ pub mod syscall {
 pub mod url {
     pub const PATH: &str = "url.path";
     pub const SCHEME: &str = "url.scheme";
+}
+
+/// Native WebSocket application-message identity.
+pub mod websocket {
+    pub const MESSAGE_ID: &str = "websocket.message_id";
+    pub const CONNECTION_ID: &str = "websocket.connection_id";
+    pub const OPCODE: &str = "websocket.opcode";
 }

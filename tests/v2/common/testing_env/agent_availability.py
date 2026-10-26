@@ -8,12 +8,14 @@ from typing import Mapping
 
 from .agent_discovery import AgentBinaryDiscovery, default_claude_model
 
+from .constants import DEFAULTS
+
 
 class AgentAvailability:
     def __init__(self):
         self._agent2availability: dict[tuple[str, str], bool] = {}
         self._timeout_seconds = int(
-            os.environ.get("ACTRAIL_TEST_AGENT_AVAILABILITY_TIMEOUT_SECONDS", "60")
+            os.environ.get("ACTRAIL_TEST_AGENT_AVAILABILITY_TIMEOUT_SECONDS", str(DEFAULTS.availability_timeout_seconds))
         )
 
     def check_agent_availability(
@@ -55,7 +57,7 @@ class AgentAvailability:
     def _prompt(self) -> str:
         return os.environ.get(
             "ACTRAIL_TEST_AGENT_AVAILABILITY_PROMPT",
-            "directly answer hello",
+            DEFAULTS.availability_prompt,
         )
 
     def _check_codex_availability(
@@ -72,7 +74,7 @@ class AgentAvailability:
                 self._codex_model(binary),
                 "-c",
                 "model_reasoning_effort="
-                + os.environ.get("CODEX_E2E_REASONING_EFFORT", "low"),
+                + os.environ.get("CODEX_E2E_REASONING_EFFORT", DEFAULTS.codex_reasoning_effort),
                 self._prompt(),
             ],
             environment,
@@ -88,7 +90,7 @@ class AgentAvailability:
             )
         except Exception:
             model = None
-        return model or "gpt-5.5"
+        return model or DEFAULTS.codex_model
 
     def _check_claude_availability(
         self,
@@ -161,7 +163,7 @@ class AgentAvailability:
                 "run",
                 "--no-tools",
                 "--max-turns",
-                "1",
+                str(DEFAULTS.xiaoo_max_turns),
                 "--prompt",
                 self._prompt(),
             ],

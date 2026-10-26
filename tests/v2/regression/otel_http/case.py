@@ -16,6 +16,8 @@ from tests.v2.common.testing_env import AgentBinaryDiscovery
 from .config import OtelHttpConfig
 from .environment import OtelHttpEnvironment
 
+from .constants import CASE_CONSTANTS
+
 
 class OtelHttpCase(TestCase):
     _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
@@ -28,6 +30,10 @@ class OtelHttpCase(TestCase):
         "actrail.process.id",
         "actrail.action.valid",
         "process.parent.identity_state",
+        "process.executable",
+        "agent.identity.status",
+        "agent.identity.source",
+        "agent.identity.evidence_action_id",
         "llm.request.trajectory_id",
         "llm.request.trajectory_inference_version",
     }
@@ -71,14 +77,14 @@ class OtelHttpCase(TestCase):
             )
 
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "llm.request"}
+                {"process.exec", "process.exit", "agent.identity", "llm.request"}
             )
             results["outbound-policy"] = TestResult(
                 TestStatus.PASSED,
-                "explicit process/request allow-list and metadata-only mode accepted",
+                "explicit process/identity/request allow-list and metadata-only mode accepted",
             )
 
-            marker = f"OTEL_HTTP_V2_{secrets.token_hex(8)}"
+            marker = f"OTEL_HTTP_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
             trace_id = self._launch(marker, xiaoo, xiaoo_environment)
             self._wait_for_terminal_trace(trace_id)
             results["source-trace"] = TestResult(
@@ -93,7 +99,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             spans = self._wait_for_marker_spans(
                 marker,
-                {"process.exec", "process.exit", "llm.request"},
+                {"process.exec", "process.exit", "agent.identity", "llm.request"},
             )
             results["shutdown-tail"] = TestResult(
                 TestStatus.PASSED,
@@ -123,12 +129,22 @@ class OtelHttpCase(TestCase):
                 f"OTLP traceId {otel_trace_id} matches the persisted 16-byte identity",
             )
 
+            identity_binary = self._require_agent_identity_correlation(
+                spans,
+                otel_trace_id,
+                xiaoo,
+            )
+            results["agent-identity-correlation"] = TestResult(
+                TestStatus.PASSED,
+                f"agent.identity binds {identity_binary} to OTLP traceId",
+            )
+
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "llm.request"},
+                {"process.exec", "process.exit", "agent.identity", "llm.request"},
                 attribute_mode="full",
             )
-            body_marker = f"REQUEST_BODY_V2_{secrets.token_hex(8)}"
-            full_marker = f"OTEL_HTTP_FULL_V2_{secrets.token_hex(8)}"
+            body_marker = f"REQUEST_BODY_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
+            full_marker = f"OTEL_HTTP_FULL_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
             full_trace_id = self._launch(
                 full_marker,
                 xiaoo,
@@ -143,7 +159,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             full_spans = self._wait_for_marker_spans(
                 full_marker,
-                {"process.exec", "process.exit", "llm.request"},
+                {"process.exec", "process.exit", "agent.identity", "llm.request"},
             )
             full_counts = self._require_terminal_one_shot(full_spans)
             if full_counts["llm.request"] < 1:
@@ -215,7 +231,7 @@ class OtelHttpCase(TestCase):
                 "run",
                 "--no-tools",
                 "--max-turns",
-                "1",
+                str(CASE_CONSTANTS.max_turns),
                 "--prompt",
                 prompt,
             ],
@@ -225,17 +241,17 @@ class OtelHttpCase(TestCase):
         if result.returncode != 0:
             raise AssertionError(
                 f"actrailctl launch exited with {result.returncode}: "
-                f"{result.output[-4000:]}"
+                f"{result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         if answer_marker not in result.stdout:
             raise AssertionError(
                 f"xiaoO output did not contain answer marker {answer_marker}: "
-                f"{result.output[-4000:]}"
+                f"{result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         trace_ids = [int(value) for value in self._TRACE_PATTERN.findall(result.output)]
         if len(trace_ids) != 1:
             raise AssertionError(
-                f"expected one trace id, found {trace_ids}: {result.output[-4000:]}"
+                f"expected one trace id, found {trace_ids}: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         return trace_ids[0]
 
@@ -257,7 +273,8 @@ class OtelHttpCase(TestCase):
         if wire_id[12] != "4" or wire_id[16] not in "89ab":
             raise AssertionError(f"OTLP traceId is not an RFC 4122 UUIDv4 value: {wire_id}")
 
-        database = self._config.work_dir / "data" / "actrail.sqlite"
+        assert self._environment is not None
+        database = self._environment.runtime.database_path
         with sqlite3.connect(database) as connection:
             row = connection.execute(
                 "SELECT lower(hex(otel_trace_id)), length(otel_trace_id) "
@@ -270,6 +287,39 @@ class OtelHttpCase(TestCase):
                 f"wire={wire_id}, sqlite={row!r}"
             )
         return wire_id
+
+    def _require_agent_identity_correlation(
+        self,
+        spans: list[dict[str, Any]],
+        otel_trace_id: str,
+        agent_binary: Path,
+    ) -> str:
+        identities = [
+            span
+            for span in spans
+            if self._attribute(span, "actrail.action.kind") == "agent.identity"
+        ]
+        if len(identities) != 1:
+            raise AssertionError(
+                f"expected one agent.identity span, found {len(identities)}"
+            )
+        identity = identities[0]
+        if identity.get("traceId") != otel_trace_id:
+            raise AssertionError(
+                "agent.identity does not share the trace OTLP identity: "
+                f"{identity.get('traceId')!r} != {otel_trace_id!r}"
+            )
+        executable = self._attribute(identity, "process.executable")
+        if not executable:
+            raise AssertionError("agent.identity has no process.executable")
+        if Path(executable).name != agent_binary.name:
+            raise AssertionError(
+                f"agent.identity executable {executable!r} does not identify "
+                f"the launched agent {str(agent_binary)!r}"
+            )
+        if not self._attribute(identity, "actrail.process.id"):
+            raise AssertionError("agent.identity has no process identity")
+        return executable
 
     def _wait_for_terminal_trace(self, trace_id: int) -> None:
         last_state = "<missing>"
@@ -482,7 +532,7 @@ class OtelHttpCase(TestCase):
         if result.returncode != 0:
             raise AssertionError(
                 f"actrailviewer {' '.join(arguments)} exited with "
-                f"{result.returncode}: {result.stderr[-2000:]}"
+                f"{result.returncode}: {result.stderr[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
         try:
             document = json.loads(result.stdout)

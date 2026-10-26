@@ -3,6 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod trace_hash_alloc;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EventTransport {
     RingBuffer,
@@ -43,6 +45,33 @@ struct LaunchBindingChoice {
     reason: String,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OnceBackend {
+    Cas,
+    MapOnce,
+}
+
+impl OnceBackend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Cas => "cas",
+            Self::MapOnce => "map-once",
+        }
+    }
+
+    fn clang_define(self) -> Option<&'static str> {
+        match self {
+            Self::Cas => Some("-DACTRAIL_BPF_ONCE_CAS"),
+            Self::MapOnce => None,
+        }
+    }
+}
+
+struct OnceChoice {
+    backend: OnceBackend,
+    reason: String,
+}
+
 impl EventTransport {
     fn as_str(self) -> &'static str {
         match self {
@@ -79,44 +108,23 @@ fn main() {
         other => panic!("unsupported eBPF target architecture {other}"),
     };
 
-    println!("cargo:rerun-if-changed=bpf/live_observation.bpf.c");
-    println!("cargo:rerun-if-changed=bpf/actrail_helpers.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_file.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_net.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_fd.h");
-    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_index.h");
-    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_lifecycle.h");
-    println!("cargo:rerun-if-changed=bpf/fd/actrail_fd_sweep.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_proc.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_runtime.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_suppressed_fd.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_tls_payload.h");
-    println!("cargo:rerun-if-changed=bpf/actrail_uprobe_regs.h");
-    println!("cargo:rerun-if-changed=bpf/launch_binding/actrail_launch_binding.h");
-    println!("cargo:rerun-if-changed=bpf/launch_binding/impl/task_storage.h");
-    println!("cargo:rerun-if-changed=bpf/launch_binding/impl/pid_generation_hash.h");
-    println!("cargo:rerun-if-changed=bpf/file/actrail_file_bulk_read_fast.h");
-    println!("cargo:rerun-if-changed=bpf/file/actrail_file_path.h");
-    println!("cargo:rerun-if-changed=bpf/include/actrail_const.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_fd_state.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_tls.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_socket_payload_types.h");
-    println!("cargo:rerun-if-changed=bpf/payload/actrail_stdio_payload.h");
-    println!("cargo:rerun-if-changed=bpf/process/actrail_process_programs.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_capture.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_completion.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_diagnostics.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_payload_probes.h");
-    println!("cargo:rerun-if-changed=bpf/tls/actrail_tls_rustls_internal.h");
-    println!("cargo:rerun-if-changed=/proc/sys/kernel/osrelease");
+    println!("cargo:rerun-if-changed=bpf");
     println!("cargo:rerun-if-changed=/sys/kernel/btf/vmlinux");
+    // /proc/sys/kernel/osrelease reports a synthetic mtime, so watching it made
+    // every build re-run this script. The kernel release is still read at build
+    // time; ACTRAIL_BPF_KERNEL_RELEASE is the explicit override for rebuilds
+    // after a live kernel change.
+    println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_KERNEL_RELEASE");
     println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_SYSTEM_INCLUDE");
     println!("cargo:rerun-if-env-changed=ACTRAIL_EBPF_EVENT_TRANSPORT");
     println!("cargo:rerun-if-env-changed=ACTRAIL_LAUNCH_BINDING_BACKEND");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_ONCE_BACKEND");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_BPF_TRACE_HASH_ALLOC");
+    println!("cargo:rerun-if-env-changed=ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS");
     println!("cargo:rustc-check-cfg=cfg(actrail_event_transport_perf)");
     println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_task_storage)");
     println!("cargo:rustc-check-cfg=cfg(actrail_launch_binding_pid_generation_hash)");
+    println!("cargo:rustc-check-cfg=cfg(actrail_bpf_once_cas)");
     println!(
         "cargo:rustc-env=ACTRAIL_EBPF_OBJECT={}",
         object_path.display()
@@ -124,6 +132,9 @@ fn main() {
 
     let transport = select_event_transport();
     let launch_binding = select_launch_binding_backend();
+    let once_backend = select_bpf_once_backend();
+    let trace_hash_alloc = trace_hash_alloc::select();
+    let bpf_loop_supported = supports_bpf_loop();
     println!(
         "cargo:rustc-env=ACTRAIL_EBPF_EVENT_TRANSPORT={}",
         transport.transport.as_str()
@@ -143,12 +154,34 @@ fn main() {
         launch_binding.backend.as_str(),
         launch_binding.reason
     );
+    println!(
+        "cargo:rustc-env=ACTRAIL_BPF_ONCE_BACKEND={}",
+        once_backend.backend.as_str()
+    );
+    if once_backend.backend == OnceBackend::Cas {
+        println!("cargo:rustc-cfg=actrail_bpf_once_cas");
+    }
+    println!(
+        "cargo:warning=AcTrail BPF once-only backend: {} ({})",
+        once_backend.backend.as_str(),
+        once_backend.reason
+    );
+    println!(
+        "cargo:warning=AcTrail trace hash map allocation: {} ({})",
+        trace_hash_alloc.alloc.as_str(),
+        trace_hash_alloc.reason
+    );
 
     let mut clang_args = vec![
         "-I".to_string(),
         "bpf".to_string(),
         bpf_target_arch.to_string(),
     ];
+    let tls_direct_copy_max_chunks = env::var("ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS")
+        .expect("ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS must be set by Cargo configuration");
+    clang_args.push(format!(
+        "-DACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS={tls_direct_copy_max_chunks}"
+    ));
     if let Some(include) = target_system_include(&target_arch) {
         clang_args.push(format!("-I{}", include.display()));
     }
@@ -156,7 +189,19 @@ fn main() {
         println!("cargo:rustc-cfg=actrail_event_transport_perf");
         clang_args.push("-DACTRAIL_EVENT_TRANSPORT_PERF".to_string());
     }
+    if bpf_loop_supported {
+        clang_args.push("-DACTRAIL_BPF_LOOP".to_string());
+        println!("cargo:warning=AcTrail bounded iterators: bpf_loop");
+    } else {
+        println!("cargo:warning=AcTrail bounded iterators: verifier loop fallback");
+    }
     clang_args.push(launch_binding.backend.clang_define().to_string());
+    if let Some(define) = once_backend.backend.clang_define() {
+        clang_args.push(define.to_string());
+    }
+    if let Some(define) = trace_hash_alloc.alloc.clang_define() {
+        clang_args.push(define.to_string());
+    }
 
     libbpf_cargo::SkeletonBuilder::new()
         .source("bpf/live_observation.bpf.c")
@@ -164,6 +209,20 @@ fn main() {
         .clang_args(clang_args)
         .build()
         .expect("failed to compile eBPF object");
+}
+
+fn supports_bpf_loop() -> bool {
+    if fs::read("/sys/kernel/btf/vmlinux")
+        .ok()
+        .is_some_and(|btf| contains_bytes(&btf, b"bpf_loop"))
+    {
+        return true;
+    }
+    let Some(release) = kernel_release() else {
+        return false;
+    };
+    parse_kernel_major_minor(&release)
+        .is_some_and(|(major, minor)| major > 5 || (major == 5 && minor >= 17))
 }
 
 fn select_launch_binding_backend() -> LaunchBindingChoice {
@@ -210,8 +269,7 @@ fn auto_launch_binding_backend() -> LaunchBindingChoice {
         };
     }
 
-    let release = fs::read_to_string("/proc/sys/kernel/osrelease")
-        .or_else(|_| uname_release())
+    let release = kernel_release()
         .expect("cannot determine the local kernel release for launch binding selection");
     let (major, minor) = parse_kernel_major_minor(&release)
         .expect("cannot parse the local kernel release for launch binding selection");
@@ -227,6 +285,51 @@ fn auto_launch_binding_backend() -> LaunchBindingChoice {
     panic!(
         "kernel {major}.{minor} may support BPF task-storage, but neither privileged bpftool nor vmlinux BTF proved the required map and helpers; set ACTRAIL_LAUNCH_BINDING_BACKEND explicitly"
     );
+}
+
+fn select_bpf_once_backend() -> OnceChoice {
+    match env::var("ACTRAIL_BPF_ONCE_BACKEND") {
+        Ok(value) => match value.as_str() {
+            "auto" => auto_bpf_once_backend(),
+            "cas" => OnceChoice {
+                backend: OnceBackend::Cas,
+                reason: "forced by ACTRAIL_BPF_ONCE_BACKEND".to_owned(),
+            },
+            "map-once" => OnceChoice {
+                backend: OnceBackend::MapOnce,
+                reason: "forced by ACTRAIL_BPF_ONCE_BACKEND".to_owned(),
+            },
+            _ => panic!("ACTRAIL_BPF_ONCE_BACKEND must be auto, cas, or map-once; got {value}"),
+        },
+        Err(env::VarError::NotPresent) => auto_bpf_once_backend(),
+        Err(error) => panic!("invalid ACTRAIL_BPF_ONCE_BACKEND: {error}"),
+    }
+}
+
+fn auto_bpf_once_backend() -> OnceChoice {
+    let host = env::var("HOST").expect("HOST must be set");
+    let target = env::var("TARGET").expect("TARGET must be set");
+    if host != target {
+        panic!(
+            "ACTRAIL_BPF_ONCE_BACKEND=auto cannot infer the deployment kernel while cross-compiling from {host} to {target}; select cas or map-once explicitly"
+        );
+    }
+
+    let release = kernel_release()
+        .expect("cannot determine the local kernel release for BPF once-only backend selection");
+    let (major, minor) = parse_kernel_major_minor(&release)
+        .expect("cannot parse the local kernel release for BPF once-only backend selection");
+    if major > 5 || (major == 5 && minor >= 12) {
+        OnceChoice {
+            backend: OnceBackend::Cas,
+            reason: format!("local kernel {major}.{minor} supports BPF_ATOMIC cmpxchg (5.12+)"),
+        }
+    } else {
+        OnceChoice {
+            backend: OnceBackend::MapOnce,
+            reason: format!("local kernel {major}.{minor} predates BPF_ATOMIC cmpxchg"),
+        }
+    }
 }
 
 fn task_storage_reported_by_bpftool() -> bool {
@@ -456,9 +559,7 @@ fn probe_ringbuf_with_vmlinux_btf() -> Option<RingbufProbe> {
 }
 
 fn probe_ringbuf_with_kernel_release() -> Option<RingbufProbe> {
-    let release = fs::read_to_string("/proc/sys/kernel/osrelease")
-        .or_else(|_| uname_release())
-        .ok()?;
+    let release = kernel_release()?;
     let (major, minor) = parse_kernel_major_minor(&release)?;
     let supported = major > 5 || (major == 5 && minor >= 8);
     Some(RingbufProbe {
@@ -482,6 +583,21 @@ fn uname_release() -> std::io::Result<String> {
     } else {
         Err(std::io::Error::other("uname -r failed"))
     }
+}
+
+/// Kernel release used for feature selection. `ACTRAIL_BPF_KERNEL_RELEASE`
+/// overrides the probe so a rebuild can be forced after a live kernel change
+/// without watching /proc, whose mtime is synthetic.
+fn kernel_release() -> Option<String> {
+    if let Ok(value) = env::var("ACTRAIL_BPF_KERNEL_RELEASE") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .or_else(|_| uname_release())
+        .ok()
 }
 
 fn parse_kernel_major_minor(release: &str) -> Option<(u32, u32)> {

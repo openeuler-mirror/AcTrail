@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+from tests.v2.regression.constants import DEFAULTS
 
-DEFAULT_PROFILE = Path("local/kata/v2-test-profile.json")
+
+DEFAULT_PROFILE = DEFAULTS.profile
 
 _ALLOWED_ENVIRONMENT = {
     "ACTRAIL_BIN_DIR",

@@ -14,8 +14,9 @@ use super::audit::{
 };
 use super::wake::notify_wake_fd;
 use crate::services::control_runtime::ControlPluginRuntime;
+use crate::services::enforcement::fanotify::FileKey;
 use crate::services::enforcement::fanotify::{PermissionEventFd, respond};
-use crate::services::enforcement::rules::{EnforcementRule, FileKey};
+use access_control::policy::file::EnforcementRule;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ReusableDecisionKey {

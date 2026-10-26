@@ -187,33 +187,33 @@ function emptyDistribution() {
 .latency-page {
   min-width: 0;
   display: grid;
-  gap: var(--stats-section-gap);
+  gap: var(--ui-section-gap);
 }
 
 .latency-intro {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-2xs);
+  gap: var(--ui-space-2xs);
 }
 
 .latency-intro h3 {
   margin: 0;
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-medium);
-  line-height: var(--stats-line-height-tight);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-medium);
+  line-height: var(--ui-line-height-tight);
 }
 
 .latency-intro p {
   margin: 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .latency-controls {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: var(--stats-space-md);
+  gap: var(--ui-space-md);
 }
 
 .latency-controls :deep(.single-select-control) {
@@ -231,7 +231,7 @@ function emptyDistribution() {
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
 }
 
 @media (max-width: 940px) {

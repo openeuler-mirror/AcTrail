@@ -1,6 +1,3 @@
-#[path = "shared/attr_keys.rs"]
-pub(super) mod attr_keys;
-
 #[path = "shared/event_fields.rs"]
 mod event_fields;
 #[path = "shared/fd_identity.rs"]

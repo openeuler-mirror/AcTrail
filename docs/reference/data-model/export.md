@@ -8,8 +8,8 @@ AcTrail 异步导出已经完成的语义事实。导出失败不能阻塞观测
 
 | Action | 完成边界 | 持久化与导出行为 |
 | --- | --- | --- |
-| `process.exec` | 一次完成的 process image replacement | 持久化一个语义事实，并提交一次在线导出 |
-| `command.invocation` | 一次完成的命令调用 | 持久化一个语义事实，并提交一次在线导出 |
+| `process.exec` | 一次 exec 尝试完成，包含成功或失败 | 持久化一个语义事实，并提交一次在线导出 |
+| `command.invocation` | 成功 exec 进入新的命令上下文 | 持久化一个语义事实，并提交一次在线导出；失败 exec 保留原命令上下文 |
 | `llm.request` | 一次完成且已保留的 LLM request | 持久化一个语义事实，并提交一次在线导出 |
 | `agent.identity` | 首次确认 Agent identity | 只导出一次；后续 request 不刷新它 |
 | `process.exit` | Process 终止 | 提交 terminal 在线导出，不重放之前的 action |
@@ -18,6 +18,8 @@ AcTrail 异步导出已经完成的语义事实。导出失败不能阻塞观测
 | `file.write` | File lifecycle close 或其他显式 terminal boundary | 每个 write direction 产生一个有界 aggregate |
 
 持久化与异步导出是相互独立的 best-effort 结果，即系统会尝试完成两者，但两者之间不保证原子性或顺序。Queue 满时丢弃新的 export record，不替换较早的 queued record；失败必须产生结构化 diagnostic 和 counter。
+
+失败 `process.exec` 可通过 `command.contains_process_exec` 归属当时已观测、且起始时间不晚于失败尝试的同进程命令。无法证明归属时保留独立失败事实，不使用祖先当前命令推定继承关系，不等待未来命令回填；原始返回值、参数与证据继续可查询。
 
 ## File I/O 聚合
 

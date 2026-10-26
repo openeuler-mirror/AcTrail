@@ -1,208 +1,180 @@
-//! Incremental HTTP/2 frame decoding and DATA demultiplex input.
-
+//! One incremental HTTP/2 framer with ordered protocol events.
+use super::{HTTP2_CONNECTION_PREFACE, Http2FrameDecode, decode_http2_frame_state};
+use crate::llm_pipeline::transport::buffer::CursorBuffer;
+use crate::llm_pipeline::transport::evidence::EvidenceTracker;
 use model_core::payload::PayloadSegment;
 use std::time::SystemTime;
 
-use super::{
-    HTTP2_CONNECTION_PREFACE, HTTP2_CONTINUATION_FRAME_TYPE, HTTP2_DATA_FRAME_TYPE,
-    HTTP2_FLAG_END_STREAM, HTTP2_HEADERS_FRAME_TYPE, HTTP2_RST_STREAM_FRAME_TYPE, Http2FrameDecode,
-    data_payload, decode_http2_frame_state,
-};
-use crate::llm_pipeline::transport::buffer::CursorBuffer;
-use crate::llm_pipeline::transport::evidence::EvidenceTracker;
-
-pub(in crate::llm_pipeline) struct Http2DataEvent {
-    pub(in crate::llm_pipeline) stream_id: u32,
-    pub(in crate::llm_pipeline) data: Vec<u8>,
-    pub(in crate::llm_pipeline) evidence: Vec<PayloadSegment>,
-    pub(in crate::llm_pipeline) end_stream: bool,
+pub(in crate::llm_pipeline) enum Http2Event {
+    Frame {
+        observation: crate::Http2FrameObservation,
+        evidence: Vec<PayloadSegment>,
+    },
+    StreamFailure {
+        stream_id: u32,
+        observed_at: SystemTime,
+    },
+    ConnectionFailure,
 }
 
-pub(in crate::llm_pipeline) struct Http2EndStreamEvent {
-    pub(in crate::llm_pipeline) stream_id: u32,
-    pub(in crate::llm_pipeline) observed_at: Option<SystemTime>,
-}
-
-pub(in crate::llm_pipeline) struct Http2StreamFailureEvent {
-    pub(in crate::llm_pipeline) stream_id: u32,
-    pub(in crate::llm_pipeline) observed_at: Option<SystemTime>,
-    pub(in crate::llm_pipeline) reset_by_peer: bool,
-}
-
-#[derive(Default)]
-pub(in crate::llm_pipeline) struct Http2DecodeBatch {
-    pub(in crate::llm_pipeline) data: Vec<Http2DataEvent>,
-    pub(in crate::llm_pipeline) ended: Vec<Http2EndStreamEvent>,
-    pub(in crate::llm_pipeline) failures: Vec<Http2StreamFailureEvent>,
-    pub(in crate::llm_pipeline) connection_failures: usize,
-}
-
-#[derive(Default)]
 pub(in crate::llm_pipeline) struct Http2Decoder {
+    identity_prefix: String,
     buffer: CursorBuffer,
     base_offset: usize,
     evidence: EvidenceTracker,
 }
-
 impl Http2Decoder {
-    pub(in crate::llm_pipeline) fn from_buffer(
-        buffer: Vec<u8>,
-        base_offset: usize,
-        evidence: EvidenceTracker,
-    ) -> Self {
+    pub(in crate::llm_pipeline) fn new(identity_prefix: String) -> Self {
         Self {
-            buffer: CursorBuffer::from_vec(buffer),
-            base_offset,
-            evidence,
+            identity_prefix,
+            buffer: CursorBuffer::default(),
+            base_offset: 0,
+            evidence: EvidenceTracker::default(),
         }
     }
-
     pub(in crate::llm_pipeline) fn buffered_bytes(&self) -> usize {
         self.buffer.len()
     }
-
-    pub(in crate::llm_pipeline) fn end_offset(&self) -> usize {
-        self.base_offset.saturating_add(self.buffer.len())
-    }
-
     pub(in crate::llm_pipeline) fn evidence_ranges(&self) -> usize {
         self.evidence.len()
     }
-
     pub(in crate::llm_pipeline) fn append(&mut self, segment: &PayloadSegment) {
         let start = self.base_offset + self.buffer.len();
         self.buffer.extend_from_slice(&segment.bytes);
-        let end = self.base_offset + self.buffer.len();
-        self.evidence.append(start, end, segment);
+        self.evidence
+            .append(start, start + segment.bytes.len(), segment);
     }
-
-    pub(in crate::llm_pipeline) fn advance(&mut self) -> Http2DecodeBatch {
-        let mut batch = Http2DecodeBatch::default();
+    fn observation(
+        &self,
+        start: usize,
+        end: usize,
+        frame_type: u8,
+        flags: u8,
+        stream_id: u32,
+        payload: &[u8],
+        preface: bool,
+    ) -> Option<crate::Http2FrameObservation> {
+        let evidence = self.evidence.for_range(start, end);
+        let first = evidence.first()?;
+        Some(crate::Http2FrameObservation {
+            source: crate::Http1MessageSource {
+                trace_id: first.trace_id,
+                process: first.process,
+                source_boundary: first.source_boundary,
+                stream_key: first.stream_key.to_string(),
+                direction: first.direction,
+                observed_at: first.observed_at,
+                segment_id: first.segment_id,
+                payload_sequence: first.sequence,
+            },
+            observed_at: evidence.last()?.observed_at,
+            payload_segment_ids: evidence.iter().map(|segment| segment.segment_id).collect(),
+            frame_id: format!("{}:frame:{}", self.identity_prefix, start),
+            message_id: None,
+            frame_type,
+            flags,
+            stream_id,
+            payload: std::sync::Arc::new(payload.to_vec()),
+            connection_preface: preface,
+        })
+    }
+    pub(in crate::llm_pipeline) fn advance(&mut self, max_frame_bytes: usize) -> Vec<Http2Event> {
+        let mut events = Vec::new();
         let mut cursor = 0;
+        if self.base_offset == 0
+            && HTTP2_CONNECTION_PREFACE.starts_with(&self.buffer)
+            && self.buffer.len() < HTTP2_CONNECTION_PREFACE.len()
+        {
+            return events;
+        }
         if self.buffer.starts_with(HTTP2_CONNECTION_PREFACE) {
             cursor = HTTP2_CONNECTION_PREFACE.len();
+            if let Some(observation) = self.observation(
+                self.base_offset,
+                self.base_offset + cursor,
+                0,
+                0,
+                0,
+                HTTP2_CONNECTION_PREFACE,
+                true,
+            ) {
+                events.push(Http2Event::Frame {
+                    observation,
+                    evidence: Vec::new(),
+                });
+            }
         }
         loop {
-            let frame = match decode_http2_frame_state(&self.buffer[cursor..]) {
+            let bytes = &self.buffer[cursor..];
+            if bytes.len() >= 9 {
+                let length = (usize::from(bytes[0]) << 16)
+                    | (usize::from(bytes[1]) << 8)
+                    | usize::from(bytes[2]);
+                if length > max_frame_bytes {
+                    events.push(Http2Event::ConnectionFailure);
+                    cursor = self.buffer.len();
+                    break;
+                }
+            }
+            let frame = match decode_http2_frame_state(bytes) {
                 Http2FrameDecode::NeedMore => break,
                 Http2FrameDecode::Invalid {
                     encoded_len,
                     stream_id,
                 } => {
-                    let frame_start = self.base_offset + cursor;
-                    let frame_end = frame_start + encoded_len;
+                    let start = self.base_offset + cursor;
                     let observed_at = self
                         .evidence
-                        .for_range(frame_start, frame_end)
+                        .for_range(start, start + encoded_len)
                         .last()
-                        .map(|segment| segment.observed_at);
-                    if stream_id == 0 {
-                        batch.connection_failures = batch.connection_failures.saturating_add(1);
-                    } else {
-                        batch.failures.push(Http2StreamFailureEvent {
-                            stream_id,
-                            observed_at,
-                            reset_by_peer: false,
-                        });
+                        .map(|source| source.observed_at);
+                    if let Some(observed_at) = observed_at {
+                        if stream_id == 0 {
+                            events.push(Http2Event::ConnectionFailure);
+                        } else {
+                            events.push(Http2Event::StreamFailure {
+                                stream_id,
+                                observed_at,
+                            });
+                        }
                     }
                     cursor += encoded_len;
                     continue;
                 }
                 Http2FrameDecode::Frame(frame) => frame,
             };
-            let encoded_len = frame.encoded_len;
-            let frame_start = self.base_offset + cursor;
-            let frame_end = frame_start + encoded_len;
-            let end_stream = frame.flags & HTTP2_FLAG_END_STREAM != 0;
-            match frame.frame_type {
-                HTTP2_DATA_FRAME_TYPE => {
-                    if let Some(data) = data_payload(frame.flags, frame.payload) {
-                        let evidence = self
-                            .evidence
-                            .for_range(frame_start, frame_end)
-                            .into_iter()
-                            .cloned()
-                            .collect();
-                        batch.data.push(Http2DataEvent {
-                            stream_id: frame.stream_id,
-                            data: data.to_vec(),
-                            evidence,
-                            end_stream,
-                        });
-                    } else if let Some(observed_at) = self
-                        .evidence
-                        .for_range(frame_start, frame_end)
-                        .last()
-                        .map(|segment| segment.observed_at)
-                    {
-                        batch.failures.push(Http2StreamFailureEvent {
-                            stream_id: frame.stream_id,
-                            observed_at: Some(observed_at),
-                            reset_by_peer: false,
-                        });
-                    }
-                }
-                HTTP2_HEADERS_FRAME_TYPE | HTTP2_CONTINUATION_FRAME_TYPE if end_stream => {
-                    batch.ended.push(Http2EndStreamEvent {
-                        stream_id: frame.stream_id,
-                        observed_at: self
-                            .evidence
-                            .for_range(frame_start, frame_end)
-                            .last()
-                            .map(|segment| segment.observed_at),
-                    });
-                }
-                HTTP2_RST_STREAM_FRAME_TYPE => {
-                    if frame.payload.len() == 4 {
-                        batch.failures.push(Http2StreamFailureEvent {
-                            stream_id: frame.stream_id,
-                            observed_at: self
-                                .evidence
-                                .for_range(frame_start, frame_end)
-                                .last()
-                                .map(|segment| segment.observed_at),
-                            reset_by_peer: true,
-                        });
-                    } else {
-                        batch.failures.push(Http2StreamFailureEvent {
-                            stream_id: frame.stream_id,
-                            observed_at: self
-                                .evidence
-                                .for_range(frame_start, frame_end)
-                                .last()
-                                .map(|segment| segment.observed_at),
-                            reset_by_peer: false,
-                        });
-                    }
-                }
-                _ => {}
+            let start = self.base_offset + cursor;
+            if let Some(observation) = self.observation(
+                start,
+                start + frame.encoded_len,
+                frame.frame_type,
+                frame.flags,
+                frame.stream_id,
+                frame.payload,
+                false,
+            ) {
+                let evidence = if frame.frame_type == 0 {
+                    self.evidence
+                        .for_range(start, start + frame.encoded_len)
+                        .into_iter()
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                events.push(Http2Event::Frame {
+                    observation,
+                    evidence,
+                });
             }
-            cursor += encoded_len;
+            cursor += frame.encoded_len;
         }
-        self.release(cursor);
-        batch
-    }
-
-    fn release(&mut self, consumed: usize) {
-        if consumed == 0 {
-            return;
-        }
-        let Some(global_end) = self.base_offset.checked_add(consumed) else {
-            tracing::warn!(consumed, "refused overflowing HTTP/2 buffer release");
-            return;
-        };
-        if !self.buffer.release(consumed) {
-            tracing::warn!(
-                consumed,
-                buffered_bytes = self.buffer.len(),
-                "refused out-of-range HTTP/2 buffer release"
-            );
-            return;
-        }
-        self.base_offset = global_end;
-        self.evidence.evict_before(global_end);
+        self.buffer.release(cursor);
+        self.base_offset += cursor;
+        self.evidence.evict_before(self.base_offset);
         if self.buffer.is_empty() {
             self.evidence.reset();
         }
+        events
     }
 }

@@ -1,9 +1,17 @@
 //! Sync TLS payload event ingestion.
 
+#[path = "direct.rs"]
+mod direct;
+#[path = "frame_buffer.rs"]
+mod frame_buffer;
+#[path = "launch.rs"]
+mod launch;
 #[path = "resolver.rs"]
 mod resolver;
 #[path = "root_path.rs"]
 mod root_path;
+pub(in crate::services) use direct::{DirectObject, DirectResolution};
+pub(in crate::services) use launch::PinnedLaunchPlan;
 
 use std::collections::BTreeMap;
 use std::fs::{self, Permissions};
@@ -26,22 +34,22 @@ use payload_event::RawPayloadSegment;
 use storage_core::TlsFlowDiagnostic;
 use tls_payload_core::PayloadDirection as SyncDirection;
 use tls_payload_sync::{
-    PayloadEvent, SummaryEvent, SyncEvent, decode_event_line, decode_plan_lookup_request,
-    target_runtime_for_path,
+    FrameCodec, PayloadEvent, SummaryEvent, SyncEvent, SyncMessage, target_runtime_for_path,
 };
 use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
+use self::frame_buffer::FrameBuffer;
 use self::resolver::{ExecPlanConsumer, TlsSyncPlanResolver};
-use self::root_path::PeerRootResolver;
+use self::root_path::{PeerRootResolver, PinnedPeerPath};
 use crate::peer_identity::{PeerIdentity, peer_error};
 
 pub(crate) struct TlsSyncService {
     listener: Option<UnixListener>,
     clients: Vec<TlsSyncClient>,
     resolver: Option<TlsSyncPlanResolver>,
-    read_buffer_bytes: usize,
-    max_line_bytes: usize,
+    read_buffer: Vec<u8>,
+    max_frame_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +61,35 @@ pub(crate) enum ExecTlsPlanMode {
 pub(crate) struct ExecTlsPlanResolution {
     pub(crate) mode: ExecTlsPlanMode,
     pub(crate) reply: LaunchTlsPlanReply,
+}
+
+pub(crate) struct RuntimeRootPathMapper {
+    root: root_path::PeerRootHandle,
+}
+
+pub(crate) struct PinnedRuntimePath {
+    _handle: PinnedPeerPath,
+    probe_path: std::path::PathBuf,
+}
+
+impl RuntimeRootPathMapper {
+    pub(crate) fn pin(&self, runtime_path: &Path) -> Result<PinnedRuntimePath, ControlError> {
+        let handle = self
+            .root
+            .pin_path(runtime_path)
+            .map_err(|error| ControlError::new("tls_sync_plan_root", error))?;
+        let probe_path = handle.path();
+        Ok(PinnedRuntimePath {
+            _handle: handle,
+            probe_path,
+        })
+    }
+}
+
+impl PinnedRuntimePath {
+    pub(crate) fn path(&self) -> &Path {
+        &self.probe_path
+    }
 }
 
 #[derive(Debug, Default)]
@@ -71,13 +108,26 @@ pub(crate) struct TlsSyncDiagnostic {
 impl TlsSyncService {
     pub(crate) fn new(config: &PayloadTlsConfig) -> Result<Self, ControlError> {
         if !enabled(config) {
+            let resolver = if config.enabled && config.capture_backend.uses_probe_plans() {
+                Some(TlsSyncPlanResolver::new(config)?)
+            } else {
+                None
+            };
             return Ok(Self {
                 listener: None,
                 clients: Vec::new(),
-                resolver: None,
-                read_buffer_bytes: usize::default(),
-                max_line_bytes: usize::default(),
+                resolver,
+                read_buffer: Vec::new(),
+                max_frame_bytes: usize::default(),
             });
+        }
+        let max_frame_bytes = usize::try_from(config.sync_max_frame_bytes)
+            .map_err(|error| ControlError::new("tls_sync_config", error.to_string()))?;
+        if max_frame_bytes < FrameCodec::HEADER_LEN || config.max_segment_bytes == 0 {
+            return Err(ControlError::new(
+                "tls_sync_config",
+                "sync_max_frame_bytes must fit the frame header and max_segment_bytes must be positive",
+            ));
         }
         let resolver = TlsSyncPlanResolver::new(config)?;
         create_parent_directory(&config.sync_event_socket_path)?;
@@ -95,8 +145,8 @@ impl TlsSyncService {
             listener: Some(listener),
             clients: Vec::new(),
             resolver: Some(resolver),
-            read_buffer_bytes: read_buffer_bytes(config)?,
-            max_line_bytes: max_line_bytes(config)?,
+            read_buffer: vec![0; read_buffer_bytes(config)?],
+            max_frame_bytes,
         })
     }
 
@@ -108,7 +158,32 @@ impl TlsSyncService {
             .into_iter()
             .collect::<Vec<_>>();
         fds.extend(self.clients.iter().map(TlsSyncClient::event_poll_fd));
+        fds.extend(
+            self.resolver
+                .as_ref()
+                .and_then(TlsSyncPlanResolver::direct_poll_fd),
+        );
         fds
+    }
+
+    pub(in crate::services) fn submit_direct(
+        &self,
+        object: DirectObject,
+    ) -> Option<DirectResolution> {
+        self.resolver.as_ref()?.submit_direct(object)
+    }
+
+    pub(in crate::services) fn direct_discovery_enabled(&self) -> bool {
+        self.resolver
+            .as_ref()
+            .is_some_and(TlsSyncPlanResolver::direct_discovery_enabled)
+    }
+
+    pub(in crate::services) fn drain_direct(&mut self) -> Vec<DirectResolution> {
+        self.resolver
+            .as_mut()
+            .map(TlsSyncPlanResolver::drain_direct)
+            .unwrap_or_default()
     }
 
     pub(crate) fn resolve_exec_plan(
@@ -136,6 +211,7 @@ impl TlsSyncService {
     pub(crate) fn resolve_launch_plan(
         &self,
         binary: &Path,
+        path_view_pid: u32,
     ) -> Result<LaunchTlsPlanReply, ControlError> {
         let Some(resolver) = &self.resolver else {
             return Err(ControlError::new(
@@ -143,7 +219,18 @@ impl TlsSyncService {
                 "TLS sync plan resolver is disabled",
             ));
         };
-        resolver.resolve_launch_plan(binary)
+        let mut root = PeerRootResolver::new(path_view_pid);
+        resolver.resolve_launch_plan(binary, root.duplicate())
+    }
+
+    pub(crate) fn runtime_root_path_mapper(
+        &self,
+        path_view_pid: u32,
+    ) -> Result<RuntimeRootPathMapper, ControlError> {
+        let mut root = PeerRootResolver::new(path_view_pid);
+        root.duplicate()
+            .map(|root| RuntimeRootPathMapper { root })
+            .map_err(|error| ControlError::new("tls_sync_plan_root", error))
     }
 
     pub(crate) fn drain(
@@ -155,8 +242,8 @@ impl TlsSyncService {
         let mut retained_clients = Vec::new();
         for mut client in std::mem::take(&mut self.clients) {
             let result = client.read_events(
-                self.read_buffer_bytes,
-                self.max_line_bytes,
+                &mut self.read_buffer,
+                self.max_frame_bytes,
                 self.resolver.as_ref(),
                 trace_runtime,
                 &mut drain.payload_segments,
@@ -213,7 +300,7 @@ impl TlsSyncService {
                         stream,
                         path_root: PeerRootResolver::new(peer.credentials.pid),
                         peer,
-                        buffer: Vec::new(),
+                        buffer: FrameBuffer::default(),
                         process_cache: BTreeMap::new(),
                     });
                 }
@@ -230,7 +317,7 @@ struct TlsSyncClient {
     stream: UnixStream,
     path_root: PeerRootResolver,
     peer: PeerIdentity,
-    buffer: Vec<u8>,
+    buffer: FrameBuffer,
     process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
 }
 
@@ -241,26 +328,26 @@ impl TlsSyncClient {
 
     fn read_events(
         &mut self,
-        read_buffer_bytes: usize,
-        max_line_bytes: usize,
+        scratch: &mut [u8],
+        max_frame_bytes: usize,
         resolver: Option<&TlsSyncPlanResolver>,
         trace_runtime: &TraceRuntime,
         segments: &mut Vec<RawPayloadSegment>,
         flow_diagnostics: &mut Vec<TlsFlowDiagnostic>,
     ) -> Result<bool, ControlError> {
-        let mut scratch = vec![0_u8; read_buffer_bytes];
         loop {
-            match self.stream.read(&mut scratch) {
-                Ok(0) => return Ok(true),
+            match self.stream.read(scratch) {
+                Ok(0) if self.buffer.is_empty() => return Ok(true),
+                Ok(0) => {
+                    return Err(ControlError::new(
+                        "tls_sync_event",
+                        "truncated sync frame at EOF",
+                    ));
+                }
                 Ok(read) => {
-                    self.buffer.extend_from_slice(&scratch[..read]);
-                    if self.buffer.len() > max_line_bytes {
-                        return Err(ControlError::new(
-                            "tls_sync_event",
-                            "sync event line exceeded configured maximum",
-                        ));
-                    }
-                    if self.drain_complete_lines(
+                    self.buffer.append(&scratch[..read]);
+                    if self.drain_complete_frames(
+                        max_frame_bytes,
                         resolver,
                         trace_runtime,
                         segments,
@@ -275,34 +362,46 @@ impl TlsSyncClient {
         }
     }
 
-    fn drain_complete_lines(
+    fn drain_complete_frames(
         &mut self,
+        max_frame_bytes: usize,
         resolver: Option<&TlsSyncPlanResolver>,
         trace_runtime: &TraceRuntime,
         segments: &mut Vec<RawPayloadSegment>,
         flow_diagnostics: &mut Vec<TlsFlowDiagnostic>,
     ) -> Result<bool, ControlError> {
-        while let Some(index) = self.buffer.iter().position(|byte| *byte == b'\n') {
-            let line = self.buffer.drain(..=index).collect::<Vec<_>>();
-            if let Ok(request) = decode_plan_lookup_request(&line) {
-                let Some(resolver) = resolver else {
+        while let Some(message) = self
+            .buffer
+            .next(max_frame_bytes)
+            .map_err(sync_event_error)?
+        {
+            let event = match message {
+                SyncMessage::Event(event) => event,
+                SyncMessage::PlanResponse(_) => {
                     return Err(ControlError::new(
-                        "tls_sync_plan",
-                        "plan lookup received while resolver is disabled",
+                        "tls_sync_event",
+                        "unexpected plan response from runtime",
                     ));
-                };
-                let response = self
-                    .stream
-                    .try_clone()
-                    .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-                response
-                    .set_nonblocking(false)
-                    .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-                let peer_root = self.path_root.duplicate();
-                resolver.submit_lookup(&request.binary, peer_root, response)?;
-                return Ok(true);
-            }
-            let event = decode_event_line(&line).map_err(sync_event_error)?;
+                }
+                SyncMessage::PlanLookup(request) => {
+                    let Some(resolver) = resolver else {
+                        return Err(ControlError::new(
+                            "tls_sync_plan",
+                            "plan lookup received while resolver is disabled",
+                        ));
+                    };
+                    let response = self
+                        .stream
+                        .try_clone()
+                        .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                    response
+                        .set_nonblocking(false)
+                        .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
+                    let peer_root = self.path_root.duplicate();
+                    resolver.submit_lookup(&request.binary, peer_root, response)?;
+                    return Ok(true);
+                }
+            };
             authorize_sync_event(&self.peer, trace_runtime, &event)?;
             match event {
                 SyncEvent::Payload(event) => {
@@ -331,6 +430,7 @@ impl TlsSyncClient {
                 SyncEvent::Decision(_) => {}
             }
         }
+        self.buffer.compact();
         Ok(false)
     }
 }
@@ -395,7 +495,9 @@ fn summary_segment(
         &event.pid_namespace,
         process_cache,
     )?;
-    let captured_size = event.bytes.len() as u64;
+    // Summary headers are metadata, not the next bytes of the TLS stream.
+    // Preserve a zero-byte incomplete operation so consumers observe the gap.
+    let captured_size = 0;
     let original_size = event.observed_size.max(captured_size);
     Ok(Some(RawPayloadSegment {
         trace_id,
@@ -409,6 +511,7 @@ fn summary_segment(
         original_size,
         captured_size,
         operation_id: event.sequence,
+        operation_chunk_index: 0,
         operation_offset: 0,
         operation_original_size: original_size,
         operation_captured_size: captured_size,
@@ -420,7 +523,7 @@ fn summary_segment(
             "tls-summary;reason={};protocol={}",
             event.reason, event.protocol_hint
         )),
-        bytes: event.bytes,
+        bytes: Vec::new(),
     }))
 }
 
@@ -449,6 +552,7 @@ fn payload_segment(
         original_size: captured_size,
         captured_size,
         operation_id: event.sequence,
+        operation_chunk_index: 0,
         operation_offset: 0,
         operation_original_size: captured_size,
         operation_captured_size: captured_size,
@@ -532,17 +636,6 @@ fn enabled(config: &PayloadTlsConfig) -> bool {
 fn read_buffer_bytes(config: &PayloadTlsConfig) -> Result<usize, ControlError> {
     usize::try_from(config.max_segment_bytes)
         .map_err(|error| ControlError::new("tls_sync_config", error.to_string()))
-}
-
-fn max_line_bytes(config: &PayloadTlsConfig) -> Result<usize, ControlError> {
-    let operation = usize::try_from(config.max_operation_bytes)
-        .map_err(|error| ControlError::new("tls_sync_config", error.to_string()))?;
-    let segment = usize::try_from(config.max_segment_bytes)
-        .map_err(|error| ControlError::new("tls_sync_config", error.to_string()))?;
-    operation
-        .checked_mul(2)
-        .and_then(|value| value.checked_add(segment))
-        .ok_or_else(|| ControlError::new("tls_sync_config", "sync event line limit overflow"))
 }
 
 fn sync_event_error(error: tls_payload_sync::SyncError) -> ControlError {

@@ -250,4 +250,4 @@ case workspace，由 runner 的 `--cleanup/--no-cleanup` 统一决定是否保�
 
 合同测试通过不等于完成真机验证：真机需确认 Guest 无路由时生成的 trace 出现在 Host
 Collector 中。设计取舍与原生 VSOCK 的升级条件见
-[`../../../docs/designs/virtual-container/vsock-egress-poc.zh.md`](../../../docs/designs/virtual-container/vsock-egress-poc.zh.md)。
+[`../../../docs/decisions/0003-use-vsock-bridge-for-networkless-guest-egress.md`](../../../docs/decisions/0003-use-vsock-bridge-for-networkless-guest-egress.md)。

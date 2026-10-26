@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use agent_lifecycle_contract::{TurnLifecycleKind, UserInteractionState, WorkKind, WorkState};
 use model_core::binary_identity::BinaryIdentity;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
@@ -69,6 +70,14 @@ pub struct LaunchTlsProbePlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LaunchTarget {
+    /// Executable path in the stopped child's filesystem.
+    pub executable: PathBuf,
+    /// Additional executables to prepare before the child starts.
+    pub candidates: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackAddCommand {
     pub request_id: RequestId,
     pub root: ProcessRef,
@@ -76,6 +85,7 @@ pub struct TrackAddCommand {
     pub profile_name: ProfileName,
     pub tags: BTreeSet<String>,
     pub launch_mode: bool,
+    pub launch_target: Option<LaunchTarget>,
     pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
     pub tls_probe_plans: Vec<LaunchTlsProbePlan>,
 }
@@ -103,6 +113,48 @@ pub struct ListTracesCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DoctorCommand {
     pub request_id: RequestId,
+}
+
+/// Authoritative root-task lifecycle transition reported by an agent host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportTurnLifecycleCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub session_id: String,
+    pub task_id: String,
+    pub kind: TurnLifecycleKind,
+    pub observed_at: std::time::SystemTime,
+}
+
+/// Authoritative user-wait transition reported by an agent host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportUserInteractionCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub session_id: String,
+    pub task_id: String,
+    pub interaction_id: String,
+    pub state: UserInteractionState,
+    pub observed_at: std::time::SystemTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportWorkLifecycleCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub session_id: String,
+    pub task_id: String,
+    pub kind: WorkKind,
+    pub state: WorkState,
+    pub observed_at: std::time::SystemTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReportSessionClosedCommand {
+    pub request_id: RequestId,
+    pub trace_id: TraceId,
+    pub session_id: String,
+    pub observed_at: std::time::SystemTime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -167,6 +219,10 @@ pub enum ControlCommand {
     TrackRemove(TrackRemoveCommand),
     ListTraces(ListTracesCommand),
     Doctor(DoctorCommand),
+    ReportTurnLifecycle(ReportTurnLifecycleCommand),
+    ReportUserInteraction(ReportUserInteractionCommand),
+    ReportSessionClosed(ReportSessionClosedCommand),
+    ReportWorkLifecycle(ReportWorkLifecycleCommand),
     PluginList(PluginListCommand),
     PluginStatus(PluginStatusCommand),
     PluginLoad(PluginLoadCommand),

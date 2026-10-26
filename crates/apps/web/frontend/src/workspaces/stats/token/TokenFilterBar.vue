@@ -123,42 +123,42 @@ defineEmits([
 <style scoped>
 .token-filter-bar {
   min-width: 0;
-  padding: var(--stats-panel-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-lg);
-  background: var(--stats-surface);
+  padding: var(--ui-panel-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
   box-shadow:
-    var(--stats-highlight),
-    var(--stats-shadow);
-  backdrop-filter: var(--stats-glass-filter);
+    var(--ui-highlight),
+    var(--ui-shadow);
+  backdrop-filter: var(--ui-glass-filter);
 }
 
 .filter-heading {
-  margin-bottom: var(--stats-space-2xl);
+  margin-bottom: var(--ui-space-2xl);
 }
 
 .filter-heading span {
   display: block;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .filter-heading strong {
   display: block;
-  margin-top: var(--stats-heading-kicker-gap);
-  color: var(--stats-text);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-lg);
-  font-weight: var(--stats-weight-medium);
-  line-height: var(--stats-line-height-tight);
+  margin-top: var(--ui-heading-kicker-gap);
+  color: var(--ui-text);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-lg);
+  font-weight: var(--ui-weight-medium);
+  line-height: var(--ui-line-height-tight);
 }
 
 .filter-grid {
   display: grid;
-  grid-template-columns: var(--stats-filter-grid);
-  gap: var(--stats-space-2xl);
+  grid-template-columns: var(--ui-filter-grid);
+  gap: var(--ui-space-2xl);
   align-items: end;
 }
 
@@ -168,22 +168,22 @@ defineEmits([
 }
 
 .filter-actions button {
-  height: var(--stats-control-height-lg);
+  height: var(--ui-control-height-lg);
   display: inline-flex;
   align-items: center;
-  gap: var(--stats-space-xs);
-  padding: 0 var(--stats-action-padding-x);
+  gap: var(--ui-space-xs);
+  padding: 0 var(--ui-action-padding-x);
   border: 0;
-  border-radius: var(--stats-radius-md);
-  background: var(--stats-accent);
-  color: var(--stats-on-accent);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-accent);
+  color: var(--ui-on-accent);
   cursor: pointer;
-  font-weight: var(--stats-weight-medium);
+  font-weight: var(--ui-weight-medium);
 }
 
 .filter-actions button.loading {
-  background: var(--stats-danger);
-  color: var(--stats-on-danger);
+  background: var(--ui-danger);
+  color: var(--ui-on-danger);
 }
 
 @media (max-width: 980px) {

@@ -13,6 +13,9 @@ from tests.v2.common.runner import TestingContextSingleton
 
 from .environment import ToolFrequentFailureAlertEnvironment
 
+from .constants import CASE_CONSTANTS
+
+
 _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
 
 _TERMINAL_STATES = frozenset({"exited", "completed"})
@@ -211,7 +214,7 @@ class ToolFrequentFailureAlertTask:
         prefix: str,
         command: list[str],
     ) -> TestResult:
-        marker = f"TOOL_FREQUENT_ALERT_{prefix}_" + secrets.token_hex(6)
+        marker = f"TOOL_FREQUENT_ALERT_{prefix}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         launch = self._launch(marker, command)
         trace_id = self._require_trace_id(launch)
         self._wait_terminal(trace_id)
@@ -231,9 +234,9 @@ class ToolFrequentFailureAlertTask:
         prefix: str,
         paths: tuple[str, ...],
         *,
-        successful_paths: tuple[str, ...] = (),
+        successful_paths: tuple[str, ...] = CASE_CONSTANTS.run_positive_round_successful_paths,
     ) -> tuple[int, dict[str, Any]]:
-        marker = f"TOOL_FREQUENT_ALERT_{prefix}_" + secrets.token_hex(6)
+        marker = f"TOOL_FREQUENT_ALERT_{prefix}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         commands = [f"ls {path}" for path in successful_paths]
         commands.extend(f"ls {path}" for path in paths)
         command = ["bash", "-c", "; ".join(commands)]
@@ -259,7 +262,7 @@ class ToolFrequentFailureAlertTask:
         return trace_id, payload
 
     def _run_cooldown_round(self) -> TestResult:
-        marker = "TOOL_FREQUENT_ALERT_COOLDOWN_" + secrets.token_hex(6)
+        marker = "TOOL_FREQUENT_ALERT_COOLDOWN_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
         command = [
             "bash",
             "-c",
@@ -318,7 +321,7 @@ class ToolFrequentFailureAlertTask:
             for attempt in (1, 2):
                 marker = (
                     f"TOOL_FREQUENT_ALERT_AGENT_{attempt}_"
-                    + secrets.token_hex(6)
+                    + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
                 )
                 launch = self._launch(
                     marker,
@@ -456,7 +459,7 @@ class ToolFrequentFailureAlertTask:
         if len(trace_ids) != 1:
             raise AssertionError(
                 f"expected one trace id, found {trace_ids}: "
-                f"{launch.output[-4000:]}"
+                f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         return trace_ids[0]
 
@@ -556,10 +559,10 @@ class ToolFrequentFailureAlertTask:
         self,
         payload: dict[str, Any],
         *,
-        require_tool_name: bool = True,
-        strict_values: bool = True,
-        expected_total_count: int = 3,
-        expected_failure_rate: float = 1.0,
+        require_tool_name: bool = CASE_CONSTANTS.assert_payload_require_tool_name,
+        strict_values: bool = CASE_CONSTANTS.assert_payload_strict_values,
+        expected_total_count: int = CASE_CONSTANTS.assert_payload_expected_total_count,
+        expected_failure_rate: float = CASE_CONSTANTS.assert_payload_expected_failure_rate,
     ) -> None:
         required = {
             "alert_type",

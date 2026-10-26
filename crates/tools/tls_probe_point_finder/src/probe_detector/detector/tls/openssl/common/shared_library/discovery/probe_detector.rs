@@ -73,7 +73,13 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
         let mut candidates = BTreeMap::<PathBuf, LibraryCandidate>::new();
         let mut notices = Vec::new();
         for path in libraries {
-            self.insert_candidate(&mut candidates, path, CONFIDENCE_USER_SPECIFIED, None)?;
+            self.insert_candidate(
+                image,
+                &mut candidates,
+                path,
+                CONFIDENCE_USER_SPECIFIED,
+                None,
+            )?;
         }
         self.collect_direct_libssl(image, library_search_dirs, &mut candidates, &mut notices)?;
         if self.config.python_ssl_query_enabled {
@@ -95,20 +101,13 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
 
     fn insert_candidate(
         &self,
+        image: &ElfImage,
         candidates: &mut BTreeMap<PathBuf, LibraryCandidate>,
         path: &Path,
         confidence: &'static str,
         note: Option<String>,
     ) -> ToolResult<()> {
-        if !path.exists() {
-            return Err(ToolError::new(format!(
-                "shared library path does not exist: {}",
-                path.display()
-            )));
-        }
-        let canonical = fs::canonicalize(path).map_err(|error| {
-            ToolError::new(format!("cannot resolve {}: {error}", path.display()))
-        })?;
+        let canonical = image.related_path(path)?;
         let candidate = LibraryCandidate {
             path: canonical.clone(),
             confidence,
@@ -145,7 +144,7 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
                 depth: DependencyDepth::Direct,
             })
             .collect::<VecDeque<_>>();
-        let mut visited = BTreeMap::<PathBuf, ()>::new();
+        let mut visited = BTreeMap::<(u64, u64), ()>::new();
         let mut inspected = 0_usize;
         while let Some(edge) = pending.pop_front() {
             inspected += 1;
@@ -155,13 +154,12 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
                     self.config.max_dependency_nodes
                 )));
             }
-            let Some(path) = Self::resolve_needed_library(&edge.name, &edge.search_dirs) else {
+            let Some(path) = Self::resolve_needed_library(image, &edge.name, &edge.search_dirs)
+            else {
                 notices.push(format!("needed_not_found name={}", edge.name));
                 continue;
             };
-            let canonical = fs::canonicalize(&path).map_err(|error| {
-                ToolError::new(format!("cannot resolve {}: {error}", path.display()))
-            })?;
+            let canonical = image.related_path(&path)?;
             let chain = Self::chain_with(&edge.chain, &edge.name);
             if Self::is_libssl_name(&edge.name) {
                 let confidence = match edge.depth {
@@ -169,6 +167,7 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
                     DependencyDepth::Transitive => CONFIDENCE_TRANSITIVE_NEEDED,
                 };
                 self.insert_candidate(
+                    image,
                     candidates,
                     &canonical,
                     confidence,
@@ -176,10 +175,10 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
                 )?;
                 continue;
             }
-            if visited.insert(canonical.clone(), ()).is_some() {
+            let dependency = image.parse_related(&canonical)?;
+            if visited.insert(dependency.file_key(), ()).is_some() {
                 continue;
             }
-            let dependency = ElfImage::parse(&canonical)?;
             let dependency_dynamic = dependency.dynamic_info()?;
             let dependency_origin = dependency.path().parent().unwrap_or_else(|| Path::new("."));
             let dependency_dirs = Self::dependency_search_dirs(
@@ -228,10 +227,16 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
         if !Self::is_python_executable(image.path()) {
             return Ok(());
         }
+        if image.uses_target_filesystem() {
+            // TODO: query _ssl through an execution context belonging to the target.
+            notices
+                .push("python_ssl_extension_query_requires_target_execution_context".to_string());
+            return Ok(());
+        }
         let Some(extension_path) = Self::python_ssl_extension_path(image.path(), notices)? else {
             return Ok(());
         };
-        let extension = ElfImage::parse(&extension_path)?;
+        let extension = image.parse_related(&extension_path)?;
         let root_label = format!("{}:_ssl", Self::file_label(image.path(), "python"));
         self.collect_direct_libssl_from_root(
             &extension,
@@ -262,19 +267,17 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
             if !Self::is_libssl_name(needed) {
                 continue;
             }
-            let Some(path) = Self::resolve_needed_library(needed, &search_dirs) else {
+            let Some(path) = Self::resolve_needed_library(image, needed, &search_dirs) else {
                 notices.push(format!("needed_not_found name={needed}"));
                 continue;
             };
-            let canonical = fs::canonicalize(&path).map_err(|error| {
-                ToolError::new(format!("cannot resolve {}: {error}", path.display()))
-            })?;
+            let canonical = image.related_path(&path)?;
             let mut note = format!("dependency_chain={root_label} -> {needed}");
             if let Some(extra) = extra_note.as_deref() {
                 note.push(' ');
                 note.push_str(extra);
             }
-            self.insert_candidate(candidates, &canonical, confidence, Some(note))?;
+            self.insert_candidate(image, candidates, &canonical, confidence, Some(note))?;
         }
         Ok(())
     }
@@ -341,15 +344,19 @@ impl OpenSslSharedLibraryDiscoveryProbeDetector {
         )
     }
 
-    fn resolve_needed_library(name: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
+    fn resolve_needed_library(
+        image: &ElfImage,
+        name: &str,
+        search_dirs: &[PathBuf],
+    ) -> Option<PathBuf> {
         let needed = Path::new(name);
-        if needed.is_absolute() && needed.exists() {
+        if needed.is_absolute() && image.related_exists(needed) {
             return Some(needed.to_path_buf());
         }
         search_dirs
             .iter()
             .map(|directory| directory.join(name))
-            .find(|path| path.exists())
+            .find(|path| image.related_exists(path))
     }
 
     fn is_libssl_name(name: &str) -> bool {

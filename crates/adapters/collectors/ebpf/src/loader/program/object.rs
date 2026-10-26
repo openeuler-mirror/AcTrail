@@ -16,7 +16,9 @@ use libbpf_rs::{RingBuffer, RingBufferBuilder};
 use super::LoaderError;
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 use super::abi::{
-    EXEC_EVENT_SIZE, KERNEL_OBSERVATION_EVENT_SIZE, LAUNCH_BINDING_FAILURE_EVENT_SIZE,
+    FD_IO_EVENT_SIZE, LAUNCH_BINDING_FAILURE_EVENT_SIZE, NETWORK_EVENT_SIZE,
+    PROCESS_EXEC_EVENT_SIZE, PROCESS_EXIT_EVENT_SIZE, PROCESS_FORK_EVENT_SIZE,
+    PROCESS_SIGNAL_EVENT_SIZE, SOCKET_RELEASE_EVENT_SIZE,
 };
 
 pub(crate) fn ring_buffer_max_bytes(config: &EbpfCollectorConfig, payload: &PayloadConfig) -> u32 {
@@ -149,9 +151,8 @@ where
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn perf_sample_payload(raw: &[u8]) -> &[u8] {
-    strip_perf_raw_size_prefix(raw)
-        .or_else(|| strip_perf_trailing_padding(raw))
-        .unwrap_or(raw)
+    let payload = strip_perf_raw_size_prefix(raw).unwrap_or(raw);
+    strip_perf_trailing_padding(payload).unwrap_or(payload)
 }
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
@@ -171,8 +172,26 @@ fn strip_perf_raw_size_prefix(raw: &[u8]) -> Option<&[u8]> {
 
 #[cfg(any(feature = "perf-buffer", actrail_event_transport_perf))]
 fn strip_perf_trailing_padding(raw: &[u8]) -> Option<&[u8]> {
+    let kind = read_u32(raw, 0)?;
+    let variable_record = match kind {
+        5 => Some((80, 56)),
+        9 => Some((72, 52)),
+        _ => None,
+    };
+    if let Some((header_size, length_offset)) = variable_record {
+        let captured_size = read_u32(raw, length_offset)? as usize;
+        if captured_size > 4_096 {
+            return None;
+        }
+        let payload_size = header_size + captured_size;
+        // PERF_SAMPLE_RAW aligns its u32 size field plus payload to 8 bytes.
+        // Variable records can therefore have zero through seven tail bytes.
+        let sample_size = (payload_size + 4).next_multiple_of(8) - 4;
+        return (raw.len() == sample_size)
+            .then(|| raw.get(..payload_size))
+            .flatten();
+    }
     let payload = raw.get(..raw.len().checked_sub(4)?)?;
-    let kind = read_u32(payload, 0)?;
     if known_event_size(kind, payload.len()) {
         Some(payload)
     } else {
@@ -190,16 +209,27 @@ fn known_event_size(kind: u32, size: usize) -> bool {
     const FILE_EVENT_SIZE: usize = FILE_EVENT_HEADER_SIZE + 256 * 2;
     const STDIO_EVENT_SIZE: usize = 80 + 4_096;
     const STDIO_COMPLETION_EVENT_SIZE: usize = 88;
-    const SOCKET_EVENT_SIZE: usize = 80 + 4_096;
-    const SOCKET_COMPLETION_EVENT_SIZE: usize = 96;
+    const SOCKET_EVENT_SIZE: usize = 120 + 4_096;
+    const SOCKET_COMPLETION_EVENT_SIZE: usize = 104;
+    const PROCESS_EXEC_RESULT_EVENT_SIZE: usize = 64;
+    const PROCESS_FORK_ATTEMPT_EVENT_SIZE: usize = 88;
+    const PROCESS_FORK_RESULT_EVENT_SIZE: usize = 64;
 
     if !known_event_kind(kind) {
         return false;
     }
 
     match kind {
-        1 | 3 | 4 | 100..=107 => size == KERNEL_OBSERVATION_EVENT_SIZE,
-        2 => size == EXEC_EVENT_SIZE,
+        1 => size == PROCESS_FORK_EVENT_SIZE,
+        2 => size == PROCESS_EXEC_EVENT_SIZE,
+        3 => size == PROCESS_EXIT_EVENT_SIZE,
+        4 => size == PROCESS_SIGNAL_EVENT_SIZE,
+        6 => size == PROCESS_EXEC_RESULT_EVENT_SIZE,
+        7 => size == PROCESS_FORK_ATTEMPT_EVENT_SIZE,
+        8 => size == PROCESS_FORK_RESULT_EVENT_SIZE,
+        100 | 101 | 104..=107 => size == NETWORK_EVENT_SIZE,
+        102 | 103 => size == FD_IO_EVENT_SIZE,
+        108 => size == SOCKET_RELEASE_EVENT_SIZE,
         201 | 202 => size == TLS_PAYLOAD_FIXED_EVENT_SIZE,
         203 => size == TLS_DIRECT_CAPTURE_EVENT_SIZE,
         204 => size == TLS_DIAGNOSTIC_EVENT_SIZE,
@@ -222,7 +252,7 @@ fn known_event_size(kind: u32, size: usize) -> bool {
 fn known_event_kind(kind: u32) -> bool {
     matches!(
         kind,
-        1..=4 | 100..=107 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
+        1..=9 | 100..=108 | 201..=205 | 300..=308 | 400 | 401 | 500 | 501
     )
 }
 

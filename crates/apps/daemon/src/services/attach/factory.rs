@@ -1,13 +1,11 @@
 //! Construction for the storage-backed attach service.
 
-use std::collections::BTreeMap;
-
 use config_core::daemon::{
-    AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig, DiagnosticLogLevel,
-    EbpfCollectorConfig, FileObservationConfig, NetworkControlConfig, PayloadConfig,
-    PluginAlertRuntimeConfig, ProcessSeccompConfig, ResourceMetricsConfig, SeccompNotifyConfig,
-    SemanticRetentionConfig, StorageRetentionConfig, TraceFinalizationConfig,
-    launch_seccomp_requirements,
+    AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, CommandControlConfig,
+    DiagnosticLogLevel, EbpfCollectorConfig, EnforcementConfig, FileObservationConfig,
+    IdleDetectionConfig, NetworkControlConfig, PayloadConfig, PluginAlertRuntimeConfig,
+    ProcessSeccompConfig, SeccompNotifyConfig, SemanticRetentionConfig, StorageRetentionConfig,
+    TraceFinalizationConfig, launch_seccomp_requirements,
 };
 use ebpf_collector::EbpfCollector;
 use ebpf_collector::procfs::{ProcfsIdentityReader, ProcfsTreeSnapshotter};
@@ -15,6 +13,7 @@ use export_core::ExportRuntime;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
 use semantic_action_runtime::LiveSemanticActionRuntime;
+use std::collections::BTreeMap;
 use storage_core::StorageBackend;
 
 use crate::profiles::DaemonProfileRegistry;
@@ -23,12 +22,12 @@ use crate::services::alert_ingress::AlertIngress;
 use crate::services::application_protocol::ApplicationProtocolAnalyzer;
 use crate::services::command_control::CommandControlService;
 use crate::services::control_runtime::ControlPluginRuntime;
-use crate::services::enforcement::FanotifyEnforcementService;
+use crate::services::enforcement::FileEnforcementService;
 use crate::services::network_control::NetworkControlService;
 use crate::services::payload_gate::{PayloadBodyRetentionGate, SocketHttpPayloadGate};
 use crate::services::post_trace::{PostTraceBroker, PostTraceCoordinator};
 use crate::services::process_seccomp::ProcessSeccompService;
-use crate::services::resource_metrics::ResourceMetricsSampler;
+use crate::services::resource_profiling::ResourceProfilingAdapter;
 use crate::services::retention::StorageRetentionService;
 use crate::services::seccomp_notify::SeccompNotifyService;
 use crate::services::seccomp_socket::SeccompSocketService;
@@ -50,16 +49,19 @@ impl StorageAttachService {
         process_seccomp: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
-        resource_metrics: ResourceMetricsConfig,
+        resource_metrics: ResourceProfilingAdapter,
         storage_retention: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         alert_forwarding: AlertForwardingService,
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics: WorkloadDiagnostics,
-        enforcement: FanotifyEnforcementService,
+        access_control_config: AccessControlConfig,
+        enforcement_config: EnforcementConfig,
+        enforcement: FileEnforcementService,
         command_control: CommandControlConfig,
         network_control: NetworkControlConfig,
         export_runtime: ExportRuntime,
@@ -74,6 +76,7 @@ impl StorageAttachService {
             process_seccomp,
             agent_invocation,
             semantic_retention,
+            idle_detection,
             file_observation,
             application_protocol,
             resource_metrics,
@@ -83,6 +86,8 @@ impl StorageAttachService {
             trace_finalization,
             shutdown_runtime_timeout_ms,
             workload_diagnostics,
+            access_control_config,
+            enforcement_config,
             enforcement,
             command_control,
             network_control,
@@ -93,31 +98,46 @@ impl StorageAttachService {
     }
 
     pub(in crate::services) fn new_with_provider_classifier(
-        profiles: DaemonProfileRegistry,
+        mut profiles: DaemonProfileRegistry,
         mut storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
-        payload_config: PayloadConfig,
+        mut payload_config: PayloadConfig,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify_config: SeccompNotifyConfig,
         process_seccomp_config: ProcessSeccompConfig,
         agent_invocation: AgentInvocationConfig,
         semantic_retention: SemanticRetentionConfig,
+        idle_detection: IdleDetectionConfig,
         file_observation: FileObservationConfig,
         application_protocol: ApplicationProtocolConfig,
-        resource_metrics: ResourceMetricsConfig,
+        resource_metrics: ResourceProfilingAdapter,
         storage_retention_config: StorageRetentionConfig,
         plugin_alert_runtime: PluginAlertRuntimeConfig,
         alert_forwarding: AlertForwardingService,
         trace_finalization: TraceFinalizationConfig,
         shutdown_runtime_timeout_ms: u64,
         workload_diagnostics: WorkloadDiagnostics,
-        enforcement: FanotifyEnforcementService,
+        access_control_config: AccessControlConfig,
+        enforcement_config: EnforcementConfig,
+        enforcement: FileEnforcementService,
         command_control_config: CommandControlConfig,
         network_control_config: NetworkControlConfig,
         export_runtime: ExportRuntime,
         provider_classifier: Box<dyn ProviderClassifier>,
         provider_classification_enabled: bool,
     ) -> Result<Self, control_contract::reply::ControlError> {
+        payload_config.resolve_stdio_capture(&semantic_retention);
+        let mut file_collection = file_observation.collection;
+        if !file_observation.enabled || !semantic_retention.projection_enabled {
+            file_collection.writable_open = false;
+            file_collection.path_mutations = false;
+            file_collection.fd_mutations = false;
+            file_collection.read = Default::default();
+            file_collection.write = Default::default();
+        }
+        if !payload_config.stdio.enabled {
+            profiles.disable_stdio_capture();
+        }
         let process_records = storage.list_process_records().map_err(storage_error)?;
         let block_size = process_id_block_size()?;
         let (block_start, block_end) = storage
@@ -133,34 +153,27 @@ impl StorageAttachService {
                 })?;
         let payload_tls_enabled = payload_config.tls.enabled;
         let payload_tls_redaction_policy = payload_config.tls.redaction_policy;
-        let payload_tls_retention_max_bytes_per_trace =
-            payload_config.tls.retention_max_bytes_per_trace;
         let payload_stdio_enabled = payload_config.stdio.enabled;
         let payload_stdio_redaction_policy = payload_config.stdio.redaction_policy;
-        let payload_stdio_retention_max_bytes_per_trace =
-            payload_config.stdio.retention_max_bytes_per_trace;
         let payload_stdio_stdin_storage_mode = payload_config.stdio.stdin_storage_mode;
         let payload_stdio_stdout_storage_mode = payload_config.stdio.stdout_storage_mode;
         let payload_stdio_stderr_storage_mode = payload_config.stdio.stderr_storage_mode;
         let payload_socket_enabled = payload_config.socket.enabled;
         let payload_socket_redaction_policy = payload_config.socket.redaction_policy;
-        let payload_socket_retention_max_bytes_per_trace =
-            payload_config.socket.retention_max_bytes_per_trace;
         let payload_mcp = payload_config.mcp;
         let launch_seccomp_requirements = launch_seccomp_requirements(
             &payload_config,
+            &seccomp_notify_config,
             &process_seccomp_config,
             &network_control_config,
             &command_control_config,
+            &access_control_config,
         );
         let socket_payload_gate = SocketHttpPayloadGate::new(
             payload_config.socket.http_sniff_max_bytes,
             payload_config.socket.stream_state_max_entries,
         );
-        let payload_body_retention_gate = PayloadBodyRetentionGate::new(
-            application_protocol.http2_max_data_preview_bytes,
-            semantic_retention.clone(),
-        );
+        let payload_body_retention_gate = PayloadBodyRetentionGate::new(semantic_retention.clone());
         let finalization_traces_per_cycle = usize::try_from(trace_finalization.traces_per_cycle)
             .map_err(|error| {
                 control_contract::reply::ControlError::new(
@@ -172,16 +185,97 @@ impl StorageAttachService {
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
         let tls_sync = TlsSyncService::new(&payload_config.tls)?;
         let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
-        let process_seccomp = ProcessSeccompService::new(&process_seccomp_config);
-        let command_control = CommandControlService::new(&command_control_config)?;
-        let network_control = NetworkControlService::new(&network_control_config)?;
+        let process_seccomp = ProcessSeccompService::new(
+            &process_seccomp_config,
+            seccomp_notify_config.enabled
+                && payload_config.tls.enabled
+                && payload_config.tls.capture_backend.is_sync(),
+        );
+        let lsm_access_control = if access_control_config.uses_lsm() {
+            if !ebpf_config.enabled {
+                return Err(control_contract::reply::ControlError::new(
+                    "lsm_startup",
+                    "LSM requires an available host eBPF collector",
+                ));
+            }
+            Some(
+                access_control::lsm::LsmController::new(
+                    access_control_config.backends.lsm.clone(),
+                    enforcement_config,
+                    access_control_config.file.clone(),
+                    if access_control_config.command.exec.is_lsm() {
+                        command_control_config.clone()
+                    } else {
+                        CommandControlConfig::disabled()
+                    },
+                    if access_control_config.network.connect.is_lsm() {
+                        network_control_config.clone()
+                    } else {
+                        NetworkControlConfig::disabled()
+                    },
+                )
+                .map_err(|message| {
+                    control_contract::reply::ControlError::new("lsm_policy", message)
+                })?,
+            )
+        } else {
+            None
+        };
+        if let Some(controller) = &lsm_access_control
+            && access_control_config.file.uses_lsm()
+        {
+            enforcement.bind_lsm(controller.clone())?;
+        }
+        let command_control =
+            CommandControlService::new(&if !access_control_config.command.exec.is_seccomp() {
+                CommandControlConfig::disabled()
+            } else {
+                command_control_config
+            })?;
+        let network_control =
+            NetworkControlService::new(&if !access_control_config.network.connect.is_seccomp() {
+                NetworkControlConfig::disabled()
+            } else {
+                network_control_config
+            })?;
         let post_trace_broker = PostTraceBroker::new(trace_finalization.post_trace)?;
         let post_trace_coordinator = PostTraceCoordinator::new(trace_finalization.post_trace)?;
-        let alert_ingress = AlertIngress::new(
+        let mut alert_ingress = AlertIngress::new(
             plugin_alert_runtime,
             storage.as_mut(),
             alert_forwarding.plugin(),
         )?;
+        let idle_detection_alert_host = if idle_detection.enabled {
+            Some(alert_ingress.register_producer(
+                idle_detector::IdleDetector::PRODUCER_ID,
+                idle_detector::IdleDetector::alert_definitions(),
+                storage.as_mut(),
+            )?)
+        } else {
+            None
+        };
+        let agent_executions = agent_host::ExecutionStates::new(idle_detection.enabled);
+        let idle_detection =
+            idle_detector::IdleDetector::new(idle_detection).map_err(|message| {
+                control_contract::reply::ControlError::new("idle_detection_config", message)
+            })?;
+        let mut collector = EbpfCollector::new(
+            ebpf_config,
+            payload_config,
+            process_seccomp_config.clone(),
+            file_observation.summary.clone(),
+            semantic_retention.projection_enabled,
+            file_collection,
+            file_observation.enabled
+                && semantic_retention.projection_enabled
+                && file_observation.enumerate.enabled,
+            file_observation.enabled
+                && semantic_retention.projection_enabled
+                && file_observation.tty.enabled,
+        );
+        if let Some(controller) = &lsm_access_control {
+            collector.set_lsm_controller(controller.clone());
+        }
         Ok(Self {
             profiles,
             host_id: crate::host_id::get(),
@@ -189,10 +283,10 @@ impl StorageAttachService {
             storage,
             process_registry,
             process_id_block_size: block_size,
-            collector: EbpfCollector::new(
-                ebpf_config,
-                payload_config,
-                file_observation.bulk_read.fast_path.clone(),
+            collector,
+            lsm_access_control,
+            lsm_boundary_alerts: crate::services::access_control::LsmBoundaryAlerts::new(
+                &access_control_config.backends.lsm,
             ),
             host_ebpf_preflight: Default::default(),
             identity_reader: ProcfsIdentityReader,
@@ -204,16 +298,13 @@ impl StorageAttachService {
             diagnostic_log_level,
             last_payload_tls_diagnostics: None,
             payload_tls_redaction_policy,
-            payload_tls_retention_max_bytes_per_trace,
             payload_stdio_enabled,
             payload_stdio_redaction_policy,
-            payload_stdio_retention_max_bytes_per_trace,
             payload_stdio_stdin_storage_mode,
             payload_stdio_stdout_storage_mode,
             payload_stdio_stderr_storage_mode,
             payload_socket_enabled,
             payload_socket_redaction_policy,
-            payload_socket_retention_max_bytes_per_trace,
             socket_payload_gate,
             payload_body_retention_gate,
             payload_reorderer: Default::default(),
@@ -231,7 +322,7 @@ impl StorageAttachService {
                 application_protocol,
                 semantic_retention.clone(),
             ),
-            resource_metrics: ResourceMetricsSampler::new(resource_metrics),
+            resource_metrics,
             storage_retention: StorageRetentionService::new(storage_retention_config),
             enforcement,
             control_plugins: ControlPluginRuntime::new(),
@@ -245,11 +336,13 @@ impl StorageAttachService {
             ),
             export_runtime,
             alert_ingress,
+            idle_detection,
+            idle_detection_alert_host,
+            agent_executions,
             alert_forwarding,
             post_trace_broker,
             post_trace_coordinator,
             workload_diagnostics,
-            retained_payload_bytes_by_trace: Default::default(),
             finalized_terminal_traces: Default::default(),
             pending_terminal_finalizations: Default::default(),
             terminal_finalization_queued_at: Default::default(),

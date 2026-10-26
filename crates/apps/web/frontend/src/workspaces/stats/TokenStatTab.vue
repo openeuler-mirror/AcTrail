@@ -283,26 +283,26 @@ function emptyStats() {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--stats-section-gap);
-  width: min(100%, var(--stats-shell-max-width));
+  gap: var(--ui-section-gap);
+  width: min(100%, var(--ui-shell-max-width));
   margin: 0 auto;
-  padding: var(--stats-viewport-padding);
+  padding: var(--ui-viewport-padding);
 }
 
 .token-stat-tab :deep(.token-visualization) {
-  min-height: var(--stats-visualization-min-height);
+  min-height: var(--ui-visualization-min-height);
   flex: 0 0 auto;
 }
 
 .token-stat-tab :deep(.token-request-panel) {
-  min-height: var(--stats-request-panel-min-height);
+  min-height: var(--ui-request-panel-min-height);
   flex: 1 1 320px;
 }
 
 @media (max-width: 760px) {
   .token-stat-tab {
-    gap: var(--stats-section-gap-mobile);
-    padding: var(--stats-viewport-padding-mobile);
+    gap: var(--ui-section-gap-mobile);
+    padding: var(--ui-viewport-padding-mobile);
   }
 }
 </style>

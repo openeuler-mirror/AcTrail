@@ -98,17 +98,23 @@ impl ConnectionWorker {
 
     fn handle_frame(&mut self, frame: Frame) -> Result<(), ConnectionError> {
         if !self.welcomed {
-            if frame.code != FrameCode::GatewayHello || !frame.payload.is_empty() {
+            if frame.code != FrameCode::GatewayHello {
                 return Err(ConnectionError::protocol(
-                    "first frame must be an empty GatewayHello",
+                    "first frame must be GatewayHello",
                 ));
             }
+            let workload_cgroup_observations = frame
+                .decode_gateway_hello()
+                .map_err(|error| ConnectionError::wire("gateway_hello", error))?;
             let connection = self
                 .runtime
                 .try_open()
                 .map_err(|error| ConnectionError::protocol(error.to_string()))?;
             let gateway_id = connection.gateway_id();
-            self.write_frame(Frame::numeric_id(FrameCode::GatewayWelcome, gateway_id))?;
+            self.write_frame(
+                Frame::gateway_welcome(gateway_id, workload_cgroup_observations)
+                    .map_err(|error| ConnectionError::wire("gateway_welcome", error))?,
+            )?;
             self.connection = Some(connection);
             self.welcomed = true;
             return Ok(());

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tests.v2.common.test_suite_tools.mcp.constants import DEFAULTS
+
 STDIO_CAPTURE_ABI_MAX_BYTES = 4095
 
 _MCP_PROBE_SERVER = (
@@ -25,7 +27,7 @@ class McpProbeSpec:
     tool_name: str
     marker: str
     event_log: Path
-    tool_description_padding_bytes: int = 0
+    tool_description_padding_bytes: int = DEFAULTS.tool_description_padding_bytes
 
     _NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
@@ -90,7 +92,7 @@ class McpProbeWorkspace:
         server_name: str,
         tool_name: str,
         marker: str,
-        tool_description_padding_bytes: int = 0,
+        tool_description_padding_bytes: int = DEFAULTS.tool_description_padding_bytes,
     ) -> McpProbeSpec:
         return McpProbeSpec(
             server_name=server_name,

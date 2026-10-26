@@ -1,0 +1,3 @@
+[env]
+# Build-time maximum number of 65,535-byte chunks per TLS direct-copy operation.
+ACTRAIL_TLS_DIRECT_COPY_MAX_CHUNKS = "100"

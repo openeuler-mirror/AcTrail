@@ -8,7 +8,7 @@
 | `llm.response.growth` | LLM 响应达到固定阈值，或相对历史基线异常增长 |
 | `command.duration.exceeded` | Agent 顶层命令耗时超过阈值 |
 
-配置、加载、更新和验证步骤见[插件使用手册](../../../../docs/plugins/activity-anomaly-manual.zh.md)。
+配置、加载、更新和验证步骤见[插件使用手册](../../../../docs/operations/plugins/activity-anomaly.md)。
 
 ## 检测规则
 
@@ -77,7 +77,7 @@ scripts/install-release.sh
 
 ## 验证
 
-真实 xiaoO 多容器验证见[端到端测试说明](../../../../tests/agent-trace/multi-container-activity-anomaly/README.md)。
+真实 xiaoO 告警验证见[端到端测试说明](../../../../tests/v2/regression/activity_anomaly/README.zh.md)。
 
 仓库同时提供可直接运行的长命令示例：
 
@@ -85,4 +85,4 @@ scripts/install-release.sh
 bash examples/plugins/wit-component/activity-anomaly/long-running-command.sh 60 5
 ```
 
-第一个参数是目标阈值秒数，第二个参数是超过阈值后继续运行的秒数；上述命令共运行 65 秒。真实 Agent E2E 会把阈值调为 500ms，并让 xiaoO 的 bash 工具执行同一脚本，以便在脚本结束前验证告警已上报。
+第一个参数是目标阈值秒数，第二个参数是超过阈值后继续运行的秒数；上述命令共运行 65 秒。

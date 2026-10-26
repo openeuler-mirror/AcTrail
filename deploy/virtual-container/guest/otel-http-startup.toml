@@ -1,5 +1,4 @@
-# Optional OTLP/HTTP exporter. install-rootfs.sh appends this fragment only
-# when the deployment explicitly supplies --otel-endpoint.
+# OTLP/HTTP exporter settings applied by init --patch when --otel-endpoint is set.
 [plugins.startup]
 enabled = true
 failure_policy = "fail-fast"

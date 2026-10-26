@@ -1,16 +1,24 @@
 //! eBPF-backed collector adapter.
 
 pub mod capability_probe;
+#[path = "collector/access_control/bridge.rs"]
+mod collector_access_control;
 #[path = "collector/dynamic_go_tls.rs"]
 mod collector_dynamic_go_tls;
 #[path = "collector/dynamic_tls.rs"]
 mod collector_dynamic_tls;
 #[path = "collector/events.rs"]
 mod collector_events;
+#[path = "collector/file_io/collector.rs"]
+mod collector_file_io;
 #[path = "collector/instance.rs"]
 mod collector_instance_impl;
 #[path = "collector/net_aggregation.rs"]
 mod collector_net_aggregation;
+#[path = "collector/process_exec.rs"]
+mod collector_process_exec;
+#[path = "collector/process_fork.rs"]
+mod collector_process_fork;
 #[path = "collector/runtime.rs"]
 mod collector_runtime;
 #[path = "collector/stdio_payload.rs"]
@@ -35,7 +43,10 @@ use collector_binding::{
 use collector_event::RawCollectorEvent;
 use collector_instance::{CollectorError, CollectorInstance, CollectorPollBatch};
 use collector_stats::{CollectorStats, DropCounter};
-use config_core::daemon::{EbpfCollectorConfig, FileBulkReadFastPathConfig, PayloadConfig};
+use config_core::daemon::{
+    EbpfCollectorConfig, FileCollectionConfig, FileIoSummaryConfig, PayloadConfig,
+    ProcessSeccompConfig,
+};
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{
@@ -54,13 +65,15 @@ pub use crate::decode::{
 };
 use crate::loader::{
     ArmedLaunchBinding, AttachPlan, EbpfProgramLoader, EbpfRuntime, LoaderError,
-    PendingTlsPayloadOp, TlsPayloadDiagnostics,
+    PendingTlsPayloadOp, ProcessIdentityResolutionRequest, TlsPayloadDiagnostics,
 };
 pub use crate::loader::{LaunchBindingFailure, LaunchBindingFailureStatus, SocketPayloadFdState};
 use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
 use collector_net_aggregation::NetAggregator;
+use collector_process_exec::ProcessExecAssembler;
+use collector_process_fork::ProcessForkAssembler;
 use collector_stdio_payload::StdioPayloadAssembler;
 
 pub struct EbpfCollector {
@@ -69,15 +82,19 @@ pub struct EbpfCollector {
     bindings: BindingStateMap,
     runtime: Option<EbpfRuntime>,
     file_tracker: FileTracker,
+    semantic_projection_enabled: bool,
     dynamic_go_tls: DynamicGoTlsAttacher,
     dynamic_tls: DynamicTlsAttacher,
-    file_bulk_read_fast_path: FileBulkReadFastPathConfig,
+    file_io_summaries: collector_file_io::FileIoSummaryCollector,
     tls_capture_requests: Vec<TlsPayloadCaptureRequest>,
     tls_completions: Vec<TlsPayloadCompletion>,
     tls_direct_captures: Vec<TlsPayloadDirectCapture>,
+    tls_mapping_events: Vec<loader::KernelTlsMappingEvent>,
     tls_diagnostic_events: Vec<TlsDiagnosticEvent>,
     launch_binding_failures: Vec<LaunchBindingFailure>,
     socket_completions: Vec<SocketPayloadCompletion>,
+    process_exec: ProcessExecAssembler,
+    process_fork: ProcessForkAssembler,
     stdio_payloads: StdioPayloadAssembler,
     net_aggregator: NetAggregator,
     net_aggregation_enabled: Arc<AtomicBool>,
@@ -86,6 +103,9 @@ pub struct EbpfCollector {
     pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
     binding_gap_drops: u64,
     binding_gap_lifecycle_skips: u64,
+    socket_total_limit_partials: u64,
+    socket_chunk_limit_partials: u64,
+    socket_iovec_limit_partials: u64,
     clock_ticks_per_second: Option<u64>,
 }
 
@@ -126,14 +146,42 @@ pub enum ForkTraceLookup {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelForkTraceBinding {
     trace_id: TraceId,
-    host_pid: u32,
+    kernel_tgid: u32,
     start_boottime_ns: u64,
     start_time_ticks: u64,
 }
 
 impl KernelForkTraceBinding {
+    fn from_runtime(
+        kernel_tgid: u32,
+        binding: crate::loader::ForkTraceBinding,
+        clock_ticks_per_second: u64,
+    ) -> Result<Self, CollectorError> {
+        let start_time_ticks = u64::try_from(
+            u128::from(binding.child_start_boottime_ns)
+                .saturating_mul(u128::from(clock_ticks_per_second))
+                / 1_000_000_000_u128,
+        )
+        .map_err(|_| {
+            CollectorError::new(
+                "fork_trace_identity",
+                "fork start generation does not fit procfs clock ticks",
+            )
+        })?;
+        Ok(Self {
+            trace_id: binding.trace_id,
+            kernel_tgid,
+            start_boottime_ns: binding.child_start_boottime_ns,
+            start_time_ticks,
+        })
+    }
+
     pub fn trace_id(&self) -> TraceId {
         self.trace_id
+    }
+
+    pub fn kernel_tgid(&self) -> u32 {
+        self.kernel_tgid
     }
 
     pub fn validate_and_enrich(
@@ -146,12 +194,12 @@ impl KernelForkTraceBinding {
                 "procfs observation has no host coordinates",
             )
         })?;
-        if host.pid != self.host_pid || host.start_time_ticks != self.start_time_ticks {
+        if host.start_time_ticks != self.start_time_ticks {
             return Err(CollectorError::new(
                 "fork_trace_identity",
                 format!(
-                    "kernel fork binding generation mismatch for host PID {}",
-                    self.host_pid
+                    "kernel fork binding generation mismatch for kernel TGID {}",
+                    self.kernel_tgid
                 ),
             ));
         }
@@ -164,38 +212,49 @@ impl EbpfCollector {
     pub fn new(
         config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
-        file_bulk_read_fast_path: FileBulkReadFastPathConfig,
+        process_config: ProcessSeccompConfig,
+        file_io_summary_config: FileIoSummaryConfig,
+        semantic_projection_enabled: bool,
+        file_collection: FileCollectionConfig,
+        file_directory_observation: bool,
+        file_tty_observation: bool,
     ) -> Self {
         let mut probe_result = probe();
         if !config.enabled {
             probe_result.reason_unavailable =
                 Some("collector disabled by configuration".to_string());
         }
-        let mcp_stdio_enabled = payload_config.mcp.enabled
-            && payload_config.stdio.enabled
-            && payload_config.stdio.capture_stdin;
-        let file_tracker = FileTracker::new(config.ipc_lineage, mcp_stdio_enabled);
-        let probe_result = probe_result_for_config(probe_result, &config, &payload_config);
+        let process_pending_max_entries = process_config.pending_max_entries;
+        let file_tracker = FileTracker::new(config.ipc_lineage, false).with_file_capture(false);
+        let probe_result = probe_result_for_config(probe_result, &payload_config);
         let net_aggregation_enabled = Arc::new(AtomicBool::new(config.net_send_recv_aggregation));
         Self {
             probe_result,
             loader: EbpfProgramLoader::new(
                 config,
                 payload_config.clone(),
-                file_bulk_read_fast_path.clone(),
+                process_config,
+                file_io_summary_config.clone(),
+                file_collection,
+                file_directory_observation,
+                file_tty_observation,
             ),
             bindings: BindingStateMap::default(),
             runtime: None,
             file_tracker,
+            semantic_projection_enabled,
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
             dynamic_tls: DynamicTlsAttacher::default(),
-            file_bulk_read_fast_path,
+            file_io_summaries: collector_file_io::FileIoSummaryCollector::default(),
             tls_capture_requests: Vec::new(),
             tls_completions: Vec::new(),
             tls_direct_captures: Vec::new(),
+            tls_mapping_events: Vec::new(),
             tls_diagnostic_events: Vec::new(),
             launch_binding_failures: Vec::new(),
             socket_completions: Vec::new(),
+            process_exec: ProcessExecAssembler::new(process_pending_max_entries),
+            process_fork: ProcessForkAssembler::new(process_pending_max_entries),
             stdio_payloads: StdioPayloadAssembler::new(
                 payload_config.stdio.pending_operation_max_entries,
             ),
@@ -206,6 +265,9 @@ impl EbpfCollector {
             pending_launches: BTreeMap::new(),
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,
+            socket_total_limit_partials: 0,
+            socket_chunk_limit_partials: 0,
+            socket_iovec_limit_partials: 0,
             clock_ticks_per_second: clock_ticks_per_second(),
         }
     }
@@ -230,17 +292,8 @@ fn clock_ticks_per_second() -> Option<u64> {
 
 fn probe_result_for_config(
     mut result: EbpfProbeResult,
-    config: &EbpfCollectorConfig,
     payload: &PayloadConfig,
 ) -> EbpfProbeResult {
-    if !config.ipc_lineage.enabled {
-        result.descriptor.capabilities.retain(|descriptor| {
-            !matches!(
-                &descriptor.capability,
-                Capability::IpcPipeFifo | Capability::IpcUnixSocket
-            )
-        });
-    }
     if payload.tls.enabled && !payload.tls.capture_backend.is_sync() {
         result
             .descriptor
@@ -280,24 +333,20 @@ fn probe_result_for_config(
     result
 }
 
-fn supported_required_capability(
-    capability: &Capability,
-    config: &EbpfCollectorConfig,
-    payload: &PayloadConfig,
-) -> bool {
+fn supported_required_capability(capability: &Capability, payload: &PayloadConfig) -> bool {
     matches!(
         capability,
         Capability::ProcLifecycle
+            | Capability::ProcExecContext
             | Capability::NetTransport
             | Capability::FsAccessBasic
             | Capability::FsMmap
     ) || (matches!(
         capability,
         Capability::IpcPipeFifo | Capability::IpcUnixSocket
-    ) && config.ipc_lineage.enabled)
-        || (matches!(capability, Capability::TlsPlaintextPayload)
-            && payload.tls.enabled
-            && !payload.tls.capture_backend.is_sync())
+    )) || (matches!(capability, Capability::TlsPlaintextPayload)
+        && payload.tls.enabled
+        && !payload.tls.capture_backend.is_sync())
         || (matches!(capability, Capability::SocketPlaintextPayload) && payload.socket.enabled)
         || (matches!(capability, Capability::StdioChunk)
             && stdio_payload_capability_configured(payload))

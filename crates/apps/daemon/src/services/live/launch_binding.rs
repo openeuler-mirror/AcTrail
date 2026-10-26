@@ -57,6 +57,7 @@ impl StorageAttachService {
             SemanticActionBatch::default(),
             trace_states,
             Vec::new(),
+            Vec::new(),
         )
     }
 }

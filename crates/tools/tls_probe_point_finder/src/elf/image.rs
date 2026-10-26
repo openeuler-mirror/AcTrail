@@ -1,5 +1,7 @@
+use super::ProbeFileSource;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -41,6 +43,8 @@ impl Arch {
 
 pub(crate) struct ElfImage {
     pub(super) path: PathBuf,
+    pub(super) file_source: Option<Rc<dyn ProbeFileSource>>,
+    pub(super) file_key: (u64, u64),
     pub(super) data: Mmap,
     pub(super) arch: Arch,
     pub(super) identity: BinaryIdentity,
@@ -54,6 +58,7 @@ pub(crate) struct ElfImage {
     pub(super) analysis_cache: Option<Rc<BinaryAnalysisCache>>,
     pub(super) scan_cache: RefCell<PatternScanCache>,
     pub(super) symbol_cache: RefCell<SymbolScanCache>,
+    named_address_cache: RefCell<BTreeMap<String, Option<BTreeMap<String, u64>>>>,
 }
 
 impl ElfImage {
@@ -66,7 +71,7 @@ impl ElfImage {
         scan_mode: ScanMode,
         scan_chunk_bytes: usize,
     ) -> ToolResult<Self> {
-        Self::parse_with_cache(path, scan_mode, scan_chunk_bytes, None)
+        Self::parse_with_cache(path, scan_mode, scan_chunk_bytes, None, None)
     }
 
     pub(crate) fn parse_with_analysis_cache(
@@ -75,17 +80,27 @@ impl ElfImage {
         scan_chunk_bytes: usize,
         analysis_cache: Rc<BinaryAnalysisCache>,
     ) -> ToolResult<Self> {
-        Self::parse_with_cache(path, scan_mode, scan_chunk_bytes, Some(analysis_cache))
+        Self::parse_with_cache(
+            path,
+            scan_mode,
+            scan_chunk_bytes,
+            Some(analysis_cache),
+            None,
+        )
     }
 
-    fn parse_with_cache(
+    pub(super) fn parse_with_cache(
         path: &Path,
         scan_mode: ScanMode,
         scan_chunk_bytes: usize,
         analysis_cache: Option<Rc<BinaryAnalysisCache>>,
+        file_source: Option<Rc<dyn ProbeFileSource>>,
     ) -> ToolResult<Self> {
-        let file = std::fs::File::open(path)
-            .map_err(|error| ToolError::new(format!("cannot open {}: {error}", path.display())))?;
+        let file = match &file_source {
+            Some(source) => source.open(path),
+            None => std::fs::File::open(path),
+        }
+        .map_err(|error| ToolError::new(format!("cannot open {}: {error}", path.display())))?;
         let metadata = file.metadata().map_err(|error| {
             ToolError::new(format!(
                 "cannot stat opened ELF {}: {error}",
@@ -105,6 +120,8 @@ impl ElfImage {
         let analysis_key = BinaryAnalysisKey::new(identity.clone(), &metadata);
         Ok(Self {
             path: path.to_path_buf(),
+            file_source,
+            file_key: (metadata.dev(), metadata.ino()),
             data,
             arch,
             identity,
@@ -118,7 +135,23 @@ impl ElfImage {
             analysis_cache,
             scan_cache: RefCell::new(PatternScanCache::default()),
             symbol_cache: RefCell::new(SymbolScanCache::new()),
+            named_address_cache: RefCell::new(BTreeMap::new()),
         })
+    }
+
+    pub(crate) fn parse_with_file_source(
+        path: &Path,
+        scan_mode: ScanMode,
+        cache: Option<Rc<BinaryAnalysisCache>>,
+        source: Rc<dyn ProbeFileSource>,
+    ) -> ToolResult<Self> {
+        Self::parse_with_cache(
+            path,
+            scan_mode,
+            DEFAULT_LOW_MEMORY_CHUNK_BYTES,
+            cache,
+            Some(source),
+        )
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -205,23 +238,32 @@ impl ElfImage {
         &self.identity
     }
 
-    pub(crate) fn analysis_cache(&self) -> Option<Rc<BinaryAnalysisCache>> {
-        self.analysis_cache.clone()
-    }
-
-    pub(crate) fn scan_mode(&self) -> ScanMode {
-        self.scan_mode
-    }
-
     pub(crate) fn scan_chunk_bytes(&self) -> usize {
         self.scan_chunk_bytes
+    }
+
+    pub(crate) fn release_scan_range(&self, offset: usize, length: usize) {
+        if self.scan_mode == ScanMode::LowMemory && length > 0 {
+            let _ = self
+                .data
+                .advise_range(memmap2::Advice::DontNeed, offset, length);
+        }
+    }
+
+    pub(crate) fn release_scan_window(&self, offset: usize) {
+        let chunk = self.scan_chunk_bytes.max(1);
+        let begin = offset / chunk * chunk;
+        let end = begin.saturating_add(chunk).min(self.data.len());
+        self.release_scan_range(begin, end - begin);
     }
 
     pub(crate) fn cached_named_addresses(
         &self,
         key: &str,
     ) -> Option<Option<BTreeMap<String, u64>>> {
-        let cache = self.analysis_cache.as_ref()?;
+        let Some(cache) = self.analysis_cache.as_ref() else {
+            return self.named_address_cache.borrow().get(key).cloned();
+        };
         let cached =
             cache.with_named_addresses(&self.analysis_key, |addresses| addresses.get(key).cloned());
         cache.record_analysis(cached.is_some());
@@ -237,6 +279,8 @@ impl ElfImage {
             cache.with_named_addresses(&self.analysis_key, |cached| {
                 cached.insert(key, addresses);
             });
+        } else {
+            self.named_address_cache.borrow_mut().insert(key, addresses);
         }
     }
 

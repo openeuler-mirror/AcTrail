@@ -1,0 +1,55 @@
+[plugins.startup]
+enabled = true
+failure_policy = "fail-fast"
+
+[storage]
+backend = "sqlite"
+
+[enforcement]
+enabled = false
+
+[command_control]
+enabled = false
+
+[network_control]
+enabled = false
+
+[capture]
+profile_name = "container-auto"
+capabilities = [
+    "proc-lifecycle",
+    "net-transport",
+    "tls-plaintext-payload",
+    "proc-exec-context",
+]
+opportunistic_capabilities = [
+    "fs-access-basic",
+    "fs-mmap",
+    "ipc-unix-socket",
+    "ipc-pipe-fifo",
+    "stdio-chunk",
+    "socket-plaintext-payload",
+    "net-application-plaintext-http",
+    "net-application-http2-frames",
+    "resource-metrics",
+]
+
+[ebpf]
+enabled = "auto"
+event_ring_buffer_max_bytes = 8388608
+
+[seccomp_notify]
+enabled = true
+
+[process_seccomp]
+enabled = true
+syscalls = ["execve", "execveat"]
+
+[payload.tls]
+redaction_policy = "authorization-header"
+
+[payload.socket]
+enabled = false
+
+[semantic_retention.l4_payload]
+enabled = true

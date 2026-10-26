@@ -13,10 +13,12 @@ from server_core.connection.interface import (
 from .config import HTTPConfig
 from .handler import HTTPRequestHandler
 
+from tests.v2.common.test_suites.local_maas_server.constants import DEFAULTS
+
 
 class HTTPConnectionServer(ThreadingHTTPServer, ConnectionServer):
-    allow_reuse_address = True
-    daemon_threads = True
+    allow_reuse_address = DEFAULTS.allow_reuse_address
+    daemon_threads = DEFAULTS.daemon_threads
 
     def __init__(
         self,

@@ -20,10 +20,10 @@ use trace_runtime::registry::TraceRuntime;
 
 use super::audit::{NetworkAuditBuilder, NetworkDecisionSource};
 use super::request::NetworkConnectContext;
-use super::rules::StoredNetworkRule;
 use super::service::{NetworkControlBackend, NetworkControlService};
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::seccomp_notify::DeferredNotification;
+use access_control::policy::network::StoredNetworkRule;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct ReusableDecisionKey {

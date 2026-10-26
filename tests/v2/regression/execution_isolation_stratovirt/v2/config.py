@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from .constants import CASE_CONSTANTS
+
 from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.config import (
     CloudHypervisorExecutionIsolationConfig,
 )
@@ -14,6 +16,7 @@ class StratoVirtExecutionIsolationConfig(
 ):
     CONFIG_NAMESPACE: ClassVar[str] = "EXECUTION_ISOLATION_STRATOVIRT"
     ENVIRONMENT_PREFIX: ClassVar[str] = "EXECUTION_ISOLATION_STRATOVIRT_E2E_"
+    DEFAULT_VM_ROOT: ClassVar[str] = CASE_CONSTANTS.vm_root
     BACKEND: ClassVar[str] = "stratovirt"
     VMM_COMMAND: ClassVar[str] = "stratovirt"
     PROFILE_RUNTIME_CONFIG: ClassVar[str] = (

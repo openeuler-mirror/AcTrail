@@ -139,7 +139,7 @@ reserved_listener_fd = 253
 enabled = false
 syscalls = ["execve", "execveat", "fork", "vfork", "clone", "clone3"]
 max_args = 64
-max_arg_bytes = 4096
+max_arg_bytes = 4095
 pending_max_entries = 4096
 
 [agent_invocation]
@@ -164,22 +164,19 @@ max_connection_buffer_bytes = 1048576
 emit_data_preview = false
 max_data_preview_bytes = 4096
 
-[resource_metrics]
+[resource_profiling]
 enabled = false
-interval_ms = 1000
-include_children = true
-include_system = true
-cpu_alert_percent_millis = "disabled"
-memory_alert_rss_kb = "disabled"
 
 [provider]
 rules_enabled = false
 rules_path = "/etc/actrail/provider-rules.conf"
 unknown_provider_label = "unknown"
 
+[access_control.file.open]
+backend = "fanotify"
+
 [enforcement]
 enabled = true
-backend = "fanotify"
 scope = "trace"
 rules_path = "{rules_path}"
 default_decision = "allow"

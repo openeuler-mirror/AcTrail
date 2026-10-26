@@ -1,0 +1,86 @@
+# Low-overhead observation: retain LLM identity, timing and terminal state.
+[file_observation.tty]
+enabled = false
+
+[file_observation.enumerate]
+enabled = false
+
+[file_observation.collection]
+writable_open = true
+path_mutations = true
+fd_mutations = false
+
+[file_observation.collection.read]
+observed = false
+counts = false
+bytes = false
+errors = false
+
+[file_observation.collection.write]
+observed = false
+counts = false
+bytes = false
+errors = false
+
+[enforcement]
+enabled = false
+
+[command_control]
+enabled = false
+
+[network_control]
+enabled = false
+
+[process_seccomp]
+enabled = false
+
+[seccomp_notify]
+enabled = false
+
+[payload.tls]
+enabled = true
+capture_backend = "bpf-copy"
+max_segment_bytes = 65535
+max_operation_bytes = 65535
+
+[payload.socket]
+enabled = true
+capture_backend = "bpf-copy"
+
+[payload.mcp]
+enabled = false
+
+[semantic_retention.l0_llm_call]
+enabled = true
+request_content = "none"
+request_body_export = "none"
+response_content = "none"
+tool_calls = "none"
+tool_results_enabled = false
+tool_result_content_export = "none"
+usage = "none"
+retain_assembled_payload = false
+
+[semantic_retention.l0_llm_call.trajectory]
+enabled = false
+
+[semantic_retention.l1_sse]
+enabled = false
+stream_summary = false
+event_content = "none"
+
+[semantic_retention.l2_http]
+body_content = "none"
+
+[semantic_retention.l3_http2_frame]
+enabled = false
+frame_summary = false
+data_content = "none"
+
+[semantic_retention.l4_payload]
+enabled = false
+body_content = "none"
+
+[application.http]
+sse_enabled = false
+sse_data_policy = "disabled"

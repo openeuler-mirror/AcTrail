@@ -70,6 +70,7 @@ fn add_payload_metadata(diagnostic: &mut DiagnosticRecord, payload: &RawObservat
             operation,
             parent,
             metadata,
+            exec_file_identity: _,
         } => {
             insert_metadata(diagnostic, "raw.payload_kind", "process");
             insert_metadata(diagnostic, "raw.operation", operation);
@@ -90,6 +91,11 @@ fn add_payload_metadata(diagnostic: &mut DiagnosticRecord, payload: &RawObservat
             insert_metadata(diagnostic, "raw.payload_kind", "file");
             insert_metadata(diagnostic, "raw.operation", operation);
             copy_metadata_keys(diagnostic, metadata, &["syscall", "fd", "result"]);
+        }
+        RawObservationPayload::FileIoSummary { summary, .. } => {
+            insert_metadata(diagnostic, "raw.payload_kind", "file_io_summary");
+            insert_metadata(diagnostic, "raw.file_token", summary.file_token.to_string());
+            insert_metadata(diagnostic, "raw.errno", summary.errno.to_string());
         }
         RawObservationPayload::Net {
             transport,

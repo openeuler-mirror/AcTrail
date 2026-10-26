@@ -19,7 +19,7 @@ from tests.v2.regression.project_subagent_trajectory.config import (  # noqa: E4
 
 TEST_DEFINITION = TestDefinition(
     name="project_subagent_trajectory",
-    description="Verify configurable project-subagent LLM projection",
+    description="Verify sorting-subagent LLM projection and trajectory graph API",
     build_case=lambda inputs: ProjectSubagentTrajectoryCase(
         ProjectSubagentTrajectoryConfig.from_environment(inputs)
     ),

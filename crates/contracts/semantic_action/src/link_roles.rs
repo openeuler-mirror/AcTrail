@@ -19,8 +19,12 @@ pub const COMMAND_CONTAINS_PROCESS_FORK_ATTEMPT: &str =
     SemanticActionLinkRole::CommandContainsProcessForkAttempt.as_str();
 pub const FILE_WRITE_CONTAINS_FILE_EVENT: &str =
     SemanticActionLinkRole::FileWriteContainsFileEvent.as_str();
+pub const HTTP_REQUEST_HTTP_RESPONSE: &str =
+    SemanticActionLinkRole::HttpRequestHttpResponse.as_str();
 pub const LLM_CALL_REQUEST: &str = SemanticActionLinkRole::LlmCallRequest.as_str();
 pub const LLM_CALL_RESPONSE: &str = SemanticActionLinkRole::LlmCallResponse.as_str();
+pub const LLM_CALL_HTTP_RESPONSE: &str = SemanticActionLinkRole::LlmCallHttpResponse.as_str();
+pub const LLM_REQUEST_TOOL_RESULT: &str = SemanticActionLinkRole::LlmRequestToolResult.as_str();
 pub const LLM_REQUEST_HTTP_MESSAGE: &str = SemanticActionLinkRole::LlmRequestHttpMessage.as_str();
 pub const LLM_REQUEST_LLM_RESPONSE: &str = SemanticActionLinkRole::LlmRequestLlmResponse.as_str();
 pub const LLM_RESPONSE_HTTP_MESSAGE: &str = SemanticActionLinkRole::LlmResponseHttpMessage.as_str();
@@ -30,3 +34,7 @@ pub const MCP_RESPONSE_STDIN: &str = SemanticActionLinkRole::McpResponseStdin.as
 pub const MCP_TOOL_CALL_REQUEST: &str = SemanticActionLinkRole::McpToolCallRequest.as_str();
 pub const MCP_TOOL_CALL_RESPONSE: &str = SemanticActionLinkRole::McpToolCallResponse.as_str();
 pub const SSE_STREAM_EVENT: &str = SemanticActionLinkRole::SseStreamEvent.as_str();
+pub const LLM_REQUEST_WEBSOCKET_MESSAGE: &str =
+    SemanticActionLinkRole::LlmRequestWebSocketMessage.as_str();
+pub const LLM_RESPONSE_WEBSOCKET_MESSAGE: &str =
+    SemanticActionLinkRole::LlmResponseWebSocketMessage.as_str();

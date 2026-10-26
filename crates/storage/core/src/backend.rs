@@ -13,6 +13,10 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
+use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
+use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
+use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
     FileObservationPath, FilePathSetPathPage, FilePathSetWrite, LlmRequestContentPage,
     LlmRequestContentWrite, LlmRequestLineage, LlmRequestLineageWrite, McpJsonRpcContentPage,
@@ -69,6 +73,7 @@ pub struct SemanticActionTraceRevision {
     pub action_max_key: i64,
     pub link_count: u64,
     pub link_max_rowid: i64,
+    pub state_revision: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,7 +102,10 @@ pub struct SemanticActionChildPageQuery {
     pub limit: usize,
 }
 
-pub trait StorageBackend {
+pub trait StorageBackend: crate::CgroupV1BindingStore {
+    /// Whether observation records are retained and need protection from purge during history reads.
+    fn retains_observations(&self) -> bool;
+
     fn next_trace_id_seed(&self) -> Result<u64, StorageError>;
     fn next_event_id_seed(&self) -> Result<u64, StorageError>;
     fn next_diagnostic_id_seed(&self) -> Result<u64, StorageError>;
@@ -125,9 +133,62 @@ pub trait StorageBackend {
     ) -> Result<(), StorageError>;
     fn get_trace(&self, trace_id: TraceId) -> Result<Option<TraceRecord>, StorageError>;
     fn list_traces(&self, filter: &TraceFilter) -> Result<Vec<TraceRecord>, StorageError>;
+    fn trace_counts(&self, trace_id: TraceId) -> Result<crate::TraceCounts, StorageError>;
+    fn trace_page(&self, query: &crate::TracePageQuery) -> Result<crate::TracePage, StorageError>;
+    fn idle_page(&self, query: &crate::IdleQuery) -> Result<crate::IdlePage, StorageError>;
 
     fn upsert_membership(&mut self, membership: ProcessMembership) -> Result<(), StorageError>;
     fn trace_memberships(&self, trace_id: TraceId) -> Result<Vec<ProcessMembership>, StorageError>;
+
+    fn create_resource_scope(&mut self, scope: TraceResourceScope) -> Result<(), StorageError>;
+    fn get_resource_scope(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<TraceResourceScope>, StorageError>;
+    fn list_resource_scopes(&self) -> Result<Vec<TraceResourceScope>, StorageError>;
+    fn update_resource_scope_state(
+        &mut self,
+        trace_id: TraceId,
+        lifecycle_state: ResourceScopeLifecycleState,
+
+        updated_at: SystemTime,
+    ) -> Result<(), StorageError>;
+
+    fn create_external_cgroup_binding(
+        &mut self,
+        binding: ExternalCgroupBinding,
+    ) -> Result<(), StorageError>;
+    fn get_external_cgroup_binding(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Option<ExternalCgroupBinding>, StorageError>;
+    fn list_live_external_cgroup_bindings(
+        &self,
+    ) -> Result<Vec<ExternalCgroupBinding>, StorageError>;
+    fn record_external_cgroup_success(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: SystemTime,
+    ) -> Result<(), StorageError>;
+    fn record_external_cgroup_failure(
+        &mut self,
+        trace_id: TraceId,
+        observed_at: SystemTime,
+    ) -> Result<u32, StorageError>;
+    fn mark_external_cgroup_stale(
+        &mut self,
+        trace_id: TraceId,
+        reason: ExternalBindingStaleReason,
+        updated_at: SystemTime,
+    ) -> Result<(), StorageError>;
+    /// Discard a legacy interrupted admission only if its trace does not exist.
+    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError>;
+
+    fn close_external_cgroup_binding(
+        &mut self,
+        trace_id: TraceId,
+        closed_at: SystemTime,
+    ) -> Result<(), StorageError>;
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError>;
     fn list_events(&self, trace_id: TraceId) -> Result<Vec<DomainEvent>, StorageError>;
@@ -184,7 +245,11 @@ pub trait StorageBackend {
         limit: AlertListLimit,
     ) -> Result<Vec<AlertView>, AlertStoreError>;
 
-    fn upsert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
+    fn insert_semantic_action(&mut self, action: SemanticAction) -> Result<(), StorageError>;
+    fn update_semantic_action(
+        &mut self,
+        update: semantic_action::SemanticActionUpdate,
+    ) -> Result<(), StorageError>;
     fn upsert_semantic_action_link(&mut self, link: SemanticActionLink)
     -> Result<(), StorageError>;
     fn upsert_file_observation_paths(
@@ -213,11 +278,20 @@ pub trait StorageBackend {
         offset: usize,
         limit: usize,
     ) -> Result<SemanticActionPage, StorageError>;
+    fn timeline_page(
+        &self,
+        query: &crate::TimelineQuery,
+    ) -> Result<crate::TimelinePage, StorageError>;
+    fn timeline_bounds(&self, trace_id: TraceId) -> Result<crate::TimelineBounds, StorageError>;
     fn llm_request_lineage(
         &self,
         trace_id: TraceId,
         action_id: &str,
     ) -> Result<Option<LlmRequestLineage>, StorageError>;
+    fn llm_request_lineages(
+        &self,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, StorageError>;
     fn llm_request_trajectory(
         &self,
         trace_id: TraceId,
@@ -333,6 +407,23 @@ pub trait StorageBackend {
         action_id: &str,
         max_bytes: usize,
     ) -> Result<Option<LlmRequestContentPage>, StorageError>;
+    fn action_content_source(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+    ) -> Result<Option<crate::ActionContentSource>, StorageError>;
+    fn http_content_page(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &crate::HttpContentQuery,
+    ) -> Result<Option<crate::HttpContentPage>, StorageError>;
+    fn llm_request_content_node(
+        &self,
+        trace_id: TraceId,
+        action_id: &str,
+        query: &crate::ContentNodeQuery,
+    ) -> Result<Option<crate::ContentNodePage>, StorageError>;
     fn mcp_jsonrpc_content_page(
         &self,
         trace_id: TraceId,

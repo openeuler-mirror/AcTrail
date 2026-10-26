@@ -1,0 +1,26 @@
+[payload.tls]
+enabled = false
+capture_backend = "bpf-copy"
+[payload.stdio]
+enabled = false
+[payload.socket]
+enabled = true
+capture_backend = "bpf-copy"
+[ebpf]
+enabled = true
+[process_seccomp]
+enabled = false
+[access_control.backends.lsm]
+deny_signal = "none"
+audit_default_allow = false
+[enforcement]
+enabled = false
+[command_control]
+enabled = false
+[network_control]
+enabled = true
+default_decision = "allow"
+audit_enabled = false
+audit_default_allow = false
+[plugins.startup]
+enabled = false

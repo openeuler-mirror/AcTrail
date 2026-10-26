@@ -11,7 +11,7 @@
 
 ## 本示例调用流程
 
-WASM core module 的通用导出和输入写入流程见 [WASM Core Module ABI](../../../../docs/plugins/abi/wasm-core-module.zh.md)。控制决策插件的功能层入口和返回码见 [控制决策 ABI](../../../../docs/plugins/abi/control-decider.zh.md)。
+WASM core module 的通用导出和输入写入流程见 [WASM Core Module ABI](../../../../docs/reference/plugin-api/wasm-core-module.md)。控制决策插件的功能层入口和返回码见 [控制决策 ABI](../../../../docs/reference/plugin-api/control-decider.md)。
 
 这个示例只展示命令执行命中插件后的拒绝流程：
 

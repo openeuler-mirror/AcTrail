@@ -160,6 +160,58 @@ impl ProcfsReader {
         })
     }
 
+    pub(crate) fn discover_roots(
+        &self,
+        names: &[[u8; 16]],
+    ) -> Result<Vec<ProcessMarker>, SandboxLinuxError> {
+        let entries = fs::read_dir(&self.root).map_err(|error| {
+            SandboxLinuxError::new(
+                "discover_roots",
+                format!("cannot enumerate {}: {error}", self.root.display()),
+            )
+        })?;
+        let mut roots = Vec::new();
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            match self.process_snapshot(pid) {
+                Ok(snapshot) if names.contains(&snapshot.marker.executable_name) => {
+                    roots.push(snapshot.marker);
+                }
+                Ok(_) => {}
+                Err(error) if is_transient_process_error(&error) => {}
+                Err(_) => {}
+            }
+        }
+        roots.sort_unstable_by_key(|root| (root.pid, root.start_time_ticks));
+        Ok(roots)
+    }
+
+    pub(crate) fn process_start_time_ticks(&self, pid: u32) -> io::Result<u64> {
+        let path = self.root.join(pid.to_string()).join("stat");
+        let stat = fs::read_to_string(path)?;
+        let close = stat.rfind(')').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "process stat has no closing comm",
+            )
+        })?;
+        stat[close + 1..]
+            .split_ascii_whitespace()
+            .nth(19)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "process stat has no starttime")
+            })?
+            .parse::<u64>()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
     pub(crate) fn cpu_snapshot(&self) -> Result<CpuSnapshot, SandboxLinuxError> {
         let path = self.root.join("stat");
         let raw = fs::read_to_string(&path).map_err(|error| {
@@ -486,5 +538,23 @@ mod tests {
 
         assert_eq!(error.stage(), "read_cpu");
         assert_eq!(error.detail(), "aggregate CPU tick counter overflow");
+    }
+
+    #[test]
+    fn process_start_time_reader_uses_the_pid_reuse_marker() {
+        let procfs = TempProcfs::with_stat("cpu 1 1 1 1 1\ncpu0 1 1 1 1 1\n");
+        let process = procfs.root.join("42");
+        fs::create_dir(&process).unwrap();
+        let mut fields = vec!["0"; 20];
+        fields[0] = "S";
+        fields[1] = "1";
+        fields[19] = "4242";
+        fs::write(
+            process.join("stat"),
+            format!("42 (workload root) {}\n", fields.join(" ")),
+        )
+        .unwrap();
+
+        assert_eq!(procfs.reader().process_start_time_ticks(42).unwrap(), 4242);
     }
 }

@@ -1,5 +1,14 @@
 //! Agent semantic-action configuration.
 
+#[path = "agent/http1.rs"]
+mod http1;
+#[path = "agent/retention.rs"]
+mod retention;
+#[path = "agent/websocket.rs"]
+mod websocket;
+pub use http1::Http1ProtocolConfig;
+pub use websocket::{L2WebSocketRetention, LlmWebSocketConfig};
+
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -10,18 +19,12 @@ pub const DEFAULT_LLM_TRAJECTORY_MAX_HISTORY_ATOMS_PER_REQUEST: u32 = 4_096;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_BLOCKS_PER_ATOM: u32 = 64;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_STRUCTURAL_BYTES_PER_ATOM: u32 = 4_096;
 pub const DEFAULT_LLM_TRAJECTORY_IDLE_TTL: Duration = Duration::from_secs(30 * 60);
-pub const DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS: u32 = 8;
 pub const DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 pub const DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES: u32 = 8_192;
 pub const DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES: u64 = 16 * 1024;
-pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
-pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 64;
 pub const DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE: u32 = 4_096;
 pub const DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE: u32 = 1_024;
 pub const DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE: u32 = 4_096;
-pub const DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE: u32 = 4_096;
-pub const DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE: u32 = 1_024;
-pub const DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE: u32 = 1_024;
 pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM: u32 = 256;
 pub const DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM: u32 = 32;
 pub const DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS: Duration = Duration::from_secs(1);
@@ -59,11 +62,13 @@ impl AgentInvocationConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticRetentionConfig {
+    pub projection_enabled: bool,
     pub content_owner: SemanticContentOwner,
     pub l0_llm_call: L0LlmCallRetention,
     pub l0_mcp_call: L0McpCallRetention,
     pub l1_sse: L1SseRetention,
     pub l2_http: L2HttpRetention,
+    pub l2_websocket: L2WebSocketRetention,
     pub l3_http2_frame: L3Http2FrameRetention,
     pub l4_payload: L4PayloadRetention,
 }
@@ -71,149 +76,16 @@ pub struct SemanticRetentionConfig {
 impl Default for SemanticRetentionConfig {
     fn default() -> Self {
         Self {
+            projection_enabled: true,
             content_owner: SemanticContentOwner::HighestConsumed,
             l0_llm_call: L0LlmCallRetention::default(),
             l0_mcp_call: L0McpCallRetention::default(),
             l1_sse: L1SseRetention::default(),
             l2_http: L2HttpRetention::default(),
+            l2_websocket: L2WebSocketRetention::default(),
             l3_http2_frame: L3Http2FrameRetention::default(),
             l4_payload: L4PayloadRetention::default(),
         }
-    }
-}
-
-impl SemanticRetentionConfig {
-    pub fn llm_layer_enabled(&self) -> bool {
-        self.l0_llm_call.enabled
-    }
-
-    pub fn llm_request_consumed_by_l0(&self) -> bool {
-        self.l0_llm_call.enabled
-            && !matches!(
-                self.l0_llm_call.request_content,
-                LlmRequestContentRetention::None
-            )
-    }
-
-    /// Whether the canonical request body is carried on the action for
-    /// export. Configuration validation already guarantees this is only ever
-    /// true alongside `canonical_blocks` request retention.
-    pub fn llm_request_body_export_enabled(&self) -> bool {
-        self.l0_llm_call.enabled
-            && matches!(
-                self.l0_llm_call.request_body_export,
-                LlmRequestBodyExportRetention::CanonicalJson
-            )
-    }
-
-    pub fn llm_response_assembled_provider_enabled(&self) -> bool {
-        self.l0_llm_call.enabled
-            && matches!(
-                self.l0_llm_call.response_content,
-                LlmResponseContentRetention::AssembledProvider
-            )
-    }
-
-    pub fn llm_response_tool_calls_enabled(&self) -> bool {
-        self.l0_llm_call.enabled
-            && matches!(
-                self.l0_llm_call.tool_calls,
-                LlmToolCallRetention::AssembledJson
-            )
-    }
-
-    pub fn llm_tool_result_content_export_enabled(&self) -> bool {
-        self.l0_llm_call.enabled
-            && matches!(
-                self.l0_llm_call.tool_result_content_export,
-                LlmToolResultContentExportRetention::CanonicalJson
-            )
-    }
-
-    pub fn llm_response_usage_enabled(&self) -> bool {
-        self.l0_llm_call.enabled && matches!(self.l0_llm_call.usage, LlmUsageRetention::Summary)
-    }
-
-    pub fn llm_trajectory_enabled(&self) -> bool {
-        self.l0_llm_call.enabled
-            && self.l0_llm_call.trajectory.enabled
-            && matches!(
-                self.l0_llm_call.request_content,
-                LlmRequestContentRetention::CanonicalBlocks
-            )
-    }
-
-    pub fn sse_stream_summary_enabled(&self) -> bool {
-        self.l1_sse.enabled && self.l1_sse.stream_summary
-    }
-
-    pub fn sse_event_content_for_llm_response(&self) -> SseEventContentRetention {
-        if !self.l1_sse.enabled {
-            return SseEventContentRetention::None;
-        }
-        if self.content_owner == SemanticContentOwner::HighestConsumed
-            && self.llm_response_assembled_provider_enabled()
-        {
-            return SseEventContentRetention::None;
-        }
-        self.l1_sse.event_content
-    }
-
-    pub fn http_message_summary_enabled(&self) -> bool {
-        self.l2_http.enabled && self.l2_http.message_summary
-    }
-
-    pub fn http_headers(&self) -> HttpHeadersRetention {
-        if self.l2_http.enabled {
-            self.l2_http.headers
-        } else {
-            HttpHeadersRetention::None
-        }
-    }
-
-    pub fn http_body_content_for_http_message(&self, llm_message: bool) -> HttpBodyRetention {
-        if !self.l2_http.enabled {
-            return HttpBodyRetention::None;
-        }
-        if llm_message
-            && self.content_owner == SemanticContentOwner::HighestConsumed
-            && (self.llm_request_consumed_by_l0() || self.llm_response_assembled_provider_enabled())
-        {
-            return HttpBodyRetention::None;
-        }
-        self.l2_http.body_content
-    }
-
-    pub fn http_body_content_needed(&self, llm_message: bool) -> bool {
-        !matches!(
-            self.http_body_content_for_http_message(llm_message),
-            HttpBodyRetention::None
-        )
-    }
-
-    pub fn http2_frame_summary_enabled(&self) -> bool {
-        self.l3_http2_frame.enabled && self.l3_http2_frame.frame_summary
-    }
-
-    pub fn http2_data_content(&self) -> Http2DataContentRetention {
-        if self.l3_http2_frame.enabled {
-            self.l3_http2_frame.data_content
-        } else {
-            Http2DataContentRetention::None
-        }
-    }
-
-    pub fn retain_transport_payload_body(&self, consumed_by_higher_layer: bool) -> bool {
-        if !self.l4_payload.enabled {
-            return false;
-        }
-        if !matches!(
-            self.l4_payload.body_content,
-            PayloadBodyContentRetention::Retained
-        ) {
-            return false;
-        }
-        self.content_owner == SemanticContentOwner::ConfiguredLayers || !consumed_by_higher_layer
     }
 }
 
@@ -249,11 +121,12 @@ pub struct L0LlmCallRetention {
     pub request_body_export_max_bytes: u64,
     pub response_content: LlmResponseContentRetention,
     pub tool_calls: LlmToolCallRetention,
+    pub tool_results_enabled: bool,
     pub tool_result_content_export: LlmToolResultContentExportRetention,
     pub tool_result_content_export_max_bytes: u64,
     pub usage: LlmUsageRetention,
     pub retain_assembled_payload: bool,
-    pub websocket_max_connections_per_process: u32,
+    pub websocket: LlmWebSocketConfig,
     pub assembly: LlmAssemblyConfig,
     pub stream_classifier: LlmStreamClassifierConfig,
     pub projection_state: LlmProjectionStateConfig,
@@ -290,32 +163,18 @@ impl Default for LlmStreamClassifierConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LlmProjectionStateConfig {
-    pub max_pending_requests_per_stream: u32,
-    pub max_pending_responses_per_stream: u32,
     pub max_action_versions_per_trace: u32,
     pub max_pending_trajectory_actions_per_trace: u32,
     pub max_tool_entries_per_trace: u32,
-    pub max_active_response_bindings_per_trace: u32,
-    pub max_damaged_response_bindings_per_trace: u32,
-    pub max_correlation_streams_per_trace: u32,
 }
 
 impl Default for LlmProjectionStateConfig {
     fn default() -> Self {
         Self {
-            max_pending_requests_per_stream: DEFAULT_LLM_PROJECTION_MAX_PENDING_REQUESTS_PER_STREAM,
-            max_pending_responses_per_stream:
-                DEFAULT_LLM_PROJECTION_MAX_PENDING_RESPONSES_PER_STREAM,
             max_action_versions_per_trace: DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
             max_pending_trajectory_actions_per_trace:
                 DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
             max_tool_entries_per_trace: DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE,
-            max_active_response_bindings_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_ACTIVE_RESPONSE_BINDINGS_PER_TRACE,
-            max_damaged_response_bindings_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_DAMAGED_RESPONSE_BINDINGS_PER_TRACE,
-            max_correlation_streams_per_trace:
-                DEFAULT_LLM_PROJECTION_MAX_CORRELATION_STREAMS_PER_TRACE,
         }
     }
 }
@@ -394,12 +253,12 @@ impl Default for L0LlmCallRetention {
             request_body_export_max_bytes: DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
             response_content: LlmResponseContentRetention::AssembledProvider,
             tool_calls: LlmToolCallRetention::AssembledJson,
+            tool_results_enabled: true,
             tool_result_content_export: LlmToolResultContentExportRetention::None,
             tool_result_content_export_max_bytes: DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
             usage: LlmUsageRetention::Summary,
             retain_assembled_payload: false,
-            websocket_max_connections_per_process:
-                DEFAULT_LLM_WEBSOCKET_MAX_CONNECTIONS_PER_PROCESS,
+            websocket: LlmWebSocketConfig::default(),
             assembly: LlmAssemblyConfig::default(),
             stream_classifier: LlmStreamClassifierConfig::default(),
             projection_state: LlmProjectionStateConfig::default(),
@@ -464,8 +323,8 @@ impl FromStr for LlmRequestBodyExportRetention {
 }
 
 /// Whether an LLM-native tool result body may leave the host on a semantic
-/// action. Result identity, size, hash, and error state remain available when
-/// this is `none`.
+/// action. Result identity, size, and error state remain available when this is
+/// `none`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LlmToolResultContentExportRetention {
     #[default]
@@ -587,14 +446,18 @@ impl FromStr for SseEventContentRetention {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct L2HttpRetention {
     pub enabled: bool,
+    pub max_active_directions: u32,
     pub message_summary: bool,
     pub headers: HttpHeadersRetention,
     pub body_content: HttpBodyRetention,
     pub exchange: HttpExchangeConfig,
+    pub http1: Http1ProtocolConfig,
+    pub http2: Http2ProtocolConfig,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HttpExchangeConfig {
+    pub max_message_facts_per_trace: u32,
     pub max_pending_requests_per_stream: u32,
     pub max_pending_responses_per_stream: u32,
     pub response_lateness: Duration,
@@ -603,6 +466,7 @@ pub struct HttpExchangeConfig {
 impl Default for HttpExchangeConfig {
     fn default() -> Self {
         Self {
+            max_message_facts_per_trace: 4096,
             max_pending_requests_per_stream: DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
             max_pending_responses_per_stream:
                 DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
@@ -615,10 +479,13 @@ impl Default for L2HttpRetention {
     fn default() -> Self {
         Self {
             enabled: true,
+            max_active_directions: 4096,
             message_summary: true,
             headers: HttpHeadersRetention::Metadata,
             body_content: HttpBodyRetention::Text,
             exchange: HttpExchangeConfig::default(),
+            http1: Http1ProtocolConfig::default(),
+            http2: Http2ProtocolConfig::default(),
         }
     }
 }
@@ -737,6 +604,25 @@ impl FromStr for PayloadBodyContentRetention {
             "none" => Ok(Self::None),
             "retained" => Ok(Self::Retained),
             other => Err(format!("unsupported payload body retention {other}")),
+        }
+    }
+}
+
+/// Transport framing budgets, independent of LLM content assembly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Http2ProtocolConfig {
+    pub max_active_streams_per_trace: u32,
+    pub max_evidence_ranges: u32,
+    pub max_frame_bytes: u64,
+    pub max_connection_buffer_bytes: u64,
+}
+impl Default for Http2ProtocolConfig {
+    fn default() -> Self {
+        Self {
+            max_active_streams_per_trace: 4096,
+            max_evidence_ranges: 4096,
+            max_frame_bytes: 65_536,
+            max_connection_buffer_bytes: 4_194_304,
         }
     }
 }

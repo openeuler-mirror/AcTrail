@@ -1,0 +1,23 @@
+[package]
+name = "resource_profiling"
+version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+rusqlite = { version = "0.31.0", features = ["bundled"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls"] }
+prost = "0.13"
+snap = "1"
+libc = "0.2"
+linux_cgroup = { path = "../linux_cgroup" }
+model_core = { path = "../model" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+getrandom = "0.3"
+
+
+[dev-dependencies]
+tempfile = "3"

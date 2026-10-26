@@ -172,7 +172,7 @@ fn selected_parent(
          JOIN semantic_action_ids parent_ids ON parent_ids.action_key = parent.action_key
          WHERE link.trace_id = ?1
            AND link.child_action_key = ?2
-           AND link.link_valid_code = 1
+           AND link.valid = 1
            AND parent.action_valid_code = 1
            AND link.role_code IN ({})
          ORDER BY {} ASC, parent.start_time ASC, parent_ids.action_id ASC
@@ -211,7 +211,7 @@ fn sibling_offset(
              JOIN semantic_action_ids candidate_ids ON candidate_ids.action_key = candidate.action_key
              WHERE link.trace_id = ?1
                AND link.parent_action_key = ?2
-               AND link.link_valid_code = 1
+               AND link.valid = 1
                AND candidate.action_valid_code = 1
                AND link.role_code IN ({})
                AND (candidate.start_time < ?3
@@ -242,7 +242,7 @@ fn sibling_offset(
                  JOIN semantic_actions parent ON parent.action_key = incoming.parent_action_key
                  WHERE incoming.trace_id = candidate.trace_id
                    AND incoming.child_action_key = candidate.action_key
-                   AND incoming.link_valid_code = 1
+                   AND incoming.valid = 1
                    AND parent.action_valid_code = 1
                    AND incoming.role_code IN ({})
                )",
@@ -302,13 +302,13 @@ fn sql_integers(values: &[i16]) -> String {
 #[cfg(test)]
 mod tests {
     use semantic_action::{
-        SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkConfidence,
+        SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkOrigin,
         SemanticActionLinkRole, SemanticActionStatus,
     };
 
     use super::*;
     use crate::semantic_actions::codebook::sqlite::{
-        action_completeness_code, action_kind_code, action_status_code, link_confidence_code,
+        action_completeness_code, action_kind_code, action_status_code, link_origin_code,
         link_role_code,
     };
 
@@ -553,13 +553,13 @@ mod tests {
                 .execute(
                     "INSERT INTO semantic_action_links
                      (trace_id, parent_action_key, child_action_key, role_code,
-                      confidence_code, valid, link_valid_code)
-                     VALUES (?1, 1, ?2, ?3, ?4, 1, 1)",
+                      origin_code, valid)
+                     VALUES (?1, 1, ?2, ?3, ?4, 1)",
                     params![
                         TRACE_ID,
                         child_key,
                         link_role_code(role),
-                        link_confidence_code(SemanticActionLinkConfidence::Observed)
+                        link_origin_code(SemanticActionLinkOrigin::Observed)
                     ],
                 )
                 .expect("insert link");

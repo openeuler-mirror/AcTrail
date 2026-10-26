@@ -39,6 +39,7 @@ Host native VSOCK gateway 就绪后，场景执行真实
 同一个 plugin instance 必须产生新的可用内存风险告警，更新后的 JSON 必须写回原配置文件。
 
 真实 xiaoO 的一个 Bash tool call 创建测试专属 memory cgroup，只把一个 Python 分配进程放入 32 MiB 限额并触发真实内核 OOM。
+工具命令通过位置参数传入 Python 触发脚本路径和测试协调目录，参数在生成命令时进行 shell 转义。
 测试根进程和宿主其他进程不进入该 cgroup。
 
 最终要求独立告警数据库与 subscriber 同时出现以下告警：

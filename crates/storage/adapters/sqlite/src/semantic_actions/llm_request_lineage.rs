@@ -85,6 +85,18 @@ impl LlmRequestLineageStore {
         )
     }
 
+    pub(super) fn by_trace(
+        connection: &Connection,
+        trace_id: TraceId,
+    ) -> Result<Vec<LlmRequestLineage>, SemanticActionStoreError> {
+        Self::query_many(
+            connection,
+            "lineage.trace_id = ?1",
+            params![trace_id.get()],
+            "read_llm_request_lineages",
+        )
+    }
+
     pub(super) fn by_trajectory(
         connection: &Connection,
         trace_id: TraceId,

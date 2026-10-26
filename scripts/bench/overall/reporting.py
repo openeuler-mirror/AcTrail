@@ -30,6 +30,9 @@ class Report:
     agent: str = ""
     rounds: int = 0
     max_turns: int = 0
+    profile_label: str = ""
+    config_patch_path: str | None = None
+    effective_config_path: str = ""
     bare_samples: list[Sample] = field(default_factory=list)
     actrail_samples: list[Sample] = field(default_factory=list)
     actrail_baselines_ms: list[float] = field(default_factory=list)
@@ -47,6 +50,11 @@ class Report:
             "kept_per_case": self.rounds,
             "warmup_discarded": True,
             "max_turns": self.max_turns,
+            "configuration": {
+                "label": self.profile_label,
+                "patch_path": self.config_patch_path,
+                "effective_config_path": self.effective_config_path,
+            },
             "per_round": {
                 "bare": [
                     {

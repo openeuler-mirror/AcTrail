@@ -242,7 +242,7 @@ fn recommended_launch_note(report: &LaunchPlatformReport) -> Option<String> {
     }
     if report.tls_sync_ready() {
         return Some(
-            "seccomp-notify unavailable; use --seccomp-notify auto (default) to select a non-notify deployment"
+            "seccomp-notify unavailable; the default launch keeps it disabled, or use --seccomp-notify auto after enabling it in operator config"
                 .to_string(),
         );
     }
@@ -361,12 +361,9 @@ pub fn suggest_config_text(
         }
     };
 
-    // ebpf: suggest "auto" so the daemon probes eBPF at startup and
-    // auto-degrades (continuing without eBPF collection) when the host cannot
-    // run eBPF — rather than refusing to start. The probe's `ebpf_available`
-    // (from daemon doctor, when queried) is surfaced in the header comment
-    // below; it does not change the suggestion since "auto" handles both
-    // outcomes.
+    // Probe host eBPF at startup. Selected LSM control requires successful
+    // loading and attachment; observation availability cannot disable control.
+    // The probe result is surfaced in the header without changing that policy.
     config.ebpf_config.enabled_mode = EbpfEnabledMode::Auto;
     // `enabled` is the daemon-resolved effective flag; at config-suggestion
     // time we have not run the host probe, so leave it false (matches the
@@ -418,9 +415,14 @@ fn trim_profile_to_available_permissions(
             && request.capability == Capability::ProcLifecycle
     });
     if !process_lifecycle_available {
-        profile
-            .capabilities
-            .retain(|request| request.capability != Capability::EnforcementFilePermissionFanotify);
+        profile.capabilities.retain(|request| {
+            !matches!(
+                request.capability,
+                Capability::EnforcementFilePermissionFanotify
+                    | Capability::EnforcementFileMkdirSeccomp
+                    | Capability::EnforcementFileRmdirSeccomp
+            )
+        });
     }
     profile.name = name;
 }
@@ -478,7 +480,7 @@ fn suggest_config_header(
             if ebpf_available {
                 "present"
             } else {
-                "absent — host eBPF unavailable, auto will degrade"
+                "absent — startup must satisfy any selected LSM control requirements"
             }
         ));
     } else {

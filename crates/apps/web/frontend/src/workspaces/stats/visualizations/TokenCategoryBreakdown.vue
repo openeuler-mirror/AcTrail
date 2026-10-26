@@ -99,11 +99,11 @@ const chartModes = Object.freeze([
 ]);
 
 const categoryColors = Object.freeze({
-  input: 'var(--stats-chart-input)',
-  output: 'var(--stats-chart-output)',
-  reasoning: 'var(--stats-chart-reasoning)',
-  cache_hit: 'var(--stats-chart-total)',
-  cache_miss: 'var(--stats-chart-output)',
+  input: 'var(--ui-chart-input)',
+  output: 'var(--ui-chart-output)',
+  reasoning: 'var(--ui-chart-reasoning)',
+  cache_hit: 'var(--ui-chart-total)',
+  cache_miss: 'var(--ui-chart-output)',
 });
 
 const activeMode = ref(chartModes[0].id);
@@ -116,7 +116,7 @@ const chartItems = computed(() =>
       key: row.key,
       label: row.label,
       value: row.tokens,
-      color: categoryColors[row.key] ?? 'var(--stats-accent)',
+      color: categoryColors[row.key] ?? 'var(--ui-accent)',
     })),
 );
 const modelRowsWithUsage = computed(() =>
@@ -319,12 +319,12 @@ function rowTokens(key) {
 
 function seriesColor(index) {
   const colors = [
-    'var(--stats-chart-total)',
-    'var(--stats-chart-input)',
-    'var(--stats-chart-output)',
-    'var(--stats-chart-reasoning)',
-    'var(--stats-accent)',
-    'var(--stats-danger)',
+    'var(--ui-chart-total)',
+    'var(--ui-chart-input)',
+    'var(--ui-chart-output)',
+    'var(--ui-chart-reasoning)',
+    'var(--ui-accent)',
+    'var(--ui-danger)',
   ];
   return colors[index % colors.length];
 }
@@ -342,36 +342,36 @@ function seriesColor(index) {
 
 .category-bars {
   display: grid;
-  gap: var(--stats-space-xl);
-  padding: var(--stats-space-2xl);
-  border-bottom: 1px solid var(--stats-border);
-  background: var(--stats-surface-soft);
+  gap: var(--ui-space-xl);
+  padding: var(--ui-space-2xl);
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface-soft);
 }
 
 .category-chart-toolbar {
   display: grid;
   grid-template-columns: minmax(180px, 0.8fr) minmax(320px, 1.4fr) auto;
-  gap: var(--stats-space-lg);
+  gap: var(--ui-space-lg);
   align-items: start;
 }
 
 .category-chart-title span,
 .chart-card header span {
   display: block;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
-  font-weight: var(--stats-weight-medium);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
 }
 
 .category-chart-title strong,
 .chart-card header strong {
   display: block;
-  margin-top: var(--stats-heading-kicker-gap);
-  color: var(--stats-text);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-medium);
+  margin-top: var(--ui-heading-kicker-gap);
+  color: var(--ui-text);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-medium);
 }
 
 .chart-picker {
@@ -380,24 +380,24 @@ function seriesColor(index) {
 
 .pricing-note {
   margin: 0;
-  color: var(--stats-muted);
-  font-size: var(--stats-font-sm);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
 }
 
 .chart-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--stats-space-xl);
+  gap: var(--ui-space-xl);
 }
 
 .chart-card {
   min-width: 0;
   display: grid;
-  gap: var(--stats-space-lg);
-  padding: var(--stats-panel-padding);
-  border: 1px solid var(--stats-border);
-  border-radius: var(--stats-radius-lg);
-  background: var(--stats-surface);
+  gap: var(--ui-space-lg);
+  padding: var(--ui-panel-padding);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
 }
 
 .chart-card :deep(.distribution-svg) {
@@ -408,39 +408,39 @@ function seriesColor(index) {
 .chart-card :deep(.legend text),
 .chart-card :deep(.bar-label),
 .chart-card :deep(.bar-value) {
-  font-size: var(--stats-font-xs);
+  font-size: var(--ui-font-xs);
 }
 
 .category-table {
   width: 100%;
-  min-width: var(--stats-category-table-min-width);
+  min-width: var(--ui-category-table-min-width);
   border-collapse: separate;
   border-spacing: 0;
-  font-size: var(--stats-font-md);
+  font-size: var(--ui-font-md);
 }
 
 .category-table th,
 .category-table td {
-  padding: var(--stats-table-cell-padding);
-  border-bottom: 1px solid var(--stats-border);
+  padding: var(--ui-table-cell-padding);
+  border-bottom: 1px solid var(--ui-border);
   text-align: left;
 }
 
 .category-table tr.child td {
-  background: var(--stats-accent-muted);
+  background: var(--ui-accent-muted);
 }
 
 .category-table tr.child .category-name {
   position: relative;
   display: inline-block;
-  padding-left: var(--stats-table-child-indent);
-  color: var(--stats-muted);
+  padding-left: var(--ui-table-child-indent);
+  color: var(--ui-muted);
 }
 
 .category-table tr.child .category-name::before {
   position: absolute;
-  left: var(--stats-table-child-marker-left);
-  color: var(--stats-accent);
+  left: var(--ui-table-child-marker-left);
+  color: var(--ui-accent);
   content: "-";
 }
 
@@ -448,12 +448,12 @@ function seriesColor(index) {
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--stats-surface-strong);
-  color: var(--stats-muted);
-  font-size: var(--stats-font-xs);
-  font-weight: var(--stats-weight-medium);
+  background: var(--ui-surface-strong);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-xs);
+  font-weight: var(--ui-weight-medium);
   text-transform: uppercase;
-  backdrop-filter: var(--stats-control-filter);
+  backdrop-filter: var(--ui-control-filter);
 }
 
 .numeric {
@@ -463,13 +463,13 @@ function seriesColor(index) {
 }
 
 .category-empty {
-  min-height: var(--stats-empty-min-height);
+  min-height: var(--ui-empty-min-height);
   display: grid;
   place-items: center;
-  color: var(--stats-muted);
-  font-family: var(--stats-serif);
-  font-size: var(--stats-font-display-sm);
-  font-weight: var(--stats-weight-regular);
+  color: var(--ui-muted);
+  font-family: var(--ui-heading-font);
+  font-size: var(--ui-font-display-sm);
+  font-weight: var(--ui-weight-regular);
 }
 
 @media (max-width: 1180px) {

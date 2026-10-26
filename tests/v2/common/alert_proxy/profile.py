@@ -10,6 +10,8 @@ from pathlib import Path
 
 from tests.v2.common.actrail_runtime import AlertForwardingRuntimePaths
 
+from .constants import DEFAULTS
+
 
 @dataclass(frozen=True)
 class AlertProxyTestProfile:
@@ -45,7 +47,7 @@ class AlertProxyTestProfile:
             config=(work_dir / "actraild-alert-proxy.toml").resolve(),
             plugin_config=(work_dir / "alert-forwarding.json").resolve(),
             socket_path=(work_dir / "run" / "alert-proxy.sock").resolve(),
-            subscriber_host="127.0.0.1",
+            subscriber_host=DEFAULTS.subscriber_host,
             subscriber_port=subscriber_port,
             token=token,
         )
@@ -69,7 +71,7 @@ class AlertProxyTestProfile:
         self.pid_file.parent.mkdir(parents=True, exist_ok=True)
         self._write_wrapper()
         self._write_proxy_config()
-        self.write_forwarding_config(enabled=False, categories=["consecutive_failure"])
+        self.write_forwarding_config(enabled=DEFAULTS.forwarding_enabled, categories=list(DEFAULTS.forwarding_categories))
 
     def require_running(self) -> int:
         pid = self._read_pid()
@@ -85,7 +87,7 @@ class AlertProxyTestProfile:
     ) -> None:
         document = {
             "enabled": enabled,
-            "all_categories": False,
+            "all_categories": DEFAULTS.forwarding_all_categories,
             "categories": categories,
         }
         self.plugin_config.write_text(
@@ -93,7 +95,7 @@ class AlertProxyTestProfile:
             encoding="utf-8",
         )
 
-    def terminate(self, timeout_seconds: float = 5.0) -> None:
+    def terminate(self, timeout_seconds: float = DEFAULTS.stop_timeout_seconds) -> None:
         pid = self._read_pid()
         if pid is None or not self._is_owned_process(pid):
             return
@@ -102,7 +104,7 @@ class AlertProxyTestProfile:
         while time.monotonic() < deadline:
             if not self._process_exists(pid):
                 return
-            time.sleep(0.05)
+            time.sleep(DEFAULTS.poll_seconds)
         if self._is_owned_process(pid):
             os.kill(pid, signal.SIGKILL)
 
@@ -121,38 +123,38 @@ class AlertProxyTestProfile:
         self.config.write_text(
             "[daemon_ingress]\n"
             f"socket_path = {json.dumps(str(self.socket_path))}\n"
-            'socket_mode_octal = "0600"\n'
+            f'socket_mode_octal = "{DEFAULTS.socket_mode_octal}"\n'
             f"allowed_uids = [{uid}]\n"
             f"allowed_gids = [{gid}]\n"
-            "connection_limit = 2\n"
-            "accept_poll_interval_ms = 20\n"
-            "io_poll_interval_ms = 100\n"
-            "producer_idle_timeout_ms = 5000\n"
-            "max_frame_bytes = 262144\n"
-            "max_trace_id_bytes = 128\n"
-            "max_category_bytes = 128\n"
-            "max_description_bytes = 4096\n"
-            "max_extras_bytes = 131072\n"
-            "worker_thread_stack_bytes = 524288\n"
+            f"connection_limit = {DEFAULTS.ingress_connection_limit}\n"
+            f"accept_poll_interval_ms = {DEFAULTS.accept_poll_interval_ms}\n"
+            f"io_poll_interval_ms = {DEFAULTS.io_poll_interval_ms}\n"
+            f"producer_idle_timeout_ms = {DEFAULTS.producer_idle_timeout_ms}\n"
+            f"max_frame_bytes = {DEFAULTS.max_frame_bytes}\n"
+            f"max_trace_id_bytes = {DEFAULTS.max_trace_id_bytes}\n"
+            f"max_category_bytes = {DEFAULTS.max_category_bytes}\n"
+            f"max_description_bytes = {DEFAULTS.max_description_bytes}\n"
+            f"max_extras_bytes = {DEFAULTS.max_extras_bytes}\n"
+            f"worker_thread_stack_bytes = {DEFAULTS.worker_thread_stack_bytes}\n"
             "\n[subscriber]\n"
             f'listen_addr = "{self.subscriber_host}:{self.subscriber_port}"\n'
-            "allow_insecure_remote = false\n"
-            "listen_backlog = 16\n"
-            "connection_limit = 8\n"
-            "accept_poll_interval_ms = 20\n"
-            "io_poll_interval_ms = 100\n"
-            "max_frame_bytes = 262144\n"
-            "max_client_id_bytes = 128\n"
-            "max_request_id_bytes = 128\n"
-            "max_topics = 16\n"
-            "max_topic_bytes = 128\n"
-            "broadcast_queue_capacity = 64\n"
-            "broadcaster_thread_stack_bytes = 524288\n"
-            "queue_capacity = 16\n"
-            "heartbeat_interval_ms = 1000\n"
-            "pong_timeout_ms = 500\n"
-            "peer_idle_timeout_ms = 5000\n"
-            "worker_thread_stack_bytes = 524288\n"
+            f"allow_insecure_remote = {str(DEFAULTS.allow_insecure_remote).lower()}\n"
+            f"listen_backlog = {DEFAULTS.listen_backlog}\n"
+            f"connection_limit = {DEFAULTS.subscriber_connection_limit}\n"
+            f"accept_poll_interval_ms = {DEFAULTS.accept_poll_interval_ms}\n"
+            f"io_poll_interval_ms = {DEFAULTS.io_poll_interval_ms}\n"
+            f"max_frame_bytes = {DEFAULTS.max_frame_bytes}\n"
+            f"max_client_id_bytes = {DEFAULTS.max_client_id_bytes}\n"
+            f"max_request_id_bytes = {DEFAULTS.max_request_id_bytes}\n"
+            f"max_topics = {DEFAULTS.max_topics}\n"
+            f"max_topic_bytes = {DEFAULTS.max_topic_bytes}\n"
+            f"broadcast_queue_capacity = {DEFAULTS.broadcast_queue_capacity}\n"
+            f"broadcaster_thread_stack_bytes = {DEFAULTS.broadcaster_thread_stack_bytes}\n"
+            f"queue_capacity = {DEFAULTS.queue_capacity}\n"
+            f"heartbeat_interval_ms = {DEFAULTS.heartbeat_interval_ms}\n"
+            f"pong_timeout_ms = {DEFAULTS.pong_timeout_ms}\n"
+            f"peer_idle_timeout_ms = {DEFAULTS.peer_idle_timeout_ms}\n"
+            f"worker_thread_stack_bytes = {DEFAULTS.worker_thread_stack_bytes}\n"
             f"allowed_tokens = [{json.dumps(self.token)}]\n",
             encoding="utf-8",
         )

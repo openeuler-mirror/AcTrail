@@ -38,6 +38,8 @@ sudo actrailviewer tls-flow --trace-id <TRACE_ID>
 
 运维人员应确认 `[capture].capabilities` 包含 `tls-plaintext-payload`，`[payload.tls].enabled = true`，且目标使用 `actrailctl launch`。`tls-sync` 必须在 exec 前准备 runtime、event socket 和 probe plan；`track-add` 不能补装这些条件。实际 TLS provider/二进制还必须能被 resolver 匹配，runtime library 也必须可读。
 
+TLS `bpf-copy` 应检查 ring-buffer 制品、direct plan 及启动时的目标挂载结果。该后端不注入 runtime，也不创建 TLS sync event socket。当前新 executable/共享库的运行中发现仍待实现，同 trace 后代只能复用已挂对象的探针。后端就绪不代表每个目标文件都已有探针。
+
 加密 socket bytes 不能作为 TLS 明文 fallback。probe plan 不完整时应保留显式失败。
 
 ## 有 payload，但没有 `llm.request`
@@ -51,7 +53,7 @@ sudo actrailviewer actions --trace-id <TRACE_ID>
 sudo actrailviewer diagnostics --trace-id <TRACE_ID>
 ```
 
-运维人员应确认 application/HTTP/LLM semantic retention 层已启用。partial、truncated、方向容量溢出或缺少可信 message boundary 会只隔离受影响 stream/direction，并留下 diagnostic；这时不应把不完整 body 投影为完整请求。
+运维人员应确认 application/HTTP/LLM semantic retention 层已启用。完整采集模式中的 `partial`、`truncated`、方向容量溢出或缺少可信 message boundary 会只隔离受影响 stream/direction，并留下 diagnostic；这时不应把不完整 body 投影为完整请求。默认 `bpf-copy` 主动限采则记录为 payload `policy_limited` 和 semantic `capture_limited`，不属于错误；只有 POST、JSON Content-Type 和精确 LLM 路由足以确认请求时才会保留 metadata-only `llm.request`。
 
 ## CLI 看不到内容，但底层已采集
 

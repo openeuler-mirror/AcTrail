@@ -27,7 +27,7 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
             / "tests/v2/regression/virtual_container/validate-runtime-config.py"
         )
         self._provider = (
-            config.repo / "tests/support/llm-http-proxy/provider_proxy.py"
+            config.repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         )
         self._workload = Path(__file__).resolve().parent / "workload.sh"
 

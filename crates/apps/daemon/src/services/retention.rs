@@ -32,12 +32,9 @@ impl StorageRetentionService {
     }
 
     pub(crate) fn poll_timeout(&self) -> Option<Duration> {
-        if !self.config.enabled {
-            return None;
-        }
-        let next_sweep_at = self.next_sweep_at?;
         let now = Instant::now();
-        Some(next_sweep_at.saturating_duration_since(now))
+        self.next_sweep_at
+            .map(|deadline| deadline.saturating_duration_since(now))
     }
 
     pub(crate) fn sweep_if_due(
@@ -220,6 +217,7 @@ impl StorageAttachService {
             return Ok(());
         };
         if report.purged_traces > 0 || report.skipped_active_leases > 0 {
+            self.resource_metrics.prune_forgotten(trace_runtime);
             tracing::info!(
                 purged_traces = report.purged_traces,
                 skipped_active_leases = report.skipped_active_leases,

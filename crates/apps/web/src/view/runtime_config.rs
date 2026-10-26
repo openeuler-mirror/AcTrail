@@ -1,12 +1,11 @@
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use config_core::daemon::{OperatorConfig, StartupPluginLoadConfig};
 use control_contract::command::{ControlCommand, PluginListCommand};
 use control_contract::reply::{ControlError, ControlReply};
-use model_core::ids::RequestId;
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
 
+use super::web_request_id;
 use crate::json;
 
 pub(crate) fn current_config_json(
@@ -35,7 +34,11 @@ pub(crate) fn current_config_json(
     json::field(
         &mut summary,
         "storage_path",
-        &json::string(&config.storage.path().display().to_string()),
+        &config
+            .storage
+            .path()
+            .map(|path| json::string(&path.display().to_string()))
+            .unwrap_or_else(|| "null".to_string()),
     );
     summary.push(',');
     json::field(
@@ -399,13 +402,4 @@ fn source_json(config_path: Option<&Path>) -> String {
     }
     output.push('}');
     output
-}
-
-fn web_request_id() -> Result<RequestId, String> {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "system clock is before unix epoch; cannot build control request id")?;
-    let millis = u64::try_from(duration.as_millis())
-        .map_err(|_| "system clock millis overflowed request id")?;
-    Ok(RequestId::new(millis))
 }

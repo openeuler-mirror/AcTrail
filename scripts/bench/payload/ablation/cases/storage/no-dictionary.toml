@@ -1,0 +1,4 @@
+[storage]
+backend = "sqlite"
+[storage.sqlite]
+event_payload_dictionary_cache_bytes = 0

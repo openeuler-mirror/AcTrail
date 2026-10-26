@@ -17,7 +17,7 @@ use super::request::project_stream_llm_request_action;
 use super::request::{ProjectedLlmRequestHistory, ProjectedLlmToolResult};
 use super::response::{
     InFlightResponse, LlmResponseProjection, ProjectedProviderResponseId,
-    project_raw_stream_llm_response_actions, project_stream_llm_response_message_actions,
+    project_stream_llm_response_message_actions,
 };
 
 pub(crate) struct LiveLlmProjection {
@@ -42,7 +42,9 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
     segments: &[&PayloadSegment],
 ) -> Option<LiveLlmProjection> {
     let encoded_len = message.encoded_len;
+    let body = message.body;
     let http = HttpRequestParts {
+        message_id: message.message_id?,
         protocol: message.protocol,
         scheme: "https",
         method: message.method,
@@ -51,8 +53,10 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
         stream_id: None,
         headers_text: Some(message.headers_text),
         headers_hpack_base64: None,
-        body: message.body,
+        body: body.bytes(raw_bytes)?,
+        declared_body_len: message.declared_body_len,
         encoded_len,
+        complete: message.complete,
     };
     let request = project_stream_llm_request_action(
         config,
@@ -87,29 +91,6 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
     })
 }
 
-pub(in crate::llm_pipeline) fn project_raw_llm_response_message(
-    config: &SemanticRetentionConfig,
-    codecs: &LlmCodecRegistry,
-    key: &PayloadStreamGroupKey,
-    message_start: usize,
-    bytes: &[u8],
-    evidence: &EvidenceSnapshot,
-    sse_cache: &mut Option<IncrementalSseCache>,
-    force_terminal: bool,
-) -> Option<LiveLlmProjection> {
-    project_raw_stream_llm_response_actions(
-        config,
-        codecs,
-        key,
-        message_start,
-        bytes,
-        evidence,
-        sse_cache,
-        force_terminal,
-    )
-    .map(live_projection_from_response)
-}
-
 pub(in crate::llm_pipeline) fn project_decoded_http1_response(
     config: &SemanticRetentionConfig,
     codecs: &LlmCodecRegistry,
@@ -122,7 +103,9 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_response(
     force_terminal: bool,
 ) -> Option<LiveLlmProjection> {
     let encoded_len = message.encoded_len;
+    let body_decoding_failed = message.content_failure.is_some();
     let http = HttpResponseParts {
+        message_id: message.message_id?,
         protocol: message.protocol,
         scheme: "https",
         status_code: message.status_code,
@@ -130,7 +113,11 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_response(
         stream_id: None,
         headers_text: Some(message.headers_text),
         headers_hpack_base64: None,
-        body: message.body,
+        body: if body_decoding_failed {
+            Arc::default()
+        } else {
+            message.body.into_shared()?
+        },
         encoded_len,
         complete: message.complete,
         body_boundary_known: message.body_boundary_known,
@@ -145,6 +132,7 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_response(
         evidence,
         sse_cache,
         force_terminal,
+        body_decoding_failed,
     )?;
     Some(live_projection_from_response(projection))
 }
@@ -156,23 +144,28 @@ pub(crate) fn project_http2_stream_request(
     codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     stream_id: u32,
+    message_id: &str,
     message_start: usize,
     bytes: &[u8],
     body: Arc<Vec<u8>>,
     segments: &[&PayloadSegment],
+    transport_complete: bool,
 ) -> Option<LiveLlmProjection> {
     let encoded_len = bytes.len();
     let http = HttpRequestParts {
         protocol: "h2",
-        scheme: "https",
+        message_id: message_id.to_owned(),
+        scheme: super::support::plaintext_transport_scheme(segments.first()?.source_boundary),
         method: None,
         authority: None,
         path: None,
         stream_id: Some(stream_id),
         headers_text: None,
         headers_hpack_base64: None,
-        body,
+        body: body.as_slice(),
+        declared_body_len: None,
         encoded_len,
+        complete: transport_complete,
     };
     let request = project_stream_llm_request_action(
         config,
@@ -216,6 +209,7 @@ pub(crate) fn project_http2_stream_response(
     codecs: &LlmCodecRegistry,
     key: &PayloadStreamGroupKey,
     stream_id: u32,
+    message_id: &str,
     message_start: usize,
     bytes: &[u8],
     body: Arc<Vec<u8>>,
@@ -227,7 +221,10 @@ pub(crate) fn project_http2_stream_response(
     let encoded_len = bytes.len();
     let http = HttpResponseParts {
         protocol: "h2",
-        scheme: "https",
+        message_id: message_id.to_owned(),
+        scheme: super::support::plaintext_transport_scheme(
+            evidence.first.as_ref()?.source_boundary,
+        ),
         status_code: None,
         reason: None,
         stream_id: Some(stream_id),
@@ -248,6 +245,7 @@ pub(crate) fn project_http2_stream_response(
         evidence,
         sse_cache,
         force_materialize,
+        false,
     )?;
     Some(live_projection_from_response(projection))
 }
@@ -263,19 +261,5 @@ fn live_projection_from_response(projection: LlmResponseProjection) -> LiveLlmPr
         in_flight: projection.in_flight,
         encoded_len: projection.encoded_len,
         terminal: projection.terminal,
-    }
-}
-
-pub(in crate::llm_pipeline) fn empty_terminal_projection(encoded_len: usize) -> LiveLlmProjection {
-    LiveLlmProjection {
-        actions: Vec::new(),
-        llm_request_contents: Vec::new(),
-        llm_request_histories: Vec::new(),
-        llm_tool_results: Vec::new(),
-        provider_response_ids: Vec::new(),
-        payload_segments: Vec::new(),
-        in_flight: None,
-        encoded_len,
-        terminal: true,
     }
 }

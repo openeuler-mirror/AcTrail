@@ -30,7 +30,7 @@ usage() {
 Usage: install-rootfs.sh --rootfs DIR --bundle DIR [options]
 
 Options:
-  --config FILE                Guest operator config (default: guest/operator.conf)
+  --config FILE                Guest operator settings (default: guest/operator.conf)
   --unit FILE                  Guest systemd unit (default: guest/actraild.service)
   --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
@@ -422,7 +422,7 @@ fi
 while IFS= read -r library; do
   install -m 0644 "$library" "$private_lib_dir/$(basename "$library")"
 done < <(find "$BUNDLE/lib" -maxdepth 1 -type f -print | LC_ALL=C sort)
-install -m 0640 "$CONFIG" "$config_dir/operator.conf"
+operator_patches=(--patch "$CONFIG")
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   install -d -m 0755 "$plugin_config_dir" "$plugin_manifest_dir"
   actrail_write_guest_otel_endpoint_config \
@@ -431,8 +431,7 @@ if [[ -n "$OTEL_ENDPOINT" ]]; then
     "$OTEL_ENDPOINT" \
     "$EGRESS_MODE" \
     || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
-  printf '\n' >>"$config_dir/operator.conf"
-  awk '{ print }' "$OTEL_STARTUP" >>"$config_dir/operator.conf"
+  operator_patches+=(--patch "$OTEL_STARTUP")
   install -m 0644 \
     "$BUNDLE/plugins/otel-http/otel-http.plugin.toml" \
     "$BUNDLE/plugins/otel-http/otel-http.config.v1.schema.json" \
@@ -445,6 +444,11 @@ else
   [[ ! -d "$plugin_config_dir" ]] || rmdir --ignore-fail-on-non-empty "$plugin_config_dir"
   [[ ! -d "$plugin_manifest_dir" ]] || rmdir --ignore-fail-on-non-empty "$plugin_manifest_dir"
 fi
+if ! LD_LIBRARY_PATH="$BUNDLE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$BUNDLE/actrailctl" --config "$config_dir/operator.conf" init -f "${operator_patches[@]}"; then
+  fail "failed to generate Guest operator configuration"
+fi
+chmod 0640 "$config_dir/operator.conf"
 install -m 0644 "$UNIT" "$unit_dir/actraild.service"
 install -m 0644 "$TMPFILES" "$tmpfiles_dir/actrail.conf"
 

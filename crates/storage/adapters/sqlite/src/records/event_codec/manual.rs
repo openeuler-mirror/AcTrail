@@ -9,77 +9,19 @@ use std::collections::BTreeMap;
 
 use model_core::event::{
     ApplicationBody, ApplicationPayload, ControlPayload, EnforcementPayload, EventPayload,
-    FilePayload, IpcPayload, LabelPayload, LossPayload, NetPayload, ProcessPayload,
-    ResourcePayload, StdioPayload,
+    FilePayload, IpcPayload, LabelPayload, LossPayload, NetPayload, ProcessPayload, StdioPayload,
 };
+
+use super::key_codes::MetadataKeyCodebook;
+use super::value_codes::{value_code, value_for_code};
 use model_core::process::ProcessIdentity;
 
 use super::EventPayloadCodec;
 
 const UNKNOWN_KEY: u8 = 0xFF;
 
-/// Static metadata-key dictionary, assigned 1-based codes in declaration order.
-/// Keys missing here fall back to `UNKNOWN_KEY` + inline string, so nothing is
-/// ever dropped.
-const KNOWN_KEYS: &[&str] = &[
-    "content_length",
-    "content_type",
-    "data_preview",
-    "data_preview_omitted",
-    "data_preview_truncated",
-    "data_size",
-    "data_truncated",
-    "direction",
-    "endpoint_source",
-    "endpoint_unresolved",
-    "event",
-    "exec_filename",
-    "exec_filename_truncated",
-    "executable",
-    "exit_code",
-    "fd",
-    "flags",
-    "frame_type",
-    "frame_type_id",
-    "h2",
-    "host",
-    "http.body_json_state",
-    "length",
-    "method",
-    "operation",
-    "payload.captured_size",
-    "payload.omitted_size",
-    "payload.original_size",
-    "payload.summary.protocol",
-    "payload.summary.reason",
-    "payload.truncation",
-    "payload_segment_id",
-    "payload_sequence",
-    "reason",
-    "requested_size",
-    "result",
-    "signal",
-    "source_boundary",
-    "status_code",
-    "stream_id",
-    "stream_key",
-    "syscall_family",
-    "target",
-    "target_group",
-    "target_pid",
-    "transfer_encoding",
-];
-
-fn key_code(key: &str) -> Option<u8> {
-    KNOWN_KEYS
-        .binary_search(&key)
-        .ok()
-        .map(|index| u8::try_from(index + 1).expect("metadata key count fits u8"))
-}
-
-fn key_for_code(code: u8) -> Option<&'static str> {
-    KNOWN_KEYS.get(usize::from(code).checked_sub(1)?).copied()
-}
+#[path = "manual_file_summary.rs"]
+mod file_summary;
 
 pub struct ManualCodec;
 
@@ -111,10 +53,7 @@ impl EventPayloadCodec for ManualCodec {
                 out.push(5);
                 encode_application(&mut out, p);
             }
-            EventPayload::Resource(p) => {
-                out.push(6);
-                encode_resource(&mut out, p);
-            }
+
             EventPayload::Control(p) => {
                 out.push(7);
                 encode_control(&mut out, p);
@@ -145,11 +84,12 @@ impl EventPayloadCodec for ManualCodec {
             3 => EventPayload::Ipc(decode_ipc(bytes, &mut cursor)?),
             4 => EventPayload::Stdio(decode_stdio(bytes, &mut cursor)?),
             5 => EventPayload::Application(decode_application(bytes, &mut cursor)?),
-            6 => EventPayload::Resource(decode_resource(bytes, &mut cursor)?),
+
             7 => EventPayload::Control(decode_control(bytes, &mut cursor)?),
             8 => EventPayload::Loss(decode_loss(bytes, &mut cursor)?),
             9 => EventPayload::Label(decode_label(bytes, &mut cursor)?),
             10 => EventPayload::Enforcement(decode_enforcement(bytes, &mut cursor)?),
+
             other => return Err(format!("unknown event payload variant {other}")),
         };
         if cursor != bytes.len() {
@@ -173,6 +113,7 @@ fn encode_file(out: &mut Vec<u8>, p: &FilePayload) {
     write_option_string(out, &p.path);
     write_option_i32(out, p.result);
     write_map(out, &p.metadata);
+    file_summary::encode(out, &p.io_summary);
 }
 
 fn encode_net(out: &mut Vec<u8>, p: &NetPayload) {
@@ -203,15 +144,6 @@ fn encode_application(out: &mut Vec<u8>, p: &ApplicationPayload) {
     write_string(out, &p.operation);
     write_string(out, &p.summary);
     write_option_body(out, &p.body);
-    write_map(out, &p.metadata);
-}
-
-fn encode_resource(out: &mut Vec<u8>, p: &ResourcePayload) {
-    write_string(out, &p.scope);
-    write_string(out, &p.subject);
-    write_option_u64(out, p.cpu_percent_millis);
-    write_option_u64(out, p.rss_kb);
-    write_option_u64(out, p.virtual_memory_kb);
     write_map(out, &p.metadata);
 }
 
@@ -258,6 +190,7 @@ fn decode_file(bytes: &[u8], c: &mut usize) -> Result<FilePayload, String> {
         path: read_option_string(bytes, c)?,
         result: read_option_i32(bytes, c)?,
         metadata: read_map(bytes, c)?,
+        io_summary: file_summary::decode(bytes, c)?,
     })
 }
 
@@ -300,17 +233,6 @@ fn decode_application(bytes: &[u8], c: &mut usize) -> Result<ApplicationPayload,
     })
 }
 
-fn decode_resource(bytes: &[u8], c: &mut usize) -> Result<ResourcePayload, String> {
-    Ok(ResourcePayload {
-        scope: read_string(bytes, c)?,
-        subject: read_string(bytes, c)?,
-        cpu_percent_millis: read_option_u64(bytes, c)?,
-        rss_kb: read_option_u64(bytes, c)?,
-        virtual_memory_kb: read_option_u64(bytes, c)?,
-        metadata: read_map(bytes, c)?,
-    })
-}
-
 fn decode_control(bytes: &[u8], c: &mut usize) -> Result<ControlPayload, String> {
     Ok(ControlPayload {
         action: read_string(bytes, c)?,
@@ -348,7 +270,12 @@ fn decode_enforcement(bytes: &[u8], c: &mut usize) -> Result<EnforcementPayload,
 // ---- primitives ----
 
 fn write_string(out: &mut Vec<u8>, value: &str) {
-    write_bytes(out, value.as_bytes());
+    if let Some(code) = value_code(value) {
+        write_varint(out, (u64::from(code) << 1) | 1);
+    } else {
+        write_varint(out, (value.len() as u64) << 1);
+        out.extend_from_slice(value.as_bytes());
+    }
 }
 
 fn write_bytes(out: &mut Vec<u8>, value: &[u8]) {
@@ -421,7 +348,7 @@ fn write_bool(out: &mut Vec<u8>, value: bool) {
 fn write_map(out: &mut Vec<u8>, map: &BTreeMap<String, String>) {
     write_varint(out, map.len() as u64);
     for (key, value) in map {
-        match key_code(key) {
+        match MetadataKeyCodebook::code(key) {
             Some(code) => out.push(code),
             None => {
                 out.push(UNKNOWN_KEY);
@@ -483,7 +410,20 @@ fn read_bytes(bytes: &[u8], c: &mut usize) -> Result<Vec<u8>, String> {
 }
 
 fn read_string(bytes: &[u8], c: &mut usize) -> Result<String, String> {
-    String::from_utf8(read_bytes(bytes, c)?).map_err(|_| "invalid utf8 in payload".to_string())
+    let token = read_varint(bytes, c)?;
+    if token & 1 == 1 {
+        let code = u8::try_from(token >> 1).map_err(|_| "value code overflow")?;
+        return value_for_code(code)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("unknown payload value code {code}"));
+    }
+    let len = usize::try_from(token >> 1).map_err(|_| "length overflow")?;
+    let end = c.checked_add(len).ok_or("length overflow")?;
+    let value = bytes.get(*c..end).ok_or("unexpected end of payload")?;
+    *c = end;
+    std::str::from_utf8(value)
+        .map(str::to_owned)
+        .map_err(|_| "invalid utf8 in payload".to_string())
 }
 
 fn read_option_string(bytes: &[u8], c: &mut usize) -> Result<Option<String>, String> {
@@ -563,7 +503,7 @@ fn read_map(bytes: &[u8], c: &mut usize) -> Result<BTreeMap<String, String>, Str
         let key = if code == UNKNOWN_KEY {
             read_string(bytes, c)?
         } else {
-            key_for_code(code)
+            MetadataKeyCodebook::key(code)
                 .ok_or_else(|| format!("unknown metadata key code {code}"))?
                 .to_string()
         };

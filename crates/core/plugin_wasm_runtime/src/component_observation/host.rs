@@ -26,10 +26,12 @@ const COMPONENT_PAYLOAD_READ_OK: &str = "ok";
 const COMPONENT_PAYLOAD_READ_DENIED: &str = "denied";
 const COMPONENT_PAYLOAD_READ_NOT_FOUND: &str = "not-found";
 const COMPONENT_PAYLOAD_READ_TRUNCATED: &str = "truncated";
+const COMPONENT_PAYLOAD_READ_FAILED: &str = "failed";
 const PAYLOAD_READ_DENIED: i64 = -1;
 const PAYLOAD_READ_NOT_FOUND: i64 = -2;
 const PAYLOAD_READ_INVALID: i64 = -3;
 const PAYLOAD_READ_TOO_LARGE: i64 = -4;
+const PAYLOAD_READ_FAILED: i64 = -5;
 
 pub(super) fn component_linker(
     engine: &Engine,
@@ -262,42 +264,44 @@ fn component_read_payload_inner(
             PAYLOAD_READ_TOO_LARGE,
         );
     }
-    let Some(payload) = state.payload_entry(ref_id) else {
-        return ComponentPayloadReadOutcome::error(
-            COMPONENT_PAYLOAD_READ_NOT_FOUND,
-            PAYLOAD_READ_NOT_FOUND,
-        );
-    };
-    if !state
-        .host_grants()
-        .can_read_payload_source(payload.source_boundary)
+    let trace_id = state
+        .observation_trace_context()
+        .map(|context| context.trace_id)
+        .or_else(|| state.post_trace_task().map(|task| task.trace_id));
+    if component_record_string(ref_fields, "trace-id")
+        != trace_id.map(|id| id.to_string()).as_deref()
     {
         return ComponentPayloadReadOutcome::error(
             COMPONENT_PAYLOAD_READ_DENIED,
             PAYLOAD_READ_DENIED,
         );
     }
-    let Some(bytes) = payload.bytes.as_deref() else {
-        return ComponentPayloadReadOutcome::error(
-            COMPONENT_PAYLOAD_READ_NOT_FOUND,
-            PAYLOAD_READ_NOT_FOUND,
-        );
+    let (chunk, truncated, total_bytes) = match state.read_payload(ref_id, *offset, max_bytes) {
+        plugin_system::PayloadReadResult::Chunk {
+            bytes,
+            truncated,
+            total_bytes,
+        } => (bytes, truncated, total_bytes),
+        plugin_system::PayloadReadResult::NotFound => {
+            return ComponentPayloadReadOutcome::error(
+                COMPONENT_PAYLOAD_READ_NOT_FOUND,
+                PAYLOAD_READ_NOT_FOUND,
+            );
+        }
+        plugin_system::PayloadReadResult::Denied => {
+            return ComponentPayloadReadOutcome::error(
+                COMPONENT_PAYLOAD_READ_DENIED,
+                PAYLOAD_READ_DENIED,
+            );
+        }
+        plugin_system::PayloadReadResult::Failed => {
+            return ComponentPayloadReadOutcome::error(
+                COMPONENT_PAYLOAD_READ_FAILED,
+                PAYLOAD_READ_FAILED,
+            );
+        }
     };
-    let offset_usize = usize::try_from(*offset).unwrap_or(usize::MAX);
-    if offset_usize >= bytes.len() {
-        return ComponentPayloadReadOutcome::success(
-            COMPONENT_PAYLOAD_READ_OK,
-            Vec::new(),
-            *offset,
-            None,
-            Some(bytes.len()),
-            false,
-        );
-    }
-    let available = &bytes[offset_usize..];
-    let count = available.len().min(max_bytes);
-    let truncated = available.len() > count;
-    let chunk = available[..count].to_vec();
+    let count = chunk.len();
     let next_offset = truncated
         .then(|| offset.checked_add(u64::try_from(count).unwrap_or(u64::MAX)))
         .flatten();
@@ -311,7 +315,7 @@ fn component_read_payload_inner(
         chunk,
         *offset,
         next_offset,
-        Some(bytes.len()),
+        Some(total_bytes),
         truncated,
     )
 }

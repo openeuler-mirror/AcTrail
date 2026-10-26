@@ -10,6 +10,8 @@ from tests.v2.common.runner import TestingContextSingleton
 from .config import SandboxResourceAlertHostConfig
 from .scenario import SandboxResourceAlertHostScenario
 
+from .constants import CASE_CONSTANTS
+
 
 class SandboxResourceAlertHostCase(TestCase):
     def __init__(self, config: SandboxResourceAlertHostConfig) -> None:
@@ -40,6 +42,7 @@ class SandboxResourceAlertHostCase(TestCase):
     def _repository_problem(self) -> TestResult | None:
         required = (
             self._config.bin_dir / "actraild",
+            self._config.bin_dir / "actrailctl",
             self._config.bin_dir / "actrail-sb",
             self._config.bin_dir / "actrail-vsock-gateway",
             self._config.bin_dir / "actraild-alert-proxy",
@@ -55,7 +58,7 @@ class SandboxResourceAlertHostCase(TestCase):
         missing = [path for path in required if not path.is_file()]
         non_executable = [
             path
-            for path in required[:6]
+            for path in required[:7]
             if path.is_file() and not os.access(path, os.X_OK)
         ]
         if not missing and not non_executable:
@@ -103,7 +106,7 @@ class SandboxResourceAlertHostCase(TestCase):
             limit = probe / limit_name
             if not limit.is_file():
                 return f"memory controller is not enabled below {parent}"
-            limit.write_text("33554432\n", encoding="ascii")
+            limit.write_text(f"{CASE_CONSTANTS.oom_memory_limit_bytes}\n", encoding="ascii")
         except OSError as error:
             return f"memory cgroup is not delegated for the regression: {error}"
         finally:

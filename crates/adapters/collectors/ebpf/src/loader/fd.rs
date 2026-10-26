@@ -7,11 +7,13 @@ use model_core::capability::Capability;
 
 use crate::loader::{AttachPlan, LoaderError};
 
-// Should be same with enum actrail_fd_category_flag in bpf/actrail_fd.h.
+// Should be same with enum actrail_fd_category_flag in bpf/fd/types.h.
 const FD_CATEGORY_FLAG_NET: u32 = 1 << 1;
 const FD_CATEGORY_FLAG_IPC_UNIX_SOCKET: u32 = 1 << 2;
 const FD_CATEGORY_FLAG_IPC_PIPE: u32 = 1 << 3;
 const FD_CATEGORY_FLAG_FILE: u32 = 1 << 4;
+const FD_CATEGORY_FLAG_IPC_FIFO: u32 = 1 << 5;
+const FD_CATEGORY_FLAG_DIRECTORY: u32 = 1 << 6;
 const FD_INDEX_HARD_MAX_ENTRIES: u32 = 64;
 
 pub fn validate_fd_config(
@@ -38,10 +40,13 @@ fn fd_category_config_value(attach_plan: &AttachPlan) -> u32 {
         flags |= FD_CATEGORY_FLAG_IPC_UNIX_SOCKET;
     }
     if attach_plan.contains(&Capability::IpcPipeFifo) {
-        flags |= FD_CATEGORY_FLAG_IPC_PIPE;
+        flags |= FD_CATEGORY_FLAG_IPC_PIPE | FD_CATEGORY_FLAG_IPC_FIFO;
     }
-    if attach_plan.contains(&Capability::FsAccessBasic) {
+    if attach_plan.file_fd_capture_enabled() {
         flags |= FD_CATEGORY_FLAG_FILE;
+    }
+    if attach_plan.file_capture_enabled() {
+        flags |= FD_CATEGORY_FLAG_DIRECTORY;
     }
     flags
 }

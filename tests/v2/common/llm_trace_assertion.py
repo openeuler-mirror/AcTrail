@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections import Counter
 from pathlib import Path
 
 from .actrail_runtime import ActrailRuntime, CommandResult
@@ -19,13 +18,23 @@ class LLMTraceAssertion:
         "llm.response.output_text",
     )
     _REQUEST_CONTENT_STATE_ATTRIBUTE = "llm.request.content_state"
-    _REQUEST_CONTENT_HASH_ATTRIBUTE = "llm.request.canonical_body_hash"
-    _REQUEST_CONTENT_BYTES_ATTRIBUTE = "llm.request.canonical_body_bytes"
+    _REQUEST_PAYLOAD_BYTES_ATTRIBUTE = "llm.request.payload_bytes"
+    _CAPTURE_LIMITED_ROUTES = frozenset(
+        {
+            "/chat/completions",
+            "/v1/chat/completions",
+            "/api/v2/chat/completions",
+            "/responses",
+            "/v1/responses",
+            "/messages",
+            "/v1/messages",
+        }
+    )
 
     def __init__(
         self,
         runtime: ActrailRuntime,
-        marker: str,
+        marker: str | None = None,
     ):
         self._runtime = runtime
         self._marker = marker
@@ -58,6 +67,8 @@ class LLMTraceAssertion:
         launch: CommandResult,
         agent_name: str,
     ) -> None:
+        if self._marker is None:
+            raise AssertionError("answer marker validation was not configured")
         if self._marker not in launch.stdout:
             raise AssertionError(
                 f"{agent_name} stdout answer does not contain marker {self._marker}"
@@ -87,7 +98,7 @@ class LLMTraceAssertion:
             )
         )
         actions = self._llm_actions(document)
-        self._require_terminal_actions(actions)
+        self._require_terminal_actions(document, actions)
         return self._require_paired_exchange(document, actions)
 
     def _read_json(self, command: list[Path | str]) -> dict:
@@ -126,8 +137,10 @@ class LLMTraceAssertion:
         calls = [action for action in actions if action.get("kind") == "llm.call"]
         requests = [action for action in actions if action.get("kind") == "llm.request"]
         responses = [action for action in actions if action.get("kind") == "llm.response"]
-        if not requests or not responses:
-            raise AssertionError("trace has no LLM request/response")
+        if not requests:
+            raise AssertionError("trace has no LLM request")
+        if not responses:
+            raise AssertionError("trace has no LLM response")
         if len(calls) != len(requests):
             raise AssertionError(
                 "LLM call/request count mismatch: "
@@ -140,7 +153,10 @@ class LLMTraceAssertion:
             requests,
             responses,
         )
-        self._require_marker_exchange(pairs)
+        if self._marker is None:
+            self._require_successful_exchange(pairs)
+        else:
+            self._require_marker_exchange(pairs)
         return len(requests), len(responses)
 
     def _llm_actions(self, document: dict) -> list[dict]:
@@ -150,13 +166,32 @@ class LLMTraceAssertion:
             if action.get("kind") in self._LLM_ACTION_KINDS
         ]
 
-    def _require_terminal_actions(self, actions: list[dict]) -> None:
+    def _require_terminal_actions(self, document: dict, actions: list[dict]) -> None:
         if not actions:
             raise AssertionError("trace has no LLM actions")
+        http_actions = {
+            action["action_id"]: action
+            for action in document.get("actions", [])
+            if action.get("kind") == "http.message"
+        }
         for action in actions:
             kind = action.get("kind")
             status = action.get("status")
             completeness = action.get("completeness")
+            if kind == "llm.call":
+                attributes = action.get("attributes", {})
+                paired = "llm.call.response_action_id" in attributes
+                expected_completeness = "inferred" if paired else "partial"
+                if (
+                    status != "unknown"
+                    or completeness != expected_completeness
+                    or action.get("end_time_unix_nanos") is not None
+                ):
+                    raise AssertionError(
+                        f"{action.get('action_id')} has mutable connector state "
+                        f"status={status} completeness={completeness}"
+                    )
+                continue
             if status == "in_progress":
                 raise AssertionError(
                     f"{action.get('action_id')} ({kind}) is still in_progress "
@@ -172,14 +207,72 @@ class LLMTraceAssertion:
                 kind in {"llm.call", "llm.response", "sse.stream"}
                 and status == "error"
                 and completeness == "partial"
-                and finalized_on_close
+                and (
+                    finalized_on_close
+                    or self._is_peer_closed_response(action, http_actions)
+                )
             ):
+                continue
+            if (
+                kind in self._LLM_ACTION_KINDS
+                and status == "success"
+                and completeness == "capture_limited"
+                and not finalized_on_close
+            ):
+                if kind == "llm.request":
+                    self._require_capture_limited_request_metadata(action)
                 continue
             raise AssertionError(
                 f"{action.get('action_id')} ({kind}) has invalid terminal state "
                 f"status={status} completeness={completeness} "
                 f"finalized_on_trace_close={finalized_on_close}"
             )
+
+    def _is_peer_closed_response(self, action: dict, http_actions: dict) -> bool:
+        attributes = action.get("attributes", {})
+        source = http_actions.get(attributes.get("http.message_id"))
+        if (
+            action.get("kind") != "llm.response"
+            or attributes.get("http.message.incomplete_reason") != "PeerClosed"
+            or action.get("end_time_unix_nanos") is None
+            or source is None
+        ):
+            return False
+        source_attributes = source.get("attributes", {})
+        return (
+            source.get("status") == "error"
+            and source.get("completeness") == "partial"
+            and source.get("end_time_unix_nanos") is not None
+            and source_attributes.get("direction") == "inbound"
+            and action.get("trace_id_raw") is not None
+            and source.get("trace_id_raw") == action["trace_id_raw"]
+            and action.get("process") is not None
+            and source.get("process") == action["process"]
+            and bool(attributes.get("payload.stream_key"))
+            and source_attributes.get("stream_key") == attributes["payload.stream_key"]
+        )
+
+    def _require_capture_limited_request_metadata(self, action: dict) -> None:
+        attributes = action.get("attributes", {})
+        if (
+            attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE) != "unavailable"
+            or "llm.request.canonical_body_json" in attributes
+            or "llm.request.content_format_version" in attributes
+            or "llm.request.block_count" in attributes
+            or attributes.get("http.request.method", "").upper() != "POST"
+            or attributes.get("url.path") not in self._CAPTURE_LIMITED_ROUTES
+        ):
+            raise AssertionError(
+                f"{action.get('action_id')} has invalid capture-limited "
+                "request metadata"
+            )
+        try:
+            declared = int(attributes[self._REQUEST_PAYLOAD_BYTES_ATTRIBUTE])
+            captured = int(attributes["llm.request.raw_payload_bytes"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise AssertionError("capture-limited request has invalid payload sizes") from error
+        if declared <= 0 or captured <= 0:
+            raise AssertionError("capture-limited request must retain positive payload sizes")
 
     def _require_one_to_one_call_links(
         self,
@@ -193,7 +286,6 @@ class LLMTraceAssertion:
         responses_by_id = {action["action_id"]: action for action in responses}
         request_links: dict[str, set[str]] = {}
         response_links: dict[str, set[str]] = {}
-        failed_http_requests = self._failed_http_request_counts(document)
         for link in document.get("links", []):
             if not link.get("valid", False):
                 continue
@@ -228,13 +320,10 @@ class LLMTraceAssertion:
             if call_responses:
                 paired_responses.update(call_responses)
                 response_id = next(iter(call_responses))
-                pairs.append((request, responses_by_id[response_id]))
+                response = responses_by_id[response_id]
+                pairs.append((request, response))
                 continue
-            self._require_failed_http_probe(
-                calls_by_id[call_id],
-                request,
-                failed_http_requests,
-            )
+            self._require_unpaired_connector(calls_by_id[call_id])
         if (
             paired_requests != set(requests_by_id)
             or paired_responses != set(responses_by_id)
@@ -244,121 +333,82 @@ class LLMTraceAssertion:
             )
         return pairs
 
-    def _failed_http_request_counts(
-        self,
-        document: dict,
-    ) -> Counter[tuple[str, str, str]]:
-        http_requests: dict[str, tuple[str, str, str]] = {}
-        http_responses: list[dict] = []
-        for action in document.get("actions", []):
-            if action.get("kind") != "http.message":
-                continue
-            attributes = action.get("attributes")
-            if not isinstance(attributes, dict):
-                continue
-            operation = attributes.get("http.operation")
-            if operation == "request":
-                key = self._http_request_key(
-                    attributes,
-                    stream_key_name="stream_key",
-                    method_name="method",
-                    path_name="target",
-                )
-                action_id = action.get("action_id")
-                if key is not None and isinstance(action_id, str):
-                    http_requests[action_id] = key
-            elif operation == "response":
-                http_responses.append(attributes)
-
-        failed: Counter[tuple[str, str, str]] = Counter()
-        for response in http_responses:
-            try:
-                status_code = int(response.get("status_code", ""))
-            except (TypeError, ValueError):
-                continue
-            if status_code < 400:
-                continue
-            request_id = response.get("http.request.action_id")
-            if isinstance(request_id, str) and request_id in http_requests:
-                failed[http_requests[request_id]] += 1
-        return failed
-
-    def _require_failed_http_probe(
-        self,
-        call: dict,
-        request: dict,
-        failed_http_requests: Counter[tuple[str, str, str]],
-    ) -> None:
+    def _require_unpaired_connector(self, call: dict) -> None:
         attributes = call.get("attributes")
         if not isinstance(attributes, dict):
             attributes = {}
-        terminal_partial = (
-            call.get("status") == "error"
+        if not (
+            call.get("status") == "unknown"
             and call.get("completeness") == "partial"
-            and attributes.get(self._TRACE_CLOSE_ATTRIBUTE) == "true"
-        )
-        request_attributes = request.get("attributes")
-        key = (
-            self._http_request_key(
-                request_attributes,
-                stream_key_name="payload.stream_key",
-                method_name="http.request.method",
-                path_name="url.path",
-            )
-            if isinstance(request_attributes, dict)
-            else None
-        )
-        if not terminal_partial or key is None or failed_http_requests[key] == 0:
+            and call.get("end_time_unix_nanos") is None
+            and "llm.call.response_action_id" not in attributes
+        ):
             raise AssertionError(
-                f"LLM call {call.get('action_id')} has no response and no "
-                "correlated failed HTTP probe"
+                f"LLM call {call.get('action_id')} has invalid request-only "
+                "connector state"
             )
-        failed_http_requests[key] -= 1
-
-    @staticmethod
-    def _http_request_key(
-        attributes: dict,
-        *,
-        stream_key_name: str,
-        method_name: str,
-        path_name: str,
-    ) -> tuple[str, str, str] | None:
-        values = (
-            attributes.get(stream_key_name),
-            attributes.get(method_name),
-            attributes.get(path_name),
-        )
-        if not all(isinstance(value, str) and value for value in values):
-            return None
-        stream_key, method, path = values
-        return stream_key, method.upper(), path
 
     def _require_marker_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
+        if self._marker is None:
+            raise AssertionError("marker exchange validation was not configured")
         for request, response in pairs:
             request_attributes = request.get("attributes", {})
             request_has_canonical_content = (
                 request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
                 == "canonical_blocks"
-                and request_attributes.get(
-                    self._REQUEST_CONTENT_HASH_ATTRIBUTE,
-                    "",
-                ).startswith("sha256:")
+                and request.get("status") == "success"
+                and request.get("completeness") == "complete"
+                and int(request_attributes.get("llm.request.content_format_version", "0")) > 0
+                and int(request_attributes.get("llm.request.block_count", "-1")) >= 0
                 and int(
                     request_attributes.get(
-                        self._REQUEST_CONTENT_BYTES_ATTRIBUTE,
+                        self._REQUEST_PAYLOAD_BYTES_ATTRIBUTE,
                         "0",
                     )
                 )
                 > 0
+            )
+            request_has_capture_limited_metadata = (
+                request.get("status") == "success"
+                and request.get("completeness") == "capture_limited"
+                and request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
+                == "unavailable"
+                and "llm.request.canonical_body_json" not in request_attributes
+                and "llm.request.content_format_version" not in request_attributes
+                and "llm.request.block_count" not in request_attributes
+                and request_attributes.get("http.request.method", "").upper()
+                == "POST"
+                and request_attributes.get("url.path")
+                in self._CAPTURE_LIMITED_ROUTES
             )
             response_attributes = response.get("attributes", {})
             response_contains_marker = any(
                 self._marker in response_attributes.get(key, "")
                 for key in self._RESPONSE_OUTPUT_ATTRIBUTES
             )
-            if request_has_canonical_content and response_contains_marker:
+            if (
+                request_has_canonical_content
+                or request_has_capture_limited_metadata
+            ) and (
+                response_contains_marker
+                and response.get("status") == "success"
+                and response.get("completeness") == "complete"
+            ):
                 return
         raise AssertionError(
-            "no LLM call links a canonical-content request to a normalized "
-            f"response containing {self._marker}"
+            "no LLM call links a canonical or capture-limited metadata request "
+            f"to a successful complete normalized response containing {self._marker}"
         )
+
+    def _require_successful_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
+        for request, response in pairs:
+            if (
+                request.get("status") == "success"
+                and request.get("completeness")
+                in {"complete", "capture_limited"}
+                and response.get("status") == "success"
+                and response.get("completeness")
+                in {"complete", "capture_limited"}
+            ):
+                return
+        raise AssertionError("trace has no successful usable LLM exchange")

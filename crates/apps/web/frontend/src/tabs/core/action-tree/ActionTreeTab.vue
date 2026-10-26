@@ -6,7 +6,7 @@
           <span v-for="lane in treeModel.lanes" :key="lane" class="lane-label">{{ lane }}</span>
         </div>
         <div v-if="selectedDetail" class="selected-strip">
-          <span>{{ selectedDetail.kind }}</span>
+          <span v-if="selectedDetail.kind !== selectedDetail.title">{{ selectedDetail.kind }}</span>
           <strong>{{ selectedDetail.title }}</strong>
         </div>
       </div>
@@ -39,30 +39,30 @@
           @load-more="loadMoreChildren"
           @jump="jumpToNode"
         />
-        <div v-else class="action-tree-empty">No action tree root</div>
+        <div v-else class="action-tree-empty">{{ t('emptyRoot') }}</div>
       </div>
-      <div class="action-tree-nav-panel" aria-label="Action tree LLM navigation">
+      <div class="action-tree-nav-panel" :aria-label="t('navigationAria')">
         <span class="action-tree-nav-label">LLM</span>
         <button
           class="action-tree-nav-button"
           type="button"
           :disabled="llmNavigationBusy || !treeModel.root"
-          title="Jump to first LLM call"
+          :title="t('jumpFirst')"
           @click="jumpToFirstLlm"
         >
           <SkipForward v-if="!llmNavigationBusy" :size="15" aria-hidden="true" />
           <Loader2 v-else class="spin-icon" :size="15" aria-hidden="true" />
-          <span>First LLM</span>
+          <span>{{ t('firstLlm') }}</span>
         </button>
         <button
           class="action-tree-nav-button"
           type="button"
           :disabled="llmNavigationBusy || !treeModel.root"
-          title="Jump to next LLM call"
+          :title="t('jumpNext')"
           @click="jumpToNextLlm"
         >
           <StepForward :size="15" aria-hidden="true" />
-          <span>Next LLM</span>
+          <span>{{ t('nextLlm') }}</span>
         </button>
         <span v-if="llmNavigationError" class="action-tree-nav-error">{{ llmNavigationError }}</span>
       </div>
@@ -72,6 +72,7 @@
       :trace-id="traceKey"
       :error="detailError"
       hide-when-empty
+      progressive-details
       @clear="clearDetail"
     />
   </section>
@@ -86,12 +87,17 @@ import ActionTreeNode from '../../../components/ActionTreeNode.vue';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import {
   buildActionTreeChildNodes,
+  buildFullActionDetail,
   buildActionTreeRootNode,
   buildVisibleActionTreeModel,
   mergeActionTreeChildren,
 } from './model';
 import { buildHttpExchangeArcOverlay } from './httpExchangeArcs';
 import { TREE_NODE_TYPES, UI_LIMITS } from './config';
+import { useModuleLocale } from '../../../locale';
+import strings from './locale';
+
+const { t } = useModuleLocale(strings);
 
 const props = defineProps({
   traceKey: {
@@ -183,7 +189,7 @@ async function selectNode(node) {
   try {
     const action = await readActionDetail(props.traceKey, node.id);
     if (activeDetailLoad === token && selectedDetailId.value === node.id) {
-      selectedDetail.value = fullActionDetail(node.detail, action);
+      selectedDetail.value = buildFullActionDetail(node.detail, action);
     }
   } catch (err) {
     if (activeDetailLoad === token && selectedDetailId.value === node.id) {
@@ -205,14 +211,14 @@ async function jumpToFirstLlm() {
     if (path === undefined) {
       const fallback = await findFirstLlmPath(rootNode.value);
       if (!fallback) {
-        llmNavigationError.value = 'No LLM call';
+        llmNavigationError.value = t('noLlmCall');
         return;
       }
       await activateLlmPath(fallback);
       return;
     }
     if (!path) {
-      llmNavigationError.value = 'No LLM call';
+      llmNavigationError.value = t('noLlmCall');
       return;
     }
     await activateServerLlmPath(path);
@@ -228,14 +234,14 @@ async function jumpToNextLlm() {
         ? await findNextLlmPath(rootNode.value, afterId)
         : await findFirstLlmPath(rootNode.value);
       if (!fallback) {
-        llmNavigationError.value = 'No next LLM call';
+        llmNavigationError.value = t('noNextLlmCall');
         return;
       }
       await activateLlmPath(fallback);
       return;
     }
     if (!path) {
-      llmNavigationError.value = 'No next LLM call';
+      llmNavigationError.value = t('noNextLlmCall');
       return;
     }
     await activateServerLlmPath(path);
@@ -270,12 +276,12 @@ async function activateServerLlmPath(entries) {
   }
   for (const entry of entries) {
     if (!parentNode) {
-      throw new Error('LLM navigation path node not found');
+      throw new Error(t('navigationNodeMissing'));
     }
     if (parentNode.id !== entry.parent_action_id) {
       const found = findNode(rootNode.value, entry.parent_action_id);
       if (!found) {
-        throw new Error(`LLM navigation parent ${entry.parent_action_id} not found`);
+        throw new Error(t('navigationParentMissing', { id: entry.parent_action_id }));
       }
       parentNode = found;
     }
@@ -316,7 +322,7 @@ async function activateServerLlmPath(entries) {
     }
     const located = locateActionNode(children, entry.action_id);
     if (!located) {
-      throw new Error(`LLM navigation action ${entry.action_id} not found under ${parentNode.id}`);
+      throw new Error(t('navigationActionMissing', { id: entry.action_id, parent: parentNode.id }));
     }
     for (const container of located.containers) {
       if (container.id && container !== parentNode) {
@@ -327,7 +333,7 @@ async function activateServerLlmPath(entries) {
     parentNode = located.node;
   }
   if (!targetNode) {
-    throw new Error('LLM navigation returned an empty path');
+    throw new Error(t('navigationEmptyPath'));
   }
   expandedNodeIds.value = nextExpanded;
   await nextTick();
@@ -369,7 +375,7 @@ async function runLlmNavigation(callback) {
 async function activateLlmPath(path) {
   const target = path[path.length - 1];
   if (!target) {
-    throw new Error('LLM navigation returned an empty path');
+    throw new Error(t('navigationEmptyPath'));
   }
   expandAncestorPath(path.slice(0, -1));
   await nextTick();
@@ -483,7 +489,7 @@ async function loadMoreNodeChildren(node) {
     node.nextChildOffset === previousOffset &&
     node.children.length === previousCount
   ) {
-    throw new Error('Action tree children pagination made no progress');
+    throw new Error(t('paginationStalled'));
   }
 }
 
@@ -495,26 +501,6 @@ function nodeMatchesSelection(node, selectionId) {
   return node?.id === selectionId || node?.detail?.selectionId === selectionId;
 }
 
-function fullActionDetail(currentDetail, action) {
-  const pathSetDetail =
-    (action.kind === 'file.bulk_read' || action.kind === 'fs.enumerate')
-      ? {
-          filePathSetActionId: action.id,
-          filePathSetPageSize: UI_LIMITS.actionTreeChildPageSize,
-        }
-      : {};
-  return {
-    ...currentDetail,
-    ...pathSetDetail,
-    rows: {
-      ...(currentDetail.rows ?? {}),
-      evidence: action.evidence?.length ?? 0,
-    },
-    attributes: action.attributes ?? {},
-    evidence: action.evidence ?? [],
-    raw: action,
-  };
-}
 
 function clearDetail() {
   activeDetailLoad = Symbol();
@@ -709,231 +695,4 @@ function scrollNodeIntoView(nodeId) {
 }
 </script>
 
-<style scoped>
-.action-tree-layout {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.action-tree-layout.detail-open {
-  grid-template-columns: minmax(0, 1fr) var(--detail-panel-width);
-}
-
-.graph-panel {
-  position: relative;
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
-  background:
-    linear-gradient(90deg, var(--trace-action-tree-grid) 1px, transparent 1px),
-    var(--trace-action-tree-bg);
-  background-size: var(--action-lane-width) 100%;
-}
-
-.tree-sticky-header {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  width: max-content;
-  min-width: 100%;
-  background: var(--trace-action-tree-header-bg);
-  backdrop-filter: blur(6px);
-}
-
-.lane-labels {
-  display: flex;
-  gap: var(--action-lane-gap);
-  width: max-content;
-  padding: 18px 36px 10px;
-}
-
-.lane-label {
-  width: var(--action-node-width);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.action-tree-canvas {
-  position: relative;
-  width: max-content;
-  min-width: 100%;
-  padding: 34px 36px 132px;
-}
-
-.http-exchange-overlay {
-  position: absolute;
-  inset: 0 auto auto 0;
-  z-index: 0;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.action-tree-canvas > .action-tree-node {
-  position: relative;
-  z-index: 1;
-}
-
-.http-exchange-arc {
-  fill: none;
-  stroke: var(--trace-action-tree-arc);
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 6 6;
-  vector-effect: non-scaling-stroke;
-}
-
-.mcp-exchange-arc {
-  fill: none;
-  stroke: rgba(124, 58, 237, 0.5);
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 6 6;
-  vector-effect: non-scaling-stroke;
-}
-
-.action-tree-empty {
-  position: relative;
-  z-index: 1;
-  width: var(--action-node-width);
-  min-height: var(--action-node-min-height);
-  display: grid;
-  place-items: center;
-  border: 1px dashed var(--trace-action-empty-border);
-  border-radius: 8px;
-  background: var(--trace-action-empty-bg);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.selected-strip {
-  max-width: min(760px, calc(100vw - var(--trace-rail-width) - var(--detail-panel-width)));
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 36px 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--trace-action-selected-strip-border);
-  border-radius: 8px;
-  background: var(--trace-action-selected-strip-bg);
-  box-shadow: var(--shadow);
-}
-
-.selected-strip span {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.selected-strip strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--teal-deep);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.action-tree-nav-panel {
-  position: sticky;
-  left: 16px;
-  bottom: 16px;
-  z-index: 9;
-  width: 138px;
-  max-width: calc(100vw - 44px);
-  display: grid;
-  align-items: stretch;
-  gap: 6px;
-  margin: -120px 0 16px 16px;
-  padding: 8px;
-  border: 1px solid var(--trace-action-selected-strip-border);
-  border-radius: 10px;
-  background: var(--trace-action-selected-strip-bg);
-  color: var(--text);
-  box-shadow: var(--shadow);
-  backdrop-filter: var(--stats-control-filter, blur(10px));
-}
-
-.action-tree-nav-label {
-  padding: 0 2px 2px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.action-tree-nav-button {
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--trace-action-jump-border);
-  border-radius: 8px;
-  background: var(--trace-action-jump-bg);
-  color: var(--trace-action-jump-text);
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-  transition:
-    background-color 130ms ease,
-    border-color 130ms ease,
-    box-shadow 130ms ease,
-    transform 130ms ease;
-}
-
-.action-tree-nav-button:hover:not(:disabled) {
-  border-color: var(--teal);
-  background: var(--trace-action-jump-hover-bg);
-  box-shadow: var(--trace-action-jump-hover-shadow);
-  transform: translateY(-1px);
-}
-
-.action-tree-nav-button:active:not(:disabled) {
-  transform: translateY(1px);
-  box-shadow: var(--trace-action-jump-active-shadow);
-}
-
-.action-tree-nav-button:focus-visible {
-  outline: none;
-  box-shadow: var(--trace-action-jump-focus-shadow);
-}
-
-.action-tree-nav-button:disabled {
-  cursor: default;
-  opacity: 0.52;
-  box-shadow: none;
-}
-
-.action-tree-nav-error {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--trace-error-text);
-  font-size: 12px;
-  font-weight: 750;
-  text-overflow: ellipsis;
-  white-space: normal;
-}
-
-.spin-icon {
-  animation: action-tree-spin 900ms linear infinite;
-}
-
-@keyframes action-tree-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (max-width: 1100px) {
-  .action-tree-layout.detail-open {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-</style>
+<style scoped src="./ActionTreeTab.css"></style>

@@ -1,0 +1,64 @@
+/*
+ * Warm paper palette. Values follow the management console's default light
+ * theme: page background is the paper tone, surfaces are the container tone
+ * mixed to 82% so cards read as translucent sheets over the page.
+ */
+:root {
+  --ui-bg-base: #faf9f5;
+  --ui-bg-shell: #f0eee8;
+  --ui-bg-alt: #e9e6df;
+  --ui-bg-hover: var(--ui-bg-alt);
+  --ui-bg-quinary: #f6f4ee;
+  --ui-surface: color-mix(in srgb, var(--ui-bg-shell) 82%, transparent);
+  --ui-surface-strong: var(--ui-bg-shell);
+  --ui-surface-soft: var(--ui-bg-alt);
+  --ui-surface-bar: color-mix(in srgb, var(--ui-bg-shell) 68%, transparent);
+  --ui-surface-panel: var(--ui-bg-shell);
+  --ui-surface-raised: #fffdf9;
+  --ui-surface-muted: var(--ui-bg-alt);
+  --ui-text: #2d2a26;
+  --ui-muted: #6d6760;
+  --ui-text-tertiary: #a29c95;
+  --ui-text-quaternary: #c0bab3;
+  --ui-border: #e3e1db;
+  --ui-border-strong: #d5d2cb;
+  --ui-border-hover: #cecac4;
+  --ui-accent: #8b8680;
+  --ui-accent-hover: #7f7a74;
+  --ui-accent-strong: #726d67;
+  --ui-accent-contrast: #ffffff;
+  --ui-accent-soft: color-mix(in srgb, var(--ui-accent) 30%, transparent);
+  --ui-accent-muted: color-mix(in srgb, var(--ui-accent) 10%, transparent);
+  --ui-accent-faint: color-mix(in srgb, var(--ui-accent) 8%, transparent);
+  --ui-on-accent: var(--ui-accent-contrast);
+  --ui-danger: #c65746;
+  --ui-danger-bg: rgba(198, 87, 70, 0.12);
+  --ui-danger-border: rgba(198, 87, 70, 0.35);
+  --ui-on-danger: #ffffff;
+  --ui-warning: #d97706;
+  --ui-warning-bg: color-mix(in srgb, var(--ui-warning) 10%, transparent);
+  --ui-quota: #e0aa14;
+  --ui-critical: #c65746;
+  --ui-success: #10b981;
+  --ui-viz-success: #10b981;
+  --ui-viz-failure: #c65746;
+  --ui-chart-1: #8b8680;
+  --ui-chart-2: #10b981;
+  --ui-chart-3: #6366f1;
+  --ui-chart-4: #d97706;
+  --ui-chart-5: #c65746;
+  --ui-chart-6: #2563eb;
+  --ui-chart-7: #64748b;
+  --ui-chart-8: #0f9f8f;
+  --ui-chart-total: var(--ui-chart-1);
+  --ui-chart-input: #2563eb;
+  --ui-chart-output: #0f9f8f;
+  --ui-chart-reasoning: #6366f1;
+  --ui-chart-cache-hit: #10b981;
+  --ui-chart-cache-miss: #d97706;
+  --ui-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.08);
+  --ui-shadow-lg: 0 10px 18px -3px rgba(0, 0, 0, 0.1);
+  --ui-floating-surface: #fffdf9;
+  --ui-floating-shadow: 0 12px 26px rgba(0, 0, 0, 0.14);
+  --ui-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}

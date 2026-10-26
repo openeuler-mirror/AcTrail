@@ -4,7 +4,7 @@
 
 AcTrail 把插件的**用途**与**运行形态**分开：用途决定宿主调用 observation consumer、control decider 或 LLM codec 中的哪一类接口；运行形态决定接口如何跨越执行边界。
 
-![AcTrail 插件运行时与调用边界](assets/plugin-runtime.png)
+[![AcTrail 插件运行时与调用边界](assets/plugin-runtime.png)](assets/plugin-runtime.puml)
 
 图的上半部分是三种运行形态，下半部分是两条执行通路。所有外部能力都经过 plugin host；manifest 中声明 capability 只是请求，只有管理员 grant 允许后，相应 hostcall 才能成功。
 

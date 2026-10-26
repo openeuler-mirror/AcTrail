@@ -67,9 +67,15 @@ mkdir -p "$WORK"
 cat > "$WORK/actraild.patch.toml" <<EOF
 [plugins.discovery]
 directory = "$REPO/examples/plugins/builtin"
+
+[file_observation.collection.read]
+observed = true
+
+[file_observation.bulk_read]
+enabled = false
 EOF
 
-sudo -E "$BIN/actraild" --config "$WORK/actraild.conf" \
+sudo -E "$BIN/actrailctl" --config "$WORK/actraild.conf" \
   init -f --patch "$WORK/actraild.patch.toml"
 sudo -E "$BIN/actraild" --config "$WORK/actraild.conf" stop
 sudo -E "$BIN/actrailctl" --config "$WORK/actraild.conf" clean

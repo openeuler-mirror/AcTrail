@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from .constants import DEFAULTS
+
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 REPO = SERVER_DIR.parents[4]
@@ -61,7 +63,7 @@ UPSTREAM_DIRECT = {
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        sock.bind((DEFAULTS.loopback_host, DEFAULTS.ephemeral_port))
         return int(sock.getsockname()[1])
 
 
@@ -249,7 +251,9 @@ class ProbeUpstream:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.lock = threading.Lock()
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), ProbeHandler)
+        self.server = ThreadingHTTPServer(
+            (DEFAULTS.loopback_host, DEFAULTS.ephemeral_port), ProbeHandler
+        )
         self.server.log_requests = self.requests
         self.server.log_lock = self.lock
         self.thread = threading.Thread(
@@ -300,7 +304,7 @@ class MaaSServerProcess:
                 return int(self._process.args[argument_index + 1])
         raise RuntimeError("http-bind-port is required")
 
-    def wait_ready(self, timeout_seconds: float = 20.0) -> None:
+    def wait_ready(self, timeout_seconds: float = DEFAULTS.server_ready_timeout_seconds) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             if self._process.poll() is not None:
@@ -309,20 +313,20 @@ class MaaSServerProcess:
                     f"server exited early:\n{output}"
                 )
             try:
-                self.request("GET", "/healthz", timeout=1.0)
+                self.request("GET", "/healthz", timeout=DEFAULTS.healthcheck_timeout_seconds)
                 return
             except (urllib.error.URLError, ConnectionError, OSError):
-                time.sleep(0.1)
+                time.sleep(DEFAULTS.server_ready_poll_seconds)
         raise RuntimeError("server did not become ready in time")
 
     def stop(self) -> None:
         if self._process.poll() is None:
             self._process.terminate()
             try:
-                self._process.wait(timeout=5.0)
+                self._process.wait(timeout=DEFAULTS.server_stop_timeout_seconds)
             except subprocess.TimeoutExpired:
                 self._process.kill()
-                self._process.wait(timeout=5.0)
+                self._process.wait(timeout=DEFAULTS.server_stop_timeout_seconds)
 
     def request(
         self,
@@ -331,9 +335,9 @@ class MaaSServerProcess:
         *,
         document: dict[str, Any] | None = None,
         api_key: str | None = None,
-        timeout: float = 10.0,
+        timeout: float = DEFAULTS.http_timeout_seconds,
     ) -> tuple[int, bytes]:
-        url = f"http://127.0.0.1:{self.port}{path}"
+        url = f"http://{DEFAULTS.loopback_host}:{self.port}{path}"
         headers: dict[str, str] = {}
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"

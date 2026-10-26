@@ -47,7 +47,7 @@ attribute_mode = "full"
 
 此外 `[action_kinds]` 必须允许 `llm.request`。这三层分别控制本地保留、动作属性生成和
 出境，不能互相替代。工具结果正文同理，需要 operator 配置中的
-`tool_result_content_export = "canonical_json"`、大小上限、`attribute_mode = "full"`，
+`tool_results_enabled = true`、`tool_result_content_export = "canonical_json"`、大小上限、`attribute_mode = "full"`，
 并允许 `llm.tool_result`。插件管理员需要在启用前确认本地留存、Collector 和传输链路都能承载敏感内容。
 
 ## 加载
@@ -65,6 +65,13 @@ sudo target/release/actraild --config operator.conf plugin status \
 加载成功只说明配置和实例创建成功。endpoint 不可达属于运行期下游故障：实例可以保持
 `active`，同时 `last_error`、retry 和 dropped batch 指标报告交付失败。卸载会触发
 consumer `finish`，在 `shutdown_flush_deadline_ms` 内尝试发送尾批次，不会重启 daemon。
+
+## 关联 Agent 二进制与 trace
+
+当某个进程首次产生 `llm.request` 时，AcTrail 会输出一个 `agent.identity` span。
+该 span 的 `process.executable` 是同一 `(trace_id, process)` 最近一次完成 exec 的二进制，
+并与其他 span 共用 OTLP `traceId`；消费者可用 `traceId` 和 `actrail.process.id` 将 Agent
+身份关联回具体进程。`metadata-only` 模式会保留这几个身份关联字段，但仍会删除正文类属性。
 
 ## 排错
 

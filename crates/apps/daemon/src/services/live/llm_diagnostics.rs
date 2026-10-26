@@ -85,6 +85,7 @@ impl StorageAttachService {
             SemanticActionBatch::default(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         ) {
             tracing::warn!(
                 error = ?error,
