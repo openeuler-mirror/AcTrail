@@ -10,7 +10,7 @@
 - `NavigationStrip.vue` 是受控导航原语，分别渲染 Trace 一级和二级导航，不加载数据，也不解析 leaf component。
 - `tabs/registry.js` 保存稳定 leaf ID、component 映射和四组 descriptor。
 
-导航状态、数据生命周期和页面渲染目前集中在正确的最近所属组件中，不应把整套 Navigator + Workspace 抽成通用容器。
+导航状态、数据生命周期和页面渲染由所属 Workspace 管理，共享导航控件负责选项展示与选择交互。
 
 ## 可复用控件边界
 
@@ -22,7 +22,7 @@
 - 实现方向键、焦点和横向溢出策略；
 - 通过 item slot 扩展单项内容。
 
-它不得负责：
+`TraceWorkspace` 负责：
 
 - Trace 选择、Metrics strip 或 Active Workspace 布局；
 - leaf registry 解析和动态 component 生命周期；
@@ -30,7 +30,7 @@
 - group 默认项、最近访问记忆和跨页面 deep link；
 - Waterfall 与 Time Attribution 等领域跳转。
 
-这些职责继续由 `TraceWorkspace` 持有。通用控件目前只服务 Trace 的一级和二级导航；GlobalTabs、Statistics rail 和 LLM 内部导航尚未迁移。
+`NavigationStrip` 用于 Trace 的一级和二级导航。GlobalTabs、Statistics rail 和 LLM 内部导航使用各自的控件。
 
 ## Trace 信息架构
 
@@ -45,7 +45,7 @@
 
 `activeViewId` 是唯一 canonical selection。`activeGroupId` 从 registry descriptor 派生，不能与 leaf ID 分别维护为两个可能冲突的状态。Workspace 可以使用 `lastViewByGroup` 记住每组最近访问项；首次进入组时选择表中的默认项。
 
-现有 leaf ID 保持稳定，跨 Workspace 打开 Trace 时仍传递 leaf ID。按 leaf view 懒加载数据，进入一级分组不能一次请求组内全部数据；单个下游请求失败只影响对应 leaf view。
+跨 Workspace 打开 Trace 时传递稳定的 leaf ID。数据按选中的 leaf view 懒加载；单个下游请求失败只影响对应 leaf view。
 
 ## 响应式和无障碍
 

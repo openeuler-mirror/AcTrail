@@ -14,7 +14,7 @@ sudo actraild status
 sudo actrailctl doctor
 ```
 
-`start` 只有在 PID 文件和 control socket 都出现后才返回成功。它的等待预算还包含存储打开、collector preflight 和 startup plugin 加载。`doctor` 验证 control plane 和存储 readiness，不代表目标工作负载已经产生事件。
+`start` 只有在 PID 文件和 control socket 都出现后才返回成功。它的等待预算还包含存储打开、collector preflight 和 startup plugin 加载。`doctor` 验证 control plane 和存储 readiness；工作负载的采集结果通过 [查看 trace](inspect-traces.md) 确认。
 
 ## 交给 service manager
 

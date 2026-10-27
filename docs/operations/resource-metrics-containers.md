@@ -2,8 +2,8 @@
 
 Attach to an existing container process to read its runtime-owned cgroup from
 the host. AcTrail validates the full container ID, PID start time, cgroup path,
-boot ID and directory identity. Sampling never moves container processes or
-changes runtime-owned limits or controllers.
+boot ID and directory identity. Sampling uses read-only access. The container
+runtime manages process placement, limits and controllers.
 
 ```toml
 [resource_profiling.collection.workload]
@@ -42,8 +42,9 @@ container subtree samples process RSS. These measurements populate `rss_kb` and
 alerts, including when no managed host hierarchy is available.
 
 Bindings are durable and revalidated on restart. Identity loss or repeated read
-failure makes a binding stale and suspends that source. Admission fallback is labelled. Require applies at admission,
-not as a policy to kill a workload after later counter failure. Final samples are submitted through best-effort resource storage.
+failure makes a binding stale and suspends that source. Admission fallback is labelled.
+The `require` policy applies at admission. Later counter failures suspend sampling
+while the workload continues. Final samples are submitted through best-effort resource storage.
 Binding closure is persisted independently in control storage; trace retention
 removes the associated registry.
 Identity loss degrades trace health and persists a warning, including on startup.
@@ -51,9 +52,9 @@ Procfs fallback verifies saved process start times before and after memory reads
 a reused PID cannot contribute metrics to the old trace.
 
 Admission reads required counters before accepting a source, then commits the
-trace, process records, memberships and binding in one transaction. Startup repairs
-legacy bindings without a trace by discarding only those invalid admission rows and
-persisting a warning diagnostic; it does not fabricate trace or resource events.
+trace, process records, memberships and binding in one transaction. Startup discards
+bindings that have no trace and persists a warning diagnostic for each invalid
+admission record.
 Each periodic sample verifies PID start time and container membership before
 reading counters. Recovered active traces reconcile their root process identity;
 exit (including zombie state), PID reuse or a changed boot completes the trace with
@@ -69,9 +70,9 @@ python3 tests/v2/regression/resource_metrics_container/run_e2e.py --bin-dir targ
 The standalone acceptance runner uses a local Docker image with `/bin/sh` and
 `sleep`, starts a disposable container and isolated daemon, attaches twice across
 a daemon restart, reads resource samples through the viewer, and checks accounting against
-kernel counters plus unchanged cgroup controls. It never pulls an image. Root,
-cgroup v2, access to Docker and built daemon/CLI/viewer binaries are required.
-Missing prerequisites are reported as a skip (exit 77), not a pass.
+kernel counters plus unchanged cgroup controls. The image must already be available
+locally. Root, cgroup v2, access to Docker and built daemon/CLI/viewer binaries are
+required. Missing prerequisites produce a skip (exit 77).
 The restart test stops the container and requires the **original recovered trace**
 to complete and close its binding, including after a second daemon restart.
 With a healthy local resource database, it also checks one final sample.

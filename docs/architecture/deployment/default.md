@@ -2,7 +2,7 @@
 
 > 本文展示 AcTrail 默认单主机模式中的进程落位、存储位置及可选外部连接。
 
-默认部署在同一台 Linux 主机上运行 `actraild`、控制工具、被观测 Agent 和本地分析入口，不要求 MicroVM 或集群中心。
+默认部署在同一台 Linux 主机上运行 `actraild`、控制工具、被观测 Agent 和本地分析入口。
 
 [![AcTrail 默认部署](assets/default-deployment.png)](assets/default-deployment.puml)
 

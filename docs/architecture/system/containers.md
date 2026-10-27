@@ -2,7 +2,7 @@
 
 > 本文展示 AcTrail 的可执行程序、运行时角色、数据存储及其逻辑通信关系。
 
-本视图只表达软件职责，不表示 Host、MicroVM 或 Guest 等物理包含关系。实际进程落位见[默认部署](../deployment/default.md)与[执行隔离部署](../deployment/execution-isolation.md)。
+本视图按软件职责组织运行角色。Host、MicroVM 和 Guest 中的进程部署位置见[默认部署](../deployment/default.md)与[执行隔离部署](../deployment/execution-isolation.md)。
 
 ## 本地节点
 

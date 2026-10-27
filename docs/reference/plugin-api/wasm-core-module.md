@@ -2,7 +2,7 @@
 
 > 本文定义插件作者实现 core module 内存、分配函数、初始化函数和功能入口所需的 ABI。
 
-本文说明 AcTrail 对 WASM core module 插件的底层承载 ABI。这里的 core module 指普通 WebAssembly module，不是 WIT component。它通过导出函数、线性内存、整数返回码和 hostcall 与 AcTrail 通信；hostcall 是插件反向调用 daemon 受控能力的宿主函数。
+本文说明 AcTrail 对 WASM core module 插件的底层承载 ABI。Core module 指普通 WebAssembly module。它通过导出函数、线性内存、整数返回码和 hostcall 与 AcTrail 通信；hostcall 是插件反向调用 daemon 受控能力的宿主函数。
 
 插件作者如果使用 WIT component 编写插件，不需要直接实现本文中的导出函数。
 
@@ -20,7 +20,7 @@
 | `actrail_alloc(len) -> ptr` | 必需 | 每次 AcTrail 要写入数据前调用 | 插件返回一个内存偏移，AcTrail 随后把 `len` 字节写到该位置。 |
 | `actrail_plugin_init(ptr, len) -> status` | 可选 | 插件实例加载后调用；插件没有导出该函数时跳过 | 初始化插件。`status = 0` 表示成功，非 0 表示加载失败。 |
 
-`actrail_alloc` 不是业务函数，它只负责给 AcTrail 提供一段插件内存。真正处理观测数据的是 `actrail_observation_consume`，真正返回控制结论的是 `actrail_control_decide`。
+`actrail_alloc` 为 AcTrail 提供插件内存；`actrail_observation_consume` 处理观测数据；`actrail_control_decide` 返回控制结论。
 
 ## 加载阶段
 

@@ -16,7 +16,7 @@ WASM core module 插件还需要遵守 [WASM Core Module ABI](wasm-core-module.m
 
 `ptr` 和 `len` 指向 AcTrail 写入插件内存的控制决策 request envelope。
 
-对 WASM core module，request envelope 是 **UTF-8 编码的 JSON 文本**，不是二进制结构体。`len` 表示 JSON 文本的字节数，不是字符数；插件只应读取 `memory[ptr, ptr + len)` 这一段字节，然后按 UTF-8 JSON 解析。
+对 WASM core module，request envelope 是 **UTF-8 编码的 JSON 文本**。`len` 表示 JSON 文本的字节数；插件只应读取 `memory[ptr, ptr + len)` 这一段字节，然后按 UTF-8 JSON 解析。
 
 ### WIT Component
 
@@ -33,7 +33,7 @@ WASM core module 插件还需要遵守 [WASM Core Module ABI](wasm-core-module.m
 decide: func(request: decision-request) -> result<decision-response, string>
 ```
 
-WIT component 不读取 WASM core module 的 JSON envelope。AcTrail 通过 component model 直接传入结构化 `decision-request` record。返回 `ok(decision-response)` 表示插件给出控制结论；返回 `err(string)` 会被 AcTrail 视为插件运行错误。
+AcTrail 通过 component model 向 WIT component 传入结构化 `decision-request` record。返回 `ok(decision-response)` 表示插件给出控制结论；返回 `err(string)` 会被 AcTrail 视为插件运行错误。
 
 需要动态发布网络规则的 component 使用 `managed-network-control-plugin` world。它在管理命令和运行时配置接口之外导入独立的 `actrail:plugin/network-control-host@0.4.0`；普通控制插件不会因此获得网络策略写权限。
 
@@ -79,7 +79,7 @@ AcTrail 只把需要插件参与的行为送进插件。命令和网络控制都
 - WASM core module 只有线性内存和整数函数入口。AcTrail 先调用插件导出的 `actrail_alloc`，把 UTF-8 JSON envelope 写入插件 memory，再调用 `actrail_control_decide(ptr, len)`。插件需要自己解析 JSON。
 - WIT component 有 Component Model 类型系统。AcTrail 通过 Wasmtime component API 调用插件导出的 `decide`，把同一类决策语义组装成 WIT `decision-request` record 传入。插件看到的是语言绑定生成的结构体或 record，不需要解析 JSON。
 
-WASM core module JSON envelope 的短 key 是 ABI 的一部分，不是给人阅读的展示字段。插件必须按字段表解析，不应把 key 展开为长字段名，也不应依赖未列出的字段。
+WASM core module JSON envelope 的短 key 是 ABI 的一部分。插件必须使用字段表中定义的 key 解析输入。
 
 以下值是稳定 ABI 常量，Rust 插件可以从 `actrail_plugin_abi` 读取：
 
@@ -130,7 +130,7 @@ WASM core module 控制插件收到的 request envelope 是一个 JSON object。
 
 ### JSON 示例
 
-以下示例展示当前 WASM core module JSON envelope 的形状。示例值用于说明字段格式，不代表稳定 id 生成规则。
+以下示例展示 WASM core module JSON envelope 的字段格式。
 
 命令执行控制：
 
@@ -177,11 +177,11 @@ WASM core module 控制插件收到的 request envelope 是一个 JSON object。
 }
 ```
 
-上面的 JSON 示例用于说明字段类型和形状；实际字符串内容由当前 AcTrail 运行路径生成，插件应把 `id`、`tr`、`op`、`t`、`ctx` 当作不透明值处理，除非对应字段的格式在更高层文档中另有稳定约定。
+实际字符串内容由 AcTrail 运行路径生成。除另有稳定格式约定的字段外，插件应把 `id`、`tr`、`op`、`t`、`ctx` 当作不透明值处理。
 
 ### WIT Component Record
 
-WIT component 控制插件收到的是结构化 `decision-request` record，不是 JSON 文本。actraild 调用插件时，会在宿主侧把内部决策请求填入 WIT record，然后通过 Wasmtime component API 调用插件导出的 `decide` 函数；Wasmtime 按 Component Model canonical ABI 完成参数 lowering/lifting。插件作者只需要处理语言绑定生成的结构体或 record。
+WIT component 控制插件收到结构化 `decision-request` record。actraild 调用插件时，会在宿主侧把内部决策请求填入 WIT record，然后通过 Wasmtime component API 调用插件导出的 `decide` 函数；Wasmtime 按 Component Model canonical ABI 完成参数 lowering/lifting。插件作者处理语言绑定生成的结构体或 record。
 
 ```mermaid
 sequenceDiagram
@@ -224,7 +224,7 @@ sequenceDiagram
 
 ### WIT Component Hostcall Record
 
-WIT component 控制插件通过 hostcall 查询当前决策上下文和文件策略视图时，返回的是 WIT record，不是 `key=value` 文本，也不是 JSON。
+WIT component 控制插件通过 hostcall 查询当前决策上下文和文件策略视图时，返回 WIT record。
 
 `query-context(context-ref: string, query: string)` 当前只接受 `context-ref = "c"` 和 `query = "decision-summary.v1"`，返回 `decision-summary`：
 
@@ -366,7 +366,7 @@ WIT component 入口：
 | `network-policy-rules-validate(request)` | `result<network-policy-apply-result, string>` |
 | `network-policy-rules-apply(request)` | `result<network-policy-apply-result, string>` |
 
-v1 网络控制的准确边界是 `AF_INET`/`AF_INET6` 的 `connect(2)`，即“INET connect 控制”，不是完整 egress firewall，也不能据此断言 transport 是 TCP。规则 selector 由数字 IP 与精确端口或全端口 `*` 组成；端口不支持任意区间。IPv6 scope ID 只进入 gray 决策上下文和审计，不参与 v1 本地规则匹配。审计中的 `remote` 保留实际 `IP:port`，命中规则时 `policy_remote_scope` 记录精确或 `IP:*` selector。它不解析域名、不做 DNS 或反向 DNS、不支持 CIDR、TLS SNI 和代理后的最终目标，也不覆盖 `sendto(2)`、AF_UNIX、继承或预先建立的连接、未安装 seccomp listener 的 attach 流程以及非 `SYS_connect` 的异步 I/O 路径。
+v1 网络控制作用于 `AF_INET`/`AF_INET6` 的 `connect(2)` 调用；传输层协议需另行确认。规则 selector 由数字 IP 与精确端口或全端口 `*` 组成；端口不支持任意区间。IPv6 scope ID 只进入 gray 决策上下文和审计，不参与 v1 本地规则匹配。审计中的 `remote` 保留实际 `IP:port`，命中规则时 `policy_remote_scope` 记录精确或 `IP:*` selector。它不解析域名、不做 DNS 或反向 DNS、不支持 CIDR、TLS SNI 和代理后的最终目标，也不覆盖 `sendto(2)`、AF_UNIX、继承或预先建立的连接、未安装 seccomp listener 的 attach 流程以及非 `SYS_connect` 的异步 I/O 路径。
 
 需要支持 `actraild plugin cmd` 的控制插件使用 WIT world `managed-control-plugin`。它在 `control-plugin` 的基础上额外导出管理命令入口：
 

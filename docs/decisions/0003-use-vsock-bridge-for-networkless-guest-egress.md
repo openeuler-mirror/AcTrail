@@ -1,10 +1,10 @@
 # ADR 0003：无网络 Guest 使用 VSOCK bridge 出境
 
-> 本文记录无网络 Guest 采用 VSOCK bridge 出境并保持现有 exporter delivery contract 的架构决策。
+> 本文记录无网络 Guest 通过 VSOCK bridge 连接 Host collector 的架构决策。
 
 Status: accepted
 
-Scope: 初始部署 adapter
+Scope: 部署 adapter
 
 ## 背景
 
@@ -12,18 +12,18 @@ Scope: 初始部署 adapter
 
 ## 决策
 
-保留两种部署期 egress mode：
+部署提供两种 egress mode：
 
 - `network`：使用 Guest 网络和 node-local collector endpoint；
 - `vsock-bridge`：使用 Guest loopback TCP-to-VSOCK bridge 与 Host VSOCK/Unix-to-loopback TCP bridge。
 
-初始 bridge 是由 systemd 管理的前台 `socat` socket 转发进程。它只复制字节，不终止 TLS、不解析 OTLP、不持久化、不确认、不重放。Host 侧只能连接固定 loopback collector endpoint。Firecracker/StratoVirt 使用 AF_VSOCK；Cloud Hypervisor 使用 per-VM Unix endpoint 和生命周期 reconcile。
+bridge 是由 systemd 管理的前台 `socat` socket 转发进程。它只复制字节，不终止 TLS、不解析 OTLP、不持久化、不确认、不重放。Host 侧只能连接固定 loopback collector endpoint。Firecracker/StratoVirt 使用 AF_VSOCK；Cloud Hypervisor 使用 per-VM Unix endpoint 和生命周期 reconcile。
 
-它是现有 exporter connection 下方的 deployment adapter，不改变 `actraild` exporter 代码或运行时配置语义。
+bridge 位于 exporter connection 下方，承担部署层的字节转发。
 
 ## 后果
 
-- OTLP batching、TLS 校验、有界 retry、response 分类和 shutdown flush 仍端到端存在于 `actraild` 与 collector 之间。
-- systemd 负责 restart、日志、limit 和 process-group 清理，无需自建 PID/state lifecycle。
-- bridge 不提供 store-and-forward；超过 exporter retry budget 的中断仍按既有 contract 显式丢失数据。
-- native VSOCK dialer 只在测量证明需要时作为后续优化。
+- OTLP batching、TLS 校验、有界 retry、response 分类和 shutdown flush 由 `actraild` 与 collector 端到端完成。
+- systemd 负责 restart、日志、limit 和 process-group 清理。
+- bridge 不提供 store-and-forward；中断超过 exporter retry budget 时，按 exporter delivery contract 显式丢弃数据。
+- 引入 native VSOCK dialer 必须先由性能测量证明其必要性。

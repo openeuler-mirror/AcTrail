@@ -20,7 +20,7 @@ Request Parser Registry 目前注册结构化 JSON/SSE parser 和通用 JSON par
 - `protocol_id`：可选的协议身份；
 - `model`：可选的模型名称。
 
-这些字段描述识别结果，不包含 messages、tools 或有序 item。
+这些字段描述识别结果。messages、tools 和有序 item 由浏览器从请求正文中提取。
 
 ## Action 与内容保留
 

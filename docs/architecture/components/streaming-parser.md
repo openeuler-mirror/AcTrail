@@ -46,7 +46,7 @@ WebSocket owner 消费共享 HTTP 升级头，按已确认的连接身份维护 
 
 原始连接身份包含 trace、process、source boundary 和 stream key。采集对象在升级前后更换 key 时，需要 producer 的明确连接身份映射；解析器不按进程或首个可解码 frame 合并连接。
 
-Rustls 明文采集当前使用 `CommonState` 地址生成 `tls:<pid>:<pointer>`。该对象可能随 Rust 值移动而改变地址，因此这个坐标不能证明跨移动的连接连续性。现有 TLS 事件没有 socket fd/generation 或权威别名；无法证明升级请求、响应与后续 frame 属于同一连接时，保留未关联观测。补齐该能力需要 producer 在真实 TLS/IO 同调用上下文中取得 socket fd 及其 generation，并传递明确连接身份。禁止按指针接近程度、时间、线程或相邻 fd 猜测别名。经透明 TLS relay 的 socket 采集验证仅覆盖稳定 socket 身份下的协议解析与来源链；直接 Rustls 采集的跨移动身份能力仍需独立验证。
+Rustls 明文采集使用 `CommonState` 地址生成 `tls:<pid>:<pointer>`。该对象可能随 Rust 值移动而改变地址，因此这个坐标不能证明跨移动的连接连续性。现有 TLS 事件没有 socket fd/generation 或权威别名；无法证明升级请求、响应与后续 frame 属于同一连接时，保留未关联观测。跨移动关联要求 producer 在同一次 TLS/IO 调用上下文中取得 socket fd 及其 generation，并传递明确连接身份。禁止按指针接近程度、时间、线程或相邻 fd 猜测别名。
 
 ## 响应 body 与 provider
 

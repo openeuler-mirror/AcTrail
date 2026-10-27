@@ -35,7 +35,7 @@ sysctl kernel.perf_event_paranoid kernel.unprivileged_bpf_disabled
 - sysctl 与安全策略必须允许所需 tracepoint/uprobe attach；
 - `id -u` 为 `0` 是常见部署方式，但容器或 LSM 仍可能移除所需能力。
 
-只读检查不能证明 TLS、seccomp 或 fanotify 路径可用。完整 probe 需要 daemon 已经启动，并且 release binary 位于 `PATH`；只检查当前 namespace 的 launch 前置条件时可加 `--skip-daemon`。
+TLS、seccomp 和 fanotify 的可用性还需检查实际运行路径。完整 probe 需要 daemon 已经启动，并且 release binary 位于 `PATH`；只检查当前 namespace 的 launch 前置条件时可加 `--skip-daemon`。
 
 ```bash
 sudo actrailctl probe \
@@ -44,7 +44,7 @@ sudo actrailctl probe \
   --json
 ```
 
-`--skip-daemon` 的结果不能替代 daemon 根据配置和主机 collector 状态作出的最终 profile 决策。
+最终 profile 由 daemon 根据配置和主机 collector 状态决定。
 
 ## 常见阻塞
 
@@ -56,4 +56,4 @@ sudo actrailctl probe \
 | `perf_event_open` permission error | sysctl、capabilities、LSM | 调整主机策略；不得通过删除 capability 配置静默降级 |
 | fanotify `Operation not permitted` | 是否在受限容器、是否具备 permission event 权限 | 改用满足该治理能力的主机或 VM |
 
-只读检查与 `actrailctl probe` 不能替代特定目标平台上的真实工作负载验证。平台支持声明以 [平台支持范围](../../reference/platform-support.md) 为准；尚未完成真实环境验证的目标必须保持“未验证”状态。
+完成主机检查和 `actrailctl probe` 后，在目标平台运行真实工作负载并检查采集结果。平台要求见 [平台支持范围](../../reference/platform-support.md)；尚未完成真实环境验证的目标标记为“未验证”。

@@ -17,7 +17,7 @@ Control socket 是管理接口。默认路径 `/run/actrail/control.sock`、默�
 - HTTP headers/body、prompt、tool schema、tool result 与模型响应；
 - 可被离线猜测的内容 hash。
 
-默认 payload redaction policy 是 `disabled`，并且 snapshot JSON 可包含 payload bytes/text。与此同时，LLM request body 的语义导出默认为 `request_body_export = "none"`。这些是不同层的开关；关闭高层 body export 不代表底层 payload 或 snapshot 一定不含内容。
+默认 payload redaction policy 是 `disabled`，snapshot JSON 可包含 payload bytes/text。LLM request body 的语义导出默认为 `request_body_export = "none"`。Payload 保留、snapshot 内容和语义正文导出分别由各自的开关控制，部署时须逐层检查。
 
 生产部署应从 [采集配置](../reference/configuration/collection.md) 的各层开关逐一缩小内容面，设置每 trace 容量上限，并保护 SQLite、export directory 和 daemon log。API key 不应放在命令行参数中，因为 argv 本身就是观测对象。
 

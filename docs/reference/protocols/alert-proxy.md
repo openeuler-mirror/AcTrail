@@ -52,7 +52,7 @@ After protocol, peer credential, the complete readiness gate, and producer-slot 
 
 ### ForwardAlert payload
 
-`ForwardAlert` does not carry an external message ID or labels. Its payload is encoded in this order:
+The `ForwardAlert` payload is encoded in this order:
 
 ```text
 detected_at_ms       u64 big-endian
@@ -130,7 +130,7 @@ Success response:
 }
 ```
 
-In v1, `auth.token` is an opaque bearer token. The proxy compares equal-length values using a byte-wise XOR accumulator; it does not hash the token or claim JWT signature, issuer, audience, or expiry validation. Empty token sets, empty tokens, and deployment placeholder tokens fail startup. Tokens must never be logged.
+In v1, `auth.token` is an opaque bearer token. Authentication checks token equality only. The proxy compares equal-length values using a byte-wise XOR accumulator. Empty token sets, empty tokens, and deployment placeholder tokens fail startup. Tokens must never be logged.
 
 `client_id` must be non-empty and within its configured maximum length. `session_id` identifies the connection only for the lifetime of the proxy process.
 
@@ -162,7 +162,7 @@ Accepted response:
 
 A new subscription atomically replaces the session subscription. The response returns exactly the accepted topics and must not add other topics. Topics are validated for non-empty value, length, count, and allowed characters; the proxy does not maintain a static category catalog. Every syntactically valid topic is accepted and returned unchanged. Topics match the alert `cat` field exactly. An empty topic list subscribes to nothing.
 
-Severity values match `s` exactly. An empty list disables severity filtering. A non-empty list can contain `info`, `warning`, and `critical` at most once each. `filter.tags` is reserved and v1 accepts only an empty object; a future version may match it against alert `labels`.
+Severity values match `s` exactly. An empty list disables severity filtering. A non-empty list can contain `info`, `warning`, and `critical` at most once each. `filter.tags` is reserved and v1 accepts only an empty object.
 
 ### Alert push
 

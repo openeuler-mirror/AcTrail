@@ -18,4 +18,4 @@ semantic action 是 AcTrail 对有意义的 agent 或进程事实提供的可查
 
 pending exec intent 总量受 `process_seccomp.pending_max_entries` 约束。只有同一 logical process 的队首 completion 且关联可唯一证明时才能合并。path 不同、同 path 重复导致歧义或顺序不可证明时，必须生成 completion-only。completion 缺少 path 时只能使用唯一 pending candidate。
 
-fork parent identity 后续失效时只新增 invalidation link，禁止重放 one-shot action。需要最终 link 真值的 consumer 使用持久化 relation；未来若要在线表达 link update，必须另行设计独立 protocol record。
+fork parent identity 后续失效时只新增 invalidation link，禁止重放 one-shot action。需要最终 link 真值的 consumer 使用持久化 relation。在线 link update 必须使用独立 protocol record。
