@@ -22,11 +22,11 @@ Storage --> Api : 只读查询
 Api --> Browser : raw body_json
 
 note bottom of Registry
-  当前 parser 只返回识别元数据
-  不返回统一的 request item 模型
+  parser 返回 classifier、protocol
+  和 model 识别元数据
 end note
 
 note bottom of Browser
-  当前 wire-format 解释仍位于前端
+  浏览器解释 messages、input 和 tools
 end note
 @enduml

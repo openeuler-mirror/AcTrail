@@ -55,4 +55,4 @@ sudo actrailviewer export-otel \
   --output /var/lib/actrail/export/trace-<TRACE_ID>.otlp.json
 ```
 
-导出前应检查 `[export.snapshot]` 和 semantic body export 设置。JSON、OTLP 和实时插件的内容边界彼此独立；单个出口没有 body 不能证明其他出口也没有 body。
+导出前应检查 `[export.snapshot]` 和 semantic body export 设置。JSON、OTLP 和实时插件的内容边界彼此独立，应分别确认各出口的正文设置。

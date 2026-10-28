@@ -2,7 +2,7 @@
 
 > 本文展示 hand-side 执行隔离路径中 Guest、VMM、主机网关、可信 daemon 与独立存储的实际落位。
 
-本图是完整部署中的局部视图，只展开 hand-side observation 路径。`actrailweb`、`actrailviewer`、集群上报、OpenTelemetry 和外部告警代理仍按各自部署方式连接可信侧，不在本图重复显示。
+本图展示 hand-side observation 路径。`actrailweb`、`actrailviewer`、集群上报、OpenTelemetry 和外部告警代理在可信侧的连接见[默认部署](default.md)。
 
 [![执行隔离部署](assets/execution-isolation-deployment.png)](assets/execution-isolation-deployment.puml)
 

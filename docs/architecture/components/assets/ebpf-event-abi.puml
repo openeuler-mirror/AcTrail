@@ -39,7 +39,7 @@ Buffer --> Decoder
 Decoder --> Projection
 
 note bottom of Header
-  namespace 修饰 TGID 的坐标系；
-  不表示 namespace owner 自身的 TGID。
+  TGID 指向字段角色所指进程；
+  namespace 指定该 TGID 的坐标系。
 end note
 @enduml

@@ -32,7 +32,7 @@
 
 当前 `Sidebar` 提供 Statistics、Config、Plugins 和 Traces 四个顶层 Workspace，按 Observe（Statistics、Traces）和 Control（Config、Plugins）两组展示。Statistics 的子页面使用内容区顶部的下划线标签。导航状态不写入 URL：顶层选择保存在 `App`，Statistics 与 Traces 的子选择由所属 Workspace 持有。
 
-Trace 使用四组两级导航。一级为 Overview、Execution、Activity 和 Health，每组最多包含 6 个 leaf view。两级导航不改变既有 leaf view ID、数据端点或详情组件；完整状态归属和分组见 [Navigator 与 Workspace](controls/navigation-workspace.md)。
+Trace 使用四组两级导航。一级为 Overview、Execution、Activity 和 Health，每组最多包含 6 个 leaf view。各 leaf view 通过稳定 ID 关联数据端点和详情组件；状态归属和分组见 [Navigator 与 Workspace](controls/navigation-workspace.md)。
 
 ## 关键页面布局
 
@@ -40,7 +40,7 @@ Trace 使用四组两级导航。一级为 Overview、Execution、Activity 和 H
 
 ### 应用壳
 
-应用壳为两列网格：左侧 `Sidebar` 承载品牌、分组导航和仓库入口，右侧主列铺满视口。`Header` 绝对定位在主列顶部且背景透明，只渲染右对齐的悬浮操作簇。内容列顶部另有一层渐变模糊带，让滚动内容在悬浮控件下方渐隐，而不是撞上一条硬边。通知栈与错误条覆盖当前页面，不占用 Workspace 网格。
+应用壳为两列网格：左侧 `Sidebar` 承载品牌、分组导航和仓库入口，右侧主列铺满视口。`Header` 绝对定位在主列顶部且背景透明，只渲染右对齐的悬浮操作簇。内容列顶部的渐变模糊带使滚动内容在悬浮控件下方渐隐。通知栈与错误条覆盖当前页面，不占用 Workspace 网格。
 
 `Sidebar` 在 `216px` 与 `60px` 之间收起展开：拨片贴在侧栏右缘，宽度过渡完成切换，收起后只保留图标并隐藏分组标题与文字，状态记录在浏览器本地。主题、语言与刷新位于悬浮操作簇内。
 
@@ -95,12 +95,12 @@ Stats、Plugins、Alerts 与图表组件可以设置局部断点，但局部断�
 相对于 crates/apps/web/frontend/src/ 的路径
 ```
 
-叶子按钮、图标和仅用于局部排版的元素不进入全局组件图。复杂领域控件可以拥有单独文档；其入口组件记录精确路径，内部实现只记录目录边界，避免让架构图退化成文件清单。
+全局组件图展示影响布局、状态或依赖关系的控件。复杂领域控件可以拥有单独文档；其入口组件记录精确路径，内部实现记录目录边界。
 
 ### 拆分规则
 
 - 只有稳定的交互语义或被两个明确调用方复用时，才抽取共享控件。
-- 不抽取同时接管导航、业务状态、数据加载和动态页面渲染的万能容器。
+- Workspace 负责导航选择、业务状态、数据加载和动态页面渲染。
 - Workspace 保持自身状态高内聚；共享控件通过 props、events、`v-model` 和 slots 组合。
 - 新目录应声明唯一公共入口，其余实现保持目录私有；导出范围遵循最小化原则。
 - CSS 变量和主题 token 是稳定视觉值的代码真相，Markdown 不复制完整数值表。

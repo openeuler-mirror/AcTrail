@@ -2,7 +2,7 @@
 
 > 本文说明沙箱资源告警的触发规则、持久化字段、外发映射和在线配置边界。
 
-沙箱告警由 `sandbox-resource-alert` 从沙箱 observation 判定。它不做 trace 关联，不进入依赖 `TraceId` 的主告警表，也不把外部 JSON 编码职责带入检测过程。
+沙箱告警由 `sandbox-resource-alert` 从沙箱 observation 判定，以来源连接和 Guest 身份归属，并写入独立的 Sandbox Alert DB。外部 JSON 编码由告警转发通路负责。
 
 ## 告警判定
 

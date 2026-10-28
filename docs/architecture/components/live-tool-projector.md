@@ -14,7 +14,7 @@ Live Tool Projector 是 `LiveSemanticActionRuntime` 内部的有状态组件。�
 
 投影器返回 `ToolProjectionOutput`，其中只包含新增 action、link 和 LLM pipeline 诊断。运行时将这些结果与同批其他语义结果合并，再交给统一持久化路径。
 
-该组件不解析 TLS、HTTP、服务器发送事件（Server-Sent Events，SSE）或模型服务方的传输格式，也不负责存储和导出。输入在到达这里之前已经完成传输组装与 LLM 协议投影。
+输入在上游完成传输组装与 LLM 协议投影。存储和导出由 recording runtime 负责。
 
 ## 组件职责
 
@@ -35,7 +35,7 @@ Live Tool Projector 是 `LiveSemanticActionRuntime` 内部的有状态组件。�
 3. 投影器从本批 `llm.request` 建立查找表，再将每个工具结果绑定到对应 tool call。缺少 ID、没有候选或候选不唯一时，结果仍可形成 action，同时产生生命周期诊断。
 4. Emitter 一次返回完整输出，运行时将其与 LLM pipeline 的 action、content 和 lineage 合并。
 
-实时运行时不比较委派 prompt 与子请求，不保存匹配索引或用于匹配的完整用户文本副本，也不生成 `agent.invocation.child_llm_request`。工具调用和结果仍通过 tool call ID 关联，Agent 调用生命周期仍完整记录。`llm.request.message_preview` 只保留有界展示文本。
+实时运行时通过 tool call ID 关联工具调用和结果，并记录 Agent 调用生命周期。`llm.request.message_preview` 保存有界展示文本。委派 prompt 与子请求的匹配、完整文本读取和匹配状态由 Web 离线关联组件负责，生成当前视图中的 `delegation` 边。
 
 ## Web 离线委派关联
 

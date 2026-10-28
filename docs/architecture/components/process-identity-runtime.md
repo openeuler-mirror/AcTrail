@@ -6,7 +6,7 @@
 
 ## 统一基准
 
-AcTrail 不把任何裸 PID 当作跨层稳定身份。上层事件、membership、治理与存储统一引用 `ProcessIdentity`；PID 只是在明确 namespace 与 generation 下可解释的坐标。
+上层事件、membership、治理与存储统一引用稳定的 `ProcessIdentity`。PID 是在明确 namespace 与 generation 下可解释的坐标。
 
 [![raw kernel PID、observer PID 与 agent namespace PID 的关系](assets/process-pid-coordinate-relationship.png)](assets/process-pid-coordinate-relationship.puml)
 
@@ -25,7 +25,7 @@ AcTrail 不把任何裸 PID 当作跨层稳定身份。上层事件、membership
 
 已有进程 attach 与 snapshot seed 使用按需 BPF task iterator 完成反向关联：daemon 批量提交 `(observer_pid, start_time_ticks)`，iterator 在持有 `task_struct` 的内核侧返回 `(map_pid, start_boottime_ns)`。一次 seed batch 只扫描一次 task 列表；iterator 完成后立即 detach，不进入 syscall、network、file 或 payload 热路径。找不到精确进程代际时 attach 失败，不回退为 `map_pid = observer_pid`。
 
-进入观测范围后，eBPF 以 raw kernel TGID 为 key 缓存 `{start_boottime_ns, observer_pid}`。typed event 的公共 header 只做一次 O(1) cache lookup；cache miss 的单条事件 fail-local 丢弃并计数，decoder 仍可用已建立的精确 binding 做第二层恢复。TLS/seccomp correlation 另以 raw kernel pid_tgid 缓存 trace namespace 的 `(TGID,TID)`；未来线程无法在进程注册时预知，因此每个线程首次 TLS 触达时填充一次，后续 enter/completion 为 O(1)。线程 exit、trace unbind、进程 exit、取消、promotion rollback 与显式 untrack 必须清理对应 cache。
+进入观测范围后，eBPF 以 raw kernel TGID 为 key 缓存 `{start_boottime_ns, observer_pid}`。typed event 的公共 header 只做一次 O(1) cache lookup；cache miss 的单条事件 fail-local 丢弃并计数，decoder 仍可用已建立的精确 binding 做第二层恢复。TLS/seccomp correlation 另以 raw kernel pid_tgid 缓存 trace namespace 的 `(TGID,TID)`；每个线程首次 TLS 触达时填充一次，后续 enter/completion 为 O(1)。线程 exit、trace unbind、进程 exit、取消、promotion rollback 与显式 untrack 必须清理对应 cache。
 
 Socket seccomp completion 明确携带 `observer_tgid/observer_tid` 与
 `kernel_tgid/kernel_tid`。内核根据已配置 observer namespace 的 level 和 inode
@@ -34,14 +34,14 @@ Socket seccomp completion 明确携带 `observer_tgid/observer_tid` 与
 TGID 和 `start_boottime_ns`；操作关联键包含这两个字段、trace、FD generation、
 observer TID 和 syscall 参数。进程复用、FD 复用及不同 trace 的记录不得互相匹配。
 目标内存与 `/proc` 仍通过 observer 坐标访问，socket stream 与 FD map 始终使用
-kernel 坐标。该路径不新增线程逆索引，不在用户态扫描 task 或猜测 kernel TID；
+kernel 坐标。线程配对使用内核投影的 observer TID 和 seccomp notification 中的 TID。
 trace 结束时释放未完成的 socket capture 和 continuation。
 
 ## Fork、控制与 Exec
 
 `sched_process_fork` 发生时 current task 仍是 parent。eBPF 从 child `group_leader->thread_pid->numbers[]` 读取 observer namespace 对应的 TGID：首次按 namespace inode 在最多 33 层 PID namespace 中发现 observer level，随后缓存 level；稳态 fork 直接读取 `numbers[cached_level]` 并核验 inode，复杂度为 O(1)。
 
-fork hook 先以 raw kernel TGID 发布内核治理 binding，再用同一 child task 发布 `(observer_pid, map_pid, start_boottime_ns)` fork event。Collector 立即以 observer PID 创建或解析唯一的 `ProcessIdentity`，同时把 raw TGID仅登记为 eBPF map 坐标；不存在 host-only pending 身份，也不在用户态反扫 map 猜测两套 PID 的关系。
+fork hook 先以 raw kernel TGID 发布内核治理 binding，再用同一 child task 发布 `(observer_pid, map_pid, start_boottime_ns)` fork event。Collector 依据该事件立即以 observer PID 创建或解析唯一的 `ProcessIdentity`，同时把 raw TGID 登记为 eBPF map 坐标。
 
 child 调用 `execve` 时，seccomp user-notify 先于实际 exec 完成到达 daemon。Command control 使用 notification 中 daemon 可见的 PID、父进程 membership 与既有 `ProcessIdentity` 完成 trace 归属和策略裁决；它不读取、校验或补全 collector 的 fork map。daemon 返回 allow 后，exec observation 通过 raw map PID 命中 fork 已建立的同一身份。非 leader 线程执行 exec 并接管 TGID 时，active identity 仍以进程的 raw TGID 为 key；task-storage registration 同时保留按 observer TGID索引的 one-shot 副本，避免把原 leader 的 `task_struct` 当成进程身份。
 

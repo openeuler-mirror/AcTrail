@@ -21,4 +21,4 @@ Status: accepted
 - daemon 激活注册前，launcher 不能报告成功跟踪。
 - exec 热路径通常只查询 `tracked_traces`，pending one-shot 查询由共享原子计数门控。
 - Linux 5.10 需要独立 adapter，并证明 generation 能阻止 PID reuse 混淆。
-- 无法取得或激活 pidfd 时中止 launch，而不是静默创建未跟踪进程。
+- 无法取得或激活 pidfd 时中止 launch。

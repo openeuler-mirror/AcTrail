@@ -409,7 +409,7 @@
 
 - 触发：daemon 装配时逐一预检请求宿主 eBPF 观测的 capture profile。LSM 合并能力装载也复用此检查。
 - 检查：平台探测没有 `reason_unavailable`。去掉禁用项和不在 collector descriptor 中的能力，并按能力合并、保留 Required 优先级后，有效请求不为空。其中 Required 能力受当前实现支持。依据请求生成的计划能够加载。加载后的 `attached_capabilities` 包含全部有效 Required 能力。无条件支持检查中的能力为 `ProcLifecycle`、`ProcExecContext`、`NetTransport`、`FsAccessBasic`、`FsMmap`、`IpcPipeFifo`、`IpcUnixSocket`。`TlsPlaintextPayload` 还要求 TLS 已启用且后端不是 sync。`SocketPlaintextPayload` 要求 socket 采集已启用。`StdioChunk` 要求 stdio 已启用且 stdin/stdout/stderr 至少一个采集开关启用。
-- 失败：collector 返回 `CollectorError`。逐 profile 预检记录失败阶段和消息，将该 profile 标为 unavailable，继续检查其余 profile。本方法本身不返回启动错误。声明中未暴露的请求被过滤，不能描述成“拒绝任何未知 capability”。有效计划相同的 profile 复用同一预检报告。
+- 失败：collector 返回 `CollectorError`。逐 profile 预检记录失败阶段和消息，将该 profile 标为 unavailable，继续检查其余 profile。本方法本身不返回启动错误。预检会过滤 collector descriptor 未声明的能力请求。有效计划相同的 profile 复用同一预检报告。
 - 源码：[runtime.rs:35](../../../crates/adapters/collectors/ebpf/src/collector/runtime.rs#L35)。[lib.rs:336](../../../crates/adapters/collectors/ebpf/src/lib.rs#L336)。[preflight.rs:99](../../../crates/apps/daemon/src/services/attach/preflight.rs#L99)。调用 [wiring.rs:284](../../../crates/apps/daemon/src/services/wiring.rs#L284)。
 
 ### 40. LSM 常驻采集能力预检

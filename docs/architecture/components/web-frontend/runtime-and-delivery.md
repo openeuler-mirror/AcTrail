@@ -12,7 +12,7 @@
 | 图标 | `@lucide/vue` | 提供工具栏和指标图标 |
 | 样式 | 项目自有 CSS、主题 token 和组件局部样式 | 控制主题、页面网格与响应式折叠 |
 
-前端没有 URL router、全局 store 或 UI 控件框架。`App.vue` 通过响应式状态和条件渲染切换 Workspace；组件通过 props 接收状态，并通过 events 或 `v-model` 向所属组件报告交互。
+`App.vue` 通过响应式状态和条件渲染切换 Workspace。导航状态保存在所属组件中。组件通过 props 接收状态，并通过 events 或 `v-model` 向所属组件报告交互。
 
 ## 状态与请求流
 
