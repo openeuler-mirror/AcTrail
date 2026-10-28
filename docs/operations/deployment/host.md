@@ -78,11 +78,11 @@ systemd 等 supervisor 应直接执行：
 /usr/local/bin/actraild --config /etc/actrail/actraild.conf run
 ```
 
-服务只有在 control socket、存储和必需 collector 都 ready 后才应对外宣称可用。
+服务的就绪条件是 control socket、存储和必需 collector 全部 ready。
 
 ## 升级与回滚
 
-项目版本达到 `1.0.0` 前不承诺配置或 SQLite schema 向下兼容。升级前，运维人员应停止 daemon，备份当前二进制、配置、SQLite 及 WAL/SHM 文件，并用新版本 `init --output` 生成模板进行人工比较。安装过程不得自动覆盖现有配置或数据库。
+项目版本达到 `1.0.0` 前，配置和 SQLite schema 可发生不兼容变更。升级前，运维人员应停止 daemon，备份当前二进制、配置、SQLite 及 WAL/SHM 文件，并用新版本 `init --output` 生成模板进行人工比较。安装过程不得自动覆盖现有配置或数据库。
 
 回滚时停止新版本，恢复同一版本集合的二进制、配置与完整 SQLite 文件集，再启动并运行 `status` 和 `doctor`。如果新版本已经用不兼容 schema 写入数据库，不能只回滚二进制；必须同时恢复升级前的存储备份。
 

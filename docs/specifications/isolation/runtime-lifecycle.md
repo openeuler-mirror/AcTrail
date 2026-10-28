@@ -28,7 +28,7 @@ stateDiagram-v2
 
 ## 启动
 
-每个进程在宣布 ready 前必须校验静态配置、容量、必需内核能力、bind address 以及必需 store 或 plugin。缺失 tracepoint 或 endpoint 无效时不得换用其他 collector 或 transport 冒充成功。
+每个进程在宣布 ready 前必须校验静态配置、容量、必需内核能力、bind address 以及必需 store 或 plugin。缺失 tracepoint 或 endpoint 无效时，启动必须失败，禁止换用其他 collector 或 transport 继续启动。
 
 `actrail-sb daemon` 可在没有 VSOCK session 时 ready；它必须在制作 Guest snapshot 前初始化采集，snapshot 中不得包含 live data session。`actrail-sb connect` 只是 Guest-local control 操作，不加载 eBPF，也不拥有数据连接。
 

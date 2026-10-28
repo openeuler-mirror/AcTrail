@@ -4,11 +4,11 @@
 
 ## 架构
 
-| 架构 | 状态 | 说明 |
-| --- | --- | --- |
-| `x86_64` | 已验证 | eBPF、uprobe 和 process-seccomp 路径均有实现，并已运行真实工作负载验证 |
-| `aarch64` / ARM64 | 代码支持，尚未在 ARM64 目标发行版验证 | build、uprobe register reader 和 syscall mapping 已包含 ARM64 路径 |
-| 32-bit ARM 及其他架构 | 不支持 | eBPF build 会明确失败 |
+| 架构 | 支持状态 |
+| --- | --- |
+| `x86_64` | 支持 |
+| `aarch64` / ARM64 | 支持 |
+| 32-bit ARM 及其他架构 | 不支持 |
 
 ## 所有 live collection 的基础要求
 
@@ -20,18 +20,16 @@ python3 scripts/preflight/platform_preflight.py --color always
 
 | 要求 | 用途 | 只读检查 |
 | --- | --- | --- |
-| root 或等效能力 | 加载与 attach collector | `id -u`；还需结合 capabilities/LSM/container policy |
+| root 或等效能力 | 加载与 attach collector | `id -u`，结合 capabilities/LSM/container policy |
 | Kernel BTF | eBPF CO-RE | `test -r /sys/kernel/btf/vmlinux` |
 | 可写 tracefs control mount | tracepoint attach | `grep -w tracefs /proc/self/mountinfo`，并检查 `/sys/kernel/tracing` 或 `/sys/kernel/debug/tracing` 可写 |
 | 允许 perf tracepoint/uprobe | eBPF 与用户态 probe | 检查 `kernel.perf_event_paranoid`、capabilities 和安全策略 |
-
-进程 fork 观测使用 `sched/sched_process_fork`，不要求 `syscalls/sys_enter_fork`。某些架构没有独立 `fork`/`vfork` syscall，launch-time process seccomp 会按目标架构解析为可用的 `clone`/`clone3` 等实际 syscall。`dup2`/`dup3` 兼容 alias tracepoint 缺失只会降低 fd alias fidelity，不应阻塞核心 process/network/file/socket collector。
 
 ## 按功能增加的要求
 
 | 功能 | 增加的要求 |
 | --- | --- |
-| TLS sync 明文 | 目标必须经 `actrailctl launch`；sync runtime library 可读；resolver 能为实际二进制生成完整 probe plan |
+| TLS sync 明文 | 目标经 `actrailctl launch` 启动、sync runtime library 可读、resolver 可为实际二进制生成完整 probe plan |
 | socket seccomp fallback / exec context | seccomp user notification、`pidfd_open`、`pidfd_getfd`，并允许读取 child 所需内存 |
 | 大型用户态 operation 读取 | 对 traced child 的 `process_vm_readv` 权限 |
 | fanotify 文件治理 | fanotify permission events 与对应 mount/namespace 权限 |
@@ -55,4 +53,6 @@ release build：
 cargo build --release
 ```
 
-目标发行版仍须提供与构建产物兼容的 glibc 和动态库。Release 应在 ABI 不高于目标环境的构建环境中生成。
+运行环境：与 release 制品兼容的 glibc 和动态库。
+
+构建环境：ABI 版本不高于目标运行环境。

@@ -37,7 +37,7 @@ P 模板采用上述默认值。C 模板显式开启 FD 修改及读取、写入
 
 ## `[file_observation.summary]`
 
-读取和写入在内核按实际文件对象累计，并按进程归属输出摘要。单个文件也能输出，不依赖扫描程序名单或跨文件数量阈值。
+读取和写入在内核按实际文件对象累计，并按进程归属输出摘要。摘要适用于任意程序的单个或多个文件。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -45,7 +45,7 @@ P 模板采用上述默认值。C 模板显式开启 FD 修改及读取、写入
 | `max_entries` | `16384` | 内核文件 I/O 累计条目容量 |
 | `object_max_entries` | `16384` | 内核文件对象身份条目容量 |
 
-三个值均须大于零。`collection.read/write` 的 `observed`、`counts`、`bytes`、`errors` 独立控制所需事实、次数、字节和错误输出；全部关闭的方向不启动 I/O 汇总。`raw_event_retention` 不改变内核采集需求。`bulk_read` 仅消费文件摘要形成跨文件路径集合，不缓存完整 syscall 事件，不作候选回放。
+三个值均须大于零。`collection.read/write` 的 `observed`、`counts`、`bytes`、`errors` 独立控制所需事实、次数、字节和错误输出；全部关闭的方向不启动 I/O 汇总。`raw_event_retention` 控制原始事件留存，采集需求由 `collection.read/write` 决定。`bulk_read` 消费文件摘要形成跨文件路径集合。
 
 TTY 同样使用此刷新间隔。`tty.operations` 默认且仅允许 `read/readv/write/writev`，其他操作在启动时拒绝。`read` 或 `readv` 任意一项选择读取方向，`write` 或 `writev` 任意一项选择写入方向；摘要不区分这两种 syscall。只请求 `errors` 时输出错误发生事实与 errno，不输出未请求的次数。
 

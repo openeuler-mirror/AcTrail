@@ -12,9 +12,9 @@
 | `shape` | 保留 shape、请求正文尺寸、model 与 transport metadata，但不可重建 body |
 | `canonical_blocks` | 通过 manifest、refs 和 trace-local reusable blocks 保存可重建的 canonical provider JSON |
 
-非 JSON body 只能保留为 `shape`。`canonical_blocks` 重建 canonical JSON：对象 key 按字典序排序，数组顺序保持，去除无意义空白。原始 HTTP 空白和 object key order 不保留。在线存储由 skeleton、refs 和块组成，不再为整请求摘要或长度元数据额外生成 canonical JSON 副本，也不生成整请求 hash。
+非 JSON body 只能保留为 `shape`。`canonical_blocks` 重建 canonical JSON：对象 key 按字典序排序，数组顺序保持，去除无意义空白。在线存储由 skeleton、refs 和块组成，内容 hash 以块为单位生成。
 
-缺 block 或 skeleton 非法是读取错误，不得作为 silent partial success 返回。独立的完整 JSON 表示按显式读取或正文导出需要生成。存储仍需构建和编码 skeleton、块；未抽取为块的未知字段留在 skeleton 中，特殊正文形状的 skeleton 可能包含完整正文。
+缺 block 或 skeleton 非法时返回读取错误。完整 JSON 表示按显式读取或正文导出需要生成。存储负责构建和编码 skeleton、块；未抽取为块的未知字段留在 skeleton 中，特殊正文形状的 skeleton 可能包含完整正文。
 
 ## 存储关系
 
@@ -45,11 +45,11 @@ Skeleton 是保留原 JSON 结构的模板；它在内容原位置放置 ordinal
 {"messages":[{"$actrail_llm_block":0}],"model":"deepseek-v4-flash"}
 ```
 
-Block 只在同一 trace 内按 canonical block hash 去重，不能跨 trace 去重，也不能把跨 trace 内容相等性作为公开能力。`BlockAccumulator` 是当前唯一块身份生成入口，负责规范化并生成内容 hash；相同 `(trace_id, block_hash)` 必须代表不可变的相同 bytes。
+Block 只在同一 trace 内按 canonical block hash 去重；公开能力以 trace 为内容相等性判定边界。`BlockAccumulator` 是唯一块身份生成入口，负责规范化并生成内容 hash；相同 `(trace_id, block_hash)` 必须代表不可变的相同 bytes。
 
 存储以该身份的唯一索引为依据：已有块只查询 `block_id` 和字节长度，新块通过 `INSERT ... RETURNING block_id` 取得 ID；引用复用本次内容写入取得的 ID。该临时映射在一次内容写入结束后释放。查询与插入使用现有 recording 写事务。
 
-每次内容写入必须提供引用涉及的全部唯一块；缺块、重复提供同一身份或长度冲突会报错。存储不读回完整 BLOB 逐字节比较；读取也不生成整请求 hash。相同 hash、相同长度但不同 bytes 的身份冲突属于 producer 违反不可变身份约定，不能把在线写入或显式读取宣称为内容哈希审计。
+每次内容写入必须提供引用涉及的全部唯一块；缺块、重复提供同一身份或长度冲突会报错。存储校验块身份和字节长度，块内容的一致性由 producer 的不可变身份约定保证。相同 hash、相同长度但不同 bytes 的身份冲突超出此校验范围。
 
 ## Version 2 block boundaries
 
@@ -82,7 +82,7 @@ action 与统计的请求尺寸使用 `llm.request.payload_bytes`：正常消息
 GET /api/traces/{trace_id}/actions/{action_id}/content/llm-request?max_bytes=N
 ```
 
-状态必须区分 `available`、`shape_only`、`truncated`、`unavailable` 和 `corrupt`。超过 `request_body_export_max_bytes` 时，body 整体省略并标记 `too_large`，不能截断后伪装为完整 JSON。
+状态必须区分 `available`、`shape_only`、`truncated`、`unavailable` 和 `corrupt`。超过 `request_body_export_max_bytes` 时，body 整体省略并标记 `too_large`；截断内容不得标记为完整 JSON。
 
 ### 内容读取成本
 
@@ -90,7 +90,7 @@ GET /api/traces/{trace_id}/actions/{action_id}/content/llm-request?max_bytes=N
 
 节点接口按 JSON Pointer 导航，只展开路径与当前 children 页直接涉及的 block。单次请求对重复 block 共用已解码值，累计唯一 block 原始字节在读取前受 `block_read_budget` 限制，超限明确报请求预算错误。子节点类型与 child count 来自实际节点；block 内的 placeholder 同名对象是用户内容，不再次解释。String leaf 按 `preview_bytes` 返回 UTF-8 预览，`value_bytes` 和 `returned_bytes` 分别表示原字符串与预览的解码后 UTF-8 字节数；其他 scalar 使用 canonical JSON 字节数。
 
-Skeleton 和引用元数据仍按当前请求完整读取，未知字段可能直接保存在 skeleton；对象 key 排序也随当前对象规模增长。因此 `max_bytes` 是前缀输出与 block 字节读取上界，不能声明整个请求处理为 O(max_bytes)。节点解码成本受唯一 block 字节预算约束，解析后的 JSON 内存另有结构开销；对象分页需要当前对象的 key 排序。所有中间状态仅在一次请求期间存在。
+Skeleton 和引用元数据按当前请求完整读取，未知字段可能直接保存在 skeleton。`max_bytes` 限制前缀输出与 block 字节读取量；请求总成本还包含 skeleton 解析、引用元数据读取和对象 key 排序。节点解码成本受唯一 block 字节预算约束，解析后的 JSON 内存另有结构开销；对象分页需要当前对象的 key 排序。所有中间状态仅在一次请求期间存在。
 
 ## Purge 与隐私
 

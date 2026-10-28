@@ -23,4 +23,4 @@ flowchart TD
 
 当 Agent 必须位于 Docker 容器时，主机仍只运行一个 `actraild`，`/run/actrail` 挂载到 workload，`actrailctl launch` 在容器内运行。Control socket 不得通过未受保护的 TCP 暴露，操作见 [容器化工作负载](container.md)。
 
-执行隔离改变信任边界、传输与故障模型，不属于 Docker workload 模式；需要该边界时使用 [执行隔离部署](execution-isolation.md)。
+工作负载需要独立 guest 信任边界及对应的传输和故障隔离时，使用 [执行隔离部署](execution-isolation.md)。

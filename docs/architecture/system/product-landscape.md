@@ -2,7 +2,7 @@
 
 > 本文展示 AcTrail 本地节点、集群中心及两种 Web 入口的产品级组合关系。
 
-一个 AcTrail 本地节点独立完成 workload 观测、治理和本地分析。集群能力在此基础上增加可选的 reporter：它只打包并上传本地终态 trace，不把集群中心变成本地采集或控制的前置依赖。
+一个 AcTrail 本地节点独立完成 workload 观测、治理和本地分析。可选的 reporter 负责打包并向集群中心上传本地终态 trace。
 
 [![AcTrail 产品版图](assets/product-landscape.png)](assets/product-landscape.puml)
 

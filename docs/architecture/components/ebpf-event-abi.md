@@ -1,6 +1,6 @@
 # eBPF 事件 ABI
 
-eBPF producer 使用公共 header 加 typed record 向 daemon 传递事件。record 类型直接表达事件语义，不使用需要结合 kind 解释的通用 `aux`、`reserved` 或第二 endpoint 槽位。
+eBPF producer 使用公共 header 加 typed record 向 daemon 传递事件。每种 record 通过专用字段表达对应事件的语义。
 
 [![eBPF typed event ABI](assets/ebpf-event-abi.png)](assets/ebpf-event-abi.puml)
 
@@ -37,7 +37,7 @@ header 固定 40 bytes，只表达传输边界和每类事件都需要的 subjec
 | `actrail_fd_io_event` | syscall process | kind、syscall family、result、FD、category、requested bytes、FD object generation、可选 endpoint及其 role |
 | `actrail_socket_release_event` | releasing process | FD、FD object generation |
 
-fork 的 header 始终描述 child，parent 只出现在 fork payload。network record 每条只携带实际观测到的 endpoint，并用 `endpoint_role` 标明 local 或 remote；需要双 endpoint 的语义使用独立 record，不扩大全部网络事件。
+fork 的 header 始终描述 child，parent 只出现在 fork payload。network record 每条只携带实际观测到的 endpoint，并用 `endpoint_role` 标明 local 或 remote；需要双 endpoint 的语义使用独立 record。
 
 file、TLS、stdio 与 socket payload 保持各自的 typed layout，不套入上述 record。
 
@@ -45,7 +45,7 @@ file、TLS、stdio 与 socket payload 保持各自的 typed layout，不套入�
 
 PID 字段同时编码角色和坐标系：
 
-- `*_observer_namespace_tgid`：进程在 daemon 所在 PID namespace 中的 TGID，不是 observer 自身的 TGID。
+- `*_observer_namespace_tgid`：字段角色所指进程在 daemon 所在 PID namespace 中的 TGID。
 - `*_workload_namespace_tgid`：进程在 workload 所在 PID namespace 中的 TGID，并伴随 PID namespace identity。
 - `*_kernel_tgid`：进程在 initial PID namespace 中的 TGID。
 - TID 使用对应的 `*_observer_namespace_tid`、`*_workload_namespace_tid` 或 `*_kernel_tid`。
@@ -63,7 +63,7 @@ consumer 原样批量交接 raw bytes。daemon decoder 先读取公共 header，
 
 ## 内核源码分层与编译边界
 
-源码目录以状态和行为的所有权划分职责。目录拆分保持 BPF program、attach point、map ABI 和 translation unit 的边界。
+源码目录以状态和行为的所有权划分职责。BPF program、attach point、map ABI 和 translation unit 各有明确边界。
 
 ### 分层职责
 
@@ -97,6 +97,6 @@ abi and common
 
 ### 编译边界
 
-`live_observation.bpf.c` 是主 collector 的组合入口，只 include 各领域的 `programs.h` 并声明制品级信息。所有模块仍编译为同一个 BPF translation unit，源码拆分本身不引入 BPF-to-BPF 调用、额外 map 查询或运行时跳转。
+`live_observation.bpf.c` 是主 collector 的组合入口，只 include 各领域的 `programs.h` 并声明制品级信息。所有模块编译为同一个 BPF translation unit。
 
-需要降低 verifier 复杂度时，直接调整具体 program 的控制流、内联边界或状态访问；不能把移动代码到另一个 header 当作 verifier 优化。反过来，任何性能优化也不得破坏上述所有权和依赖边界。
+verifier 复杂度取决于具体 program 的控制流、内联边界和状态访问。性能优化须遵循上述所有权和依赖边界。

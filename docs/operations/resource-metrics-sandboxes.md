@@ -24,44 +24,26 @@ are isolated per root, including processes disappearing during discovery.
 Workload snapshots carry charged current/optional peak memory and available CPU,
 I/O, PID and memory-event counters. Guest-wide resource snapshots remain separate.
 Guest memory and host VMM memory measure different boundaries and must not be
-added or substituted. This PR does not project guest observations into a host
-trace's resource event series or implement authenticated guest-to-trace binding.
+added or substituted. Projection of guest observations into a host trace's
+resource event series and authenticated guest-to-trace binding are not
+implemented.
 
 Workload observation support is negotiated across the guest/gateway/upstream
 path. Unsupported peers must not receive the new observation kind; existing
 observations continue through the compatible path. Reconnect refreshes capability
 state. Guest pressure retains observation code 4; workload cgroup snapshots use
 code 5 in both the wire codec and evidence storage. Pressure and workload
-collection can run together. The sandbox evidence database advances independently from version 2 to 3;
-workload observations persist with the other no-plugin-interest evidence. Raw
-guest paths are local identity inputs, not wire-authorized host trace selectors.
-Existing generated host configs with `[sandbox_evidence] schema_version = 2` are
-accepted and normalized to 3 before opening storage. This upgrade does not require
-enabling guest workload collection; newly generated configs use 3.
+collection can run together. The sandbox evidence database uses schema version 3.
+Workload observations persist with the other no-plugin-interest evidence. Raw
+guest paths identify cgroups within the guest; host trace association requires
+separate authorization. Host configs with `[sandbox_evidence] schema_version = 2`
+are normalized to 3 before opening storage, independently of guest workload
+collection. Newly generated configs use 3.
 
-## Verification
+## Deployment checks
 
-```bash
-cargo test -p sandbox_observation -p sandbox_linux_collector -p sandbox_vsock_contract -p sandbox_upstream_contract
-cargo test -p sandbox_agent_runtime -p vsock_gateway_runtime -p sandbox_evidence_sqlite -p daemon -p sb
-cargo test -p sandbox_evidence_sqlite --test workload_pipeline
-```
-
-The pipeline integration test sends two distinct workloads through the production
-wire codec, async SQLite writer and store reopen, checking identity, source,
-sequence, route generation, absent counters and full-width values. Other tests
-exercise parsing, negotiation, payload rejection and schema migration.
-
-For live acceptance, build and run the following test inside a cgroup-v2 guest
-with an idle monitored workload and a supported layout (replace `sleep` with its
-process comm). It compares guest counters with direct kernel readings, checks
-deduplication, and exercises the same wire/storage path:
-
-```bash
-ACTRAIL_TEST_GUEST_ROOT_COMM=sleep cargo test -p sandbox_evidence_sqlite --test workload_pipeline live_guest_counters -- --ignored --nocapture
-```
-
-The live test is ignored by default and fails if explicitly run without its
-prerequisites. The pipeline test does not establish live vsock/mTLS delivery;
-deployment acceptance should also run the existing sandbox transport regressions
-on a VM-capable host.
+Use a cgroup-v2 guest with a monitored workload in one of the supported layouts.
+Compare workload snapshots with the guest's kernel counters, and confirm that
+roots in the same cgroup produce one snapshot. Check that observations arrive in
+host storage through the guest, gateway and daemon connection. Connection setup
+and checks are described in [execution isolation deployment](deployment/execution-isolation.md).

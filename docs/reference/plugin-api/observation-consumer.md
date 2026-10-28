@@ -14,7 +14,7 @@ WASM core module 插件还需要遵守 [WASM Core Module ABI](wasm-core-module.m
 | --- | --- | --- |
 | `actrail_observation_consume(ptr, len) -> code` | 观测消费者必需 | AcTrail 向插件推送观测 batch 时调用。 |
 
-`ptr` 和 `len` 指向 AcTrail 写入插件内存的观测 batch envelope。对 WASM core module，这个 envelope 是 **UTF-8 编码的 JSON 文本**，不是二进制结构体。`len` 表示 JSON 文本字节数，不是字符数。插件返回非负值表示本次调用成功；返回负值会被 AcTrail 视为插件运行错误。
+`ptr` 和 `len` 指向 AcTrail 写入插件内存的观测 batch envelope。对 WASM core module，这个 envelope 是 **UTF-8 编码的 JSON 文本**，`len` 表示其字节数。插件返回非负值表示本次调用成功；返回负值会被 AcTrail 视为插件运行错误。
 
 ### WIT Component
 
@@ -31,7 +31,7 @@ WIT package 中的 world 是 `observation-plugin`。运行时要求 component �
 consume: func(batch: observation-batch) -> result<observation-report, string>
 ```
 
-WIT component 不读取 WASM core module 的 JSON envelope。AcTrail 通过 component model 直接传入结构化 `observation-batch` record。返回 `ok(observation-report)` 表示成功；返回 `err(string)` 会被 AcTrail 视为插件运行错误。
+AcTrail 通过 component model 向 WIT component 传入结构化 `observation-batch` record。返回 `ok(observation-report)` 表示成功；返回 `err(string)` 会被 AcTrail 视为插件运行错误。
 
 ## 调用流程：WASM Core Module
 
@@ -117,7 +117,7 @@ WIT component 观测插件收到的是结构化 `observation-batch` record：
 
 在线发布只传递引用，不预取历史 payload 内容。插件显式调用 `payload_read`（legacy）或 `read-payload`（WIT）时，宿主通过有界请求队列按当前 trace 和 segment ID 查询存储，并校验实际 segment 的 source boundary 授权。每次响应受 `max_bytes` 和 manifest 读取上限约束；消费回调结束后不保留 payload 内容快照。
 
-未保存或已删除的内容返回 `not-found`；权限不足返回 `denied`。数据库故障、broker 关闭或超时返回 `failed`，legacy 对应 `-5`，并计入 `payload_read.failed`。NoOp 后端返回 `not-found`。`truncated` 表示此次读取后仍有未返回的存储字节；offset 超过内容末尾时返回空内容。WIT 保留实际 `total-bytes`，无需为读取复制整个 trace 的 payload。
+未保存或已删除的内容返回 `not-found`；权限不足返回 `denied`。数据库故障、broker 关闭或超时返回 `failed`，legacy 对应 `-5`，并计入 `payload_read.failed`。NoOp 后端返回 `not-found`。`truncated` 表示此次读取后仍有未返回的存储字节；offset 超过内容末尾时返回空内容。WIT 保留实际 `total-bytes`。
 
 `payload_segment_max_count` 限制每个 WASM 批次暴露的引用数量；`payload_read_max_bytes` 限制单次读取字节数。引用列表没有原始内容字节。
 

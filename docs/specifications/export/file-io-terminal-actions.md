@@ -20,7 +20,7 @@ stateDiagram-v2
     Partial --> [*]: 存储并提交一次
 ```
 
-FD 是 Linux file descriptor。capacity eviction 不是生命周期边界，因此不出现在图中，也不能生成终态 action。
+FD 是 Linux file descriptor。capacity eviction 不是生命周期边界，不能生成终态 action。
 
 同一次 open/close 生命周期内，read 与 write 分别形成 `file.read` 和 `file.write`。close 是正常边界；process exit、trace finalization、graceful shutdown 或 FD replacement 把已有状态收口为 Partial，但不得伪造 close evidence。另一个 action 的开始只有通过同一 aggregation scope 的显式 transition rule 才能关闭当前 aggregate。
 
