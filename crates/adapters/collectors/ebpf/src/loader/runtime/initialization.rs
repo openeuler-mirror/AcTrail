@@ -24,10 +24,8 @@ impl EbpfProgramLoader {
         environment::ensure_tracefs_control()?;
         environment::apply_memlock_rlimit(self.config.memlock_rlimit)?;
         let object_bytes = include_bytes!(env!("ACTRAIL_EBPF_OBJECT"));
+        LibbpfLogging::configure()?;
         let mut builder = ObjectBuilder::default();
-        if libbpf_debug_enabled()? {
-            builder.debug(true);
-        }
         let mut open_object = builder
             .open_memory(object_bytes)
             .map_err(|error| LoaderError::new("open_object", error.to_string()))?;

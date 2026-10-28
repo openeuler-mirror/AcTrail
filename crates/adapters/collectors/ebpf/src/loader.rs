@@ -17,6 +17,8 @@ mod file_io;
 pub(crate) use file_io::{FileIoKey, FileIoSnapshot};
 #[path = "loader/launch_binding.rs"]
 mod launch_binding;
+#[path = "loader/program/logging.rs"]
+mod logging;
 #[path = "loader/program/object.rs"]
 mod object;
 #[path = "loader/process.rs"]
@@ -45,7 +47,6 @@ mod tls;
 mod tracepoint;
 
 use std::collections::BTreeSet;
-use std::env;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::os::fd::{OwnedFd, RawFd};
@@ -65,6 +66,7 @@ use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
 use consumer::{EventConsumer, EventConsumerMessage};
 pub(crate) use launch_binding::ArmedLaunchBinding;
 use launch_binding::{LaunchBindingTarget, LaunchExecBindings, PendingLaunchBinding};
+use logging::LibbpfLogging;
 use object::{event_map_max_entries, map_handle, resize_map, ring_buffer_max_bytes};
 use ring_decode::decode_kernel_event;
 pub use ring_decode::{
@@ -92,7 +94,6 @@ const PROCESS_IDENTITY_VALUE_SIZE: usize = 16;
 const PROCESS_IDENTITY_RESOLUTION_KEY_SIZE: usize = 16;
 const PROCESS_IDENTITY_RESOLUTION_VALUE_SIZE: usize = 16;
 const TRACE_NAMESPACE_THREAD_IDENTITY_VALUE_SIZE: usize = 24;
-const LIBBPF_DEBUG_ENV: &str = "ACTRAIL_EBPF_LIBBPF_DEBUG";
 const FORK_TRACE_BINDING_TRACE_ID_OFFSET: usize = 0;
 const FORK_TRACE_BINDING_CHILD_GENERATION_OFFSET: usize = 16;
 const FORK_TRACE_BINDING_VALUE_SIZE: usize = 32;
@@ -235,21 +236,6 @@ impl EbpfProgramLoader {
 
     pub fn payload_config(&self) -> &PayloadConfig {
         &self.payload
-    }
-}
-
-fn libbpf_debug_enabled() -> Result<bool, LoaderError> {
-    let Some(value) = env::var_os(LIBBPF_DEBUG_ENV) else {
-        return Ok(false);
-    };
-    let value = value.to_string_lossy().to_ascii_lowercase();
-    match value.as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(LoaderError::new(
-            "libbpf_debug_config",
-            format!("{LIBBPF_DEBUG_ENV} must be one of 1,true,yes,on,0,false,no,off; got {value}"),
-        )),
     }
 }
 
