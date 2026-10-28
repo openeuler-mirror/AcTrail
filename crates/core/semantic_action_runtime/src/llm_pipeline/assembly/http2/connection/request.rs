@@ -51,6 +51,9 @@ impl Http2StreamAssembly {
             .llm_request_contents
             .extend(projection.llm_request_contents);
         output
+            .request_observations
+            .extend(projection.request_observations);
+        output
             .llm_request_histories
             .extend(projection.llm_request_histories);
         output.llm_tool_results.extend(projection.llm_tool_results);
@@ -100,6 +103,9 @@ impl Http2StreamAssembly {
             output
                 .llm_request_contents
                 .extend(projection.llm_request_contents);
+            output
+                .request_observations
+                .extend(projection.request_observations);
             output
                 .llm_request_histories
                 .extend(projection.llm_request_histories);

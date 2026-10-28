@@ -47,8 +47,8 @@ benchmark 输入要求，以降低真实模型输出波动。
 - append/fork/duplicate 的实际数量仍由持久化 lineage 重算，不预设模型一定产生 fork 或 duplicate。
 
 严格 fork、duplicate、截断响应和 HTTP 错误不能通过自然语言稳定驱动真实 Agent，因此仍由
-确定性图断言/协议专项用例覆盖；本用例不会为了凑数伪造真实 Agent 行为。当前版本也不启用
-related 弱关系和 compaction 自动识别。
+确定性图断言/协议专项用例覆盖；本用例不会为了凑数伪造真实 Agent 行为。
+整图 API 支持 compaction 识别，related 弱关系未启用。
 
 ## 自动化覆盖
 
@@ -78,8 +78,7 @@ related 弱关系和 compaction 自动识别。
 - append/fork 边必须完全由 `parent_action_id`/`forked_from_action_id` 推导，边集合、
   类型、置信度和顺序必须一致；
 - node、trajectory、append、fork、duplicate 计数及两个比例必须可由事实源重算；
-- capabilities 必须明确声明 strict-prefix 已启用，而 related 和 compaction detection
-  在当前版本未启用。
+- capabilities 必须明确声明 strict-prefix 和 compaction detection 已启用，related 未启用。
 
 ### OTel 导出
 
@@ -208,7 +207,7 @@ jq -e --argjson trace_id "$TRACE_ID" '
   and ([.nodes[].id] | length) == ([.nodes[].id] | unique | length)
   and .capabilities.strict_prefix_edges == true
   and .capabilities.related_edges == false
-  and .capabilities.compaction_detection == false
+  and .capabilities.compaction_detection == true
 ' /tmp/actrail-llm-trajectory-graph.json
 
 jq '.stats, .edges, [.nodes[] | {

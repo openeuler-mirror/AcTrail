@@ -572,5 +572,11 @@ mod tests {
                 .action_kinds
                 .enabled(SemanticActionKind::AgentInvocation)
         );
+        assert!(
+            !config
+                .action_kinds
+                .enabled(SemanticActionKind::AgentContextCompact),
+            "the OTLP/HTTP allow-list stays opt-in for context compaction"
+        );
     }
 }

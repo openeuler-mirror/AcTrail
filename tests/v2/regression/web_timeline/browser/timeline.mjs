@@ -1,6 +1,7 @@
 // Drive real timeline controls and locate canvas actions from their persisted times.
 import { C } from '../constants.mjs';
 import assert from 'node:assert/strict';
+import { TimelineFilters } from '../../../../../crates/apps/web/frontend/src/workspaces/timeline/filters.js';
 
 export class TimelineBrowser {
   constructor(page, base, trace) {
@@ -57,7 +58,7 @@ export class TimelineBrowser {
     const toggle = controls.locator('.timeline-kinds-toggle');
     if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
     const selected = kinds === 'default'
-      ? ['command.invocation', 'agent.invocation', 'llm.call', 'llm.request', 'llm.response', 'http.message'] : kinds;
+      ? TimelineFilters.defaultKinds : kinds;
     assert(selected === 'all' || (Array.isArray(selected) && selected.length), 'select at least one action category');
     const checkboxes = controls.locator('input[type=checkbox]');
     if (Array.isArray(selected)) {

@@ -93,20 +93,28 @@ fn is_tool_result_kind(kind: &str) -> bool {
 }
 
 pub(in crate::llm_pipeline) fn background_request_kind(body: &Value) -> Option<&'static str> {
-    let messages = body.get("messages").and_then(Value::as_array)?;
-    let mut system_parts = Vec::new();
-    for message in messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("system"))
-    {
-        collect_text(message.get("content").unwrap_or(message), &mut system_parts);
-    }
-    BackgroundRequestKind::classify(system_parts)
+    BackgroundRequestKind::from_body(body)
 }
 
 pub(in crate::llm_pipeline) struct BackgroundRequestKind;
 
 impl BackgroundRequestKind {
+    fn from_body(body: &Value) -> Option<&'static str> {
+        let mut system_parts = Vec::new();
+        if let Some(system) = body.get("system") {
+            collect_text(system, &mut system_parts);
+        }
+        if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+            for message in messages
+                .iter()
+                .filter(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+            {
+                collect_text(message.get("content").unwrap_or(message), &mut system_parts);
+            }
+        }
+        Self::classify(system_parts)
+    }
+
     pub(in crate::llm_pipeline) fn classify<'a>(
         parts: impl IntoIterator<Item = &'a str>,
     ) -> Option<&'static str> {

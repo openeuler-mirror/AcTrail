@@ -112,7 +112,11 @@ impl Http2Protocol {
                 .direction(direction)
                 .body
                 .project(config, codecs, &group, direction);
-            self.consume(projected, &mut output);
+            self.consume(
+                projected,
+                &mut output,
+                config.l0_llm_call.context_compact.enabled,
+            );
         }
         for event in terminal {
             if let crate::Http1MessageEvent::End(end) = &event {
@@ -181,7 +185,12 @@ impl Http2Protocol {
             .extend(codecs.take_decode_diagnostic(&identity, segment.observed_at));
         output
     }
-    pub(super) fn consume(&mut self, mut projected: ProjectionBatch, output: &mut ProjectionBatch) {
+    pub(super) fn consume(
+        &mut self,
+        mut projected: ProjectionBatch,
+        output: &mut ProjectionBatch,
+        observe_compaction: bool,
+    ) {
         projected.actions.retain_mut(|action| {
             let Some((id, _)) = action.action_id.rsplit_once(":llm.") else {
                 return true;
@@ -195,6 +204,15 @@ impl Http2Protocol {
                 .iter()
                 .find(|metadata| metadata.action_id == action.action_id)
                 .map(|metadata| metadata.provider_response_id.clone());
+            if observe_compaction
+                && let Some(index) = projected
+                    .response_observations
+                    .iter()
+                    .position(|observation| observation.action_id == action.action_id)
+            {
+                fact.response_observation =
+                    Some(projected.response_observations.swap_remove(index));
+            }
             action
                 .attributes
                 .insert("http.message_id".into(), id.clone());
@@ -215,13 +233,11 @@ impl Http2Protocol {
         projection: &mut ProjectionCoordinator,
     ) -> ProjectionBatch {
         let mut output = projection.changed_actions(config, output);
-        for (request, provider_id, observed_at, failed) in self.facts.take_trajectory_bindings() {
-            output.extend(projection.observe_response_trajectory(
-                &request,
-                provider_id.as_deref(),
-                observed_at,
-                failed,
-            ));
+        for binding in self
+            .facts
+            .take_response_bindings(config.l0_llm_call.context_compact.enabled)
+        {
+            output.extend(projection.observe_response_binding(binding));
         }
         HttpMessageFacts::filter_retention(output, self.retain_http)
     }

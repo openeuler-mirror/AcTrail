@@ -1,5 +1,6 @@
 mod batch;
 mod call;
+pub(super) mod compact;
 pub(in crate::llm_pipeline) use call::llm_call_from_request_response;
 pub(super) mod links;
 mod orchestrator;
@@ -7,6 +8,7 @@ pub(super) mod projector;
 mod retention;
 pub(super) mod trajectory;
 
+pub(in crate::llm_pipeline) use batch::ProjectedResponseBinding;
 pub(crate) use batch::ProjectionBatch;
 pub(in crate::llm_pipeline) use orchestrator::ProjectionCoordinator;
 pub(crate) use projector::ProjectedLlmToolResult;

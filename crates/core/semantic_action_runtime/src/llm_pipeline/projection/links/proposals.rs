@@ -13,3 +13,8 @@ pub(crate) struct LlmHttpResponseLink {
     pub(crate) llm_response: SemanticAction,
     pub(crate) http_response: SemanticAction,
 }
+
+pub(crate) struct LlmContextCompactLink {
+    pub(crate) compact: SemanticAction,
+    pub(crate) implementation_call: SemanticAction,
+}

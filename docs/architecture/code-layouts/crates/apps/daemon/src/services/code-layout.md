@@ -95,7 +95,7 @@
 │   ├── [x] shutdown.rs # 协调关闭阶段的停止接纳与数据排空。
 │   └── [x] shutdown/ # 约束关闭阶段推进与剩余等待时间。
 │       └── [x] progress.rs # 记录关闭阶段、截止时间和阶段探测信息。
-├── [x] semantic_actions.rs # 向语义投影提供当前 trace 记录查询。
+├── [x] semantic_actions.rs # 持久化语义批次、处理交付结果并查询 trace 记录。
 │   └── [x] struct LiveTraceRecordLookup # 借用运行时与存储事实，解析语义记录依赖。
 ├── [x] resource_profiling/ # 适配资源组件的工作负载身份、控制记录与生命周期；详见目录布局。
 ├── [x] retention.rs # 扫描并清理超过保留策略的存储数据。

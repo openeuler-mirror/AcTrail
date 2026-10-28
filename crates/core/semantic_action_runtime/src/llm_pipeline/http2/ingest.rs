@@ -227,7 +227,11 @@ impl Http2Protocol {
                                 codecs,
                                 group,
                             );
-                            self.consume(projected, output);
+                            self.consume(
+                                projected,
+                                output,
+                                config.l0_llm_call.context_compact.enabled,
+                            );
                             self.facts
                                 .finalize_content(&id, reason, frame.observed_at, output);
                             clean = false;
@@ -307,7 +311,11 @@ impl Http2Protocol {
                 let projected = state
                     .body
                     .abort_stream(stream_id, reason, at, direction, config, codecs, group);
-                self.consume(projected, output);
+                self.consume(
+                    projected,
+                    output,
+                    config.l0_llm_call.context_compact.enabled,
+                );
             }
             terminal.push(Http1MessageEvent::Abort {
                 message_id: connection.message_id(stream_id, direction),

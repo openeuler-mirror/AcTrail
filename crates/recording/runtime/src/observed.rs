@@ -1,3 +1,4 @@
+use crate::DeliveryReport;
 use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
@@ -115,11 +116,16 @@ impl TraceStateRecord {
 
 pub(crate) struct ObservedRecordCommit {
     semantic_actions: SemanticActionBatch,
+    delivery: DeliveryReport,
 }
 
 impl ObservedRecordCommit {
-    pub(crate) fn into_semantic_actions(self) -> SemanticActionBatch {
-        self.semantic_actions
+    pub(crate) fn into_semantic_delivery(self) -> (SemanticActionBatch, DeliveryReport) {
+        (self.semantic_actions, self.delivery)
+    }
+
+    pub(crate) fn into_delivery(self) -> DeliveryReport {
+        self.delivery
     }
 }
 
@@ -139,6 +145,7 @@ impl<'a> ObservedRecordRecorder<'a> {
         if !self.storage.retains_observations() {
             return Ok(ObservedRecordCommit {
                 semantic_actions: batch.into_semantic_actions(),
+                delivery: DeliveryReport::default(),
             });
         }
         let ObservedRecordBatch {
@@ -160,10 +167,10 @@ impl<'a> ObservedRecordRecorder<'a> {
         for segment in payload_segments {
             self.storage.append_payload_segment(segment)?;
         }
-        {
+        let delivery = {
             let mut recorder = SemanticActionRecorder::new(&mut *self.storage);
-            recorder.persist_batch(semantic_actions.as_record_batch())?;
-        }
+            recorder.persist_batch(semantic_actions.as_record_batch())?
+        };
         for segment in semantic_actions.payload_segments() {
             self.storage.append_payload_segment(segment.clone())?;
         }
@@ -178,7 +185,10 @@ impl<'a> ObservedRecordRecorder<'a> {
             self.storage.upsert_membership(membership)?;
         }
 
-        Ok(ObservedRecordCommit { semantic_actions })
+        Ok(ObservedRecordCommit {
+            semantic_actions,
+            delivery,
+        })
     }
 }
 
@@ -250,7 +260,7 @@ impl<'a> ObservedRecordWriteSession<'a> {
         self.semantic_actions.push_batch(semantic_actions)
     }
 
-    pub(crate) fn finish(self) -> Result<(), RecordingError> {
+    pub(crate) fn finish(self) -> Result<DeliveryReport, RecordingError> {
         self.semantic_actions.persist(self.storage)
     }
 }

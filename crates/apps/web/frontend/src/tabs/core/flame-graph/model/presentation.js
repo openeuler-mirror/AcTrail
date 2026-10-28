@@ -260,7 +260,7 @@ function buildAgentScope(definition, activities, window, index, spawnActivity, t
     tracks,
     activityCount: activities.length,
     durationMs: coveredDuration(envelopeActivities),
-    llmCallCount: activities.filter((activity) => activity.kind === 'llm.call').length,
+    llmCallCount: activities.filter((activity) => activity.group === 'model').length,
     toolCallCount: activities.filter((activity) => activity.kind === 'llm.tool_call').length,
     childCount: definition.childCount ?? 0,
   };

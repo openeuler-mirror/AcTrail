@@ -9,6 +9,24 @@ mod websocket;
 pub use http1::Http1ProtocolConfig;
 pub use websocket::{L2WebSocketRetention, LlmWebSocketConfig};
 
+#[path = "agent/compact.rs"]
+mod compact;
+pub use compact::{
+    DEFAULT_LLM_CONTEXT_COMPACT_COMPACTION_CANDIDATES_MAX_ENTRIES_PER_SCOPE,
+    DEFAULT_LLM_CONTEXT_COMPACT_COMPACTION_CANDIDATES_TTL,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_ACTIVE_SCOPES_PER_TRACE,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_ARTIFACT_BYTES,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_CONTEXT_ITEMS_TO_SCAN,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_CONTEXT_SCAN_BYTES,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_FINGERPRINT_POSITIONS,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_OPEN_REQUESTS_PER_SCOPE,
+    DEFAULT_LLM_CONTEXT_COMPACT_MIN_ARTIFACT_COVERAGE_PERCENT,
+    DEFAULT_LLM_CONTEXT_COMPACT_MIN_ARTIFACT_FLOW_BYTES,
+    DEFAULT_LLM_CONTEXT_COMPACT_PENDING_ADOPTIONS_MAX_ENTRIES_PER_SCOPE,
+    DEFAULT_LLM_CONTEXT_COMPACT_PENDING_ADOPTIONS_TTL, LlmContextCompactConfig,
+    LlmContextCompactPoolConfig,
+};
+
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -131,6 +149,7 @@ pub struct L0LlmCallRetention {
     pub stream_classifier: LlmStreamClassifierConfig,
     pub projection_state: LlmProjectionStateConfig,
     pub trajectory: LlmTrajectoryConfig,
+    pub context_compact: LlmContextCompactConfig,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,6 +282,7 @@ impl Default for L0LlmCallRetention {
             stream_classifier: LlmStreamClassifierConfig::default(),
             projection_state: LlmProjectionStateConfig::default(),
             trajectory: LlmTrajectoryConfig::default(),
+            context_compact: LlmContextCompactConfig::default(),
         }
     }
 }

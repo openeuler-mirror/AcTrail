@@ -95,6 +95,9 @@ impl Http2StreamAssembly {
         self.plain.sse_parse_cache = sse_parse_cache;
         output.actions.extend(projection.actions);
         output
+            .response_observations
+            .extend(projection.response_observations);
+        output
             .provider_response_ids
             .extend(projection.provider_response_ids);
         output.payload_segments.extend(projection.payload_segments);

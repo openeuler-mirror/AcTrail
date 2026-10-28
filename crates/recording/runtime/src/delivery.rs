@@ -3,6 +3,8 @@ use crate::RecordingError;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryFailureKind {
     Storage,
+    /// Optional metadata was rejected; the main storage transaction can commit.
+    StorageSupplement,
     Consumer,
     Runtime,
 }
@@ -21,6 +23,8 @@ pub struct DeliveryReport {
 }
 
 impl DeliveryReport {
+    /// Required storage delivery succeeded; optional metadata rejections are
+    /// reported separately and do not fail the main batch.
     pub fn storage_succeeded(&self) -> bool {
         !self
             .failures

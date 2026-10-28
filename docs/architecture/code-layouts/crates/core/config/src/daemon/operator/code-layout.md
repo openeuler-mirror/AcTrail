@@ -19,6 +19,7 @@
     ├── [x] semantic.rs # 汇总语义层保留文档及投影开关。
     ├── [x] semantic/ # LLM、HTTP 和 WebSocket 的内容及状态预算。
     │   ├── [x] llm.rs # 请求正文、工具结果、trajectory 和 assembly 的保留参数。
+    │   ├── [x] compact.rs # 解析并校验上下文压缩配置。
     │   ├── [x] http.rs # HTTP、SSE、HTTP/2 的语义和正文保留参数。
     │   └── [x] websocket.rs # WebSocket 消息和语义内容的保留参数。
     ├── [x] plugin/ # 插件发现、告警队列和启动加载文档。

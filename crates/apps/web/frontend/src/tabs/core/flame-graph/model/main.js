@@ -5,14 +5,16 @@ import { buildAgentLayer, buildLayer, emptyLayer, activityFromAction } from './p
 import { derivedDisplayIntervals } from './tool-effects.js';
 
 export function buildFlameGraph(actions, links, associations = [], t, contextActions = [], timelineWindow = null) {
-  const validActions = (actions ?? []).filter(validTimedAction);
+  const observedActions = (actions ?? []).filter(validTimedAction);
+  const validActions = observedActions
+    .filter((action) => action.kind !== 'agent.context_compaction');
   if (!validActions.length) {
     return { ...emptyFlameGraphModel(t), ...(timelineWindow ? { window: timelineWindow } : {}) };
   }
 
   const graphLinks = flameGraphLinks(links, associations);
   const window = timelineWindow ?? computeWindow(validActions);
-  const actionById = new Map([...contextActions, ...validActions].map((action) => [action.id, action]));
+  const actionById = new Map([...contextActions, ...observedActions].map((action) => [action.id, action]));
   const toolDisplay = new ToolCallDisplay(actionById);
   const displayedIds = new Set(validActions.map((action) => action.id));
   const callMessages = new Set(graphLinks
@@ -35,7 +37,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     const request = resolveCallRequest(action, actionById, childrenByParent);
     requestByCall.set(action.id, request ?? null);
     const backgroundKind = request?.attributes?.['llm.request.background_kind'];
-    if (backgroundKind && !childRequests.has(request?.id)) {
+    if (backgroundKind && backgroundKind !== 'context_compaction' && !childRequests.has(request?.id)) {
       backgroundKindByCall.set(action.id, backgroundKind);
     }
   }
@@ -58,8 +60,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     }
   }
 
-  const agentActivities = [];
-  const harnessActivities = [];
+  const activities = [];
   for (const action of validActions) {
     const backgroundKind = backgroundKindByAction.get(action.id) ?? null;
     const layer = backgroundKind ? 'harness' : (agentActionIds.has(action.id) ? 'agent' : 'harness');
@@ -81,7 +82,18 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     activity.scopeIncomplete = true;
     activity.modelMessage = callMessages.has(action.id)
       && ['llm.request', 'llm.response'].includes(action.kind);
-    (layer === 'agent' ? agentActivities : harnessActivities).push(activity);
+    if (action.display?.context_compaction) {
+      const suffix = t('background.contextCompaction');
+      activity.label += ` (${suffix})`;
+      activity.searchText += ` ${suffix.toLowerCase()}`;
+    }
+    activities.push(activity);
+  }
+
+  const agentActivities = [];
+  const harnessActivities = [];
+  for (const activity of activities) {
+    (activity.layer === 'agent' ? agentActivities : harnessActivities).push(activity);
   }
 
   const layers = [
@@ -212,4 +224,3 @@ function backgroundKindsByAction(backgroundKindByCall, childrenByParent, actionB
   }
   return kinds;
 }
-

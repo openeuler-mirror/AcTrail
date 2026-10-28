@@ -781,6 +781,15 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn semantic_actions_by_ids_lite(
+        &self,
+        trace_id: TraceId,
+        action_ids: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError> {
+        SqliteStorage::semantic_actions_by_ids_lite(self, trace_id, action_ids)
+            .map_err(StorageError::from)
+    }
+
     fn semantic_action_summary(
         &self,
         trace_id: TraceId,
@@ -857,6 +866,7 @@ impl StorageBackend for SqliteStorage {
         trace_id: TraceId,
         display_parent_roles: &[&str],
         root_link_roles: &[&str],
+        excluded_fallback_kinds: &[&str],
         page: SemanticActionChildPageQuery,
     ) -> Result<SemanticActionDisplayRootChildPage, StorageError> {
         SqliteStorage::semantic_action_display_root_children_page(
@@ -864,6 +874,7 @@ impl StorageBackend for SqliteStorage {
             trace_id,
             display_parent_roles,
             root_link_roles,
+            excluded_fallback_kinds,
             crate::semantic_actions::SemanticActionChildPageQuery {
                 offset: page.offset,
                 limit: page.limit,
@@ -889,10 +900,26 @@ impl StorageBackend for SqliteStorage {
         .map_err(StorageError::from)
     }
 
+    fn semantic_action_display_root_offset(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<usize>, StorageError> {
+        SqliteStorage::semantic_action_display_root_offset(
+            self,
+            trace_id,
+            display_parent_roles,
+            action_id,
+        )
+        .map_err(StorageError::from)
+    }
+
     fn semantic_action_display_path_to_kind(
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
         target_kind: &str,
         after_action_id: Option<&str>,
     ) -> Result<Option<Vec<storage_core::SemanticActionDisplayPathEntry>>, StorageError> {
@@ -900,6 +927,7 @@ impl StorageBackend for SqliteStorage {
             self,
             trace_id,
             display_parent_roles,
+            selected_parent_roles,
             target_kind,
             after_action_id,
         )

@@ -24,6 +24,7 @@
       </div>
       <div class="trajectory-legend">
         <span><i class="legend-line solid"></i>{{ t('legendStrictPrefix') }}</span>
+        <span><i class="legend-line compact"></i>{{ t('legendContextCompact') }}</span>
       </div>
       <p v-if="graph?.partial" class="capability-warning">
         {{ t('partialGraph') }}
@@ -74,10 +75,13 @@
           :data-source="edge.source"
           :data-target="edge.target"
           :data-invocation-id="edge.invocation_id"
+          :data-context-compact-id="edge.context_compact_action_id"
           :d="edge.path"
           :stroke="edge.color"
           marker-end="url(#trajectory-arrow)"
-        />
+        >
+          <title v-if="edge.kind === 'compaction-source' || edge.kind === 'compaction'">{{ t('legendContextCompact') }}</title>
+        </path>
         <g
           v-for="node in layout.nodes"
           :key="node.id"
@@ -90,8 +94,9 @@
           @keydown.space.prevent="selectNode(node)"
         >
           <circle
-            v-if="node.compaction_boundary"
+            v-if="node.context_compact_action_id"
             class="compaction-ring"
+            :data-context-compact-id="node.context_compact_action_id"
             :cx="node.x"
             :cy="node.y"
             r="17"
@@ -359,6 +364,12 @@ function emptyGraph() {
 
 
 
+.legend-line.compact {
+  height: 2px;
+  border-top: none;
+  background: repeating-linear-gradient(to right, currentColor 0 3px, transparent 3px 8px);
+}
+
 .trajectory-viewport {
   position: relative;
   min-width: 0;
@@ -384,6 +395,11 @@ function emptyGraph() {
 }
 
 
+
+.edge-compaction,
+.edge-compaction-source {
+  stroke-dasharray: 3 5;
+}
 
 .lane-reuse-marker {
   color: var(--ui-muted);

@@ -12,15 +12,20 @@ use storage_core::{
     SemanticActionChildPageQuery, SemanticActionSummary, StorageBackend, StorageError,
 };
 
-use super::LlmNavMode;
-use super::action_tree_roles::{DISPLAY_PARENT_ROLES, NODE_ID_AGENT, ROOT_LINK_ROLES};
+use super::action_tree_roles::{DISPLAY_PARENT_ROLES, NODE_ID_AGENT};
 use crate::json;
 
 #[path = "actions/serialization.rs"]
 mod serialization;
+#[path = "actions/tree.rs"]
+mod tree;
 
-use serialization::link_json;
 pub(super) use serialization::{action_json, action_json_lite};
+pub(super) use tree::{action_tree_children_json, action_tree_llm_nav_json};
+
+#[path = "actions/context_compact.rs"]
+mod context_compact;
+pub(super) use context_compact::{ContextCompactDisplay, ContextCompactRequests};
 
 #[path = "actions/llm_call_display.rs"]
 mod llm_call_display;
@@ -64,126 +69,6 @@ pub(super) fn action_tree_root_json(
     ))
 }
 
-pub(super) fn action_tree_children_json(
-    _storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-    parent_id: &str,
-    page: SemanticActionChildPageQuery,
-) -> Result<String, String> {
-    let display_roles = display_parent_role_names();
-    let (mut rows, total) = if parent_id == NODE_ID_AGENT {
-        let root_roles = ROOT_LINK_ROLES
-            .iter()
-            .map(|role| role.as_str())
-            .collect::<Vec<_>>();
-        let result = storage
-            .semantic_action_display_root_children_page(trace_id, &display_roles, &root_roles, page)
-            .map_err(|error| storage_error("read action tree root children", error))?;
-        let rows = result
-            .rows
-            .into_iter()
-            .map(|row| DisplayChild {
-                action: row.action,
-                link: row.root_link,
-                child_count: row.child_count,
-            })
-            .collect::<Vec<DisplayChild>>();
-        (rows, result.total_count)
-    } else {
-        let result = storage
-            .semantic_action_children_page(
-                trace_id,
-                parent_id,
-                &display_roles,
-                &display_roles,
-                page,
-            )
-            .map_err(|error| storage_error("read action tree children", error))?;
-        let rows = result
-            .rows
-            .into_iter()
-            .map(|row| DisplayChild {
-                action: row.action,
-                link: Some(row.link),
-                child_count: row.child_count,
-            })
-            .collect::<Vec<DisplayChild>>();
-        (rows, result.total_count)
-    };
-    for row in &mut rows {
-        LlmCallDisplay::normalize_one(storage, &mut row.action)?;
-        LlmToolDisplay::normalize_one(storage, &mut row.action);
-    }
-    let actions = rows
-        .iter()
-        .map(|row| action_json_lite(&row.action))
-        .collect::<Vec<_>>();
-    let links = rows
-        .iter()
-        .filter_map(|row| row.link.as_ref().map(link_json))
-        .collect::<Vec<_>>();
-    let child_state = rows
-        .iter()
-        .map(|row| child_state_json(&row.action, row.child_count))
-        .collect::<Vec<_>>();
-    Ok(format!(
-        "{{\"parent\":{},\"offset\":{},\"limit\":{},\"total\":{},\"next_offset\":{},\"has_more\":{},\"actions\":[{}],\"links\":[{}],\"child_state\":[{}]}}",
-        json::string(parent_id),
-        json::number(page.offset),
-        json::number(page.limit),
-        json::number(total),
-        next_offset_json(page, total),
-        bool_json(has_more_children(page, total)),
-        actions.join(","),
-        links.join(","),
-        child_state.join(",")
-    ))
-}
-
-pub(super) fn action_tree_llm_nav_json(
-    _storage_path: &Path,
-    storage: &mut dyn StorageBackend,
-    trace_id: TraceId,
-    mode: LlmNavMode,
-    after_action_id: Option<&str>,
-) -> Result<String, String> {
-    let display_roles = display_parent_role_names();
-    let after = match mode {
-        LlmNavMode::First => None,
-        LlmNavMode::Next => after_action_id,
-    };
-    let path = storage
-        .semantic_action_display_path_to_kind(trace_id, &display_roles, "llm.call", after)
-        .map_err(|error| storage_error("navigate action tree LLM calls", error))?;
-    let rows = path
-        .as_ref()
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| {
-                    let parent_action_id =
-                        entry.parent_action_id.as_deref().unwrap_or(NODE_ID_AGENT);
-                    format!(
-                        "{{\"parent_action_id\":{},\"action_id\":{},\"offset\":{},\"kind\":{}}}",
-                        json::string(parent_action_id),
-                        json::string(&entry.action_id),
-                        json::number(entry.offset),
-                        json::string(entry.kind.as_str())
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .unwrap_or_default();
-    Ok(format!(
-        "{{\"mode\":{},\"found\":{},\"path\":[{}]}}",
-        json::string(mode.as_str()),
-        bool_json(path.is_some()),
-        rows
-    ))
-}
-
 pub(super) fn action_detail_json(
     storage: &mut dyn StorageBackend,
     trace_id: TraceId,
@@ -195,7 +80,8 @@ pub(super) fn action_detail_json(
         .ok_or_else(|| format!("semantic action {action_id} not found"))?;
     LlmCallDisplay::normalize_one(storage, &mut action)?;
     LlmToolDisplay::normalize_one(storage, &mut action);
-    Ok(action_json(&action))
+    let compact = ContextCompactDisplay::for_actions(storage, trace_id, [&action])?;
+    Ok(compact.action_json(&action, false))
 }
 
 pub(super) fn file_path_set_json(

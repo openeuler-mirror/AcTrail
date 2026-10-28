@@ -106,9 +106,9 @@ impl<'a> RecordingWriter<'a> {
     pub fn persist_semantic_actions(
         &mut self,
         semantic_actions: SemanticActionBatch,
-    ) -> Result<SemanticActionBatch, RecordingError> {
+    ) -> Result<(SemanticActionBatch, DeliveryReport), RecordingError> {
         self.persist_batch(ObservedRecordBatch::from_semantic_actions(semantic_actions))
-            .map(ObservedRecordCommit::into_semantic_actions)
+            .map(ObservedRecordCommit::into_semantic_delivery)
     }
 
     pub fn persist_live_events_then_export(

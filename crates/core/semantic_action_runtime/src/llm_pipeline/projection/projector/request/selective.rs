@@ -65,6 +65,7 @@ impl<'de> Visitor<'de> for RequestVisitor {
         let facts = &mut selected.facts;
         let mut context_fields = [false; 4];
         let mut tools_present = false;
+        let mut top_system_parts = Vec::new();
         while let Some(key) = map.next_key::<Cow<'de, str>>()? {
             match key.as_ref() {
                 "model" => {
@@ -93,6 +94,9 @@ impl<'de> Visitor<'de> for RequestVisitor {
                     facts.messages_have_text = messages.have_text;
                     selected.system_parts = messages.system_parts;
                 }
+                "system" => {
+                    top_system_parts = map.next_value::<TextNode>()?.parts;
+                }
                 "prompt" | "input" => {
                     facts.input_present = true;
                     map.next_value::<Discard>()?;
@@ -114,6 +118,10 @@ impl<'de> Visitor<'de> for RequestVisitor {
                     map.next_value::<Discard>()?;
                 }
             }
+        }
+        if !top_system_parts.is_empty() {
+            top_system_parts.append(&mut selected.system_parts);
+            selected.system_parts = top_system_parts;
         }
         facts.context_signal = tools_present || context_fields.into_iter().any(|value| value);
         Ok(selected)

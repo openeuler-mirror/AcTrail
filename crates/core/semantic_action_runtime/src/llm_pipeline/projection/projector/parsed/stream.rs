@@ -7,6 +7,7 @@ use semantic_action::{
 use serde_json::Value;
 
 use crate::llm_pipeline::projection::ProjectionBatch;
+use crate::llm_pipeline::projection::compact::LlmResponseObservation;
 use crate::llm_pipeline::provider::{
     new_responses_stream_parser, new_sse_stream_parser, tool_calls_json,
 };
@@ -132,6 +133,16 @@ impl ParsedProviderStream {
             None => SemanticActionStatus::InProgress,
         };
         ProjectionBatch {
+            response_observations: if config.l0_llm_call.context_compact.enabled {
+                vec![LlmResponseObservation {
+                    action_id: context.action_id.clone(),
+                    has_tool_calls: body.tool_calls_json.is_some(),
+                    content_text: body.content_text,
+                    provider_failed: termination.is_some_and(|reason| reason.is_failure()),
+                }]
+            } else {
+                Vec::new()
+            },
             actions: vec![SemanticAction {
                 action_id: context.action_id.clone(),
                 trace_id: context.identity.trace_id,

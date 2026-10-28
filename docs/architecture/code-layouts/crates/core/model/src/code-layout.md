@@ -29,6 +29,7 @@
 │   └── [x] struct CapabilityDescriptor # 记录能力及各字段可提供的保证等级。
 ├── [x] diagnostics.rs # 运行异常、丢弃、覆盖不足及 LLM 阶段诊断。
 │   ├── [x] struct DiagnosticRecord # 关联诊断 ID、trace、严重性与元数据。
+│   ├── [x] enum LlmPipelineDiagnosticCode # 定义 LLM 解析阶段的诊断码。
 │   └── [x] struct LlmPipelineDiagnostic # 保留 LLM 解析阶段、诊断码和来源上下文。
 ├── [x] policy.rs # 记录观测处理中的允许、丢弃、截断和脱敏事实。
 │   └── [x] struct PolicyRecord # 将策略 verdict、截断与脱敏结果附加到观测。

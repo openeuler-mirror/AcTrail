@@ -12,6 +12,14 @@ use crate::model::{
 pub struct SemanticActionStoreError {
     pub stage: String,
     pub message: String,
+    /// A rejected optional update has made no persistent changes.
+    pub supplement_rejection: Option<SemanticAttributeSupplementRejection>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemanticAttributeSupplementRejection {
+    Identity,
+    Conflict,
 }
 
 impl SemanticActionStoreError {
@@ -19,6 +27,19 @@ impl SemanticActionStoreError {
         Self {
             stage: stage.into(),
             message: message.into(),
+            supplement_rejection: None,
+        }
+    }
+
+    pub fn supplement_rejected(
+        rejection: SemanticAttributeSupplementRejection,
+        stage: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            stage: stage.into(),
+            message: message.into(),
+            supplement_rejection: Some(rejection),
         }
     }
 }

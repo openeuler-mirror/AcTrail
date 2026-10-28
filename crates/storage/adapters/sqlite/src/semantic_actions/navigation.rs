@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 use model_core::ids::TraceId;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use semantic_action::{SemanticActionKind, SemanticActionStoreError};
 use storage_core::SemanticActionDisplayPathEntry;
 
@@ -25,6 +26,7 @@ impl SqliteStorage {
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
         target_kind: &str,
         after_action_id: Option<&str>,
     ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, SemanticActionStoreError> {
@@ -61,7 +63,7 @@ impl SqliteStorage {
                 &connection,
                 trace_id,
                 current.action_key,
-                display_parent_roles,
+                selected_parent_roles,
             )?;
             let offset = sibling_offset(
                 &connection,
@@ -164,6 +166,9 @@ fn selected_parent(
     child_action_key: i64,
     roles: &[&str],
 ) -> Result<Option<ActionPosition>, SemanticActionStoreError> {
+    if roles.is_empty() {
+        return Ok(None);
+    }
     let role_codes = role_codes(roles)?;
     let query = format!(
         "SELECT parent.action_key, parent_ids.action_id, parent.start_time, parent.kind_code
@@ -180,12 +185,14 @@ fn selected_parent(
         sql_integers(&role_codes),
         role_rank_sql("link.role_code", &role_codes),
     );
+    let values = vec![
+        Value::Integer(i64::try_from(trace_id.get()).map_err(|error| {
+            SemanticActionStoreError::new("semantic_action_navigation_trace_id", error.to_string())
+        })?),
+        Value::Integer(child_action_key),
+    ];
     connection
-        .query_row(
-            &query,
-            params![trace_id.get(), child_action_key],
-            action_position_from_row,
-        )
+        .query_row(&query, params_from_iter(values), action_position_from_row)
         .optional()
         .map_err(|error| {
             SemanticActionStoreError::new(
@@ -229,30 +236,8 @@ fn sibling_offset(
             |row| row.get(0),
         )
     } else {
-        let query = format!(
-            "SELECT COUNT(*)
-             FROM semantic_actions candidate
-             JOIN semantic_action_ids candidate_ids ON candidate_ids.action_key = candidate.action_key
-             WHERE candidate.trace_id = ?1
-               AND candidate.action_valid_code = 1
-               AND (candidate.start_time < ?2
-                    OR (candidate.start_time = ?2 AND candidate_ids.action_id < ?3))
-               AND NOT EXISTS (
-                 SELECT 1 FROM semantic_action_links incoming
-                 JOIN semantic_actions parent ON parent.action_key = incoming.parent_action_key
-                 WHERE incoming.trace_id = candidate.trace_id
-                   AND incoming.child_action_key = candidate.action_key
-                   AND incoming.valid = 1
-                   AND parent.action_valid_code = 1
-                   AND incoming.role_code IN ({})
-               )",
-            sql_integers(&role_codes),
-        );
-        connection.query_row(
-            &query,
-            params![trace_id.get(), child.start_time, child.action_id],
-            |row| row.get(0),
-        )
+        return super::root_tree::DisplayRootQuery::new(trace_id, roles)
+            .offset_before(connection, child.start_time, &child.action_id);
     }
     .map_err(|error| {
         SemanticActionStoreError::new(
@@ -338,6 +323,7 @@ mod tests {
             .semantic_action_display_path_to_kind(
                 trace_id,
                 DISPLAY_ROLES,
+                DISPLAY_ROLES,
                 SemanticActionKind::LlmCall.as_str(),
                 None,
             )
@@ -354,6 +340,7 @@ mod tests {
         let next = storage
             .semantic_action_display_path_to_kind(
                 trace_id,
+                DISPLAY_ROLES,
                 DISPLAY_ROLES,
                 SemanticActionKind::LlmCall.as_str(),
                 Some("llm-a"),
@@ -372,6 +359,7 @@ mod tests {
             .semantic_action_display_path_to_kind(
                 trace_id,
                 DISPLAY_ROLES,
+                DISPLAY_ROLES,
                 SemanticActionKind::LlmCall.as_str(),
                 Some("missing"),
             )
@@ -385,6 +373,7 @@ mod tests {
         let exhausted = storage
             .semantic_action_display_path_to_kind(
                 trace_id,
+                DISPLAY_ROLES,
                 DISPLAY_ROLES,
                 SemanticActionKind::LlmCall.as_str(),
                 Some("llm-b"),
@@ -496,7 +485,13 @@ mod tests {
         assert_eq!(selected[0].action_id, "target-llm");
 
         let path = storage
-            .semantic_action_display_path_to_kind(trace_id, DISPLAY_ROLES, "llm.call", None)
+            .semantic_action_display_path_to_kind(
+                trace_id,
+                DISPLAY_ROLES,
+                DISPLAY_ROLES,
+                "llm.call",
+                None,
+            )
             .expect("navigate")
             .expect("target path");
         assert_eq!(path.len(), 1);

@@ -23,6 +23,8 @@ pub(in crate::llm_pipeline) struct MessageFact {
     pub(in crate::llm_pipeline) semantic_finished: bool,
     pub(in crate::llm_pipeline) ended: bool,
     pub(in crate::llm_pipeline) provider_response_id: Option<String>,
+    pub(in crate::llm_pipeline) response_observation:
+        Option<crate::llm_pipeline::projection::compact::LlmResponseObservation>,
 }
 
 pub(in crate::llm_pipeline) struct HttpMessageFacts {
@@ -224,6 +226,7 @@ impl HttpMessageFacts {
                 semantic_finished: false,
                 ended: false,
                 provider_response_id: None,
+                response_observation: None,
             },
         );
         action
@@ -543,23 +546,42 @@ impl HttpMessageFacts {
         output
     }
 
-    pub(in crate::llm_pipeline) fn take_trajectory_bindings(
+    pub(in crate::llm_pipeline) fn take_response_bindings(
         &mut self,
-    ) -> Vec<(SemanticAction, Option<String>, std::time::SystemTime, bool)> {
+        observe_compaction: bool,
+    ) -> Vec<crate::llm_pipeline::projection::ProjectedResponseBinding> {
         let mut ids = std::mem::take(&mut self.changed);
         ids.sort_unstable();
         ids.dedup();
         ids.into_iter()
             .filter_map(|id| {
                 let request = self.messages.get(&id)?;
-                let semantic = request.semantic.as_ref()?;
-                let response = self.messages.get(request.response_id.as_ref()?)?;
-                Some((
-                    semantic.clone(),
-                    response.provider_response_id.clone(),
-                    response.http.end_time.unwrap_or(response.http.start_time),
-                    response.http.status == SemanticActionStatus::Error,
-                ))
+                let response_id = request.response_id.as_deref()?;
+                let response = self.messages.get(response_id)?;
+                let finished = observe_compaction
+                    && response
+                        .semantic
+                        .as_ref()
+                        .is_some_and(|action| action.status != SemanticActionStatus::InProgress);
+                let mut binding = crate::llm_pipeline::projection::ProjectedResponseBinding {
+                    request: request.semantic.as_ref()?.clone(),
+                    completion: None,
+                    provider_response_id: response.provider_response_id.clone(),
+                    observed_at: response.http.end_time.unwrap_or(response.http.start_time),
+                    failed: response.http.status == SemanticActionStatus::Error,
+                };
+                if finished {
+                    let response_id = response_id.to_owned();
+                    let response = self.messages.get_mut(&response_id)?;
+                    let observation = response.response_observation.take();
+                    binding.completion = response.semantic.as_ref().and_then(|action| {
+                        crate::llm_pipeline::projection::compact::CompletedResponse::from_terminal_action(
+                            action,
+                            observation,
+                        )
+                    });
+                }
+                Some(binding)
             })
             .collect()
     }

@@ -55,6 +55,9 @@ export function semanticActionLabel(action) {
   if (action?.kind === 'llm.call') {
     return 'llm.call';
   }
+  if (action?.kind === 'agent.context_compaction') {
+    return 'context compaction';
+  }
   return action?.kind ?? '';
 }
 
@@ -116,7 +119,12 @@ export function semanticActionTarget(action) {
     }
     return target;
   }
-  if (action?.kind === 'llm.call' || action?.kind === 'llm.request' || action?.kind === 'llm.response') {
+  if (
+    action?.kind === 'agent.context_compaction'
+    || action?.kind === 'llm.call'
+    || action?.kind === 'llm.request'
+    || action?.kind === 'llm.response'
+  ) {
     return attributes['llm.call.model'] ?? attributes['llm.request.model'] ?? attributes['llm.response.model'] ?? attributes.model;
   }
   return '';

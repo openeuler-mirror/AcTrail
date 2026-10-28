@@ -358,6 +358,118 @@ HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: b
 - **恢复条件**：重新观察到可信的消息边界后恢复请求关联。
 - **预期限采**：达到配置采集上限（`PolicyLimited`）时也会隔离缺失字节，并在恢复时保持静默。
 
+### `[semantic_retention.l0_llm_call.context_compact]`
+
+当 `semantic_retention.l0_llm_call.enabled = true`、本节 `enabled = true` 且
+`inference_enabled = true` 时，启动配置要求同时启用
+`semantic_retention.l0_llm_call.trajectory.enabled`，并将
+`semantic_retention.l0_llm_call.request_content` 设为 `"canonical_blocks"`、
+`semantic_retention.l0_llm_call.response_content` 设为 `"assembled_provider"`。
+不满足这些前提时启动校验失败。关闭 `inference_enabled` 可单独使用显式协议压缩识别。
+
+`enabled = false` 时不创建压缩投影器，也不生成压缩专用的请求和响应观察记录。
+压缩专属字段解析、顶层 system 分类扩展、摘要扫描、状态维护及附加复制均跳过。
+LLM 内容保留和轨迹关联分别由各自配置控制。
+
+`actrailctl init -f` 生成的默认配置包含以下全部字段：
+
+| 字段 | 默认值 | 作用与取值要求 |
+| --- | --- | --- |
+| `enabled` | `true` | context compaction 识别总开关 |
+| `inference_enabled` | `true` | 通用内容采用推断开关 |
+| `inferred_candidate_root_only` | `true` | 限制推断压缩实现请求的轨迹类型 |
+| `max_active_scopes_per_trace` | `8` | 每个 Trace 的活跃 scope 数上限，正整数 |
+| `max_open_requests_per_scope` | `10` | 每个 scope 等待响应完成事实的请求收集数上限，正整数 |
+| `compaction_candidates.max_entries_per_scope` | `2` | 每个 scope 的压缩候选容量，正整数 |
+| `compaction_candidates.ttl` | `"30m"` | 压缩候选从实现响应结束起计算的有效期，正时长 |
+| `pending_adoptions.max_entries_per_scope` | `2` | 每个 scope 的待采用项容量，正整数 |
+| `pending_adoptions.ttl` | `"1m"` | 待采用项从请求开始起计算的墙钟等待期限，正时长 |
+| `max_artifact_bytes` | `131072` | 压缩候选原始响应、opaque 产物和显式协议内嵌元数据的字节上限，正整数 |
+| `max_context_items_to_scan` | `128` | 历史条目、载体、每消息 block、累计工具调用和 opaque 输入项的数量上限，正整数 |
+| `max_context_scan_bytes` | `524288` | 载体搜索的扫描字节预算，正整数 |
+| `max_history_source_bytes` | `524288` | 单份请求 JSON 来源的保留字节上限，正整数；历史快照预算派生为该值的2倍，倍增后须能表示为本机 `usize` |
+| `min_artifact_flow_bytes` | `256` | 原文完整或部分采用的匹配字节数、JSON 按序采用值的累计字节数下限，正整数 |
+| `min_artifact_coverage_percent` | `50` | 原文部分采用的载体覆盖率、JSON 按序采用值的摘要覆盖率下限，整数 `1..=100` |
+| `max_fingerprint_positions` | `16` | 单指纹来源位置数和单载体候选命中核验次数上限，正整数 |
+
+启动时校验 `min_artifact_flow_bytes <= max_artifact_bytes <= max_context_scan_bytes`，
+字节预算还须能表示为本机 `usize`。`2 × max_history_source_bytes` 在启动时校验溢出。
+`max_history_source_bytes` 与 `max_context_scan_bytes` 分别约束请求来源保留和载体搜索。
+
+请求历史准入要求整份解码请求 JSON 的原始字节数不超过 `max_history_source_bytes`。
+确认时按需生成历史快照，内容预算为 `2 × max_history_source_bytes`，默认 `1048576` 字节。
+该预算按快照逻辑内容的 UTF-8 字节数计量，包括 system 与消息的 canonical 内容、消息文本及工具调用文本。
+工具调用文本含名称、参数与括号，system 仅计入 canonical 内容。快照超限时跳过该份历史证据。
+载体搜索预算由 `max_context_scan_bytes` 设置，默认 `524288` 字节。
+
+例如，内容采用的默认门槛可通过以下字段调整：
+
+```toml
+[semantic_retention.l0_llm_call.context_compact]
+min_artifact_flow_bytes = 256
+min_artifact_coverage_percent = 50
+```
+
+`inferred_candidate_root_only` 默认 `true`，推断压缩实现请求接受的 trajectory transition 为
+`Root`、`ForkRoot` 和 `DuplicateRoot`。trajectory 事实尚未到达时，已完成调用按候选容量和 TTL 等待；
+事实确定为 `Append` 时，该推断候选停止参与确认和续期，并由 TTL 或容量回收释放。
+需要识别直接在原历史后追加摘要指令的压缩调用时，将该选项设为 `false`，
+允许 `Append` 参与内容采用及历史替换确认。显式协议候选依据协议意图准入。
+
+`min_artifact_flow_bytes` 默认 `256`。推断压缩候选准入要求响应文本达到该 UTF-8 字节数下限，显式协议候选按协议意图准入。
+该值还限制原文完整或部分采用的连续匹配长度，以及 JSON 响应字符串值
+采用的累计解码字节数。JSON 路径允许跳过缺失的有效字符串值，已采用的值须在单个后继载体中
+按源顺序完整出现，各段互不重叠。累计采用字节数须达到该下限，且至少占原摘要全部有效字符串值
+总字节数的 `min_artifact_coverage_percent`；空白字符串不计入。`summary_bytes` 统计实际采用值的字节数，
+字段间分隔及 JSON 外层结构不计入。JSON 解码受 `max_artifact_bytes` 限制，载体搜索沿用
+`max_context_items_to_scan` 和 `max_context_scan_bytes`；解析失败在当前候选内处理。
+载体内有效 JSON 字符串的引号、反斜杠及 Unicode 转义先解码后参与值匹配。
+原文采用使用载体原文，先匹配全文，再匹配连续片段。
+
+`min_artifact_coverage_percent` 默认 `50`。原文部分采用要求连续匹配片段的 UTF-8 字节数
+至少占待采用项中单个载体去除首尾空白后 UTF-8 字节数的该百分比；分母是待采用项的载体长度。
+长度与覆盖率门槛须同时满足。完整原文采用须满足 `min_artifact_flow_bytes`，
+不受该覆盖率门槛限制。显式协议确认不依赖明文长度。JSON 值路径以响应摘要的有效值总字节数为分母；
+原文片段路径独立按载体覆盖率判断。
+
+JSON 值有缺失或原文仅采用连续片段时，`evidence_mode` 为 `artifact_flow_partial_summary`；
+完整原文或全部 JSON 有效值采用时为 `artifact_flow`。`summary_bytes` 和 `summary_chars` 均记录
+实际匹配内容的字节数和字符数。
+
+`compaction_candidates` 保存已完成调用的压缩候选；`pending_adoptions` 保存等待确认采用压缩结果的请求。
+两类状态的容量和 TTL 各自配置，均在启动时校验为正值：
+
+```toml
+[semantic_retention.l0_llm_call.context_compact]
+max_open_requests_per_scope = 10
+
+[semantic_retention.l0_llm_call.context_compact.compaction_candidates]
+max_entries_per_scope = 2
+ttl = "30m"
+
+[semantic_retention.l0_llm_call.context_compact.pending_adoptions]
+max_entries_per_scope = 2
+ttl = "1m"
+```
+
+压缩候选匹配时按待采用项的请求开始时间检查有效期。有效待采用项可保留其开始时尚未过期的压缩候选，
+保留窗口受待采用项的 TTL 及压缩候选容量约束。待采用项达到容量上限时按准备顺序释放最早项的待匹配证据。
+压缩候选达到容量上限时，回收没有有效等待依赖的最早候选；全部候选均被等待项依赖时，拒绝新候选并记录容量诊断。
+新候选丢失可能影响已有待采用项的来源唯一性时，该待采用项保持未确认。
+尚未完成的请求由 `max_open_requests_per_scope` 限制；请求被淘汰后，其有效待采用证据仍按待采用项的容量和 TTL 保留。
+
+待采用项的截止时间为请求开始时间加 `pending_adoptions.ttl`，按墙钟时间判定，达到截止时间后停止参与确认。
+迟到的压缩候选须满足 `candidate.response_end <= adoption.start`，并在待采用项的等待期限内参与匹配。
+采集事件延迟超过等待期限时，待采用项到期。
+
+候选集合变化或轨迹事实到达时，重新检查业务时序、轨迹资格和来源唯一性。
+证据不足、来源存在歧义或匹配预算耗尽时，采用请求保持未确认。
+历史快照超过预算时报告诊断并跳过该份历史证据；匹配工作量超限时记录对应诊断。
+
+`max_fingerprint_positions` 默认 `16`，必须为正整数。在部分摘要匹配中，它同时限制每个指纹保留的
+来源位置数，以及每个摘要承载项允许核验的候选命中次数。完整摘要的精确采用不消耗滚动指纹核验预算。
+尚未找到合格匹配而耗尽预算时，本次匹配保持未确认并记录工作量超限诊断。
+
 ## 治理配置
 
 - **作用范围**：`[enforcement]`、`[command_control]` 和 `[network_control]` 会改变工作负载行为，不只是采集。

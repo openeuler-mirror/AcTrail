@@ -8,7 +8,7 @@
   <template v-for="field in fields" :key="field.pointer">
     <LlmContentNode v-if="!scalar(field) || (values[field.pointer] && !compact(field))"
       :descriptor="field" :load-node="loadNode" :initial-node="values[field.pointer]"
-      :presentation="presentationFor(field)" :initial-open="presentationFor(field) === 'body'" :page-size="pageSize" />
+      :presentation="presentationFor(field)" :initial-open="['body', 'block'].includes(presentationFor(field))" :page-size="pageSize" />
     <p v-else-if="errors[field.pointer]" class="detail-error" role="alert">{{ field.token }}: {{ errors[field.pointer] }} <button type="button" @click="read(field)">{{ t('retry') }}</button></p>
   </template>
   <p v-if="pending" class="detail-muted" role="status">{{ t('loading') }}</p>
@@ -28,7 +28,7 @@ const requested = new Set();
 const { t } = useModuleLocale({ 'en-US': { loading: 'Loading fields…', retry: 'Retry' }, 'zh-CN': { loading: '正在加载字段…', retry: '重试' } });
 function scalar(field) {
   return !['object', 'array'].includes(field.type)
-    && !['body', 'message'].includes(props.presentationFor(field)) && !PROSE_FIELDS.includes(field.token);
+    && !['body', 'block', 'message'].includes(props.presentationFor(field)) && !PROSE_FIELDS.includes(field.token);
 }
 function display(value) { return typeof value === 'string' ? value : JSON.stringify(value); }
 function compact(field) {
