@@ -140,6 +140,8 @@ After the summary, exit the agent session.
 sudo actrailweb
 ```
 
+Use `--addr` and `--port` to change the listening address and port.
+
 Open [Web UI](http://127.0.0.1:18080) to inspect:
 
 - Agent process tree
