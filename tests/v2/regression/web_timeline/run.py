@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 from tests.v2.common.actrail_runtime import ActrailRuntime
 from tests.v2.common.core import TestOutput
+from tests.v2.common.patch_builder import PatchBuilder
 
 
 class Acceptance:
@@ -30,13 +31,13 @@ class Acceptance:
             self.work, agent_invocation_commands=[args.agent.resolve()])
         self.web = None
 
-    def start_web(self, name, **settings):
+    def start_web(self, name, *, config=None, **settings):
         if self.web:
             self.web.terminate()
             self.web.wait(timeout=C.web_stop_timeout_seconds)
         with (self.work / f'{name}.log').open('w') as log:
             self.web = subprocess.Popen([
-                str(self.args.bin_dir.resolve() / 'actrailweb'), '--config', str(self.work / 'actraild.conf'),
+                str(self.args.bin_dir.resolve() / 'actrailweb'), '--config', str(config or self.work / 'actraild.conf'),
                 '--addr', C.host, '--port', str(self.args.port)],
                 stdout=log, stderr=subprocess.STDOUT, cwd=REPO, env=dict(os.environ, **settings))
         base = f'http://{C.host}:{self.args.port}'
@@ -121,6 +122,16 @@ class Acceptance:
             subprocess.run(['node', str(Path(__file__).parent / 'long_content/browser.mjs'), base,
                             str(long_trace_id), str(self.work), self.args.playwright,
                             self.args.chromium], check=True, timeout=C.content_timeout_seconds)
+            empty_config = self.work / 'resources-empty.conf'
+            PatchBuilder().apply(self.work / 'actraild.conf').with_values({
+                'resource_profiling': {'storage': {'database': {'sqlite': {
+                    'path': str(self.work / 'resources-empty.sqlite'),
+                }}}},
+            }).build().save(empty_config)
+            base = self.start_web('web-resources-empty', config=empty_config)
+            subprocess.run(['node', str(Path(__file__).parent / 'browser/resource-run.mjs'), base,
+                            str(trace_id), str(self.work), self.args.playwright, self.args.chromium, 'empty'],
+                           check=True, timeout=C.browser_timeout_seconds)
             base = self.start_web('web-small-budget', ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT=str(C.timeline_small_budget),
                                   ACTRAIL_WEB_TIMELINE_MAX_LIMIT=str(C.timeline_small_budget), ACTRAIL_WEB_TIMELINE_CANDIDATES=str(C.timeline_small_budget))
             subprocess.run(['node', str(Path(__file__).with_name('small-budget.mjs')),

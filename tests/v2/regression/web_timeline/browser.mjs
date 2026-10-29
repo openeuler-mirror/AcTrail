@@ -3,6 +3,7 @@ import { C } from './constants.mjs';
 import fs from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { ContinuousAcceptance } from './browser/continuous.mjs';
+import { ResourceAcceptance } from './browser/resources.mjs';
 const [base, traceId, out, endpointTemplate, playwrightPath, executablePath] = process.argv.slice(2);
 const { chromium } = await import(playwrightPath);
 const endpoint = endpointTemplate.replace('{trace_id}', traceId);
@@ -124,6 +125,8 @@ try {
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
   const context = await browser.newContext({ viewport: C.viewport });
   const page = await context.newPage();
+  const resources = new ResourceAcceptance(page, base, traceId, report);
+  resources.setMetadata(metadata);
   page.on('request', request => { if (request.url().includes('/api/')) report.requests.push(request.url()); });
   page.on('pageerror', error => report.consoleErrors.push(error.message));
   await page.goto(base, { waitUntil: 'networkidle' });
@@ -178,6 +181,7 @@ try {
   assert(!report.requests.some(url => /content\/llm-request/.test(url)), 'initial page fetched LLM bodies');
   assert(!report.requests.slice(traceRequestStart).some(url => url.includes('/stats/llm-requests/activity')),
     'entering trace workspace triggered global statistics');
+  await resources.verify();
   const trajectoryStart = report.requests.length;
   const trajectoryResponse = page.waitForResponse(response => response.url().includes('/llm-trajectories'));
   await page.locator('#trace-view-llm_trajectory-tab').click();

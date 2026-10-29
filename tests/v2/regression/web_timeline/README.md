@@ -18,6 +18,20 @@ sudo -E python3 tests/v2/regression/web_timeline/run.py \
 
 检查项包括真实 SQLite action 集合与 API 分页结果一致、多类型合并游标无重复或遗漏、进程筛选、跨窗口区间、非法页大小、空页继续、flamegraph 首屏请求、切换页面、waterfall 按需详情以及浏览器异常。小预算阶段单独启动 Web，限制每次读取一个候选。报告、请求耗时和截图保存在工作目录。
 
+资源区域验收复用真实采集数据，检查 host/workload 曲线、来源标签、画布实际绘制、与火焰图时间轴的
+横向对齐、缩放和平移后的查询覆盖，以及折叠/展开。随后用指向独立空资源路径的配置启动真实 Web，
+要求 host/workload 都显示无样本解释且没有加载错误。该阶段不伪造资源 API 响应。
+
+已有运行中的 Web 和真实 trace 时，可只执行资源浏览器检查：
+
+```bash
+node tests/v2/regression/web_timeline/browser/resource-run.mjs \
+  http://127.0.0.1:18479 1 /path/to/report \
+  /path/to/playwright/index.mjs /path/to/chrome sampled
+```
+
+报告目录需预先存在；空资源配置的实例使用最后一个参数 `empty`，输出对应 JSON 报告和截图。
+
 正文验收对照真实 SQLite manifest 与 blocks 检查内容一致性、精确字节数和 UTF-8 前缀边界；独立 Web 实例验证 7 字节叶子预览、浏览器按节点展开，以及内容块预算耗尽后其他接口仍可使用。
 
 首页验收检查初始化不触发全局统计或清缓存，显式加载只提交一次选定范围查询，编辑日期保持已显示结果的范围，主动刷新使用已提交的范围。

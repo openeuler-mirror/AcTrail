@@ -6,6 +6,10 @@
 
 fanotify 分别使用独立资源 SQLite 和与主库存储共享文件的配置，共执行六轮真实 Xiaoo。数据库与受管控文件处于同一监听目录，覆盖首次创建和重启，验证 daemon 启动及内部数据库访问不被自身权限拦截阻塞。每轮还检查资源样本已写入；共享文件组同时检查主库事件和资源样本。
 
+每轮将文件策略结果和 `*_resource_storage` 分别显示。存储小项检查五张列存储表存在、旧表不存在、
+样本没有缺失的 profile/boot 引用，且 extra 使用 BLOB；host 的 boot ID、时间戳、CPU、内存和 load
+通过真实 viewer 读回，与 SQL 逐行核对。短任务允许只有 host 样本；共享库组还要求主库 events 非空。
+
 ```bash
 python3 tests/v2/regression/file_policy_xiaoo/run_e2e.py --color never
 ```

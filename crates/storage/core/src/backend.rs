@@ -13,8 +13,6 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
-use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
 use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
 use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
@@ -102,7 +100,7 @@ pub struct SemanticActionChildPageQuery {
     pub limit: usize,
 }
 
-pub trait StorageBackend: crate::CgroupV1BindingStore {
+pub trait StorageBackend: crate::CgroupV1BindingStore + crate::CgroupV2BindingStore {
     /// Whether observation records are retained and need protection from purge during history reads.
     fn retains_observations(&self) -> bool;
 
@@ -152,42 +150,6 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         lifecycle_state: ResourceScopeLifecycleState,
 
         updated_at: SystemTime,
-    ) -> Result<(), StorageError>;
-
-    fn create_external_cgroup_binding(
-        &mut self,
-        binding: ExternalCgroupBinding,
-    ) -> Result<(), StorageError>;
-    fn get_external_cgroup_binding(
-        &self,
-        trace_id: TraceId,
-    ) -> Result<Option<ExternalCgroupBinding>, StorageError>;
-    fn list_live_external_cgroup_bindings(
-        &self,
-    ) -> Result<Vec<ExternalCgroupBinding>, StorageError>;
-    fn record_external_cgroup_success(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: SystemTime,
-    ) -> Result<(), StorageError>;
-    fn record_external_cgroup_failure(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: SystemTime,
-    ) -> Result<u32, StorageError>;
-    fn mark_external_cgroup_stale(
-        &mut self,
-        trace_id: TraceId,
-        reason: ExternalBindingStaleReason,
-        updated_at: SystemTime,
-    ) -> Result<(), StorageError>;
-    /// Discard a legacy interrupted admission only if its trace does not exist.
-    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError>;
-
-    fn close_external_cgroup_binding(
-        &mut self,
-        trace_id: TraceId,
-        closed_at: SystemTime,
     ) -> Result<(), StorageError>;
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError>;

@@ -20,6 +20,7 @@ from tests.v2.common.core import (
     TestStatus,
 )
 from tests.v2.common.runner import TestingContextSingleton
+from tests.v2.common.resource_storage_assertion import assert_host_columns, storage_counts
 from tests.v2.regression.command_policy_xiaoo.provider import LocalXiaooProvider
 
 from .constants import CASE_CONSTANTS
@@ -49,6 +50,7 @@ class FilePolicyXiaooCase(TestCase):
 
     def run(self, context: TestingContextSingleton) -> TestResult:
         results: dict[str, TestResult] = {}
+        current = "setup"
         try:
             self._marker.write_text("", encoding="utf-8")
             provider_url = self._provider.start()
@@ -71,6 +73,7 @@ class FilePolicyXiaooCase(TestCase):
                     operator_config_patches=self._patches(),
                 )
                 for decision in ("deny", "allow"):
+                    current = f"{variant}_{decision}"
                     self._marker.write_text("", encoding="utf-8")
                     context.report_progress(
                         f"xiaoo_{decision}",
@@ -87,14 +90,19 @@ class FilePolicyXiaooCase(TestCase):
                     stopped = self._runtime.stop()
                     if stopped is not None and stopped.returncode != 0:
                         raise RuntimeError(f"daemon stop failed: {stopped.output}")
-                    self._require_resource_storage()
-                    results[f"{variant}_{decision}"] = TestResult(
+                    results[current] = TestResult(
                         TestStatus.PASSED,
                         f"{variant}: real Xiaoo trace-{trace_id} file open {decision} and selected backend audit verified",
                     )
+                    current = f"{variant}_{decision}_resource_storage"
+                    context.report_progress(current, "checking column storage, host readback and shared trace events")
+                    storage = self._require_resource_storage()
+                    results[current] = TestResult(
+                        TestStatus.PASSED, storage,
+                    )
             return TestResult(TestStatus.COMPOSITE, "real Xiaoo file policy", results)
         except Exception as error:
-            results["failure"] = TestResult(TestStatus.FAILED, str(error))
+            results[current] = TestResult(TestStatus.FAILED, str(error))
             return TestResult(TestStatus.COMPOSITE, "real Xiaoo file policy", results)
 
     def _run_xiaoo(self, decision: str) -> int:
@@ -179,19 +187,25 @@ class FilePolicyXiaooCase(TestCase):
             if "fanotify" in target:
                 raise AssertionError("default complete created a fanotify instance")
 
-    def _require_resource_storage(self) -> None:
+    def _require_resource_storage(self) -> str:
         config = tomllib.loads((self._config.work_dir / "actraild.conf").read_text())
         resource_path = Path(config["resource_profiling"]["storage"]["database"]["sqlite"]["path"])
         if not resource_path.is_absolute():
             resource_path = self._config.work_dir / resource_path
+        host, workload = storage_counts(resource_path)
+        assert self._runtime is not None
+        result = self._runtime.run_checked(self._runtime.viewer_command(
+            "host-resources", "--limit", "10000", "--output-format", "json",
+        ), echo=False)
+        assert_host_columns(resource_path, json.loads(result.stdout))
         with closing(sqlite3.connect(resource_path.as_uri() + "?mode=ro", uri=True)) as connection:
-            if connection.execute("SELECT count(*) FROM resource_samples").fetchone()[0] == 0:
-                raise AssertionError("resource storage received no real samples")
             if self._variant == "fanotify_shared_storage":
                 if resource_path != Path(config["storage"]["sqlite"]["path"]):
                     raise AssertionError("shared resource storage path differs from main storage")
                 if connection.execute("SELECT count(*) FROM events").fetchone()[0] == 0:
                     raise AssertionError("shared storage received no trace events")
+        shared = "; shared main trace events preserved" if self._variant == "fanotify_shared_storage" else ""
+        return f"host={host}, workload={workload}; column schema, references and host readback verified{shared}"
 
     def _patches(self) -> list[Path]:
         patches = [self._patch]

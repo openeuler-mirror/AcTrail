@@ -85,6 +85,28 @@ impl ResourceStorageConfig {
             ResourceStorageBackendKind::Remote => Vec::new(),
         }
     }
+    /// Main SQLite files available for local reads, excluding WAL sidecars.
+    pub fn local_database_paths(&self) -> Vec<&std::path::Path> {
+        match self.backend {
+            ResourceStorageBackendKind::Database => self
+                .database
+                .iter()
+                .map(|database| database.sqlite.path.as_path())
+                .collect(),
+            ResourceStorageBackendKind::Hybrid => self
+                .hybrid
+                .iter()
+                .flat_map(|hybrid| &hybrid.backends)
+                .filter_map(|child| {
+                    child
+                        .database
+                        .as_ref()
+                        .map(|database| database.sqlite.path.as_path())
+                })
+                .collect(),
+            ResourceStorageBackendKind::Remote => Vec::new(),
+        }
+    }
     pub fn resolve_paths(&mut self, base: &std::path::Path) {
         if let Some(database) = &mut self.database {
             database.resolve_paths(base);

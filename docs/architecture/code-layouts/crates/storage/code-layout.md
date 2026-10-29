@@ -6,14 +6,16 @@
 │   └── [x] src/ # 后端接口、事务和控制状态存储接口
 │       ├── [x] lib.rs # 导出主存储能力与查询类型
 │       ├── [x] backend.rs # 聚合 trace、事件、语义、payload 和控制状态的存取能力
-│       │   ├── [x] trait StorageBackend # 提供记录保存、历史读取、保留策略和事务入口
+│       │   ├── [x] trait StorageBackend # 提供记录保存、历史读取、保留策略和事务入口；继承两个外部 cgroup 绑定存取接口
 │       │   └── [x] enum StorageOpenMode # 选择只读或读写打开方式
 │       ├── [x] error.rs # 定义存储失败与属性补充拒绝信息。
 │       │   └── [x] struct StorageError # 保存存储失败信息。
 │       ├── [x] transaction.rs # 主存储事务接口
 │       │   └── [x] trait StorageTransaction # 控制当前事务提交和回滚
-│       ├── [x] cgroup_v1_bindings.rs # 定义 v1 绑定控制状态存取接口
+│       ├── [x] cgroup_v1_bindings.rs # 定义 v1 只读绑定控制状态存取接口
 │       │   └── [x] trait CgroupV1BindingStore # 创建、读取、失效和关闭 v1 绑定记录
+│       ├── [x] cgroup_v2_bindings.rs # 定义 v2 容器绑定控制状态存取接口
+│       │   └── [x] trait CgroupV2BindingStore # 创建、读取、成功/失败计数、失效和关闭 v2 绑定记录
 │       ├── [x] timeline.rs # 时间线游标、范围与分页结果
 │       │   ├── [x] struct TimelineQuery # 描述时间线查询方向和范围
 │       │   └── [x] struct TimelinePage # 返回带游标的时间线记录
@@ -44,7 +46,8 @@
     │       │   └── [x] struct ResourceState # 持有可参与事务的控制状态
     │       ├── [x] transaction.rs # 管理内存控制记录的事务边界
     │       │   └── [x] struct NoOpTransaction # 提交或回滚当前内存状态变更
-    │       └── [x] cgroup_v1.rs # 保留准入及完成所需控制状态，参与内存事务
+    │       ├── [x] cgroup_v1_binding.rs # 实现 v1 绑定存取，保留准入及完成所需控制状态
+    │       └── [x] cgroup_v2_binding.rs # 实现 v2 绑定存取，委托 ResourceState
     └── [x] sqlite/ # 保存主观测、语义记录和控制状态的 SQLite 后端
         └── [x] src/ # 连接、记录编码、写入、查询和清理
             ├── [x] lib.rs # 创建数据库连接并组合字典、批次与租约状态
@@ -86,8 +89,10 @@
             ├── [x] alerts/ # 通用插件告警定义、记录和查询
             ├── [x] retention.rs # trace 保留期限、租约保护和分批清理
             ├── [x] resource_scopes.rs # 保存托管资源范围的恢复与关闭记录
-            ├── [x] external_cgroups.rs # 保存外部 cgroup 关联与生命周期
-            └── [x] cgroup_v1/ # v1 绑定身份、失效与关闭状态存储
+            ├── [x] cgroup_v2_binding/ # v2 容器绑定关联与生命周期存储
+            │   ├── [x] bindings.rs # 读写 trace_external_cgroup_v2_bindings
+            │   └── [x] mod.rs # 实现 CgroupV2BindingStore
+            └── [x] cgroup_v1_binding/ # v1 绑定身份、失效与关闭状态存储
                 ├── [x] bindings.rs # 保存 v1 绑定身份、失效原因与关闭状态
                 │   └── [x] struct BindingRow # 将 SQLite 记录转换为 v1 绑定模型
                 ├── [x] mod.rs # 声明 v1 绑定存储模块

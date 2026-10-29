@@ -88,7 +88,9 @@ fanotify and excludes their database, WAL and SHM files from self interception.
 Output is best-effort. Bounded queues and write timeouts isolate storage failures
 from collection and control completion. Full queues or failed writes may lose
 samples, including final samples. Resource retention runs during writes and is
-independent of trace retention.
+independent of trace retention. Each sweep deletes expired samples in batches of
+`max_samples_per_sweep` until none are left or 50 ms is spent; a sweep that ends
+behind continues on the next write instead of waiting for `sweep_interval_seconds`.
 
 `remote` sends to Prometheus remote-write or InfluxDB line-protocol endpoints.
 `hybrid` sends independently to a configured list of database and remote backends.

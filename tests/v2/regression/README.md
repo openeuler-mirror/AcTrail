@@ -50,11 +50,15 @@ workload bundle 和 xiaoO 路径，因此正常验收不需要再粘贴环境变
 `--no-profile` 禁用自动加载。profile 不得保存密码、API key 或其他凭据。
 执行隔离的主验收 backend 是 Firecracker。
 
-当前已注册的辅助与可选回归 case 包含以下职责：
+当前已注册的资源、辅助与可选回归 case 包含以下职责：
 
-- `resource_metrics_cgroup` 负责 release binaries 在 systemd delegated cgroup v2
-  下的 exact、restart recovery、exactly-once finalization 与 timeout 验收，仅在显式
-  选择时运行。
+- `resource_metrics_cgroup` 负责 release binaries 在 systemd delegated cgroup v2（v1 宿主上改测自建 v1 trace 范围）
+  下的 exact、restart recovery、exactly-once finalization 与 timeout 验收，并检查列存储读回、
+  profile 重启复用和资源 HTTP 查询，最后在独立数据库中运行 `retention` 清理小项；属于默认回归集合，
+  宿主不满足条件时明确跳过。
+- `resource_storage_retention` 负责两张资源样本表的过期积压、未过期样本保留、profile/boot 回收和
+  键字典保留，以及旧表删除；独立入口仅在显式选择时运行，同一实现在默认的 `resource_metrics_cgroup`
+  中作为 `retention` 小项执行。
 - `sandbox_resource_alert_host` 负责无 VMM 的 Host native-VSOCK 组件通路验收。
 - `sandbox_oom_killed_alert_host` 只负责一次受控 Host memory-cgroup OOM
   与 `sandbox.resource.oom_killed` 公开告警投递，仅在显式选择时运行。
@@ -201,6 +205,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `sandbox_resource_alert_host` | [`sandbox_resource_alert_host/README.zh.md`](sandbox_resource_alert_host/README.zh.md) |
 | `sandbox_oom_killed_alert_host` | [`sandbox_oom_killed_alert_host/README.zh.md`](sandbox_oom_killed_alert_host/README.zh.md) |
 | `resource_metrics_cgroup` | [`resource_metrics_cgroup/README.zh.md`](resource_metrics_cgroup/README.zh.md) |
+| `resource_storage_retention` | [`resource_storage_retention/README.zh.md`](resource_storage_retention/README.zh.md) |
 | `execution_isolation_firecracker` | [`execution_isolation_firecracker/v2/README.zh.md`](execution_isolation_firecracker/v2/README.zh.md) |
 | `execution_isolation_stratovirt` | [`execution_isolation_stratovirt/v2/README.zh.md`](execution_isolation_stratovirt/v2/README.zh.md) |
 | `execution_isolation_cloud_hypervisor` | [`execution_isolation_cloud_hypervisor/v2/README.zh.md`](execution_isolation_cloud_hypervisor/v2/README.zh.md) |

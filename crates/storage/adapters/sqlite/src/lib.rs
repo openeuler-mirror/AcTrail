@@ -3,8 +3,8 @@
 mod action_content;
 pub mod alerts;
 pub mod backend;
+mod cgroup_v2_binding;
 pub mod config;
-mod external_cgroups;
 mod payload;
 pub mod query;
 pub mod records;
@@ -476,4 +476,4 @@ fn next_id_seed(
         .ok_or(rusqlite::Error::InvalidQuery)
 }
 
-mod cgroup_v1;
+mod cgroup_v1_binding;

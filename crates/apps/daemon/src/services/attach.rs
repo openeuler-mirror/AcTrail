@@ -467,10 +467,7 @@ impl StorageAttachService {
                 let entry = trace_runtime.get_trace(bootstrap.trace_id).ok_or_else(|| {
                     ControlError::new("trace_missing", "trace disappeared during bootstrap")
                 })?;
-                if let Err(error) = self
-                    .resource_metrics
-                    .admit_external_container(entry, coordinates)
-                {
+                if let Err(error) = self.resource_metrics.admit_binding(entry, coordinates) {
                     if uses_ebpf_collector {
                         let _ = self.collector.unbind_trace(bootstrap.trace_id);
                     }

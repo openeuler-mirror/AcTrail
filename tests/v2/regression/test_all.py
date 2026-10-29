@@ -88,6 +88,9 @@ from tests.v2.regression.sandbox_oom_killed_alert_host.run_e2e import (  # noqa:
 from tests.v2.regression.resource_metrics_cgroup.run_e2e import (  # noqa: E402
     TEST_DEFINITION as RESOURCE_METRICS_CGROUP,
 )
+from tests.v2.regression.resource_storage_retention.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as RESOURCE_STORAGE_RETENTION,
+)
 from tests.v2.regression.otel_jsonl_action_filter.run_e2e import (  # noqa: E402
     TEST_DEFINITION as OTEL_JSONL_ACTION_FILTER,
 )
@@ -131,6 +134,7 @@ DEFAULT_TESTS = [
     SANDBOX_RESOURCE_ALERT_HOST,
     CONTAINER_AUTO,
     CONTAINER_AGENT_XIAOO,
+    RESOURCE_METRICS_CGROUP,
     SEMANTIC_ACTION_BOUNDARIES,
     OTEL_JSONL_ACTION_FILTER,
     OTEL_HTTP,
@@ -143,7 +147,7 @@ DEFAULT_TESTS = [
 
 OPTIONAL_TESTS = [
     LSM_ACCESS_CONTROL_XIAOO,
-    RESOURCE_METRICS_CGROUP,
+    RESOURCE_STORAGE_RETENTION,
     SANDBOX_OOM_KILLED_ALERT_HOST,
     EXECUTION_ISOLATION_FIRECRACKER,
     EXECUTION_ISOLATION_CLOUD_HYPERVISOR,

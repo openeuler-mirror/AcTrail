@@ -1,0 +1,1 @@
+"""Resource SQLite retention acceptance."""

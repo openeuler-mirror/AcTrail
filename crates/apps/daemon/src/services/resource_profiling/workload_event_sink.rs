@@ -62,36 +62,37 @@ impl StorageAttachService {
         if let Err(error) = self.drain_resource_finalizations_impl(trace_runtime) {
             tracing::warn!(message=%error.message,"managed resource finalization failed; retrying");
         }
-        self.drain_v1_finalizations(trace_runtime);
-        if let Err(error) = self.drain_external_finalizations_impl(trace_runtime) {
+        self.drain_v1_binding_finalizations(trace_runtime);
+        if let Err(error) = self.drain_v2_binding_finalizations_impl(trace_runtime) {
             tracing::warn!(message=%error.message,"external resource finalization failed; retrying");
         }
         Ok(())
     }
 
-    pub(in crate::services) fn drain_external_finalizations_impl(
+    pub(in crate::services) fn drain_v2_binding_finalizations_impl(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
     ) -> Result<(), ControlError> {
-        let drafts = self.resource_metrics.poll_external_finalizations(
+        let drafts = self.resource_metrics.poll_v2_binding_finalizations(
             trace_runtime,
             &self.process_registry,
             self.storage.as_mut(),
         )?;
         for draft in drafts {
             let trace_id = draft;
-            if let Err(error) = self.persist_external_finalization(draft) {
+            if let Err(error) = self.persist_v2_binding_finalization(draft) {
                 tracing::warn!(%trace_id,message=%error.message,"external control finalization failed; retrying");
             }
         }
         Ok(())
     }
 
-    fn persist_external_finalization(&mut self, trace_id: TraceId) -> Result<(), ControlError> {
+    fn persist_v2_binding_finalization(&mut self, trace_id: TraceId) -> Result<(), ControlError> {
         self.storage
-            .close_external_cgroup_binding(trace_id, SystemTime::now())
+            .close_cgroup_v2_binding(trace_id, SystemTime::now())
             .map_err(|e| ControlError::new(e.stage, e.message))?;
-        self.resource_metrics.finish_external_finalization(trace_id);
+        self.resource_metrics
+            .finish_v2_binding_finalization(trace_id);
         Ok(())
     }
 

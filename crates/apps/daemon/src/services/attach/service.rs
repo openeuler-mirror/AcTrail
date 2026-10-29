@@ -34,13 +34,14 @@ impl StorageAttachService {
             trace.clone(),
             memberships,
             process_records,
-            self.resource_metrics.external_binding(trace_id),
+            self.resource_metrics.v2_binding(trace_id),
             self.resource_metrics.v1_binding(trace_id),
         ) {
-            self.resource_metrics.finish_external_finalization(trace_id);
+            self.resource_metrics
+                .finish_v2_binding_finalization(trace_id);
             return Err(ControlError::new(error.stage, error.message));
         }
-        self.resource_metrics.activate_v1(trace_id);
+        self.resource_metrics.activate_v1_binding(trace_id);
         if emit_bootstrap_diagnostic {
             let diagnostic = DiagnosticRecord::new(
                 self.next_diagnostic_id()?,
@@ -512,7 +513,7 @@ fn persist_admitted_trace(
     trace: model_core::trace::TraceRecord,
     memberships: Vec<model_core::process::ProcessMembership>,
     processes: Vec<ProcessRecord>,
-    binding: Option<resource_profiling::model::external_cgroup::ExternalCgroupBinding>,
+    binding: Option<resource_profiling::model::cgroup_v2_binding::CgroupV2Binding>,
     v1_binding: Option<resource_profiling::model::cgroup_v1_binding::CgroupV1Binding>,
 ) -> Result<(), storage_core::StorageError> {
     let transaction = storage.begin()?;
@@ -528,7 +529,7 @@ fn persist_admitted_trace(
             storage.create_cgroup_v1_binding(&binding)?;
         }
         if let Some(binding) = binding {
-            storage.create_external_cgroup_binding(binding)?;
+            storage.create_cgroup_v2_binding(binding)?;
         }
         Ok(())
     })();
@@ -548,7 +549,7 @@ mod admission_tests {
     use model_core::ids::{OtelTraceId, ProfileName, TraceId, TraceName};
     use model_core::process::{HostProcessCoordinates, ProcessMembership};
     use model_core::trace::{TraceAlertToken, TraceRecord};
-    use resource_profiling::model::external_cgroup::{ExternalCgroupBinding, HostBootId};
+    use resource_profiling::model::cgroup_v2_binding::{CgroupV2Binding, HostBootId};
 
     #[test]
     fn binding_failure_rolls_back_trace_processes_and_memberships_then_retry_commits() {
@@ -574,7 +575,7 @@ mod admission_tests {
             ProcessObservation::host(HostProcessCoordinates::new(42, 900)),
         );
         let member = ProcessMembership::root(id, process, SystemTime::now());
-        let mut binding = ExternalCgroupBinding::active(
+        let mut binding = CgroupV2Binding::active(
             id,
             ContainerRuntime::Unknown,
             NormalizedContainerId::from_lower_hex(&"ab".repeat(32)).unwrap(),
@@ -598,7 +599,7 @@ mod admission_tests {
         assert!(storage.get_trace(id).unwrap().is_none());
         assert!(storage.get_process_record(process).unwrap().is_none());
         assert!(storage.trace_memberships(id).unwrap().is_empty());
-        assert!(storage.get_external_cgroup_binding(id).unwrap().is_none());
+        assert!(storage.get_cgroup_v2_binding(id).unwrap().is_none());
         binding.runtime = ContainerRuntime::Docker;
         persist_admitted_trace(
             storage.as_mut(),
@@ -610,8 +611,8 @@ mod admission_tests {
         )
         .unwrap();
         assert!(storage.get_trace(id).unwrap().is_some());
-        assert!(storage.get_external_cgroup_binding(id).unwrap().is_some());
-        storage.discard_orphan_external_binding(id).unwrap();
-        assert!(storage.get_external_cgroup_binding(id).unwrap().is_some());
+        assert!(storage.get_cgroup_v2_binding(id).unwrap().is_some());
+        storage.discard_orphan_cgroup_v2_binding(id).unwrap();
+        assert!(storage.get_cgroup_v2_binding(id).unwrap().is_some());
     }
 }

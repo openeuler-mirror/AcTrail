@@ -28,7 +28,7 @@ AcTrail 以本地 daemon 为观测与治理中心，围绕稳定进程身份、t
 | 内核采集 | [eBPF 源码布局](code-layouts/crates/adapters/collectors/ebpf/bpf/code-layout.md)、[事件 ABI](components/ebpf-event-abi.md)、[事件传输](components/ebpf-event-transport.md)、[探针检测器](components/probe-detector.md) |
 | 明文与协议 | [TLS sync](components/tls-sync-runtime.md)、[流式解析器](components/streaming-parser.md)、[HTTP 内容解码](code-layouts/crates/core/semantic_action_runtime/src/llm_pipeline/transport/http1/code-layout.md)、[MCP stdio](components/mcp-stdio-observation.md) |
 | 语义投影 | [LLM Request](components/llm-request-projection.md)、[Live Tool Projector](components/live-tool-projector.md)、[LLM Trajectory 图](components/llm-trajectory-graph.md) |
-| 资源观测 | [资源设计](components/resource-profiling/design.md)、[代码布局](code-layouts/crates/core/resource_profiling/code-layout.md)、[配置说明](components/resource-profiling/configuration.md) |
+| 资源观测 | [资源设计](components/resource-profiling/design.md)、[样本存储](components/resource-profiling/storage.md)、[代码布局](code-layouts/crates/core/resource_profiling/code-layout.md)、[配置说明](components/resource-profiling/configuration.md) |
 | 插件与告警 | [插件运行时](components/plugin-runtime.md)、[告警代理](components/alert-proxy.md) |
 | 执行隔离 | [隔离运行时](components/execution-isolation.md)、[隔离源码布局](components/execution-isolation.md#源码职责与依赖) |
 | 查询与界面 | [Web Runtime](components/web-runtime.md)、[Web 前端](components/web-frontend/README.md) |

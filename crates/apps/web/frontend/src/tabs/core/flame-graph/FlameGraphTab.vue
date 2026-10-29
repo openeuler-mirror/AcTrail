@@ -198,6 +198,15 @@
             </div>
           </div>
           </section>
+
+          <ResourceTracks
+            ref="resourceTracks"
+            :trace-key="traceKey"
+            :timeline-window="timelineWindow"
+            :bounds="bounds"
+            :viewport="activeViewport"
+            :canvas-viewport="canvasViewport"
+          />
         </div>
       </div>
 
@@ -216,6 +225,7 @@
 
     <DetailPanel
       :detail="selectedDetail"
+      :supplemental-rows="selectedResourceRows"
       :trace-id="traceKey"
       :error="detailError"
       hide-when-empty
@@ -229,7 +239,7 @@
 import { computed, markRaw, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { Bot, ChevronDown, ChevronRight, CornerDownRight, Layers3, Minus, Plus, RotateCcw } from '@lucide/vue';
 
-import { readActionDetail } from '../../../api.js';
+import { readActionDetail, readResourceTimeline } from '../../../api.js';
 import { useModuleLocale } from '../../../locale';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import ToggleSwitch from '../../../components/ToggleSwitch.vue';
@@ -238,6 +248,8 @@ import { constrainTimeViewport } from '../time-navigation/model.js';
 import { useTimelineNavigation } from '../time-navigation/useTimelineNavigation.js';
 import { formatOffset } from '../waterfall/model';
 import FlameTrackCanvas from './FlameTrackCanvas.vue';
+import ResourceTracks from './resources/ResourceTracks.vue';
+import { resourceSummaryRows, timelineOriginMs } from './resources/model.js';
 import strings from './locale';
 
 const { t } = useModuleLocale(strings);
@@ -280,7 +292,9 @@ const collapsedLayers = ref(new Set());
 const collapsedAgentScopes = ref(new Set());
 const selectedId = ref(null);
 const selectedDetail = ref(null);
+const selectedResourceRows = ref(null);
 const detailError = ref('');
+const resourceTracks = ref(null);
 const navigationSurface = ref(null);
 const axisTrack = ref(null);
 let activeDetailLoad = null;
@@ -426,6 +440,7 @@ async function selectActivity(activity) {
   detailError.value = '';
   selectedId.value = activity.id;
   selectedDetail.value = flameActivityDetail(activity, t);
+  loadActivityResources(activity, token);
   if (activity.density) {
     return;
   }
@@ -441,10 +456,30 @@ async function selectActivity(activity) {
   }
 }
 
+/** Summarizes the trace's resources over the activity's span while the res area is open. */
+async function loadActivityResources(activity, token) {
+  selectedResourceRows.value = null;
+  const originMs = timelineOriginMs(props.timelineWindow);
+  if (!resourceTracks.value?.expanded || originMs == null || props.traceKey == null) {
+    return;
+  }
+  const fromMs = originMs + activity.startOffsetMs;
+  const toMs = fromMs + Math.max(activity.durMs ?? 0, 1);
+  try {
+    const timeline = await readResourceTimeline(props.traceKey, { fromMs, toMs, maxPoints: 1 });
+    if (activeDetailLoad === token && selectedId.value === activity.id) {
+      selectedResourceRows.value = resourceSummaryRows(timeline, t);
+    }
+  } catch {
+    // The detail panel stays usable without the resource summary.
+  }
+}
+
 function clearSelection() {
   activeDetailLoad = null;
   selectedId.value = null;
   selectedDetail.value = null;
+  selectedResourceRows.value = null;
   detailError.value = '';
 }
 

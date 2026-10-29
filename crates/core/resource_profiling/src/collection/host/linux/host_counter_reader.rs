@@ -9,6 +9,7 @@ pub(super) struct HostCounters {
     pub memory_available_bytes: u64,
     pub memory_free_bytes: u64,
     pub load_average: [f64; 3],
+    pub cpu_count: u32,
 }
 
 impl HostCounterReader {
@@ -35,6 +36,7 @@ impl HostCounterReader {
         let idle = ticks[3]
             .checked_add(ticks.get(4).copied().unwrap_or(0))
             .ok_or("/proc/stat: idle counter overflow")?;
+        let cpu_count = Self::cpu_count(&stat);
         let meminfo = fs::read_to_string("/proc/meminfo").map_err(|error| error.to_string())?;
         let loadavg = fs::read_to_string("/proc/loadavg").map_err(|error| error.to_string())?;
         let mut load = loadavg.split_whitespace();
@@ -56,7 +58,18 @@ impl HostCounterReader {
             memory_available_bytes: Self::memory(&meminfo, "MemAvailable:")?,
             memory_free_bytes: Self::memory(&meminfo, "MemFree:")?,
             load_average,
+            cpu_count,
         })
+    }
+
+    /// The per-CPU lines of /proc/stat, which list exactly the online CPUs.
+    pub fn cpu_count(stat: &str) -> u32 {
+        stat.lines()
+            .filter(|line| {
+                line.strip_prefix("cpu")
+                    .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+            })
+            .count() as u32
     }
 
     fn memory(meminfo: &str, key: &str) -> Result<u64, String> {

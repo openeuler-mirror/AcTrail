@@ -4,13 +4,13 @@ mod procfs;
 pub use cgroup::{CgroupCounterSource, CgroupResourceProfilingBackend, CgroupWorkloadSample};
 mod workload_resource_profiling_backend;
 pub use cgroup::{
-    CgroupProcessRssConfig, CgroupProfilingConfig, ExternalScopeConfig, ExternalScopePolicy,
-    ManagedScopeConfig,
+    CgroupProcessRssConfig, CgroupProfilingConfig, CgroupV2BindingConfig, CgroupV2BindingPolicy,
+    ManagedV2ScopeConfig,
 };
 pub use config::{WorkloadBackendMode, WorkloadProfilingConfig};
 pub use workload_resource_profiling_backend::WorkloadResourceProfilingBackend;
 
-pub use cgroup::{ExternalRecoveryRecord, ExternalScopePersistence};
+pub use cgroup::{CgroupV2BindingPersistence, CgroupV2BindingRecovery};
 pub use cgroup::{ManagedRecoveryRecord, ManagedScopePersistence};
 pub use procfs::{
     ProcfsProcessLiveness, ProcfsWorkloadProfilingConfig, ProcfsWorkloadResourceProfilingBackend,
@@ -24,12 +24,12 @@ mod noop;
 mod sampling;
 pub use assembly::{WorkloadBackend, WorkloadBackendFactory};
 pub use cgroup::{
-    CgroupPersistence, ExternalFinalizationDraft, ResourceFinalizationDraft,
+    CgroupPersistence, CgroupV2BindingFinalization, ResourceFinalizationDraft,
     ResourceFinalizationPoll,
 };
 pub use sampling::{SamplingSelection, VerifiedProcessTarget, WorkloadSamplingBackend};
 
 pub use cgroup::{
-    CgroupBackendMode, CgroupV1Backend, CgroupV1Config, CgroupV1Persistence,
-    CgroupV1RecoveryRecord, CgroupV2Backend, CgroupV2Config, CgroupV2Persistence,
+    CgroupBackendMode, CgroupScopeSampler, CgroupV1BindingPersistence, CgroupV1BindingRecovery,
+    CgroupV1BindingSampler, CgroupV1Config, CgroupV2Config, ManagedV1ScopeConfig,
 };

@@ -350,6 +350,17 @@
   --trace-flame-protocol-bar: var(--ui-chart-7);
   --trace-flame-protocol-bar-text: #ffffff;
   --trace-flame-error-hatch: var(--ui-danger);
+  --trace-flame-res-accent: var(--ui-chart-7);
+  --trace-flame-res-layer-bg: color-mix(in srgb, var(--ui-chart-7) 7%, var(--ui-surface-strong));
+  --trace-flame-res-cpu: var(--ui-chart-8);
+  --trace-flame-res-cpu-max: color-mix(in srgb, var(--ui-chart-8) 65%, var(--ui-text));
+  --trace-flame-res-memory: var(--ui-chart-5);
+  --trace-flame-res-memory-anon: color-mix(in srgb, var(--ui-chart-5) 60%, var(--ui-text));
+  --trace-flame-res-io-read: var(--ui-chart-3);
+  --trace-flame-res-io-write: var(--ui-chart-4);
+  --trace-flame-res-pids: var(--ui-chart-7);
+  --trace-flame-res-host: var(--ui-chart-7);
+  --trace-flame-res-shared: var(--ui-warning);
   --trace-flame-layer-shadow: 0 8px 24px color-mix(in srgb, var(--ui-text) 6%, transparent);
 }
 

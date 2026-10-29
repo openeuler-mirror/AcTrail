@@ -12,9 +12,17 @@ from typing import Callable
 
 from tests.v2.common.core import TestCase, TestCaseInputs, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
+from tests.v2.common.resource_storage_assertion import (
+    assert_restart_storage, assert_workload_columns, profile_snapshot,
+)
 from tests.v2.common.patch_builder import PatchBuilder
+from tests.v2.regression.resource_metrics_cgroup.cgroup_v1 import (
+    ResourceMetricsCgroupV1Case,
+)
+from tests.v2.regression.resource_storage_retention.case import ResourceStorageRetentionCase
 
 from .constants import CASE_CONSTANTS
+from .resource_api import assert_resource_api
 
 
 PATCH_CONFIG = Path(__file__).with_name("patch_config.toml")
@@ -33,31 +41,48 @@ class ResourceMetricsCase(TestCase):
         self._pid_file = inputs.work_dir / "run/actraild.pid"
         self._database = inputs.work_dir / "data/actrail.sqlite"
         self._cgroup = Path("/sys/fs/cgroup/system.slice") / self._service
+        self._v1: ResourceMetricsCgroupV1Case | None = None
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        del test_context
+        # cgroup v1 hosts run the managed v1 scenarios instead.
+        if not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
+            self._v1 = ResourceMetricsCgroupV1Case(self._inputs)
+            return self._v1.run(test_context)
         problem = self._prerequisite_problem()
         if problem is not None:
             return TestResult(TestStatus.SKIPPED, problem)
+        results: dict[str, TestResult] = {}
+        current = "setup"
         try:
             self._prepare_config()
             self._start_daemon()
             self._assert_hierarchy()
-            exact = self._run_exact_case()
-            restarted = self._run_restart_case()
-            timed_out = self._run_timeout_case()
-            lost = self._run_lost_scope_case()
+            for current, check in (
+                ("exact", self._run_exact_case),
+                ("restart", self._run_restart_case),
+                ("timeout", self._run_timeout_case),
+                ("lost", self._run_lost_scope_case),
+                ("column_storage", lambda: assert_workload_columns(
+                    self._config.parent / "actrail-resources.sqlite", 1, self._resource_samples(1),
+                )),
+                ("resource_api", lambda: assert_resource_api(
+                    self._inputs, self._config, {trace: self._resource_samples(trace) for trace in (1, 2)},
+                )),
+            ):
+                test_context.report_progress(current, f"checking managed cgroup-v2 {current}")
+                results[current] = TestResult(TestStatus.PASSED, check())
             return TestResult(
-                TestStatus.PASSED,
-                "cgroup-v2 resource metrics passed: "
-                f"exact={exact}, restart={restarted}, timeout={timed_out}, lost={lost}",
+                TestStatus.COMPOSITE, "cgroup-v2 resource metrics", results,
             )
         except Exception as error:
-            return TestResult(TestStatus.FAILED, str(error))
+            results[current] = TestResult(TestStatus.FAILED, str(error))
+            return TestResult(TestStatus.COMPOSITE, "cgroup-v2 resource metrics", results)
         finally:
             self._stop_units()
 
     def cleanup(self, test_context: TestingContextSingleton) -> TestResult | None:
+        if self._v1 is not None:
+            return self._v1.cleanup(test_context)
         del test_context
         self._stop_units()
         return None
@@ -78,6 +103,7 @@ class ResourceMetricsCase(TestCase):
             self._binary("actraild"),
             self._binary("actrailctl"),
             self._binary("actrailviewer"),
+            self._binary("actrailweb"),
         ]
         missing.extend(str(path) for path in binaries if not path.is_file())
         if missing:
@@ -204,6 +230,9 @@ class ResourceMetricsCase(TestCase):
             "initial sample was not stored",
         )
         before = self._event_count(2)
+        database = self._config.parent / "actrail-resources.sqlite"
+        before_profile = profile_snapshot(database, 2)
+        before_samples = self._resource_samples(2)
         # Simulate a crash after trace-1's atomic final-event/scope commit but
         # before its separate trace terminal-state write.
         with sqlite3.connect(self._database) as connection:
@@ -233,10 +262,12 @@ class ResourceMetricsCase(TestCase):
         )
         process.communicate(timeout=CASE_CONSTANTS.run_restart_case_timeout)
         self._wait_for_trace(2, "finalized")
-        payloads = self._resource_payloads(2)
+        samples = self._resource_samples(2)
+        payloads = [sample["payload"] for sample in samples]
         self._assert_launch_membership("restart")
         self._assert_final(payloads, coverage="exact")
-        return f"events={len(payloads)},restarted_pid={self._service_pid()}"
+        storage = assert_restart_storage(database, 2, before_profile, before_samples, samples)
+        return f"events={len(payloads)},restarted_pid={self._service_pid()}; {storage}"
 
     def _run_timeout_case(self) -> str:
         self._launch("timeout", child_seconds=CASE_CONSTANTS.run_timeout_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_timeout_case_parent_seconds)
@@ -399,12 +430,15 @@ class ResourceMetricsCase(TestCase):
             return 0
         with sqlite3.connect(database) as connection:
             row = connection.execute(
-                "SELECT COUNT(*) FROM resource_samples WHERE trace_id = ? AND kind = 'workload'",
+                "SELECT COUNT(*) FROM resource_workload_samples WHERE trace_id = ?",
                 (trace_id,),
             ).fetchone()
         return int(row[0]) if row is not None else 0
 
     def _resource_payloads(self, trace_id: int) -> list[dict[str, object]]:
+        return [sample["payload"] for sample in self._resource_samples(trace_id)]
+
+    def _resource_samples(self, trace_id: int) -> list[dict[str, object]]:
         result = self._command(
             (
                 str(self._binary("actrailviewer")),
@@ -414,7 +448,7 @@ class ResourceMetricsCase(TestCase):
                 "--limit", str(CASE_CONSTANTS.limit),
             )
         )
-        return [sample["payload"] for sample in json.loads(result.stdout)]
+        return json.loads(result.stdout)
 
     def _doctor_ok(self) -> bool:
         result = subprocess.run(
@@ -491,3 +525,16 @@ class ResourceMetricsCase(TestCase):
 class ResourceMetricsCgroupCase(ResourceMetricsCase):
     def __init__(self, inputs: TestCaseInputs) -> None:
         super().__init__(inputs, patch_configs=(PATCH_CONFIG,))
+
+    def run(self, test_context: TestingContextSingleton) -> TestResult:
+        result = super().run(test_context)
+        if result.effective_status() is not TestStatus.PASSED:
+            return result
+        inputs = TestCaseInputs(
+            repo=self._inputs.repo,
+            bin_dir=self._inputs.bin_dir,
+            work_dir=self._inputs.work_dir / "retention",
+        )
+        test_context.report_progress("retention", "checking resource backlog cleanup in an isolated database")
+        result.details["retention"] = ResourceStorageRetentionCase(inputs).run(test_context)
+        return result
