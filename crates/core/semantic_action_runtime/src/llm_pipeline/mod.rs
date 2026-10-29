@@ -14,6 +14,7 @@ mod projection;
 mod provider;
 mod stream;
 mod transport;
+mod utils;
 mod websocket;
 mod websocket_source;
 

@@ -15,8 +15,13 @@ use serde_json::Value;
 use crate::llm_pipeline::transport::HttpRequestParts;
 
 use crate::llm_pipeline::assembly::router::PayloadStreamGroupKey;
+use crate::llm_pipeline::projection::compact::LlmRequestObservation;
+pub(crate) use crate::llm_pipeline::provider::ProviderContextReference;
 use crate::llm_pipeline::provider::codec::LlmCodecRegistry;
-use crate::llm_pipeline::provider::{LlmRequestFacts, LlmRequestParserInput, parse_json_request};
+use crate::llm_pipeline::provider::{
+    LlmRequestFacts, LlmRequestParserInput, ParsedRequestContext, RequestContextLimits,
+    parse_json_request,
+};
 
 use super::super::retention::semantic_payload_draft;
 use super::super::retention::{BackgroundRequestKind, TrajectoryHistoryProjection};
@@ -38,6 +43,7 @@ use tool_results::project_tool_results;
 pub(crate) struct ProjectedLlmRequestAction {
     pub(crate) action: SemanticAction,
     pub(crate) content: Option<LlmRequestContentWrite>,
+    pub(crate) observation: Option<LlmRequestObservation>,
     pub(crate) trajectory_history: Option<ProjectedLlmRequestHistory>,
     pub(crate) tool_results: Vec<ProjectedLlmToolResult>,
     pub(crate) payload_segments: Vec<PayloadSegment>,
@@ -51,13 +57,6 @@ pub(crate) struct ProjectedLlmRequestHistory {
     pub(crate) history: TrajectoryHistoryProjection,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ProviderContextReference {
-    NotProvider,
-    Root,
-    PreviousResponse(String),
-}
-
 pub(super) fn project_stream_llm_request_action(
     config: &SemanticRetentionConfig,
     codecs: &LlmCodecRegistry,
@@ -68,7 +67,7 @@ pub(super) fn project_stream_llm_request_action(
     segments: &[&PayloadSegment],
 ) -> Option<ProjectedLlmRequestAction> {
     let completeness = llm_stream_completeness(http.complete, segments);
-    let body = if completeness == SemanticActionCompleteness::CaptureLimited {
+    let mut body = if completeness == SemanticActionCompleteness::CaptureLimited {
         CaptureLimitedHttpRequestClassifier::classify(&http)
     } else {
         parse_llm_request_body(&http, codecs, config)
@@ -103,24 +102,34 @@ pub(super) fn project_stream_llm_request_action(
         } else {
             vec![semantic_payload_draft(first, raw_bytes)]
         };
-    Some(ProjectedLlmRequestAction {
-        trajectory_history: content_projection.trajectory_history.map(|history| {
-            ProjectedLlmRequestHistory {
+    let trajectory_history =
+        content_projection
+            .trajectory_history
+            .map(|history| ProjectedLlmRequestHistory {
                 action_id: action_id.clone(),
                 classifier_id: body.classifier_id.clone(),
                 provider_context: body
-                    .json
-                    .as_ref()
-                    .map(|value| {
-                        provider_context_reference(
-                            value,
-                            config.l0_llm_call.trajectory.max_structural_bytes_per_atom as usize,
-                        )
-                    })
+                    .context
+                    .as_mut()
+                    .map(ParsedRequestContext::take_provider_reference)
                     .unwrap_or(ProviderContextReference::NotProvider),
                 history,
-            }
-        }),
+            });
+    let observation = if config.l0_llm_call.context_compact.enabled {
+        body.json
+            .take()
+            .zip(body.context.take())
+            .map(|(json, context)| LlmRequestObservation {
+                action_id: action_id.clone(),
+                history: context.history_source(json),
+                context,
+                history_source_bytes: body.history_source_bytes,
+            })
+    } else {
+        None
+    };
+    Some(ProjectedLlmRequestAction {
+        trajectory_history,
         action: SemanticAction {
             action_id,
             trace_id: first.trace_id,
@@ -135,6 +144,7 @@ pub(super) fn project_stream_llm_request_action(
             evidence,
         },
         content: content_projection.content,
+        observation,
         tool_results,
         payload_segments,
     })
@@ -367,11 +377,13 @@ fn plaintext_transport_scheme(source_boundary: PayloadSourceBoundary) -> &'stati
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LlmRequestBody {
     payload_bytes: usize,
+    history_source_bytes: usize,
     json_valid: bool,
     classifier_id: String,
     protocol_id: Option<String>,
     model: Option<String>,
     json: Option<Value>,
+    context: Option<ParsedRequestContext>,
     content_available: bool,
     background_kind: Option<&'static str>,
 }
@@ -383,22 +395,33 @@ fn parse_llm_request_body(
 ) -> Option<LlmRequestBody> {
     LlmRequestBodyParser {
         codecs,
+        context_limits: (config.l0_llm_call.context_compact.enabled
+            || config.llm_trajectory_enabled())
+        .then(|| RequestContextLimits {
+            observe_compaction: config.l0_llm_call.context_compact.enabled,
+            max_metadata_bytes: config.l0_llm_call.context_compact.max_artifact_bytes as usize,
+            max_reference_bytes: config.l0_llm_call.trajectory.max_structural_bytes_per_atom
+                as usize,
+        }),
         retain_json: config.l0_llm_call.request_content != LlmRequestContentRetention::None
             || config.l0_llm_call.tool_results_enabled
             || config.llm_request_body_export_enabled()
-            || config.llm_trajectory_enabled(),
+            || config.llm_trajectory_enabled()
+            || config.l0_llm_call.context_compact.enabled,
     }
     .parse(http)
 }
 
 struct LlmRequestBodyParser<'a> {
     codecs: &'a LlmCodecRegistry,
+    context_limits: Option<RequestContextLimits>,
     retain_json: bool,
 }
 
 struct DecodedRequestJson {
     facts: LlmRequestFacts,
     json: Option<Value>,
+    history_source_bytes: usize,
     background_kind: Option<&'static str>,
 }
 
@@ -407,8 +430,9 @@ impl LlmRequestBodyParser<'_> {
         if self.retain_json {
             let json: Value = serde_json::from_slice(bytes)?;
             Ok(DecodedRequestJson {
-                facts: LlmRequestFacts::from_json(&json),
+                facts: LlmRequestFacts::from_json(&json, self.context_limits),
                 json: Some(json),
+                history_source_bytes: bytes.len(),
                 background_kind: None,
             })
         } else {
@@ -419,6 +443,7 @@ impl LlmRequestBodyParser<'_> {
                 ),
                 facts: selected.facts,
                 json: None,
+                history_source_bytes: bytes.len(),
             })
         }
     }
@@ -431,6 +456,7 @@ impl LlmRequestBodyParser<'_> {
                 facts: &value.facts,
             };
             let parsed = parse_json_request(&input);
+            let context = value.facts.context;
             let classifier_id = decoded.classifier_id.or_else(|| {
                 parsed
                     .as_ref()
@@ -438,6 +464,7 @@ impl LlmRequestBodyParser<'_> {
             })?;
             return Some(LlmRequestBody {
                 payload_bytes: body.len(),
+                history_source_bytes: value.history_source_bytes,
                 json_valid: true,
                 classifier_id,
                 protocol_id: decoded.protocol_id.or_else(|| {
@@ -448,6 +475,7 @@ impl LlmRequestBodyParser<'_> {
                 model: valid_model(decoded.model)
                     .or_else(|| parsed.and_then(|parsed| valid_model(parsed.model))),
                 json: value.json,
+                context,
                 background_kind: value.background_kind,
                 content_available: true,
             });
@@ -457,6 +485,7 @@ impl LlmRequestBodyParser<'_> {
                 facts: &value.facts,
             };
             let parsed = parse_json_request(&input);
+            let context = value.facts.context;
             let classifier_id =
                 parsed
                     .as_ref()
@@ -468,6 +497,7 @@ impl LlmRequestBodyParser<'_> {
                     })?;
             return Some(LlmRequestBody {
                 payload_bytes: body.len(),
+                history_source_bytes: value.history_source_bytes,
                 json_valid: true,
                 classifier_id: classifier_id.to_string(),
                 protocol_id: parsed
@@ -475,6 +505,7 @@ impl LlmRequestBodyParser<'_> {
                     .and_then(|parsed| parsed.protocol_id.map(ToString::to_string)),
                 model: valid_model(parsed.and_then(|parsed| parsed.model)),
                 json: value.json,
+                context,
                 background_kind: value.background_kind,
                 content_available: true,
             });
@@ -484,11 +515,13 @@ impl LlmRequestBodyParser<'_> {
         if model.is_some() && lossy_text_has_llm_shape(&text) {
             Some(LlmRequestBody {
                 payload_bytes: body.len(),
+                history_source_bytes: 0,
                 json_valid: false,
                 classifier_id: "generic-json-request".to_string(),
                 protocol_id: None,
                 model,
                 json: None,
+                context: None,
                 background_kind: None,
                 content_available: true,
             })
@@ -508,11 +541,13 @@ impl CaptureLimitedHttpRequestClassifier {
         let classifier_id = Self::route(http)?;
         Some(LlmRequestBody {
             payload_bytes: http.declared_body_len.unwrap_or(http.body.len()),
+            history_source_bytes: 0,
             json_valid: false,
             classifier_id: classifier_id.to_string(),
             protocol_id: None,
             model: None,
             json: None,
+            context: None,
             background_kind: None,
             content_available: false,
         })
@@ -552,19 +587,6 @@ impl CaptureLimitedHttpRequestClassifier {
                     media_type.trim().eq_ignore_ascii_case("application/json")
                 })
         })
-    }
-}
-
-fn provider_context_reference(value: &Value, maximum_bytes: usize) -> ProviderContextReference {
-    match value.get("previous_response_id") {
-        None => ProviderContextReference::NotProvider,
-        Some(Value::Null) => ProviderContextReference::Root,
-        Some(Value::String(response_id))
-            if !response_id.is_empty() && response_id.len() <= maximum_bytes =>
-        {
-            ProviderContextReference::PreviousResponse(response_id.clone())
-        }
-        Some(_) => ProviderContextReference::Root,
     }
 }
 

@@ -4,12 +4,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use model_core::trace::TraceRecord;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkRole,
-    SemanticActionStatus,
+    SemanticAction, SemanticActionLink, SemanticActionLinkRole, SemanticActionStatus,
 };
 use serde_json::Value;
 
 use crate::serialize::{int_attr, quoted, string_attr};
+use crate::span_kind::SpanKindPolicy;
 
 const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = "process.parent.identity_state";
 const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
@@ -132,7 +132,7 @@ fn render_span(trace_id: &str, action: &SemanticAction, links: &[SemanticActionL
         quoted(&otel_span_id(&action.action_id)),
         parent_span_id,
         quoted(&action.title),
-        span_kind(action.kind),
+        SpanKindPolicy::classify(action.kind).as_str_name(),
         unix_nanos(action.start_time),
         unix_nanos(action.end_time.unwrap_or(action.start_time)),
         attrs.join(","),
@@ -140,39 +140,6 @@ fn render_span(trace_id: &str, action: &SemanticAction, links: &[SemanticActionL
         span_links.join(","),
         status_code(action.status)
     )
-}
-
-fn span_kind(kind: SemanticActionKind) -> &'static str {
-    match kind {
-        SemanticActionKind::HttpMessage
-        | SemanticActionKind::WebSocketMessage
-        | SemanticActionKind::LlmCall
-        | SemanticActionKind::LlmRequest
-        | SemanticActionKind::LlmResponse => "SPAN_KIND_CLIENT",
-        SemanticActionKind::ProcessExec
-        | SemanticActionKind::ProcessExit
-        | SemanticActionKind::AgentIdentity
-        | SemanticActionKind::AgentExit
-        | SemanticActionKind::CommandInvocation
-        | SemanticActionKind::ProcessForkAttempt
-        | SemanticActionKind::AgentInvocation
-        | SemanticActionKind::LlmToolCall
-        | SemanticActionKind::LlmToolResult
-        | SemanticActionKind::FileRead
-        | SemanticActionKind::FileWrite
-        | SemanticActionKind::FileModify
-        | SemanticActionKind::FileTtyIo
-        | SemanticActionKind::FileBulkRead
-        | SemanticActionKind::FsEnumerate
-        | SemanticActionKind::McpToolCall
-        | SemanticActionKind::McpRequest
-        | SemanticActionKind::McpResponse
-        | SemanticActionKind::McpStdin
-        | SemanticActionKind::McpStdout
-        | SemanticActionKind::SseStream
-        | SemanticActionKind::SseEvent
-        | SemanticActionKind::EnforcementDecision => "SPAN_KIND_INTERNAL",
-    }
 }
 
 pub(crate) fn parent_link<'a>(
@@ -233,6 +200,7 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::FileWriteContainsFileEvent
             | SemanticActionLinkRole::AgentInvocationExec
             | SemanticActionLinkRole::AgentInvocationChildLlmRequest
+            | SemanticActionLinkRole::AgentContextCompactImplementationLlmCall
             | SemanticActionLinkRole::LlmRequestTrajectoryParent
             | SemanticActionLinkRole::LlmRequestTrajectoryFork
             | SemanticActionLinkRole::LlmCallRequest
@@ -278,6 +246,7 @@ enum ParentRolePriority {
     HttpRequestHttpResponse,
     LlmCallHttpResponse,
     LlmRequestToolResult,
+    ContextCompactImplementationLlmCall,
 }
 
 fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
@@ -343,6 +312,9 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         }
         SemanticActionLinkRole::LlmCallHttpResponse => ParentRolePriority::LlmCallHttpResponse,
         SemanticActionLinkRole::LlmRequestToolResult => ParentRolePriority::LlmRequestToolResult,
+        SemanticActionLinkRole::AgentContextCompactImplementationLlmCall => {
+            ParentRolePriority::ContextCompactImplementationLlmCall
+        }
     }
 }
 
@@ -409,7 +381,8 @@ mod tests {
     use model_core::ids::TraceId;
     use model_core::process::ProcessIdentity;
     use semantic_action::{
-        SemanticActionCompleteness, SemanticActionLinkOrigin, SemanticActionStatus,
+        SemanticActionCompleteness, SemanticActionKind, SemanticActionLinkOrigin,
+        SemanticActionStatus,
     };
 
     use super::*;

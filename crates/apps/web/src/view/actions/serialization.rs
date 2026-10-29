@@ -18,14 +18,22 @@ const HEAVY_ATTRIBUTE_SUFFIXES: &[&str] = &[
 ];
 
 pub(in crate::view) fn action_json(action: &SemanticAction) -> String {
-    render_action_json(action, false)
+    render_action_json(action, false, None)
 }
 
 pub(in crate::view) fn action_json_lite(action: &SemanticAction) -> String {
-    render_action_json(action, true)
+    render_action_json(action, true, None)
 }
 
-fn render_action_json(action: &SemanticAction, lite: bool) -> String {
+pub(super) fn render_action_json(
+    action: &SemanticAction,
+    lite: bool,
+    compact: Option<(&str, &str)>,
+) -> String {
+    let display = compact.map(|(action_id, implementation_id)| format!(
+        ",\"display\":{{\"context_compaction\":{{\"action_id\":{},\"implementation_llm_call_action_id\":{}}}}}",
+        json::string(action_id), json::string(implementation_id),
+    )).unwrap_or_default();
     let attributes = if lite {
         action
             .attributes
@@ -42,7 +50,7 @@ fn render_action_json(action: &SemanticAction, lite: bool) -> String {
         evidence_json(&action.evidence)
     };
     format!(
-        "{{\"id\":{},\"kind\":{},\"title\":{},\"start_time\":{},\"start_time_unix_nanos\":{},\"end_time\":{},\"end_time_unix_nanos\":{},\"duration\":{},\"process\":{},\"status\":{},\"completeness\":{},\"attributes\":{},\"evidence\":{}}}",
+        "{{\"id\":{},\"kind\":{},\"title\":{},\"start_time\":{},\"start_time_unix_nanos\":{},\"end_time\":{},\"end_time_unix_nanos\":{},\"duration\":{},\"process\":{},\"status\":{},\"completeness\":{},\"attributes\":{},\"evidence\":{}{}}}",
         json::string(&action.action_id),
         json::string(action.kind.as_str()),
         json::string(&action.title),
@@ -62,7 +70,8 @@ fn render_action_json(action: &SemanticAction, lite: bool) -> String {
         json::string(action.status.as_str()),
         json::string(action.completeness.as_str()),
         json::map(&attributes),
-        evidence
+        evidence,
+        display
     )
 }
 

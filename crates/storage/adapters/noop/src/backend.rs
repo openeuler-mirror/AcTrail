@@ -519,6 +519,14 @@ impl StorageBackend for NoOpStorage {
         Ok(Vec::new())
     }
 
+    fn semantic_actions_by_ids_lite(
+        &self,
+        _trace_id: TraceId,
+        _action_ids: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError> {
+        Ok(Vec::new())
+    }
+
     fn semantic_action_summary(
         &self,
         _trace_id: TraceId,
@@ -579,6 +587,7 @@ impl StorageBackend for NoOpStorage {
         _trace_id: TraceId,
         _parent_roles: &[&str],
         _root_roles: &[&str],
+        _excluded_fallback_kinds: &[&str],
         _page: SemanticActionChildPageQuery,
     ) -> Result<SemanticActionDisplayRootChildPage, StorageError> {
         Ok(SemanticActionDisplayRootChildPage {
@@ -595,10 +604,20 @@ impl StorageBackend for NoOpStorage {
         Ok(0)
     }
 
+    fn semantic_action_display_root_offset(
+        &self,
+        _trace_id: TraceId,
+        _display_parent_roles: &[&str],
+        _action_id: &str,
+    ) -> Result<Option<usize>, StorageError> {
+        Ok(None)
+    }
+
     fn semantic_action_display_path_to_kind(
         &self,
         _trace_id: TraceId,
         _parent_roles: &[&str],
+        _selected_parent_roles: &[&str],
         _target: &str,
         _after: Option<&str>,
     ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError> {

@@ -326,6 +326,13 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         trace_id: TraceId,
         kinds: &[&str],
     ) -> Result<Vec<SemanticAction>, StorageError>;
+    /// Read requested actions with their attributes and derived relationships,
+    /// omitting evidence as with matching_kinds_lite.
+    fn semantic_actions_by_ids_lite(
+        &self,
+        trace_id: TraceId,
+        action_ids: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError>;
     fn semantic_action_summary(
         &self,
         trace_id: TraceId,
@@ -359,11 +366,14 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
     ///
     /// This is a storage-level display query; web-only legacy LLM normalization and
     /// global cycle removal remain owned by the full projection path.
+    /// `excluded_fallback_kinds` are positioned by the caller's projection and
+    /// are omitted from command fallback child counts.
     fn semantic_action_display_root_children_page(
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
         root_link_roles: &[&str],
+        excluded_fallback_kinds: &[&str],
         page: SemanticActionChildPageQuery,
     ) -> Result<SemanticActionDisplayRootChildPage, StorageError>;
     fn semantic_action_display_root_child_count(
@@ -371,13 +381,23 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         trace_id: TraceId,
         display_parent_roles: &[&str],
     ) -> Result<usize, StorageError>;
+    /// Returns the position of an eligible root using the root page's ordering.
+    fn semantic_action_display_root_offset(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<usize>, StorageError>;
     /// Locates one action and its display ancestors without materializing the
     /// complete semantic-action graph. `after_action_id` selects the next
     /// matching action in chronological display order.
+    /// `selected_parent_roles` controls ancestor selection; full display roles
+    /// still determine sibling offsets. Root offsets use the root-page predicate.
     fn semantic_action_display_path_to_kind(
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
         target_kind: &str,
         after_action_id: Option<&str>,
     ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError>;

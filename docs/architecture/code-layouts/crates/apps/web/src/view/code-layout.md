@@ -8,16 +8,20 @@
 ├── [x] events.rs # 汇总事件数量并生成事件列表。
 │   └── [x] struct EventCounts # 汇总按事件类别统计的计数。
 ├── [x] actions.rs # 读取动作及关联边并构造动作详情。
-├── [x] actions/ # 将动作内容与 LLM、工具显示数据分开投影。
-│   ├── [x] serialization.rs # 将语义动作序列化为界面记录。
+├── [x] actions/ # 将动作树、动作内容与 LLM、工具及上下文压缩显示数据分开投影。
+│   ├── [x] serialization.rs # 将语义动作及上下文压缩显示关联序列化为界面记录。
+│   ├── [x] tree.rs # 构造动作树分页与模型调用导航。
+│   ├── [x] context_compact.rs # 读取并验证上下文压缩的显示关联。
+│   │   └── [x] struct ContextCompactDisplay # 组织压缩动作与实现调用的显示信息。
 │   ├── [x] llm_call_display.rs # 构造模型调用的展示字段。
 │   └── [x] llm_tool_display.rs # 构造工具调用与返回的展示字段。
 ├── [x] action_content.rs # 按内容节点与分页请求读取动作正文。
 ├── [x] action_tree_roles.rs # 将动作关系角色转换为动作树连接含义。
 ├── [x] payloads.rs # 查询负载段元数据和按需读取的正文。
 ├── [x] commands.rs # 将命令执行动作投影为命令详情和关联记录。
-├── [x] llm_trajectory.rs # 组合模型请求、工具调用和关系边形成交互轨迹。
-├── [x] timeline.rs # 查询给定窗口内的动作、上下文与关联关系。
+├── [x] llm_trajectory.rs # 组合模型请求、工具调用和关系边形成交互轨迹，展示上下文压缩关系。
+├── [x] llm_trajectory/ # 投影上下文压缩的轨迹关联。
+├── [x] timeline.rs # 查询给定窗口内的动作、上下文与关联关系，附加上下文压缩显示关联。
 ├── [x] topology.rs # 构造进程与动作的时间线拓扑。
 │   └── [x] struct TimelineRow # 保存时间线展示行的身份和时间信息。
 ├── [x] agent_idle.rs # 根据活动区间计算 agent 空闲区间及分页结果。

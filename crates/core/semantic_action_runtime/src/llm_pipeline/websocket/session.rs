@@ -1,6 +1,9 @@
 //! Responses protocol lanes bind creates in the server's declared serial order.
+use crate::llm_pipeline::projection::compact::CompletedResponse;
 use crate::llm_pipeline::projection::projector::{ParsedMessageContext, ParsedProviderStream};
-use crate::llm_pipeline::projection::{ProjectionBatch, llm_call_from_request_response};
+use crate::llm_pipeline::projection::{
+    ProjectedResponseBinding, ProjectionBatch, llm_call_from_request_response,
+};
 use crate::llm_pipeline::stream::finalizer::{ResponseFinalizer, StreamFinalizationReason};
 use crate::llm_pipeline::transport::websocket::{WebSocketAbortReason, WebSocketMessageHead};
 use config_core::daemon::SemanticRetentionConfig;
@@ -15,7 +18,7 @@ pub(super) struct Session {
     pub(super) lanes: BTreeMap<String, Lane>,
     pub(super) blocked: bool,
     pub(super) request_count: usize,
-    pub(super) trajectory_bindings: Vec<(SemanticAction, String, std::time::SystemTime, bool)>,
+    pub(super) response_bindings: Vec<ProjectedResponseBinding>,
 }
 #[derive(Default)]
 pub(super) struct Lane {
@@ -39,17 +42,29 @@ impl Session {
         for lane in self.lanes.values_mut() {
             if let Some(response) = lane.active.as_mut() {
                 if response.dirty {
-                    let snapshot = response.snapshot(config, None);
+                    let mut snapshot = response.snapshot(config, None);
                     if let Some(request) = &response.request {
-                        self.trajectory_bindings.push((
-                            request.clone(),
-                            response.provider_id.clone(),
-                            response.context.last_at,
-                            snapshot
+                        self.response_bindings.push(ProjectedResponseBinding {
+                            request: request.clone(),
+                            completion: config
+                                .l0_llm_call
+                                .context_compact
+                                .enabled
+                                .then(|| {
+                                    let observation = snapshot.response_observations.pop();
+                                    snapshot.actions.first().and_then(|action| {
+                                        CompletedResponse::from_terminal_action(action, observation)
+                                    })
+                                })
+                                .flatten(),
+                            provider_response_id: (!response.provider_id.is_empty())
+                                .then(|| response.provider_id.clone()),
+                            observed_at: response.context.last_at,
+                            failed: snapshot
                                 .actions
                                 .first()
                                 .is_some_and(|action| action.status == SemanticActionStatus::Error),
-                        ));
+                        });
                     }
                     output.extend(snapshot);
                     response.dirty = false;
@@ -72,7 +87,7 @@ impl Session {
     ) -> ProjectionBatch {
         let mut output = ProjectionBatch::default();
         for lane in self.lanes.values_mut() {
-            output.extend(lane.abort(config, reason, &mut self.trajectory_bindings));
+            output.extend(lane.abort(config, reason, &mut self.response_bindings));
         }
         self.lanes.clear();
         self.request_count = 0;
@@ -94,7 +109,7 @@ impl Session {
                     .as_ref()
                     .is_some_and(|response| response.has_create),
             );
-        let output = lane.abort(config, reason, &mut self.trajectory_bindings);
+        let output = lane.abort(config, reason, &mut self.response_bindings);
         self.request_count = self.request_count.saturating_sub(count);
         output
     }
@@ -169,19 +184,32 @@ impl Lane {
         &mut self,
         config: &SemanticRetentionConfig,
         reason: WebSocketAbortReason,
-        bindings: &mut Vec<(SemanticAction, String, std::time::SystemTime, bool)>,
+        bindings: &mut Vec<ProjectedResponseBinding>,
     ) -> ProjectionBatch {
         let mut output = ProjectionBatch::default();
         if let Some(mut response) = self.active.take() {
-            output.extend(response.snapshot(config, Some(reason)));
+            let mut snapshot = response.snapshot(config, Some(reason));
             if let Some(request) = response.request {
-                bindings.push((
+                bindings.push(ProjectedResponseBinding {
                     request,
-                    response.provider_id,
-                    response.context.last_at,
-                    true,
-                ));
+                    completion: config
+                        .l0_llm_call
+                        .context_compact
+                        .enabled
+                        .then(|| {
+                            let observation = snapshot.response_observations.pop();
+                            snapshot.actions.first().and_then(|action| {
+                                CompletedResponse::from_terminal_action(action, observation)
+                            })
+                        })
+                        .flatten(),
+                    provider_response_id: (!response.provider_id.is_empty())
+                        .then_some(response.provider_id),
+                    observed_at: response.context.last_at,
+                    failed: true,
+                });
             }
+            output.extend(snapshot);
         }
         for request in self.pending.drain(..).flatten() {
             if Session::reason(reason) != StreamFinalizationReason::TraceClosed {

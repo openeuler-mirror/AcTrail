@@ -89,6 +89,7 @@ sudo -E python3.11 tests/v2/regression/test_all.py --case probe_codex_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_dcode_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_pi_llm
 sudo -E python3.11 tests/v2/regression/test_all.py --case probe_qodercli_llm
+sudo -E python3.11 tests/v2/regression/test_all.py --case context_compact
 sudo -E python3.11 tests/v2/regression/test_all.py --case command_policy_xiaoo
 sudo -E VIRTUAL_CONTAINER_E2E_SCOPE=contracts \
   python3.11 tests/v2/regression/test_all.py --case virtual_container
@@ -193,6 +194,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `probe_pi_llm` | [`probe_pi_llm/README.zh.md`](probe_pi_llm/README.zh.md) |
 | `probe_qodercli_llm` | [`probe_qodercli_llm/README.zh.md`](probe_qodercli_llm/README.zh.md) |
 | `probe_xiaoo_llm` | [`probe_xiaoo_llm/README.zh.md`](probe_xiaoo_llm/README.zh.md) |
+| `context_compact` | [`context_compact/README.zh.md`](context_compact/README.zh.md) |
 | `command_policy_xiaoo` | [`command_policy_xiaoo/README.zh.md`](command_policy_xiaoo/README.zh.md) |
 | `virtual_container` | [`virtual_container/README.zh.md`](virtual_container/README.zh.md) |
 | `virtual_container_xiaoo_concurrency` | [`virtual_container_xiaoo_concurrency/README.zh.md`](virtual_container_xiaoo_concurrency/README.zh.md) |
@@ -206,6 +208,7 @@ stderr 和完整检查明细，同时仍由公共框架保存对应日志。
 | `container_agent_xiaoo` | [`container_agent_xiaoo/README.zh.md`](container_agent_xiaoo/README.zh.md) |
 | `semantic_action_boundaries` | [`semantic_action_boundaries/README.zh.md`](semantic_action_boundaries/README.zh.md) |
 | `otel_jsonl_action_filter` | [`otel_jsonl_action_filter/README.zh.md`](otel_jsonl_action_filter/README.zh.md) |
+| `otel_http` | [`otel_http/README.zh.md`](otel_http/README.zh.md) |
 | `project_subagent_trajectory` | [`project_subagent_trajectory/README.zh.md`](project_subagent_trajectory/README.zh.md) |
 | `plugin_activity_anomaly` | [`activity_anomaly/README.zh.md`](activity_anomaly/README.zh.md) |
 | `alert_forwarding` | [`alert_forwarding/README.zh.md`](alert_forwarding/README.zh.md) |

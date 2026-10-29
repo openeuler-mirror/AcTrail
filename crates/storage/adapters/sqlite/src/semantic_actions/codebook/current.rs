@@ -1,11 +1,15 @@
 //! Current semantic action storage: compact integer codes in SQLite.
+//!
+//! Schema 43 assigns WebSocketMessage 128, AgentContextCompact 129, WebSocket
+//! support links 530/531 and compact implementation links 532. Only the current
+//! schema is accepted so each stored code has one meaning.
 
 use super::{
     ActionCompletenessCodes, ActionKindCodes, ActionStatusCodes, EvidenceKindCodes,
     LinkOriginCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 42;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 43;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {
@@ -23,6 +27,7 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             http_message: 108,
             websocket_message: 128,
             llm_call: 109,
+            agent_context_compact: 129,
             llm_request: 110,
             llm_response: 111,
             llm_tool_call: 126,
@@ -58,6 +63,7 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
         },
         link_role: LinkRoleCodes {
             agent_performed_action: 501,
+            agent_context_compact_implementation_llm_call: 532,
             command_contains_file_access: 502,
             command_contains_process_fork_attempt: 503,
             command_contains_process_exec: 504,

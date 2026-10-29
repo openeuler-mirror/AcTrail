@@ -79,12 +79,16 @@
 │               └── [x] trait ProviderClassifier # classify 将证据转换为提供方标签
 ├── [x] semantic_action/ # 语义行为、证据关系、正文和请求轨迹的共享模型
 │   └── [x] src/ # 语义数据、解析扩展和持久化端口
+│       ├── [x] attr_keys.rs # 定义语义行为属性键。
+│       ├── [x] evidence_roles.rs # 定义语义证据角色。
+│       ├── [x] link_roles.rs # 定义语义关系角色。
 │       ├── [x] model.rs # 定义行为、链接、证据及正文记录
 │       │   ├── [x] struct SemanticAction # 表达行为身份、类型、时序、状态和证据
 │       │   ├── [x] struct SemanticActionLink # 表达行为间关系、来源与角色
 │       │   ├── [x] struct LlmRequestContentWrite # 携带 LLM 请求正文写入数据
 │       │   └── [x] struct LlmRequestLineageWrite # 携带请求轨迹延续、分叉及起点依据
-│       ├── [x] update.rs # 定义已建立行为的增量变化与终态原因
+│       ├── [x] model/ # 语义种类及行为关联规则。
+│       ├── [x] update.rs # 定义已建立行为的增量变化、终态原因和属性补充
 │       │   ├── [x] struct SemanticActionUpdate # 携带一次行为更新
 │       │   └── [x] enum SemanticActionChange # 区分语义字段与生命周期变化
 │       ├── [x] llm.rs # 定义模型响应解析和流式消费接口

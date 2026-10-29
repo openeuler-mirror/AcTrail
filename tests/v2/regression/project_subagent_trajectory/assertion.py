@@ -113,7 +113,7 @@ class ProjectSubagentTrajectoryAssertion(TrajectoryAssertionSupport):
         expected_capabilities = {
             "strict_prefix_edges": True,
             "related_edges": False,
-            "compaction_detection": False,
+            "compaction_detection": True,
         }
         if document.get("capabilities") != expected_capabilities:
             raise ProductAssertionFailure(

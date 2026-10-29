@@ -134,6 +134,7 @@
         "fs.enumerate": {"type": "boolean"},
         "http.message": {"type": "boolean"},
         "llm.call": {"type": "boolean"},
+        "agent.context_compaction": {"type": "boolean"},
         "llm.request": {"type": "boolean"},
         "llm.response": {"type": "boolean"},
         "llm.tool_call": {"type": "boolean"},

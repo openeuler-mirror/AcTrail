@@ -9,6 +9,8 @@ export const GRAPH_LANES = Object.freeze({
   actions: 'Actions',
 });
 
+export const LLM_NAVIGATION_KINDS = Object.freeze(['llm.call']);
+
 export const UI_LIMITS = Object.freeze({
   inlineAttributeCount: 6,
   actionGroupMinActions: 2,

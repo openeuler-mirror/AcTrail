@@ -118,7 +118,7 @@ impl Http1Protocol {
         self.observe_events(events, &mut output);
         self.resume_bound(config, codecs, &mut output);
         let mut output = projection.changed_actions(config, output);
-        self.project_trajectory(projection, &mut output);
+        self.project_trajectory(config, projection, &mut output);
         output.payload_consumed_by_llm = fully_framed
             && !touched.is_empty()
             && touched.iter().all(|id| {
@@ -275,6 +275,14 @@ impl Http1Protocol {
                             .first()
                             .map(|metadata| metadata.provider_response_id.clone());
                     }
+                    if config.l0_llm_call.context_compact.enabled
+                        && let Some(fact) = self.facts.messages.get_mut(&head.message_id)
+                    {
+                        fact.response_observation = projected.response_observations.pop();
+                    }
+                    output
+                        .request_observations
+                        .extend(projected.request_observations);
                     for action in &mut projected.actions {
                         if !complete
                             && force_terminal
@@ -327,16 +335,15 @@ impl Http1Protocol {
 
     fn project_trajectory(
         &mut self,
+        config: &SemanticRetentionConfig,
         projection: &mut ProjectionCoordinator,
         output: &mut ProjectionBatch,
     ) {
-        for (request, provider_id, observed_at, failed) in self.facts.take_trajectory_bindings() {
-            output.extend(projection.observe_response_trajectory(
-                &request,
-                provider_id.as_deref(),
-                observed_at,
-                failed,
-            ));
+        for binding in self
+            .facts
+            .take_response_bindings(config.l0_llm_call.context_compact.enabled)
+        {
+            output.extend(projection.observe_response_binding(binding));
         }
     }
 
@@ -413,7 +420,7 @@ impl Http1Protocol {
         }
         self.exchange.forget_payload_stream(identity);
         let mut output = projection.changed_actions(config, output);
-        self.project_trajectory(projection, &mut output);
+        self.project_trajectory(config, projection, &mut output);
         self.filter_retention(output)
     }
 
@@ -465,7 +472,7 @@ impl Http1Protocol {
         );
         self.exchange.forget_payload_stream(identity);
         let mut output = projection.changed_actions(config, output);
-        self.project_trajectory(projection, &mut output);
+        self.project_trajectory(config, projection, &mut output);
         self.filter_retention(output)
     }
 
@@ -502,7 +509,7 @@ impl Http1Protocol {
             &mut output,
         );
         let mut output = projection.changed_actions(config, output);
-        self.project_trajectory(projection, &mut output);
+        self.project_trajectory(config, projection, &mut output);
         self.filter_retention(output)
     }
 

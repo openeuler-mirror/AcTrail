@@ -144,7 +144,7 @@ class TrajectoryGraphAssertionTest(unittest.TestCase):
             "capabilities": {
                 "strict_prefix_edges": True,
                 "related_edges": False,
-                "compaction_detection": False,
+                "compaction_detection": True,
             },
         }
 

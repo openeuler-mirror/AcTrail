@@ -93,7 +93,7 @@ import {
   mergeActionTreeChildren,
 } from './model';
 import { buildHttpExchangeArcOverlay } from './httpExchangeArcs';
-import { TREE_NODE_TYPES, UI_LIMITS } from './config';
+import { LLM_NAVIGATION_KINDS, TREE_NODE_TYPES, UI_LIMITS } from './config';
 import { useModuleLocale } from '../../../locale';
 import strings from './locale';
 
@@ -494,7 +494,7 @@ async function loadMoreNodeChildren(node) {
 }
 
 function isLlmCallNode(node) {
-  return node?.kind === 'llm.call';
+  return LLM_NAVIGATION_KINDS.includes(node?.kind);
 }
 
 function nodeMatchesSelection(node, selectionId) {

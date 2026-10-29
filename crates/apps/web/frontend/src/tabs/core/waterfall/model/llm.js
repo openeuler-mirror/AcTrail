@@ -1,13 +1,16 @@
 import { buildLlmMessages, llmRequestMessage, llmResponseMessage, previewText } from '../../../../llm/insight.js';
 import { toBigInt, nanosDiffMs } from './utils.js';
 
-export function attachLlmCallDetails(node, nodeById, parentByChild, window) {
+export function attachLlmCallDetails(node, nodeById, parentByChild, window, childrenByParent) {
+  const children = (parent) => (childrenByParent.get(parent?.id) ?? [])
+    .map((id) => nodeById.get(id)).filter(Boolean);
+  const call = node;
   const requestAction =
-    node.children.find((child) => child.kind === 'llm.request')?.action ??
-    actionById(nodeById, node.action.attributes?.['llm.call.request_action_id']);
+    children(call).find((child) => child.kind === 'llm.request')?.action ??
+    actionById(nodeById, call?.action.attributes?.['llm.call.request_action_id']);
   const responseAction =
-    node.children.find((child) => child.kind === 'llm.response')?.action ??
-    actionById(nodeById, node.action.attributes?.['llm.call.response_action_id']);
+    children(call).find((child) => child.kind === 'llm.response')?.action ??
+    actionById(nodeById, call?.action.attributes?.['llm.call.response_action_id']);
   node.llmRequestAction = requestAction;
   node.llmResponseAction = responseAction;
   node.llmPhases = buildLlmPhases(requestAction, responseAction, window);

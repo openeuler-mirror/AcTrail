@@ -55,7 +55,11 @@ impl Http2Protocol {
                             codecs,
                             &group,
                         );
-                        self.consume(projected, &mut output);
+                        self.consume(
+                            projected,
+                            &mut output,
+                            config.l0_llm_call.context_compact.enabled,
+                        );
                     }
                 }
                 if ended {

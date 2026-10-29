@@ -10,6 +10,7 @@ pub(super) const ROOT_LINK_ROLES: &[SemanticActionLinkRole] =
 pub(super) const DISPLAY_PARENT_ROLES: &[SemanticActionLinkRole] = &[
     SemanticActionLinkRole::AgentInvocationExec,
     SemanticActionLinkRole::AgentInvocationChildLlmRequest,
+    SemanticActionLinkRole::AgentContextCompactImplementationLlmCall,
     SemanticActionLinkRole::CommandContainsCommandInvocation,
     SemanticActionLinkRole::CommandContainsLlmCall,
     SemanticActionLinkRole::CommandContainsMcpToolCall,

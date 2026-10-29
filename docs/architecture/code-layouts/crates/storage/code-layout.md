@@ -8,6 +8,8 @@
 │       ├── [x] backend.rs # 聚合 trace、事件、语义、payload 和控制状态的存取能力
 │       │   ├── [x] trait StorageBackend # 提供记录保存、历史读取、保留策略和事务入口
 │       │   └── [x] enum StorageOpenMode # 选择只读或读写打开方式
+│       ├── [x] error.rs # 定义存储失败与属性补充拒绝信息。
+│       │   └── [x] struct StorageError # 保存存储失败信息。
 │       ├── [x] transaction.rs # 主存储事务接口
 │       │   └── [x] trait StorageTransaction # 控制当前事务提交和回滚
 │       ├── [x] cgroup_v1_bindings.rs # 定义 v1 绑定控制状态存取接口
@@ -37,6 +39,7 @@
     │   └── [x] src/ # 内存控制状态与事务
     │       ├── [x] storage.rs # 实现不保留观测的 StorageBackend
     │       │   └── [x] struct NoOpStorage # 提供空观测存储和必要的内存控制记录
+    │       ├── [x] backend.rs # 实现空观测存储接口。
     │       ├── [x] resource_state.rs # 保存资源准入、关闭和外部绑定控制记录
     │       │   └── [x] struct ResourceState # 持有可参与事务的控制状态
     │       ├── [x] transaction.rs # 管理内存控制记录的事务边界
@@ -72,6 +75,13 @@
             │   └── [x] trace_page.rs # 执行 trace 分页和过滤
             │       └── [x] struct TracePageReader # 借用数据库连接读取 trace 页面
             ├── [x] semantic_actions/ # 语义行为、链接、LLM 正文和轨迹关系的持久化
+            │   ├── [x] codebook/ # 管理语义种类与关系角色的整数编码。
+            │   ├── [x] store/ # 保存动作及其增量状态。
+            │   │   └── [x] state.rs # 保存动作状态与属性更新。
+            │   ├── [x] query.rs # 查询语义动作与关系记录。
+            │   ├── [x] root_tree.rs # 查询展示根节点与子项信息。
+            │   ├── [x] root_tree/ # 组织展示根节点查询。
+            │   └── [x] navigation.rs # 查询动作展示路径与位置。
             ├── [x] payload/ # 明文段保存、读取与保留预算
             ├── [x] alerts/ # 通用插件告警定义、记录和查询
             ├── [x] retention.rs # trace 保留期限、租约保护和分批清理

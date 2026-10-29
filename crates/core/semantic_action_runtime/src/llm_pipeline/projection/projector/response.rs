@@ -5,6 +5,7 @@ use model_core::payload::PayloadSegment;
 use semantic_action::{LlmResponseRetention, SemanticAction, SemanticActionKind};
 
 use crate::llm_pipeline::config::StreamClassifierConfig;
+use crate::llm_pipeline::projection::compact::LlmResponseObservation;
 use crate::llm_pipeline::transport::HttpResponseParts;
 
 use crate::llm_pipeline::assembly::router::PayloadStreamGroupKey;
@@ -29,6 +30,7 @@ pub(crate) struct InFlightResponse {
 
 pub(super) struct LlmResponseProjection {
     pub(super) actions: Vec<SemanticAction>,
+    pub(super) response_observations: Vec<LlmResponseObservation>,
     pub(super) provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(super) payload_segments: Vec<PayloadSegment>,
     pub(super) in_flight: Option<InFlightResponse>,
@@ -44,6 +46,7 @@ pub(crate) struct ProjectedProviderResponseId {
 fn in_flight_projection(encoded_len: usize, message_start: usize) -> LlmResponseProjection {
     LlmResponseProjection {
         actions: Vec::new(),
+        response_observations: Vec::new(),
         provider_response_ids: Vec::new(),
         payload_segments: Vec::new(),
         in_flight: Some(InFlightResponse { message_start }),
@@ -105,8 +108,9 @@ pub(super) fn project_stream_llm_response_message_actions(
     let attributes = llm_response_attributes(config, evidence, raw_bytes, &http, &body);
     let semantic_evidence = payload_evidence(evidence);
     let payload_segments = semantic_response_payloads(config, first, raw_bytes);
+    let action_id = format!("{}:llm.response", http.message_id);
     let response = SemanticAction {
-        action_id: format!("{}:llm.response", http.message_id),
+        action_id,
         trace_id: first.trace_id,
         kind: SemanticActionKind::LlmResponse,
         title: llm_response_title(&attributes),
@@ -120,8 +124,21 @@ pub(super) fn project_stream_llm_response_message_actions(
     };
     let provider_response_ids =
         projected_provider_response_ids(&response, body.provider_response_id.take());
+    let response_observations = if config.l0_llm_call.context_compact.enabled {
+        vec![LlmResponseObservation {
+            action_id: response.action_id.clone(),
+            has_tool_calls: body.tool_calls_json.is_some(),
+            provider_failed: body
+                .termination
+                .is_some_and(|termination| termination.is_failure()),
+            content_text: body.content_text.take(),
+        }]
+    } else {
+        Vec::new()
+    };
     Some(LlmResponseProjection {
         actions: vec![response],
+        response_observations,
         provider_response_ids,
         payload_segments,
         in_flight: (!terminal).then_some(InFlightResponse { message_start }),

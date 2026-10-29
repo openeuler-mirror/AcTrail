@@ -318,6 +318,14 @@ impl LiveSemanticActionRuntime {
                 output.links.push(link);
             }
         }
+        for proposal in &llm_output.context_compact_links {
+            if let Some(link) = self.links.observe_exact_context_compact_link(
+                &proposal.compact,
+                &proposal.implementation_call,
+            ) {
+                output.links.push(link);
+            }
+        }
         for mut action in llm_output.actions {
             let agent_actions = if action.kind == SemanticActionKind::LlmRequest {
                 self.agent.annotate_user_input(&mut action);

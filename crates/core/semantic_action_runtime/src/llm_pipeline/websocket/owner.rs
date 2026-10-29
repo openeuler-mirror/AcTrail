@@ -98,17 +98,12 @@ impl WebSocketProtocol {
         if let Some(key) = touched {
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.flush(config, &mut output);
-                bindings = std::mem::take(&mut session.trajectory_bindings);
+                bindings = std::mem::take(&mut session.response_bindings);
             }
         }
         let mut output = projection.changed_actions(config, output);
-        for (request, provider_id, at, failed) in bindings {
-            output.extend(projection.observe_response_trajectory(
-                &request,
-                (!provider_id.is_empty()).then_some(provider_id.as_str()),
-                at,
-                failed,
-            ));
+        for binding in bindings {
+            output.extend(projection.observe_response_binding(binding));
         }
         output
     }
@@ -457,13 +452,8 @@ impl WebSocketProtocol {
             return ProjectionBatch::default();
         };
         let mut output = projection.changed_actions(config, session.abort(config, reason));
-        for (request, provider_id, at, failed) in session.trajectory_bindings {
-            output.extend(projection.observe_response_trajectory(
-                &request,
-                (!provider_id.is_empty()).then_some(provider_id.as_str()),
-                at,
-                failed,
-            ));
+        for binding in session.response_bindings {
+            output.extend(projection.observe_response_binding(binding));
         }
         output
     }

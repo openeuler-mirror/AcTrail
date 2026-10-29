@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
+use crate::llm_pipeline::provider::RequestContentBlock;
+use crate::llm_pipeline::utils::CanonicalJsonWriter;
 use model_core::ids::TraceId;
 use semantic_action::{
     LlmRequestBlock, LlmRequestBlockRef, LlmRequestContentWrite, LlmRequestManifest,
 };
 use serde_json::{Map, Number, Value};
 
-pub(in crate::llm_pipeline) use self::canonical_json::CanonicalJsonWriter;
 use self::canonical_json::{
     bytes as canonical_json_bytes, sha256_hex, string as canonical_json_string,
 };
@@ -336,7 +337,7 @@ impl<'a> MessageProjector<'a> {
                 stable_content_descriptor(object, "text"),
             );
         }
-        if block_is_tool_result(item) && object.contains_key("content") {
+        if RequestContentBlock::new(item).is_tool_result() && object.contains_key("content") {
             return self.skeletonize_nested(
                 item,
                 Some("content"),
@@ -420,7 +421,10 @@ fn stable_content_fields(
 ) -> Map<String, Value> {
     object
         .iter()
-        .filter(|(key, _)| key.as_str() != "cache_control" && Some(key.as_str()) != payload_key)
+        .filter(|(key, _)| {
+            !CanonicalJsonWriter::is_content_cache_metadata(key)
+                && Some(key.as_str()) != payload_key
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
@@ -644,11 +648,4 @@ fn block_placeholder(ordinal: u32) -> Value {
         Value::Number(Number::from(ordinal)),
     );
     Value::Object(object)
-}
-
-fn block_is_tool_result(block: &Value) -> bool {
-    block
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| matches!(kind, "tool_result" | "tool-result"))
 }

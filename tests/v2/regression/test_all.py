@@ -43,6 +43,9 @@ from tests.v2.regression.probe_qodercli_llm.run_e2e import (  # noqa: E402
 from tests.v2.regression.probe_xiaoo_llm.run_e2e import (  # noqa: E402
     TEST_DEFINITION as XIAOO,
 )
+from tests.v2.regression.context_compact.run_e2e import (  # noqa: E402
+    TEST_DEFINITION as CONTEXT_COMPACT,
+)
 from tests.v2.regression.command_policy_xiaoo.run_e2e import (  # noqa: E402
     TEST_DEFINITION as COMMAND_POLICY_XIAOO,
 )
@@ -119,6 +122,7 @@ DEFAULT_TESTS = [
     PI,
     QODERCLI,
     XIAOO,
+    CONTEXT_COMPACT,
     COMMAND_POLICY_XIAOO,
     FILE_POLICY_XIAOO,
     NETWORK_POLICY_XIAOO,

@@ -50,7 +50,7 @@ export default {
     background: {
       titleGeneration: 'Title generation',
       conversationSummary: 'Conversation summary',
-      contextCompaction: 'Context compaction',
+      contextCompaction: 'context compaction',
       auxiliaryInferred: 'Background LLM (inferred)',
     },
     layer: {

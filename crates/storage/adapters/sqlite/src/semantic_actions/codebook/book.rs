@@ -12,7 +12,7 @@ pub(crate) fn for_schema_version(
     schema_version: i32,
 ) -> Result<&'static SemanticActionCodebook, CodebookError> {
     match schema_version {
-        26 | 27 | CURRENT_SCHEMA_VERSION => Ok(super::current::CODEBOOK),
+        CURRENT_SCHEMA_VERSION => Ok(super::current::CODEBOOK),
         _ => Err(CodebookError::new(
             "semantic_action_schema_version",
             format!("unsupported semantic action codebook schema version {schema_version}"),

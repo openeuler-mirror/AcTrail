@@ -25,6 +25,12 @@ pub mod llm_request {
     pub const PAYLOAD: &str = "llm.request.payload";
 }
 
+pub mod agent_context_compact {
+    pub const POST_CONTEXT_PAYLOAD: &str = "agent.context_compaction.post_context_payload";
+    pub const PRE_CONTEXT_PAYLOAD: &str = "agent.context_compaction.pre_context_payload";
+    pub const RESPONSE_PAYLOAD: &str = "agent.context_compaction.response_payload";
+}
+
 pub mod llm_response {
     pub const PAYLOAD: &str = "llm.response.payload";
 }

@@ -18,11 +18,10 @@ use opentelemetry_proto::tonic::trace::v1::{
     ResourceSpans, ScopeSpans, Span, Status, span, status,
 };
 use prost::Message;
-use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStatus,
-};
+use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionStatus};
 
 use crate::service::{otel_span_id_u64, otel_trace_id_u128, parent_link, support_links};
+use crate::span_kind::SpanKindPolicy;
 
 /// Content type for the produced bytes: `application/x-protobuf`.
 pub const OTLP_PROTOBUF_CONTENT_TYPE: &str = "application/x-protobuf";
@@ -155,7 +154,7 @@ fn build_span(trace_id: &[u8], action: &SemanticAction, links: &[SemanticActionL
         span_id: otel_span_id_u64(&action.action_id).to_be_bytes().to_vec(),
         parent_span_id,
         name: action.title.clone(),
-        kind: span_kind(action.kind) as i32,
+        kind: SpanKindPolicy::classify(action.kind) as i32,
         start_time_unix_nano: start,
         end_time_unix_nano: unix_nanos(action.end_time.unwrap_or(action.start_time)),
         attributes,
@@ -200,17 +199,6 @@ fn int_kv(key: &str, value: i64) -> KeyValue {
             value: Some(any_value::Value::IntValue(value)),
         }),
         ..Default::default()
-    }
-}
-
-fn span_kind(kind: SemanticActionKind) -> span::SpanKind {
-    match kind {
-        SemanticActionKind::HttpMessage
-        | SemanticActionKind::WebSocketMessage
-        | SemanticActionKind::LlmCall
-        | SemanticActionKind::LlmRequest
-        | SemanticActionKind::LlmResponse => span::SpanKind::Client,
-        _ => span::SpanKind::Internal,
     }
 }
 

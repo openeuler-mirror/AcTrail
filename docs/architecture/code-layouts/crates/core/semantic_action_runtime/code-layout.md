@@ -38,8 +38,8 @@
     │   │       ├── [x] correlation/ # 匹配工具结果及 Agent 调用证据。
     │   │       ├── [x] state/ # 保存待关联工具记录及容量受限的索引。
     │   │       └── [x] emission/ # 从确认事实生成动作、link 和诊断。
-    │   └── [x] links/ # 按动作类别维护已确认的父子与协议关联。
-    │       └── [x] projector.rs # 组合 agent、command、HTTP、LLM 与 SSE 关系投影。
+    │   └── [x] links/ # 按动作类别维护已确认的父子、协议及压缩实现关联。
+    │       └── [x] projector.rs # 组合 agent、command、HTTP、LLM、SSE 与上下文压缩实现关系投影。
     │           └── [x] struct ActionLinkProjector # 依据动作身份生成关联，收尾时释放 trace 局部状态。
-    └── [x] llm_pipeline/ # 恢复传输协议、解析 provider 内容并生成 LLM 语义与轨迹。
+    └── [x] llm_pipeline/ # 恢复传输协议、解析 provider 内容并生成 LLM 语义、上下文压缩与轨迹。
 ```

@@ -8,7 +8,7 @@
         ├── [x] writer.rs # 聚合 trace、membership、诊断与语义记录的写入操作
         │   └── [x] struct RecordingWriter # 借用 StorageBackend；persist_live_events_then_export、write_session_then_export 协调写入与发布
         ├── [x] commit.rs # 组织一次观测批次的事务提交与独立导出
-        │   └── [x] struct ObservedRecordCommitCoordinator # 借用主存储与 ExportRuntime；记录存储结果后继续处理可发布批次
+        │   └── [x] struct ObservedRecordCommitCoordinator # 借用主存储与 ExportRuntime；记录存储与语义交付结果后继续处理可发布批次
         ├── [x] observed.rs # 聚合进程、trace、membership、payload、事件及语义写入
         │   ├── [x] struct ObservedRecordBatch # 保存一次提交中的观测记录与语义批次
         │   ├── [x] struct ObservedRecordWriteSession # persist_event、persist_payload_segment、persist_semantic_actions 在当前事务内收集写入
@@ -18,13 +18,13 @@
         ├── [x] delivery.rs # 汇总每个交付阶段的失败与存储结果
         │   ├── [x] struct DeliveryReport # storage_succeeded 查询持久化结果，into_failures 取出失败列表
         │   ├── [x] struct DeliveryFailure # 保存失败阶段和错误信息
-        │   └── [x] enum DeliveryFailureKind # 区分存储和导出等交付阶段
+        │   └── [x] enum DeliveryFailureKind # 区分存储、可选属性补充拒绝和导出等交付阶段
         ├── [x] diagnostics.rs # 将交付错误与丢弃信息写入诊断记录
         └── [x] semantic/ # 语义 action、link、正文与 lineage 的批量持久化和发布
             ├── [x] batch.rs # 拥有或借用语义批次及其附属内容
             │   ├── [x] struct SemanticActionBatch # 收集 action、更新、link、正文和 lineage；按存储与导出需要提供视图
             │   └── [x] struct SemanticActionRecordBatch # 借用批次记录并校验 trace 归属
-            ├── [x] recorder.rs # 将批次中的语义记录写入主存储
+            ├── [x] recorder.rs # 将批次中的语义记录写入主存储并报告属性补充拒绝
             │   └── [x] struct SemanticActionRecorder # 借用存储后端并执行语义记录保存
             ├── [x] persistence.rs # 汇集语义写入并统一提交
             │   └── [x] struct SemanticActionPersistenceAccumulator # 保存待刷新的语义记录

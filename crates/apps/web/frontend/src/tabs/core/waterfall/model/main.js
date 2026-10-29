@@ -1,6 +1,7 @@
 // Build bounded waterfall rows on the shared trace time axis.
 import { compactRows, kindClass, shortTime } from '../../action-tree/common.js';
 import { isBashWrapperCommand, semanticActionLabel, semanticActionTarget } from '../../../actionLabels.js';
+import { ContextCompactDisplay } from '../../../shared/contextCompactDisplay.js';
 import { ToolCallDisplay } from '../../../shared/toolCallDisplay.js';
 import { attachLlmCallDetails, ensureLlmMessages, llmMessagesFromAction } from './llm.js';
 import { toBigInt, nanosDiffMs, microsLabel, formatOffset, computeWindow, emptyWindow, compareNodes } from './utils.js';
@@ -71,22 +72,38 @@ export function defaultActiveGroups(groups) {
 }
 
 export function buildWaterfall(actions, links, idleIntervals = [], axisEndNanos = null, contextActions = [], timelineWindow = null) {
-  const validActions = actions ?? [];
+  const observedActions = actions ?? [];
+  const actionById = new Map([...contextActions, ...observedActions].map((action) => [action.id, action]));
+  const displayedActions = new Map();
+  for (const action of observedActions) {
+    const displayed = action.kind === 'agent.context_compaction'
+      ? ContextCompactDisplay.implementation(action, (id) => actionById.get(id))
+      : action;
+    if (displayed) displayedActions.set(displayed.id, displayed);
+  }
+  const validActions = [...displayedActions.values()];
   const intervals = (idleIntervals ?? []).map(idleIntervalNode);
   const window = timelineWindow ?? computeWindow(validActions, intervals, axisEndNanos);
   if (!validActions.length) {
     return { roots: [], window, groups: [], totalActions: 0, idleIntervals: intervals };
   }
 
-  const toolDisplay = new ToolCallDisplay(new Map(validActions.map((action) => [action.id, action])));
+  const toolDisplay = new ToolCallDisplay(actionById);
   const nodeById = new Map(
-    validActions.map((action) => [action.id, actionNode(action, window, toolDisplay)]),
+    validActions.map((action) => {
+      const node = actionNode(action, window, toolDisplay);
+      if (action.display?.context_compaction) node.label += ' (context compaction)';
+      return [action.id, node];
+    }),
   );
   const detailNodes = new Map([
     ...contextActions.map((action) => [action.id, actionNode(action, window, toolDisplay)]),
     ...nodeById,
   ]);
   const childrenByParent = groupChildren(links, nodeById);
+  const llmChildrenByParent = groupChildren(links, detailNodes, new Set([
+    'llm.call.request', 'llm.call.response',
+  ]));
   const childIds = new Set();
   for (const children of childrenByParent.values()) {
     for (const child of children) {
@@ -116,7 +133,7 @@ export function buildWaterfall(actions, links, idleIntervals = [], axisEndNanos 
       .sort(compareNodes);
     node.hasChildren = node.children.length > 0;
     if (node.kind === 'llm.call') {
-      attachLlmCallDetails(node, detailNodes, parentByChild, window);
+      attachLlmCallDetails(node, detailNodes, parentByChild, window, llmChildrenByParent);
     }
     return node;
   };
@@ -415,12 +432,21 @@ function actionNode(action, window, toolDisplay) {
 const LOW_PRIORITY_LINK_ROLES = new Set(['agent.performed_action']);
 
 function linkPriority(role) {
+  if (role === 'agent.context_compaction.implementation_llm_call') {
+    return 3;
+  }
+  if (role === 'llm.call.request' || role === 'llm.call.response') {
+    return 2;
+  }
   return LOW_PRIORITY_LINK_ROLES.has(role) ? 0 : 1;
 }
 
-function groupChildren(links, nodeById) {
+function groupChildren(links, nodeById, roles = null) {
   const bestParent = new Map();
   for (const link of links ?? []) {
+    if (link.valid === false || (roles && (link.valid !== true || !roles.has(link.role)))) {
+      continue;
+    }
     const parent = link.parent;
     const child = link.child;
     if (!parent || !child || parent === child) {

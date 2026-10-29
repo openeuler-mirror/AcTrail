@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 use storage_core::TimelineQuery;
 use storage_factory::StorageConfig;
 
-use super::{actions, open_storage, traces::ProcessDisplayIndex};
+use super::{actions::ContextCompactDisplay, open_storage, traces::ProcessDisplayIndex};
 use crate::json;
 
 pub(crate) fn trace_metadata_json(config: &StorageConfig, trace_id: u64) -> Result<String, String> {
@@ -33,15 +33,20 @@ impl TimelineView {
         let page = storage
             .timeline_page(query)
             .map_err(|error| format!("read timeline: {}: {}", error.stage, error.message))?;
+        let compact = ContextCompactDisplay::for_actions(
+            storage.as_ref(),
+            query.trace_id,
+            page.actions.iter().chain(&page.context_actions),
+        )?;
         let actions = page
             .actions
             .iter()
-            .map(actions::action_json_lite)
+            .map(|action| compact.action_json(action, true))
             .collect::<Vec<_>>();
         let context = page
             .context_actions
             .iter()
-            .map(actions::action_json_lite)
+            .map(|action| compact.action_json(action, true))
             .collect::<Vec<_>>();
         let links = page
             .links

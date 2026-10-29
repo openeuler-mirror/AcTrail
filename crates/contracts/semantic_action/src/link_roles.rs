@@ -6,6 +6,8 @@ pub const AGENT_INVOCATION_CHILD_LLM_REQUEST: &str =
     SemanticActionLinkRole::AgentInvocationChildLlmRequest.as_str();
 pub const AGENT_INVOCATION_EXEC: &str = SemanticActionLinkRole::AgentInvocationExec.as_str();
 pub const AGENT_PERFORMED_ACTION: &str = SemanticActionLinkRole::AgentPerformedAction.as_str();
+pub const AGENT_CONTEXT_COMPACT_IMPLEMENTATION_LLM_CALL: &str =
+    SemanticActionLinkRole::AgentContextCompactImplementationLlmCall.as_str();
 pub const COMMAND_CONTAINS_COMMAND_INVOCATION: &str =
     SemanticActionLinkRole::CommandContainsCommandInvocation.as_str();
 pub const COMMAND_CONTAINS_FILE_ACCESS: &str =

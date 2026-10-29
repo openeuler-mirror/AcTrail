@@ -1,5 +1,4 @@
 import { projectTimeInterval } from '../../time-navigation/model.js';
-import { kindGroup } from './main.js';
 import { formatOffset } from './utils.js';
 
 export function llmBarSegments(row, axisWindow) {

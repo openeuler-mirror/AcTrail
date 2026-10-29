@@ -14,8 +14,9 @@ pub use content_node::{
 };
 
 pub use update::{
-    SemanticActionChange, SemanticActionFinalizationReason, SemanticActionUpdate,
-    SemanticCommandKind, SemanticToolResultBinding,
+    SemanticActionChange, SemanticActionFinalizationReason, SemanticActionIdentity,
+    SemanticActionUpdate, SemanticAttributeSupplement, SemanticCommandKind,
+    SemanticToolResultBinding,
 };
 
 pub use llm::{
@@ -35,4 +36,7 @@ pub use model::{
     file_path_set_identity_for_overflow_scope, file_path_set_identity_for_paths,
 };
 pub use model_identity::validated_model_identifier;
-pub use store::{SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore};
+pub use store::{
+    SemanticActionReadStore, SemanticActionStoreError, SemanticActionWriteStore,
+    SemanticAttributeSupplementRejection,
+};
