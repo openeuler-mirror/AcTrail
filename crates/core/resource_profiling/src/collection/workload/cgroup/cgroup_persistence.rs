@@ -1,5 +1,10 @@
-use super::{v1::CgroupV1Persistence, v2::CgroupV2Persistence};
+use super::{
+    common::managed::ManagedScopePersistence, v1::CgroupV1BindingPersistence,
+    v2::CgroupV2BindingPersistence,
+};
 use crate::ProfilingError;
-pub trait CgroupPersistence: CgroupV1Persistence + CgroupV2Persistence {
+pub trait CgroupPersistence:
+    ManagedScopePersistence + CgroupV1BindingPersistence + CgroupV2BindingPersistence
+{
     fn validate_recovery_versions(&mut self, v1: bool, v2: bool) -> Result<(), ProfilingError>;
 }

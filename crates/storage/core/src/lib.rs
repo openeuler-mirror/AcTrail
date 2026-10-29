@@ -37,4 +37,6 @@ pub use store_snapshot_contract::view::SnapshotView;
 pub use transaction::StorageTransaction;
 
 mod cgroup_v1_bindings;
+mod cgroup_v2_bindings;
 pub use cgroup_v1_bindings::CgroupV1BindingStore;
+pub use cgroup_v2_bindings::CgroupV2BindingStore;

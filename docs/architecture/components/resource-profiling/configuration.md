@@ -6,6 +6,8 @@
 
 `collection` 负责采集方式和周期。`host` 采集宿主机的 CPU、内存和负载；`workload` 采集被观测进程及其所属资源分组。`procfs` 后端读取 Linux 的 `/proc` 进程信息，`cgroup` 后端读取内核资源分组的计数。`auto` 模式根据可用能力选择后端，配置错误会终止对应配置的加载。
 
+`collection.workload.cgroup.v1.managed` 配置 v1 自建 trace 范围，默认启用，根目录名为 `actrail`，恢复扫描上限为 `1024`，最终采样等待上限为 `30000 ms`。没有恢复约束时，managed 优先选择 v2，再尝试 v1；能力不足时可继续尝试只读绑定。已有 live managed 记录要求使用所属版本恢复，移动 PID 后固定所选来源。
+
 `storage` 负责样本交付与保留。`database` 后端写入本地数据库，`remote` 后端发送到外部指标服务，`hybrid` 后端将同一批样本分发到多个目标。每个后端解析自己的子配置。各目标独立处理写入失败、超时和队列满，并记录交付结果。
 
 Viewer 和 Web 通过本地数据库查询资源样本。使用 hybrid 时，这些查询要求恰好一个 `database` 子后端。只有远端目标时，通过相应的接收端查询数据。

@@ -234,12 +234,12 @@ impl StorageAttachService {
         // still finalizes exactly; a populated scope becomes an explicit
         // partial final sample instead of multiplying per-trace waits.
         self.drain_resource_finalizations_impl(trace_runtime)?;
-        self.drain_v1_finalizations(trace_runtime);
+        self.drain_v1_binding_finalizations(trace_runtime);
         self.resource_metrics.force_pending_finalizations_due();
         loop {
             if self.pending_terminal_finalizations.is_empty()
                 && self.terminal_trace_count(trace_runtime) == 0
-                && !self.resource_metrics.has_pending_v1_finalizations()
+                && !self.resource_metrics.has_pending_v1_binding_finalizations()
             {
                 return Ok(());
             }
@@ -249,7 +249,7 @@ impl StorageAttachService {
             }
             self.drain_live_events_impl(trace_runtime)?;
             let pending_count = self.pending_terminal_finalizations.len();
-            if pending_count == 0 && !self.resource_metrics.has_pending_v1_finalizations() {
+            if pending_count == 0 && !self.resource_metrics.has_pending_v1_binding_finalizations() {
                 return Ok(());
             }
             let elapsed = started_at.elapsed();
@@ -408,7 +408,7 @@ impl StorageAttachService {
             if !self.resource_metrics.resource_barrier_ready(trace_id) {
                 continue;
             }
-            if !self.resource_metrics.external_barrier_ready(trace_id) {
+            if !self.resource_metrics.binding_barrier_ready(trace_id) {
                 continue;
             }
             if !self.post_trace_coordinator.barrier_ready(trace_id) {

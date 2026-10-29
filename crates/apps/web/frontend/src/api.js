@@ -217,6 +217,15 @@ export function readTimelinePage(traceId, { signal, ...filters } = {}) {
   return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/actions/timeline?${query}`, { signal });
 }
 
+/** Downsampled host and trace resource tracks for one window, in Unix milliseconds. */
+export function readResourceTimeline(traceId, { fromMs, toMs, maxPoints, signal } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries({ from_ms: fromMs, to_ms: toMs, max_points: maxPoints })) {
+    if (value != null) query.set(key, String(Math.round(value)));
+  }
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/resource-timeline?${query}`, { signal });
+}
+
 export function readIdleIntervals(traceId, { signal, ...filters } = {}) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {

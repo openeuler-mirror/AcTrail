@@ -41,7 +41,8 @@
 │   │       ├── [x] process-identity-runtime.md # 进程身份设计
 │   │       ├── [x] resource-profiling/ # 资源观测组件文档
 │   │       │   ├── [x] configuration.md # 资源配置使用说明
-│   │       │   └── [x] design.md # 资源观测设计
+│   │       │   ├── [x] design.md # 资源观测设计
+│   │       │   └── [x] storage.md # 资源样本存储设计
 │   │       ├── [x] streaming-parser.md # 流式解析设计
 │   │       ├── [x] tls-sync-runtime.md # TLS 同步采集设计
 │   │       ├── [x] web-frontend/ # 前端设计

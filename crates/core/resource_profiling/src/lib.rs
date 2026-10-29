@@ -14,17 +14,17 @@ pub use collection::workload::WorkloadResourceProfilingBackend;
 
 pub use collection::host::{HostBackendFactory, HostBackendMode, HostProfilingConfig};
 pub use collection::workload::{
-    CgroupProcessRssConfig, CgroupProfilingConfig, ExternalScopeConfig, ExternalScopePolicy,
-    ManagedScopeConfig, WorkloadBackendMode, WorkloadProfilingConfig,
+    CgroupProcessRssConfig, CgroupProfilingConfig, CgroupV2BindingConfig, CgroupV2BindingPolicy,
+    ManagedV2ScopeConfig, WorkloadBackendMode, WorkloadProfilingConfig,
 };
 pub use config::ResourceProfilingConfig;
 
 pub use collection::workload::{
-    CgroupPersistence, ExternalFinalizationDraft, ResourceFinalizationDraft,
+    CgroupPersistence, CgroupV2BindingFinalization, ResourceFinalizationDraft,
     ResourceFinalizationPoll, ResourceMetricsDrain, ResourceSampleDraft, ResourceSamplingFailure,
     WorkloadProfiler, WorkloadTarget, WorkloadTargets,
 };
-pub use collection::workload::{ExternalRecoveryRecord, ExternalScopePersistence};
+pub use collection::workload::{CgroupV2BindingPersistence, CgroupV2BindingRecovery};
 pub use collection::workload::{ManagedRecoveryRecord, ManagedScopePersistence};
 pub use collection::workload::{
     ProcfsProcessLiveness, ProcfsWorkloadProfilingConfig, ProcfsWorkloadResourceProfilingBackend,
@@ -36,14 +36,15 @@ pub use collection::workload::{
 };
 
 pub use collection::workload::{
-    CgroupBackendMode, CgroupV1Backend, CgroupV1Config, CgroupV1Persistence,
-    CgroupV1RecoveryRecord, CgroupV2Backend, CgroupV2Config, CgroupV2Persistence,
+    CgroupBackendMode, CgroupScopeSampler, CgroupV1BindingPersistence, CgroupV1BindingRecovery,
+    CgroupV1BindingSampler, CgroupV1Config, CgroupV2Config, ManagedV1ScopeConfig,
 };
 
 pub mod alerts;
 mod collection;
 pub mod model;
 pub mod storage;
+pub mod timeline;
 pub use collection::ResourceCollectionConfig;
 mod service;
 pub use service::{ResourceCompletion, ResourceCompletionPoll};

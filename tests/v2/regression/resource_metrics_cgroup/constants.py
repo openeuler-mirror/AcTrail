@@ -32,6 +32,11 @@ class ResourceMetricsCgroupConstants:
     minimum_peak_bytes: int = 50331648
     minimum_systemd_version: int = 254
     service_restart_milliseconds: int = 200
+    web_ready_timeout: int = 10
+    web_request_timeout: int = 10
+    web_stop_timeout: int = 5
+    web_poll_seconds: float = 0.05
+    resource_api_max_points: int = 8
 
 
 CASE_CONSTANTS = ResourceMetricsCgroupConstants()

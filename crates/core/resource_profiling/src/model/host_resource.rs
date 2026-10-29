@@ -14,4 +14,7 @@ pub struct HostResourceSample {
     pub memory_available_bytes: u64,
     pub memory_free_bytes: u64,
     pub load_average: [f64; 3],
+    /// Online CPUs; older samples predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_count: Option<u32>,
 }

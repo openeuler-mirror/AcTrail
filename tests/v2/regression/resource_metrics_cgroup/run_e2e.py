@@ -18,7 +18,8 @@ TEST_DEFINITION = TestDefinition(
     name="resource_metrics_cgroup",
     description=(
         "Validate release-binary exact, timeout, and restart cgroup-v2 "
-        "resource accounting"
+        "resource accounting, or managed cgroup-v1 scopes on v1 hosts, "
+        "plus resource SQLite retention"
     ),
     build_case=ResourceMetricsCgroupCase,
 )

@@ -71,7 +71,7 @@ class ContainerAcceptance(ResourceMetricsCase):
                            "--pid", str(pid), "--name", "container-cgroup-acceptance"))
             self._wait_until(lambda: self._event_count(1) >= CASE_CONSTANTS.initial_sample_count, "no initial samples")
             with sqlite3.connect(self._database) as connection:
-                row = connection.execute("SELECT relative_path FROM trace_external_cgroup_bindings WHERE trace_id=1").fetchone()
+                row = connection.execute("SELECT relative_path FROM trace_external_cgroup_v2_bindings WHERE trace_id=1").fetchone()
             if row is None:
                 raise AssertionError("container attachment did not persist a binding")
             boundary = Path("/sys/fs/cgroup") / str(row[0]).lstrip("/")
@@ -95,14 +95,14 @@ class ContainerAcceptance(ResourceMetricsCase):
                            "--trace-id", "trace-2"))
             def closed() -> bool:
                 with sqlite3.connect(self._database) as connection:
-                    return connection.execute("SELECT lifecycle_state FROM trace_external_cgroup_bindings WHERE trace_id=2").fetchone() == ("closed",)
+                    return connection.execute("SELECT lifecycle_state FROM trace_external_cgroup_v2_bindings WHERE trace_id=2").fetchone() == ("closed",)
             self._wait_until(closed, "external finalization did not close binding")
             self._assert_final(self._resource_payloads(2), coverage="broader_than_trace")
             self._command(("docker", "stop", "--time", str(CASE_CONSTANTS.container_stop_seconds), container_id))
             def recovered_closed() -> bool:
                 with sqlite3.connect(self._database) as connection:
                     return connection.execute(
-                        "SELECT b.lifecycle_state, t.lifecycle_state FROM trace_external_cgroup_bindings b "
+                        "SELECT b.lifecycle_state, t.lifecycle_state FROM trace_external_cgroup_v2_bindings b "
                         "JOIN traces t USING(trace_id) WHERE trace_id=1"
                     ).fetchone() == ("closed", "completed")
             self._wait_until(recovered_closed, "original recovered trace did not complete after process exit")

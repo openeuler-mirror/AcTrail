@@ -11,8 +11,6 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceAlertToken, TraceHealth, TraceLifecycleState, TraceRecord};
-use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
-use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
 use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
 use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
@@ -203,64 +201,6 @@ impl StorageBackend for NoOpStorage {
         time: SystemTime,
     ) -> Result<(), StorageError> {
         self.resources.borrow_mut().update_scope(id, state, time)
-    }
-
-    fn create_external_cgroup_binding(
-        &mut self,
-        binding: ExternalCgroupBinding,
-    ) -> Result<(), StorageError> {
-        self.resources.borrow_mut().create_binding(binding)
-    }
-
-    fn get_external_cgroup_binding(
-        &self,
-        id: TraceId,
-    ) -> Result<Option<ExternalCgroupBinding>, StorageError> {
-        Ok(self.resources.borrow().binding(id))
-    }
-
-    fn list_live_external_cgroup_bindings(
-        &self,
-    ) -> Result<Vec<ExternalCgroupBinding>, StorageError> {
-        Ok(self.resources.borrow().live_bindings())
-    }
-
-    fn record_external_cgroup_success(
-        &mut self,
-        id: TraceId,
-        time: SystemTime,
-    ) -> Result<(), StorageError> {
-        self.resources.borrow_mut().success(id, time)
-    }
-
-    fn record_external_cgroup_failure(
-        &mut self,
-        id: TraceId,
-        time: SystemTime,
-    ) -> Result<u32, StorageError> {
-        self.resources.borrow_mut().failure(id, time)
-    }
-
-    fn mark_external_cgroup_stale(
-        &mut self,
-        id: TraceId,
-        reason: ExternalBindingStaleReason,
-        time: SystemTime,
-    ) -> Result<(), StorageError> {
-        self.resources.borrow_mut().stale(id, reason, time)
-    }
-
-    fn discard_orphan_external_binding(&mut self, id: TraceId) -> Result<(), StorageError> {
-        self.resources.borrow_mut().discard_orphan(id);
-        Ok(())
-    }
-
-    fn close_external_cgroup_binding(
-        &mut self,
-        id: TraceId,
-        time: SystemTime,
-    ) -> Result<(), StorageError> {
-        self.resources.borrow_mut().close(id, time)
     }
 
     fn list_events(&self, _trace_id: TraceId) -> Result<Vec<DomainEvent>, StorageError> {

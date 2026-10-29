@@ -1,7 +1,7 @@
 use super::resource_sample_sink::ResourceSampleSink;
 use super::{ResourceCompletion, ResourceCompletionPoll};
 use crate::model::{
-    cgroup_v1_binding::CgroupV1Binding, external_cgroup::ExternalCgroupBinding,
+    cgroup_v1_binding::CgroupV1Binding, cgroup_v2_binding::CgroupV2Binding,
     resource_scope::TraceResourceScope,
 };
 use crate::{
@@ -27,7 +27,7 @@ impl ResourceProfilingService {
         };
         backend.admit_stopped_launch(target, coordinates, launch)
     }
-    pub fn admit_external_container(
+    pub fn admit_binding(
         &mut self,
         target: &WorkloadTarget,
         coordinates: &HostProcessCoordinates,
@@ -35,13 +35,12 @@ impl ResourceProfilingService {
         let Some(backend) = self.profiler.backend_mut().cgroup_mut() else {
             return Ok(());
         };
-        backend.admit_existing(target, coordinates)
+        backend.admit_binding(target, coordinates)
     }
     pub fn activate_scope(&mut self, scope: &TraceResourceScope) -> Result<(), ProfilingError> {
         self.profiler
             .backend_mut()
             .cgroup_mut()
-            .and_then(|family| family.v2_mut())
             .ok_or_else(|| {
                 ProfilingError::new(
                     "resource_scope_activation",
@@ -65,12 +64,7 @@ impl ResourceProfilingService {
         &mut self,
         targets: &dyn WorkloadTargets,
     ) -> Result<ResourceCompletionPoll, ProfilingError> {
-        let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|f| f.v2_mut())
-        else {
+        let Some(backend) = self.profiler.backend_mut().cgroup_mut() else {
             return Ok(ResourceCompletionPoll::default());
         };
         let poll = backend.poll_finalizations(targets)?;
@@ -89,20 +83,15 @@ impl ResourceProfilingService {
         })
     }
 
-    pub fn poll_external_finalizations(
+    pub fn poll_v2_binding_finalizations(
         &mut self,
         targets: &dyn WorkloadTargets,
         persistence: &mut dyn CgroupPersistence,
     ) -> Result<Vec<TraceId>, ProfilingError> {
-        let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|f| f.v2_mut())
-        else {
+        let Some(backend) = self.profiler.backend_mut().cgroup_mut() else {
             return Ok(Vec::new());
         };
-        let drafts = backend.poll_external_finalizations(targets, persistence)?;
+        let drafts = backend.poll_v2_binding_finalizations(targets, persistence)?;
         let mut completed = Vec::with_capacity(drafts.len());
         for draft in drafts {
             completed.push(draft.trace_id);
@@ -118,40 +107,20 @@ impl ResourceProfilingService {
     }
 
     pub fn finish_finalization(&mut self, id: TraceId, remove: bool) {
-        if let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|family| family.v2_mut())
-        {
+        if let Some(backend) = self.profiler.backend_mut().cgroup_mut() {
             backend.finish_finalization(id, remove)
         }
     }
-    pub fn finish_external_finalization(&mut self, id: TraceId) {
-        self.finish_v1_finalization(id);
-        if let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|family| family.v2_mut())
-        {
-            backend.finish_external_finalization(id)
+    pub fn finish_v2_binding_finalization(&mut self, id: TraceId) {
+        if let Some(backend) = self.profiler.backend_mut().cgroup_mut() {
+            backend.finish_v2_binding_finalization(id)
         }
     }
-    pub fn external_binding(&self, id: TraceId) -> Option<ExternalCgroupBinding> {
-        self.profiler
-            .backend()
-            .cgroup()
-            .and_then(|family| family.v2())
-            .and_then(|backend| backend.external_binding(id))
+    pub fn v2_binding(&self, id: TraceId) -> Option<CgroupV2Binding> {
+        self.profiler.backend().cgroup()?.v2_binding(id)
     }
     pub fn prune_forgotten(&mut self, targets: &dyn WorkloadTargets) {
-        if let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|family| family.v2_mut())
-        {
+        if let Some(backend) = self.profiler.backend_mut().cgroup_mut() {
             backend.prune_forgotten(targets)
         }
     }
@@ -159,36 +128,28 @@ impl ResourceProfilingService {
         self.profiler
             .backend()
             .cgroup()
-            .and_then(|family| family.v2())
             .is_none_or(|backend| backend.resource_barrier_ready(id))
     }
     pub fn completed_managed_barrier(&self, id: TraceId) -> bool {
         self.profiler
             .backend()
             .cgroup()
-            .and_then(|family| family.v2())
             .is_some_and(|backend| backend.completed_managed_barrier(id))
     }
     pub fn has_pending_barrier(&self, id: TraceId) -> bool {
         self.profiler
             .backend()
             .cgroup()
-            .and_then(|family| family.v2())
             .is_some_and(|backend| backend.has_pending_barrier(id))
     }
-    pub fn external_barrier_ready(&self, id: TraceId) -> bool {
+    pub fn binding_barrier_ready(&self, id: TraceId) -> bool {
         self.profiler
             .backend()
             .cgroup()
-            .is_none_or(|backend| backend.external_barrier_ready(id))
+            .is_none_or(|backend| backend.binding_barrier_ready(id))
     }
     pub fn force_pending_finalizations_due(&mut self) {
-        if let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|family| family.v2_mut())
-        {
+        if let Some(backend) = self.profiler.backend_mut().cgroup_mut() {
             backend.force_pending_finalizations_due()
         }
     }
@@ -221,51 +182,35 @@ impl ResourceProfilingService {
 }
 
 impl ResourceProfilingService {
-    pub fn has_pending_v1_finalizations(&self) -> bool {
+    pub fn has_pending_v1_binding_finalizations(&self) -> bool {
         self.profiler
             .backend()
             .cgroup()
-            .and_then(|family| family.v1())
-            .is_some_and(|v1| v1.has_pending_finalizations())
+            .is_some_and(|backend| backend.has_pending_v1_binding_finalizations())
     }
     pub fn v1_binding(&self, id: TraceId) -> Option<CgroupV1Binding> {
-        self.profiler.backend().cgroup()?.v1()?.binding(id)
+        self.profiler.backend().cgroup()?.v1_binding(id)
     }
-    pub fn activate_v1(&mut self, id: TraceId) {
-        if let Some(v1) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|f| f.v1_mut())
-        {
-            v1.activate(id);
+    pub fn activate_v1_binding(&mut self, id: TraceId) {
+        if let Some(backend) = self.profiler.backend_mut().cgroup_mut() {
+            backend.activate_v1_binding(id);
         }
     }
-    pub fn finish_v1_finalization(&mut self, id: TraceId) {
-        if let Some(v1) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|f| f.v1_mut())
-        {
-            v1.finish(id);
+    pub fn finish_v1_binding_finalization(&mut self, id: TraceId) {
+        if let Some(backend) = self.profiler.backend_mut().cgroup_mut() {
+            backend.finish_v1_binding_finalization(id);
         }
     }
 
-    pub fn poll_v1_finalizations(
+    pub fn poll_v1_binding_finalizations(
         &mut self,
         targets: &dyn WorkloadTargets,
         persistence: &mut dyn CgroupPersistence,
     ) -> Vec<TraceId> {
-        let Some(backend) = self
-            .profiler
-            .backend_mut()
-            .cgroup_mut()
-            .and_then(|f| f.v1_mut())
-        else {
+        let Some(backend) = self.profiler.backend_mut().cgroup_mut() else {
             return Vec::new();
         };
-        let drafts = backend.poll_finalizations(targets, persistence);
+        let drafts = backend.poll_v1_binding_finalizations(targets, persistence);
         let completed = drafts.iter().map(|d| d.trace_id).collect();
         self.sink.submit_drafts(drafts);
         completed
