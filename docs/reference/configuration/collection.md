@@ -270,11 +270,15 @@ HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: b
 
 ### HTTP/2 协议容量
 
-- **单帧容量**：`semantic_retention.l2_http.http2.max_frame_bytes` 限制 HTTP/2 单帧大小，默认 `65536` 字节。
-- **连接缓冲**：`max_connection_buffer_bytes` 限制共享 HTTP/2 协议缓冲，默认 `4194304` 字节。
-- **配置要求**：两者必须大于零，作用于唯一 frame decoder，独立于 LLM 正文组装预算。
+- **连接缓冲**：`semantic_retention.l2_http.http2.max_connection_buffer_bytes` 统一限制 HTTP/2 framing 缓冲，默认 `4194304` 字节。完整帧的 payload 与 9 字节头都计入该预算，声明长度超出预算时提前拒绝。
+- **配置要求**：连接缓冲必须至少容纳 9 字节帧头，独立于头块及 LLM 正文组装预算。
 - **内容预览**：frame 内容预览仍由 application HTTP/2 观测配置控制。
+- **头块容量**：`max_header_block_bytes` 限制 HEADERS/CONTINUATION 拼接后的 HPACK 输入，默认 `65536` 字节。
+- **头列表容量**：`max_header_list_bytes` 限制解码字段的累计 `name + value + 32`，默认 `65536` 字节；超限终止该 stream 的内容消费，HPACK 仍完成本块解码以维护动态表。
+- **动态表容量**：`max_hpack_table_bytes` 是每个连接方向的 HPACK 动态表硬上限，默认 `65536` 字节，配置必须不小于协议初始表大小 `4096`。超过硬上限的编码更新终止受影响连接解析。
+- **正文解码**：根据已解头部的 Content-Encoding 增量处理 identity、gzip、Brotli、zstd；累计解码输出受 `semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 限制。正文错误隔离到对应 stream，HTTP frame 观测继续。
 - **协议完整性**：捕获缺口或 framing 完整性丢失后，受影响连接停止解析至连接关闭，防止把帧中间的字节当作新消息。
+- **失败定位**：framing 首次失败记录原因、帧长度、缓冲预算、type、flags、stream ID、连接身份与偏移，不记录 payload。`connection_buffer_limit` 表示本地预算，`invalid_stream_id` 表示帧与 stream 的协议约束不符。
 
 `semantic_retention.l2_http.http2.max_active_streams_per_trace` 限制每个 trace 的活动 HTTP/2 stream 数，默认 `4096`，必须大于零。每个 stream 的两个方向共用一个名额，结束后释放。该上限限制协议生命周期状态，消息事实容量另由 `exchange.max_message_facts_per_trace` 控制。
 

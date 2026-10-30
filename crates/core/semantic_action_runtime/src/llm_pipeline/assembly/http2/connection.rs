@@ -1,5 +1,6 @@
 //! HTTP/2 connection assembly and logical-stream coordination.
 
+mod content;
 mod request;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,12 +9,10 @@ use std::time::SystemTime;
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::payload::PayloadSegment;
-use semantic_action::{SemanticAction, SemanticActionKind};
+use semantic_action::{SemanticAction, SemanticActionCompleteness, SemanticActionKind};
 
 use crate::llm_pipeline::assembly::plain::PlainStreamAssembly;
-use crate::llm_pipeline::assembly::router::{
-    AssemblyLimits, AssemblyResetReason, LiveStreamDirection, PayloadStreamGroupKey,
-};
+use crate::llm_pipeline::assembly::router::{LiveStreamDirection, PayloadStreamGroupKey};
 use crate::llm_pipeline::projection::ProjectionBatch as LiveLlmOutput;
 use crate::llm_pipeline::projection::projector::{
     ProjectedProviderResponseId, project_http2_stream_response,
@@ -22,17 +21,15 @@ use crate::llm_pipeline::provider::codec::LlmCodecRegistry;
 use crate::llm_pipeline::stream::finalizer::ResponseFinalizer;
 use crate::llm_pipeline::stream::finalizer::StreamFinalizationReason;
 
-/// One sequential plaintext byte stream to assemble and project: a whole
-/// HTTP/1 (or raw) connection body, or one de-multiplexed HTTP/2 stream's
-/// plaintext (its DATA-frame payloads).
-/// One HTTP/2 stream's de-multiplexed plaintext plus its end-of-stream flag.
+/// One directional message: decoded content, wire evidence, and parser progress.
 #[derive(Default)]
 pub(in crate::llm_pipeline) struct Http2StreamAssembly {
     discarded: bool,
     semantic_terminal: bool,
     pub(in crate::llm_pipeline) message_id: Option<String>,
     pub(in crate::llm_pipeline) plain: PlainStreamAssembly,
-    body: Arc<Vec<u8>>,
+    head: Option<crate::Http1MessageHead>,
+    body: Option<crate::llm_pipeline::transport::content_decoder::DecoderHandle>,
     pub(in crate::llm_pipeline) end_stream: bool,
     end_stream_observed_at: Option<SystemTime>,
 }
@@ -40,7 +37,7 @@ pub(in crate::llm_pipeline) struct Http2StreamAssembly {
 impl Http2StreamAssembly {
     fn retention_footprint(&self) -> RetentionFootprint {
         RetentionFootprint {
-            bytes: self.plain.buffer.len(),
+            bytes: self.body.as_ref().map_or(0, |body| body.snapshot().len()),
             ranges: self.plain.segments.len(),
         }
     }
@@ -62,15 +59,24 @@ impl Http2StreamAssembly {
         stream_id: u32,
     ) -> LiveLlmOutput {
         let mut output = LiveLlmOutput::default();
+        if self.semantic_terminal && !self.end_stream {
+            return output;
+        }
         let Some(message_id) = self.message_id.as_deref() else {
             return output;
         };
-        if self.plain.buffer.is_empty() {
+        let Some(head) = self.head.as_ref() else {
+            return output;
+        };
+        let Some(body) = self.body.as_ref().map(|decoder| decoder.snapshot()) else {
+            return output;
+        };
+        if body.is_empty() {
             return output;
         }
         let mut sse_parse_cache = self.plain.sse_parse_cache.take();
-        let message_start = self.plain.base_offset;
-        let message_end = message_start + self.plain.buffer.len();
+        let message_start = 0;
+        let message_end = self.plain.encoded_len;
         let Some(evidence) = self.plain.response_evidence(message_start, message_end) else {
             self.plain.sse_parse_cache = sse_parse_cache;
             return output;
@@ -82,8 +88,10 @@ impl Http2StreamAssembly {
             stream_id,
             message_id,
             message_start,
-            &self.plain.buffer,
-            Arc::clone(&self.body),
+            &body,
+            Arc::clone(&body),
+            head,
+            self.plain.encoded_len,
             &evidence,
             &mut sse_parse_cache,
             self.end_stream,
@@ -93,6 +101,16 @@ impl Http2StreamAssembly {
             return output;
         };
         self.plain.sse_parse_cache = sse_parse_cache;
+        self.plain.in_flight_response = projection.in_flight;
+        self.semantic_terminal |= projection.actions.iter().any(|action| {
+            action.kind == SemanticActionKind::LlmResponse
+                && action.status != semantic_action::SemanticActionStatus::InProgress
+        });
+        // Provider completion leaves the content decoder active until END_STREAM.
+        // The SSE cache owns the pending response; materialize it after validation.
+        if self.semantic_terminal && !self.end_stream {
+            return output;
+        }
         output.actions.extend(projection.actions);
         output
             .response_observations
@@ -101,10 +119,6 @@ impl Http2StreamAssembly {
             .provider_response_ids
             .extend(projection.provider_response_ids);
         output.payload_segments.extend(projection.payload_segments);
-        self.plain.in_flight_response = projection.in_flight;
-        if projection.terminal {
-            self.plain.evict_encoded_len(projection.encoded_len);
-        }
         output
     }
 
@@ -120,11 +134,12 @@ impl Http2StreamAssembly {
         Vec<PayloadSegment>,
         Vec<ProjectedProviderResponseId>,
     )> {
-        if self.plain.buffer.is_empty() {
+        let body = self.body.as_ref()?.snapshot();
+        if body.is_empty() {
             return None;
         }
         let mut sse_parse_cache = self.plain.sse_parse_cache.take();
-        let message_end = message_start.checked_add(self.plain.buffer.len())?;
+        let message_end = self.plain.encoded_len;
         let projection = {
             let evidence = self.plain.response_evidence(message_start, message_end)?;
             project_http2_stream_response(
@@ -134,8 +149,10 @@ impl Http2StreamAssembly {
                 stream_id,
                 self.message_id.as_deref()?,
                 message_start,
-                &self.plain.buffer,
-                Arc::clone(&self.body),
+                &body,
+                Arc::clone(&body),
+                self.head.as_ref()?,
+                self.plain.encoded_len,
                 &evidence,
                 &mut sse_parse_cache,
                 false,
@@ -160,62 +177,6 @@ pub(in crate::llm_pipeline) struct Http2BodyAssembly {
     retained_ranges: usize,
 }
 impl Http2BodyAssembly {
-    pub(in crate::llm_pipeline) fn append_data(
-        &mut self,
-        stream_id: u32,
-        message_id: &str,
-        data: &[u8],
-        evidence: &[PayloadSegment],
-        limits: AssemblyLimits,
-    ) -> Option<AssemblyResetReason> {
-        if self
-            .streams
-            .get(&stream_id)
-            .is_some_and(|stream| stream.discarded || stream.semantic_terminal)
-        {
-            return None;
-        }
-        if self
-            .retained_bytes
-            .checked_add(data.len())
-            .is_none_or(|size| size > limits.max_buffer_bytes)
-        {
-            return Some(AssemblyResetReason::BufferBytesExceeded);
-        }
-        if self
-            .retained_ranges
-            .checked_add(evidence.len())
-            .is_none_or(|size| size > limits.max_segment_ranges)
-        {
-            return Some(AssemblyResetReason::SegmentRangesExceeded);
-        }
-        let stream = self.streams.entry(stream_id).or_default();
-        stream.message_id = Some(message_id.to_owned());
-        if stream.semantic_terminal {
-            return None;
-        }
-        let before = stream.retention_footprint();
-        stream.plain.append_plaintext(data, evidence);
-        Arc::make_mut(&mut stream.body).extend_from_slice(data);
-        let after = stream.retention_footprint();
-        self.retained_bytes = self
-            .retained_bytes
-            .saturating_sub(before.bytes)
-            .saturating_add(after.bytes);
-        self.retained_ranges = self
-            .retained_ranges
-            .saturating_sub(before.ranges)
-            .saturating_add(after.ranges);
-        self.dirty.insert(stream_id);
-        None
-    }
-    pub(in crate::llm_pipeline) fn end_stream(&mut self, stream_id: u32, at: SystemTime) {
-        if let Some(stream) = self.streams.get_mut(&stream_id) {
-            stream.end_stream = true;
-            stream.end_stream_observed_at = Some(at);
-            self.dirty.insert(stream_id);
-        }
-    }
     fn remove(&mut self, stream_id: u32) -> Option<Http2StreamAssembly> {
         self.dirty.remove(&stream_id);
         let stream = self.streams.remove(&stream_id)?;
@@ -271,13 +232,15 @@ impl Http2BodyAssembly {
             return stream
                 .materialize_incomplete_request(config, codecs, key, stream_id, reason, at);
         }
-        let start = stream.plain.base_offset;
+        let start = 0;
         let Some((mut actions, payload_segments, provider_response_ids)) =
             stream.materialize_response(config, codecs, key, stream_id, start)
         else {
             return LiveLlmOutput::default();
         };
         for action in &mut actions {
+            // A provider completion marker cannot establish transport completeness.
+            action.completeness = SemanticActionCompleteness::Partial;
             ResponseFinalizer::finalize_incomplete(action, reason, at);
         }
         LiveLlmOutput {
@@ -316,19 +279,8 @@ impl Http2BodyAssembly {
                     stream.project_response(config, codecs, key, stream_id)
                 }
             };
-            stream.semantic_terminal |= projected.actions.iter().any(|action| {
-                action.kind == SemanticActionKind::LlmResponse
-                    && action.status != semantic_action::SemanticActionStatus::InProgress
-            });
-            if stream.semantic_terminal {
-                // Keep this stream's transport marker until END_STREAM, but release
-                // consumed content before subtracting its retention footprint.
-                stream.plain = PlainStreamAssembly::default();
-                stream.body = Arc::default();
-            }
             if stream.end_stream
                 && was_confirmed
-                && !stream.semantic_terminal
                 && projected.actions.is_empty()
                 && let Some(observed_at) = stream.end_stream_observed_at
             {

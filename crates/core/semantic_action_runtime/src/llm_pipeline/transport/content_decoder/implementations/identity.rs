@@ -2,16 +2,16 @@ use std::io::{self, Write};
 
 use super::super::bounded_body::BoundedBody;
 
-pub(in crate::llm_pipeline::transport::http1::content_decoder) struct IdentityDecoder;
+pub(in crate::llm_pipeline::transport::content_decoder) struct IdentityDecoder;
 
 static IDENTITY: IdentityDecoder = IdentityDecoder;
 
 impl IdentityDecoder {
-    pub(in crate::llm_pipeline::transport::http1::content_decoder) fn shared() -> &'static Self {
+    pub(in crate::llm_pipeline::transport::content_decoder) fn shared() -> &'static Self {
         &IDENTITY
     }
 
-    pub(in crate::llm_pipeline::transport::http1::content_decoder) fn append(
+    pub(in crate::llm_pipeline::transport::content_decoder) fn append(
         &self,
         bytes: &[u8],
         body: &mut BoundedBody,

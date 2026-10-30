@@ -1,16 +1,16 @@
-use super::super::decoder::Http1DecodeFailure;
+use super::ContentDecodeFailure;
 use super::bounded_body::BoundedBody;
 use super::constant::DEFAULT_ENCODING_IF_CONTENT_ENCODING_MISSING;
 use super::decoder_handle::DecoderHandle;
 use super::implementations::{BrotliDecoder, GzipDecoder, IdentityDecoder, ZstdDecoder};
 
-pub(in crate::llm_pipeline::transport::http1) struct DecoderFactory;
+pub(in crate::llm_pipeline) struct DecoderFactory;
 
 impl DecoderFactory {
-    pub(in crate::llm_pipeline::transport::http1) fn create(
+    pub(in crate::llm_pipeline) fn create(
         headers: &str,
         max_bytes: usize,
-    ) -> Result<DecoderHandle, Http1DecodeFailure> {
+    ) -> Result<DecoderHandle, ContentDecodeFailure> {
         let mut codings = headers.split("\r\n").filter_map(|line| {
             let (name, value) = line.split_once(':')?;
             name.eq_ignore_ascii_case("content-encoding")
@@ -20,8 +20,16 @@ impl DecoderFactory {
             .next()
             .unwrap_or(DEFAULT_ENCODING_IF_CONTENT_ENCODING_MISSING);
         if codings.next().is_some() {
-            return Err(Http1DecodeFailure::InvalidContentEncoding);
+            return Err(ContentDecodeFailure::InvalidContentEncoding);
         }
+        Self::for_encoding(Some(coding), max_bytes)
+    }
+
+    pub(in crate::llm_pipeline) fn for_encoding(
+        coding: Option<&str>,
+        max_bytes: usize,
+    ) -> Result<DecoderHandle, ContentDecodeFailure> {
+        let coding = coding.unwrap_or(DEFAULT_ENCODING_IF_CONTENT_ENCODING_MISSING);
         let body = BoundedBody::new(max_bytes);
         if coding.eq_ignore_ascii_case("identity") {
             Ok(DecoderHandle::identity(IdentityDecoder::shared(), body))
@@ -34,7 +42,7 @@ impl DecoderFactory {
                 ZstdDecoder::new(body).map_err(DecoderHandle::failure)?,
             )))
         } else {
-            Err(Http1DecodeFailure::InvalidContentEncoding)
+            Err(ContentDecodeFailure::InvalidContentEncoding)
         }
     }
 }

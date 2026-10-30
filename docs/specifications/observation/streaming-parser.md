@@ -34,7 +34,7 @@ HTTP exchange 唯一拥有 HTTP 请求—响应关系。LLM request/response 是
 
 HTTP/1 必须处理临时响应、HEAD、CONNECT 和升级边界；捕获缺口后重新找到消息头不能证明配对已经重新对齐。HTTP/2 按连接作用域内 stream ID 关联，消息方向和生命周期仍分别记录。WebSocket 保留消息来源，应用协议内的 request/response 身份决定逻辑 Call；一次 Call 可以消费多条消息。
 
-HTTP/2 frame 观测与 stream 正文语义必须消费同一 decoder 的输出。HEADERS/DATA 建立方向正文来源，控制帧不创建 LLM 消息。尚未解码 HPACK 时，method、path、status 保持未知；END_STREAM 只证明该方向传输结束，不能单独证明 LLM 成功。关闭 LLM 投影不停止 HTTP/2 frame 与消息观测。
+HTTP/2 frame 观测与 stream 正文语义必须消费同一 decoder 的输出。每个连接方向唯一维护 HPACK 上下文，完整 HEADERS/CONTINUATION 建立消息头与方向正文来源。method、path、status、Content-Encoding 取自解码后的真实字段；trailer 不重建消息身份或内容解码器。每个 stream 方向唯一持有增量内容解码器及有界解码正文，SSE/provider 只消费该正文，原始 DATA 坐标独立用于 evidence。END_STREAM 完成内容解码并证明该方向传输结束，不能单独证明 LLM 成功。关闭 LLM 投影不停止 HPACK、HTTP/2 frame 与消息观测。
 
 WebSocket 在消息开始时分配原生 `websocket.message` 身份，Complete/Abort 沿用同一身份及真实采集时间。frame、continuation、masking 与消息解压由单一协议 owner 处理；完整消息直接交给 provider 内容解析。禁止将 WebSocket 消息包装成 HTTP 或 SSE 后重新解析。provider response ID 及其协议定义的请求顺序决定 Call 归属，响应可通过多个 `llm.response.websocket_message` 来源链接引用多条消息。
 

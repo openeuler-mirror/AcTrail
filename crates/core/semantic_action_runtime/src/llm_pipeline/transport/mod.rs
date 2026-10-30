@@ -1,4 +1,5 @@
 pub(super) mod buffer;
+pub(in crate::llm_pipeline) mod content_decoder;
 pub(super) mod evidence;
 pub(in crate::llm_pipeline) mod http1;
 pub(in crate::llm_pipeline) mod http2;

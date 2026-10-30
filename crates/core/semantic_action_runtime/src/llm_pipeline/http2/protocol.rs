@@ -21,7 +21,6 @@ pub(in crate::llm_pipeline) struct Http2Protocol {
     pub(super) stream_counts: BTreeMap<TraceId, usize>,
     pub(super) max_streams: usize,
     pub(super) retain_http: bool,
-    max_frame_bytes: usize,
     max_connection_bytes: usize,
     max_evidence_ranges: usize,
 }
@@ -37,7 +36,6 @@ impl Http2Protocol {
             stream_counts: BTreeMap::new(),
             max_streams: config.l2_http.http2.max_active_streams_per_trace as usize,
             retain_http: config.http_message_summary_enabled(),
-            max_frame_bytes: config.l2_http.http2.max_frame_bytes as usize,
             max_connection_bytes: config.l2_http.http2.max_connection_buffer_bytes as usize,
             max_evidence_ranges: config.l2_http.http2.max_evidence_ranges as usize,
         }
@@ -68,6 +66,7 @@ impl Http2Protocol {
             };
             self.next_connection = next;
             Connection {
+                header_config: config.l2_http.http2,
                 observed_at: segment.observed_at,
                 prefix: format!("trace:{}:h2:{}", segment.trace_id.get(), next),
                 directions: BTreeMap::new(),
@@ -95,7 +94,7 @@ impl Http2Protocol {
             return self.abort_identity(&identity, reason, config, codecs, projection);
         }
         decoder.append(segment);
-        let events = decoder.advance(self.max_frame_bytes);
+        let events = decoder.advance(self.max_connection_bytes);
         let framed_all = decoder.buffered_bytes() == 0 && !segment.bytes.is_empty();
         let group = PayloadStreamGroupKey::from_segment(segment);
         let (terminal, failed, clean) = self.observe_frames(

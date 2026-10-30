@@ -25,6 +25,7 @@ impl From<LlmAssemblyConfig> for AssemblyLimits {
 pub(in crate::llm_pipeline) enum AssemblyResetReason {
     BufferBytesExceeded,
     SegmentRangesExceeded,
+    ContentDecodeFailed,
 }
 
 impl AssemblyResetReason {
@@ -32,6 +33,7 @@ impl AssemblyResetReason {
         match self {
             Self::BufferBytesExceeded => StreamFinalizationReason::BufferBytesExceeded,
             Self::SegmentRangesExceeded => StreamFinalizationReason::SegmentRangesExceeded,
+            Self::ContentDecodeFailed => StreamFinalizationReason::ProtocolDecodeFailed,
         }
     }
 }

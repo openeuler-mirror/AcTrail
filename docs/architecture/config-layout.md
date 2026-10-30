@@ -283,8 +283,10 @@
 | `semantic_retention.l2_http.http1.max_evidence_ranges` | `uint32` | `8192` | 否 | semantic_retention | 协议消息保存的证据范围数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L6) |
 | `semantic_retention.l2_http.http2.max_active_streams_per_trace` | `uint32` | `4096` | 否 | semantic_retention | 每个 trace 中活动 HTTP/2 流的数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L36) |
 | `semantic_retention.l2_http.http2.max_evidence_ranges` | `uint32` | `4096` | 否 | semantic_retention | 协议消息保存的证据范围数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L37) |
-| `semantic_retention.l2_http.http2.max_frame_bytes` | `uint64` | `65536` | 否 | semantic_retention | 单个传输帧字节上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L38) |
-| `semantic_retention.l2_http.http2.max_connection_buffer_bytes` | `uint64` | `4194304` | 否 | semantic_retention | 单条 HTTP/2 连接缓冲区字节上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L39) |
+| `semantic_retention.l2_http.http2.max_connection_buffer_bytes` | `uint64` | `4194304` | 否 | semantic_retention | HTTP/2 framing 缓冲区上限，完整帧包含 9 字节头；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L38) |
+| `semantic_retention.l2_http.http2.max_header_block_bytes` | `uint32` | `65536` | 否 | semantic_retention | HPACK 编码头块拼接字节上限 |
+| `semantic_retention.l2_http.http2.max_header_list_bytes` | `uint32` | `65536` | 否 | semantic_retention | 解码头列表上限，按 name + value + 32 累计 |
+| `semantic_retention.l2_http.http2.max_hpack_table_bytes` | `uint32` | `65536` | 否 | semantic_retention | 每个连接方向的 HPACK 动态表硬上限 |
 | `semantic_retention.l2_websocket.enabled` | `bool` | `true` | 否 | semantic_retention | 保留 WebSocket 层观测；[声明](../../crates/core/config/src/daemon/operator/document/semantic/websocket.rs#L6) |
 | `semantic_retention.l2_websocket.message_summary` | `bool` | `true` | 否 | semantic_retention | 保留协议消息摘要；[声明](../../crates/core/config/src/daemon/operator/document/semantic/websocket.rs#L7) |
 | `semantic_retention.l2_websocket.max_active_connections` | `uint32` | `4096` | 否 | semantic_retention | 活动 WebSocket 连接数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/websocket.rs#L8) |

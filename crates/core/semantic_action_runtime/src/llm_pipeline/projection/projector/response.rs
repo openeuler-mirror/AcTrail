@@ -34,7 +34,6 @@ pub(super) struct LlmResponseProjection {
     pub(super) provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(super) payload_segments: Vec<PayloadSegment>,
     pub(super) in_flight: Option<InFlightResponse>,
-    pub(super) encoded_len: usize,
     pub(super) terminal: bool,
 }
 
@@ -43,14 +42,13 @@ pub(crate) struct ProjectedProviderResponseId {
     pub(crate) provider_response_id: String,
 }
 
-fn in_flight_projection(encoded_len: usize, message_start: usize) -> LlmResponseProjection {
+fn in_flight_projection(message_start: usize) -> LlmResponseProjection {
     LlmResponseProjection {
         actions: Vec::new(),
         response_observations: Vec::new(),
         provider_response_ids: Vec::new(),
         payload_segments: Vec::new(),
         in_flight: Some(InFlightResponse { message_start }),
-        encoded_len,
         terminal: false,
     }
 }
@@ -60,7 +58,8 @@ pub(super) fn project_stream_llm_response_message_actions(
     codecs: &LlmCodecRegistry,
     _key: &PayloadStreamGroupKey,
     message_start: usize,
-    raw_bytes: &[u8],
+    assembled_bytes: &[u8],
+    raw_payload_len: usize,
     mut http: HttpResponseParts,
     evidence: &EvidenceSnapshot,
     sse_cache: &mut Option<IncrementalSseCache>,
@@ -90,7 +89,7 @@ pub(super) fn project_stream_llm_response_message_actions(
         // A finish reason does not stop consumption of trailing provider events.
         // Transport teardown asks the parser to finish with its available evidence.
         if !force_terminal && progress.termination.is_none() && !http.complete {
-            return Some(in_flight_projection(http.encoded_len, message_start));
+            return Some(in_flight_projection(message_start));
         }
         parse_llm_response_body_incremental(
             SseBodySource::SplitHttp,
@@ -105,9 +104,9 @@ pub(super) fn project_stream_llm_response_message_actions(
     http.scheme = plaintext_transport_scheme(first.source_boundary);
     let status = llm_response_status(evidence, http.complete, &body);
     let terminal = body.termination.is_some() || http.complete;
-    let attributes = llm_response_attributes(config, evidence, raw_bytes, &http, &body);
+    let attributes = llm_response_attributes(config, evidence, raw_payload_len, &http, &body);
     let semantic_evidence = payload_evidence(evidence);
-    let payload_segments = semantic_response_payloads(config, first, raw_bytes);
+    let payload_segments = semantic_response_payloads(config, first, assembled_bytes);
     let action_id = format!("{}:llm.response", http.message_id);
     let response = SemanticAction {
         action_id,
@@ -142,7 +141,6 @@ pub(super) fn project_stream_llm_response_message_actions(
         provider_response_ids,
         payload_segments,
         in_flight: (!terminal).then_some(InFlightResponse { message_start }),
-        encoded_len: http.encoded_len,
         terminal,
     })
 }

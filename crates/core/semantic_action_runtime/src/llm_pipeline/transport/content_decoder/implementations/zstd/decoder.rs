@@ -4,12 +4,12 @@ use std::sync::Arc;
 use super::super::super::bounded_body::BoundedBody;
 use super::super::super::decoder::Decoder;
 
-pub(in crate::llm_pipeline::transport::http1::content_decoder) struct ZstdDecoder {
+pub(in crate::llm_pipeline::transport::content_decoder) struct ZstdDecoder {
     inner: zstd::stream::zio::Writer<BoundedBody, zstd::stream::raw::Decoder<'static>>,
 }
 
 impl ZstdDecoder {
-    pub(in crate::llm_pipeline::transport::http1::content_decoder) fn new(
+    pub(in crate::llm_pipeline::transport::content_decoder) fn new(
         body: BoundedBody,
     ) -> io::Result<Self> {
         Ok(Self {

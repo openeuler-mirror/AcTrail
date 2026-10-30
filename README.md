@@ -27,6 +27,7 @@ A general-purpose foundation for AI agent governance, scheduling, and management
 | **Controlled execution** | Managed agent launch and live process tracking |
 | **Flexible customization** | Policy and analysis plugins loaded or unloaded at runtime |
 | **Visual investigation** | Easier diagnosis through Web UI, CLI, and trace exports |
+| **Supported agents** | xiaoO, Pi, Claude Code, Codex CLI, OpenCode, Grok, deepagents-code, Qoder CLI, zcode, and openclaw |
 
 ## 2 Why you will need AcTrail
 
@@ -118,10 +119,10 @@ sudo actraild start
 
 Example: [xiaoO](https://atomgit.com/openEuler/xiaoO) (installed and configured)
 
-Other agents: replace `xiaoO` below with `pi`, `claude`, `codex`, or `opencode`
+For other [supported agents](#1-highlights), replace `xiaoo` below with the agent's launch command.
 
 ```bash
-sudo --preserve-env=HOME,PATH actrailctl launch -- xiaoO
+sudo --preserve-env=HOME,PATH actrailctl launch -- xiaoo
 ```
 
 ### 5.4 Run a Task

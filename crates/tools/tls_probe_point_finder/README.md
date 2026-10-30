@@ -113,3 +113,10 @@ The independent `common-state-pair-52-64-x22` candidate supports the stripped Co
 
 - `rustls_buffer_plaintext`, 52 bytes: `ff 83 01 d1 fd 7b 02 a9 f8 5f 03 a9 f6 57 04 a9 f4 4f 05 a9 fd 83 00 91 16 84 41 f9 08 00 f0 d2 f4 03 02 aa f3 03 01 aa f5 03 00 aa 08 84 01 f9 df 02 08 eb`
 - `rustls_take_received_plaintext`, 64 bytes: `fd 7b bc a9 f7 0b 00 f9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 36 50 40 a9 09 00 f0 d2 33 08 40 f9 f5 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb a1 00 00 54 73 01 f8 b6 e0 03 1f aa e1 03 13 aa`
+
+The independent `common-state-pair-52-64-stack160` candidate supports the stripped Grok 1.0.70 aarch64 static executable, built with rustc 1.94.0 and rustls 0.23.37. The outbound entry reserves a 160-byte frame and loads all three queued-update Vec fields. Both entry signatures must match uniquely. `x0` carries CommonState, `x1` carries the payload, and the outbound return value is the accepted plaintext length:
+
+- `rustls_buffer_plaintext`, 52 bytes: `ff 83 02 d1 fd 7b 06 a9 f8 5f 07 a9 f6 57 08 a9 f4 4f 09 a9 fd 83 01 91 14 84 41 f9 08 00 f0 d2 15 88 41 f9 16 8c 41 f9 f3 03 02 aa 08 84 01 f9 9f 02 08 eb`
+- `rustls_take_received_plaintext`, 64 bytes: `fd 7b bc a9 f7 0b 00 f9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 36 54 40 a9 09 00 f0 d2 33 08 40 f9 f4 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb c1 02 00 54 b3 00 f8 b6 f7 03 1f aa e0 03 17 aa`
+
+Connection identity augmentation also validates certificate ownership through the inline or called destructor shapes documented in `src/probe_detector/detector/tls/rustls/handshake_locator/README.md`. Rebuild both the finder and the daemon after adding a candidate. Restart the daemon to clear cached unavailable plans before retrying the same executable.

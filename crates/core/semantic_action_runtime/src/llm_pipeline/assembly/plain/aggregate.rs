@@ -1,29 +1,27 @@
-//! Bounded semantic body bytes and evidence for an already identified HTTP/2 message.
+//! Wire DATA coordinates and evidence for an identified HTTP/2 message.
 use crate::llm_pipeline::projection::projector::InFlightResponse;
 use crate::llm_pipeline::stream::response::IncrementalSseCache;
-use crate::llm_pipeline::transport::buffer::CursorBuffer;
 use crate::llm_pipeline::transport::evidence::{EvidenceCursor, EvidenceSnapshot, EvidenceTracker};
 use model_core::payload::PayloadSegment;
 use std::sync::Arc;
 
 #[derive(Default)]
 pub(in crate::llm_pipeline) struct PlainStreamAssembly {
-    pub(in crate::llm_pipeline) buffer: CursorBuffer,
-    pub(in crate::llm_pipeline) base_offset: usize,
+    pub(in crate::llm_pipeline) encoded_len: usize,
     pub(in crate::llm_pipeline) segments: EvidenceTracker,
     response_evidence: Option<EvidenceCursor>,
     pub(in crate::llm_pipeline) sse_parse_cache: Option<IncrementalSseCache>,
     pub(in crate::llm_pipeline) in_flight_response: Option<InFlightResponse>,
 }
 impl PlainStreamAssembly {
-    pub(in crate::llm_pipeline) fn append_plaintext(
+    pub(in crate::llm_pipeline) fn append_evidence(
         &mut self,
-        bytes: &[u8],
+        encoded_len: usize,
         segments: &[PayloadSegment],
     ) {
-        let start = self.base_offset + self.buffer.len();
-        self.buffer.extend_from_slice(bytes);
-        let end = self.base_offset + self.buffer.len();
+        let start = self.encoded_len;
+        self.encoded_len += encoded_len;
+        let end = self.encoded_len;
         for segment in segments {
             self.segments.append(start, end, segment);
         }
@@ -53,26 +51,5 @@ impl PlainStreamAssembly {
         self.segments
             .advance_cursor(cursor, message_end)
             .then(|| cursor.snapshot())
-    }
-
-    pub(in crate::llm_pipeline) fn evict_encoded_len(&mut self, encoded_len: usize) {
-        let Some(global_end) = self.base_offset.checked_add(encoded_len) else {
-            tracing::warn!(encoded_len, "refused overflowing LLM stream buffer release");
-            return;
-        };
-        if !self.buffer.release(encoded_len) {
-            tracing::warn!(
-                encoded_len,
-                buffered_bytes = self.buffer.len(),
-                "refused out-of-range LLM stream buffer release"
-            );
-            return;
-        }
-        self.base_offset = global_end;
-        self.segments.evict_before(self.base_offset);
-        if self.buffer.is_empty() {
-            self.segments.reset();
-            self.response_evidence = None;
-        }
     }
 }

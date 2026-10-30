@@ -25,11 +25,20 @@ impl Http2StreamAssembly {
         let Some(message_id) = self.message_id.as_deref() else {
             return output;
         };
-        if !self.end_stream || self.plain.buffer.is_empty() {
+        let Some(head) = self.head.as_ref() else {
+            return output;
+        };
+        if !self.end_stream {
             return output;
         }
-        let message_start = self.plain.base_offset;
-        let message_end = message_start + self.plain.buffer.len();
+        let Some(body) = self.body.as_ref().map(|decoder| decoder.snapshot()) else {
+            return output;
+        };
+        if body.is_empty() {
+            return output;
+        }
+        let message_start = 0;
+        let message_end = message_start + self.plain.encoded_len;
         let segments = self.plain.segments_for_range(message_start, message_end);
         let Some(projection) = project_http2_stream_request(
             config,
@@ -38,8 +47,10 @@ impl Http2StreamAssembly {
             stream_id,
             message_id,
             message_start,
-            &self.plain.buffer,
-            Arc::clone(&self.body),
+            &body,
+            Arc::clone(&body),
+            head,
+            self.plain.encoded_len,
             &segments,
             true,
         ) else {
@@ -57,7 +68,6 @@ impl Http2StreamAssembly {
             .llm_request_histories
             .extend(projection.llm_request_histories);
         output.llm_tool_results.extend(projection.llm_tool_results);
-        self.plain.evict_encoded_len(projection.encoded_len);
         output
     }
 
@@ -74,13 +84,19 @@ impl Http2StreamAssembly {
         let Some(message_id) = self.message_id.as_deref() else {
             return output;
         };
-        if self.plain.buffer.is_empty() {
+        let Some(head) = self.head.as_ref() else {
+            return output;
+        };
+        let Some(body) = self.body.as_ref().map(|decoder| decoder.snapshot()) else {
+            return output;
+        };
+        if body.is_empty() {
             return output;
         }
-        let buffered_bytes = self.plain.buffer.len();
+        let buffered_bytes = self.plain.encoded_len;
         let retained_ranges = self.plain.segments.len();
-        let message_start = self.plain.base_offset;
-        let message_end = message_start.saturating_add(buffered_bytes);
+        let message_start = 0;
+        let message_end = buffered_bytes;
         let segments = self.plain.segments_for_range(message_start, message_end);
         if let Some(mut projection) = project_http2_stream_request(
             config,
@@ -89,8 +105,10 @@ impl Http2StreamAssembly {
             stream_id,
             message_id,
             message_start,
-            &self.plain.buffer,
-            Arc::clone(&self.body),
+            &body,
+            Arc::clone(&body),
+            head,
+            self.plain.encoded_len,
             &segments,
             false,
         ) && !projection.actions.is_empty()

@@ -6,7 +6,7 @@ use crate::llm_pipeline::projection::ProjectionBatch;
 use crate::llm_pipeline::provider::codec::LlmCodecRegistry;
 use crate::llm_pipeline::stream::finalizer::StreamFinalizationReason;
 use crate::llm_pipeline::transport::http2::{Http2Event, data_payload};
-use crate::{Http1AbortReason, Http1MessageEnd, Http1MessageEvent, Http1MessageHead};
+use crate::{Http1AbortReason, Http1MessageEnd, Http1MessageEvent};
 use config_core::daemon::SemanticRetentionConfig;
 
 impl Http2Protocol {
@@ -40,6 +40,13 @@ impl Http2Protocol {
                         false,
                     );
                 }
+                Http2Event::BufferCapacityExceeded => {
+                    return (
+                        terminal,
+                        Some(StreamFinalizationReason::BufferBytesExceeded),
+                        false,
+                    );
+                }
                 Http2Event::StreamFailure {
                     stream_id,
                     observed_at,
@@ -59,17 +66,64 @@ impl Http2Protocol {
                     continue;
                 }
             };
+            let header = match connection.direction(direction).headers.advance(&frame) {
+                Ok(header) => header,
+                Err(failure) => {
+                    tracing::warn!(
+                        ?failure,
+                        stream_id = frame.stream_id,
+                        "HTTP/2 header decoding failed"
+                    );
+                    if failure.connection_failed() {
+                        output.http2_frames.push(frame);
+                        return (
+                            terminal,
+                            Some(StreamFinalizationReason::ProtocolDecodeFailed),
+                            false,
+                        );
+                    }
+                    self.reset_stream(
+                        connection,
+                        frame.stream_id,
+                        frame.observed_at,
+                        StreamFinalizationReason::ProtocolDecodeFailed,
+                        group,
+                        config,
+                        codecs,
+                        output,
+                        &mut terminal,
+                    );
+                    output.http2_frames.push(frame);
+                    clean = false;
+                    continue;
+                }
+            };
             if frame.connection_preface || frame.stream_id == 0 {
                 output.http2_frames.push(frame);
                 continue;
             }
+            if header.as_ref().is_some_and(|block| block.push_promise) {
+                output.http2_frames.push(frame);
+                continue;
+            }
             let stream_id = frame.stream_id;
-            let creates_source = matches!(frame.frame_type, 0 | 1);
+            if matches!(frame.frame_type, 1 | 9) && header.is_none() {
+                frame.message_id = Some(connection.message_id(stream_id, direction));
+                output.http2_frames.push(frame);
+                continue;
+            }
+            if header
+                .as_ref()
+                .and_then(|block| block.head.status_code.as_deref())
+                .is_some_and(|status| status.starts_with('1'))
+            {
+                output.http2_frames.push(frame);
+                continue;
+            }
+            let creates_source = header.is_some() || frame.frame_type == 0;
             if !connection.streams.contains_key(&stream_id)
                 && (creates_source || frame.frame_type == 3)
             {
-                // Requests open monotonically numbered streams. A removed stream
-                // below the request watermark cannot become a new incarnation.
                 if stream_id <= connection.highest_request {
                     output.http2_frames.push(frame);
                     clean = false;
@@ -124,47 +178,73 @@ impl Http2Protocol {
                     continue;
                 }
                 let first = !state.started[index];
+                if first && header.is_none() {
+                    self.reset_stream(
+                        connection,
+                        stream_id,
+                        frame.observed_at,
+                        StreamFinalizationReason::ProtocolDecodeFailed,
+                        group,
+                        config,
+                        codecs,
+                        output,
+                        &mut terminal,
+                    );
+                    output.http2_frames.push(frame);
+                    clean = false;
+                    continue;
+                }
                 state.started[index] = true;
                 if direction == LiveStreamDirection::Outbound {
                     connection.highest_request = connection.highest_request.max(stream_id);
                 }
                 let id = connection.message_id(stream_id, direction);
+                let ended = header
+                    .as_ref()
+                    .map_or(frame.frame_type == 0 && frame.flags & 1 != 0, |block| {
+                        block.end_stream
+                    });
                 if first {
-                    let head = Http1MessageHead {
-                        message_id: id.clone(),
-                        source: frame.source.clone(),
-                        protocol: "h2",
-                        method: None,
-                        authority: None,
-                        path: None,
-                        status_code: None,
-                        reason: None,
-                        headers_text: String::new(),
-                        declared_body_len: None,
+                    let Some(mut head) = header.map(|block| block.head) else {
+                        continue;
                     };
+                    head.message_id = id.clone();
                     let mut http = self.facts.head(&head, output);
-                    http.title = format!(
-                        "HTTP/2 {} stream {}",
-                        Connection::direction_name(direction),
-                        stream_id
-                    );
                     http.attributes
                         .insert("stream_id".into(), stream_id.to_string());
                     http.attributes
-                        .insert("http.headers_decoded".into(), "false".into());
-                    http.evidence = frame
-                        .payload_segment_ids
-                        .iter()
-                        .map(|id| semantic_action::SemanticEvidence {
-                            kind: semantic_action::SemanticEvidenceKind::PayloadSegment,
-                            id: id.get(),
-                            role: "http.message.payload".into(),
-                        })
-                        .collect();
+                        .insert("http.headers_decoded".into(), "true".into());
+                    http.evidence = vec![semantic_action::SemanticEvidence {
+                        kind: semantic_action::SemanticEvidenceKind::PayloadSegment,
+                        id: head.source.segment_id.get(),
+                        role: "http.message.payload".into(),
+                    }];
                     if let Some(fact) = self.facts.messages.get_mut(&id) {
                         fact.http = http.clone();
                     }
                     output.actions.push(http);
+                    if config.llm_layer_enabled() {
+                        let failure = connection.direction(direction).body.begin_message(
+                            stream_id,
+                            &head,
+                            self.limits,
+                        );
+                        if let Some(failure) = failure {
+                            self.fail_content(
+                                connection,
+                                stream_id,
+                                &id,
+                                failure,
+                                frame.observed_at,
+                                direction,
+                                group,
+                                config,
+                                codecs,
+                                output,
+                            );
+                            clean = false;
+                        }
+                    }
                     let request = connection.message_id(stream_id, LiveStreamDirection::Outbound);
                     let response = connection.message_id(stream_id, LiveStreamDirection::Inbound);
                     if self.facts.messages.contains_key(&request)
@@ -196,52 +276,58 @@ impl Http2Protocol {
                                 output,
                                 &mut terminal,
                             );
-                            clean = false;
                             output.http2_frames.push(frame);
+                            clean = false;
                             continue;
                         };
-                        if config.llm_layer_enabled()
-                            && let Some(reason) = connection.direction(direction).body.append_data(
+                        if config.llm_layer_enabled() {
+                            let failure = connection.direction(direction).body.append_data(
                                 stream_id,
                                 &id,
                                 data,
                                 &evidence,
                                 self.limits,
-                            )
-                        {
-                            let reason = reason.finalization_reason();
-                            Self::diagnose(
-                                reason,
-                                group,
-                                frame.observed_at,
-                                Some(stream_id),
-                                output,
                             );
-                            let projected = connection.direction(direction).body.discard_consumer(
-                                stream_id,
-                                &id,
-                                reason,
-                                frame.observed_at,
-                                direction,
-                                config,
-                                codecs,
-                                group,
-                            );
-                            self.consume(
-                                projected,
-                                output,
-                                config.l0_llm_call.context_compact.enabled,
-                            );
-                            self.facts
-                                .finalize_content(&id, reason, frame.observed_at, output);
-                            clean = false;
+                            if let Some(failure) = failure {
+                                self.fail_content(
+                                    connection,
+                                    stream_id,
+                                    &id,
+                                    failure,
+                                    frame.observed_at,
+                                    direction,
+                                    group,
+                                    config,
+                                    codecs,
+                                    output,
+                                );
+                                clean = false;
+                            }
                         }
                     }
-                    if frame.flags & 1 != 0 {
-                        connection
-                            .direction(direction)
-                            .body
-                            .end_stream(stream_id, frame.observed_at);
+                    if ended {
+                        if config.llm_layer_enabled() {
+                            let failure = connection.direction(direction).body.end_stream(
+                                stream_id,
+                                frame.observed_at,
+                                self.limits,
+                            );
+                            if let Some(failure) = failure {
+                                self.fail_content(
+                                    connection,
+                                    stream_id,
+                                    &id,
+                                    failure,
+                                    frame.observed_at,
+                                    direction,
+                                    group,
+                                    config,
+                                    codecs,
+                                    output,
+                                );
+                                clean = false;
+                            }
+                        }
                         if let Some(state) = connection.streams.get_mut(&stream_id) {
                             state.ended[index] = true;
                             if state.ended.iter().all(|ended| *ended) {
@@ -254,13 +340,12 @@ impl Http2Protocol {
                         }));
                     }
                 } else {
-                    // Fact eviction permanently stops this source's semantic consumer.
                     connection
                         .direction(direction)
                         .body
                         .discard_stream(stream_id);
                     clean = false;
-                    if frame.flags & 1 != 0 {
+                    if ended {
                         if let Some(state) = connection.streams.get_mut(&stream_id) {
                             state.ended[index] = true;
                             if state.ended.iter().all(|ended| *ended) {
@@ -273,6 +358,39 @@ impl Http2Protocol {
             output.http2_frames.push(frame);
         }
         (terminal, None, clean)
+    }
+
+    fn fail_content(
+        &mut self,
+        connection: &mut Connection,
+        stream_id: u32,
+        id: &str,
+        failure: crate::llm_pipeline::assembly::router::AssemblyResetReason,
+        at: std::time::SystemTime,
+        direction: LiveStreamDirection,
+        group: &PayloadStreamGroupKey,
+        config: &SemanticRetentionConfig,
+        codecs: &LlmCodecRegistry,
+        output: &mut ProjectionBatch,
+    ) {
+        tracing::warn!(
+            ?failure,
+            stream_id,
+            ?direction,
+            "HTTP/2 content decoding stopped"
+        );
+        let reason = failure.finalization_reason();
+        Self::diagnose(reason, group, at, Some(stream_id), output);
+        let projected = connection
+            .direction(direction)
+            .body
+            .discard_consumer(stream_id, id, reason, at, direction, config, codecs, group);
+        self.consume(
+            projected,
+            output,
+            config.l0_llm_call.context_compact.enabled,
+        );
+        self.facts.finalize_content(id, reason, at, output);
     }
 
     fn reset_stream(
