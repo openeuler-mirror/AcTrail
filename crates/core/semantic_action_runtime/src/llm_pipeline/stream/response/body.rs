@@ -78,6 +78,10 @@ pub(crate) struct IncrementalSseCache {
 }
 
 impl IncrementalSseCache {
+    pub(in crate::llm_pipeline) fn is_terminal(&self) -> bool {
+        self.termination.is_some()
+    }
+
     pub(in crate::llm_pipeline) fn is_confirmed_llm(&self) -> bool {
         self.classifier.is_confirmed_llm()
     }

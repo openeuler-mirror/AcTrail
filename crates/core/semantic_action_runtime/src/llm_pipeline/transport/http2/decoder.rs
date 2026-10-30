@@ -15,6 +15,7 @@ pub(in crate::llm_pipeline) enum Http2Event {
         observed_at: SystemTime,
     },
     ConnectionFailure,
+    BufferCapacityExceeded,
 }
 
 pub(in crate::llm_pipeline) struct Http2Decoder {
@@ -78,7 +79,7 @@ impl Http2Decoder {
             connection_preface: preface,
         })
     }
-    pub(in crate::llm_pipeline) fn advance(&mut self, max_frame_bytes: usize) -> Vec<Http2Event> {
+    pub(in crate::llm_pipeline) fn advance(&mut self, max_buffer_bytes: usize) -> Vec<Http2Event> {
         let mut events = Vec::new();
         let mut cursor = 0;
         if self.base_offset == 0
@@ -110,8 +111,9 @@ impl Http2Decoder {
                 let length = (usize::from(bytes[0]) << 16)
                     | (usize::from(bytes[1]) << 8)
                     | usize::from(bytes[2]);
-                if length > max_frame_bytes {
-                    events.push(Http2Event::ConnectionFailure);
+                if length.saturating_add(9) > max_buffer_bytes {
+                    self.warn_failure(cursor, max_buffer_bytes, "connection_buffer_limit");
+                    events.push(Http2Event::BufferCapacityExceeded);
                     cursor = self.buffer.len();
                     break;
                 }
@@ -129,6 +131,7 @@ impl Http2Decoder {
                         .last()
                         .map(|source| source.observed_at);
                     if let Some(observed_at) = observed_at {
+                        self.warn_failure(cursor, max_buffer_bytes, "invalid_stream_id");
                         if stream_id == 0 {
                             events.push(Http2Event::ConnectionFailure);
                         } else {
@@ -176,5 +179,20 @@ impl Http2Decoder {
             self.evidence.reset();
         }
         events
+    }
+
+    fn warn_failure(&self, cursor: usize, max_buffer_bytes: usize, reason: &'static str) {
+        let Some(bytes) = self.buffer.get(cursor..cursor.saturating_add(9)) else {
+            return;
+        };
+        let frame_len =
+            (usize::from(bytes[0]) << 16) | (usize::from(bytes[1]) << 8) | usize::from(bytes[2]);
+        let stream_id = u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) & 0x7fff_ffff;
+        tracing::warn!(
+            reason, frame_len, max_buffer_bytes, frame_type = bytes[3], flags = bytes[4],
+            stream_id, offset = self.base_offset.saturating_add(cursor),
+            buffered_bytes = self.buffer.len().saturating_sub(cursor),
+            connection = %self.identity_prefix, "HTTP/2 framing failed"
+        );
     }
 }

@@ -18,7 +18,7 @@ use super::super::retention::{insert_payload_snapshot_attributes, payload_snapsh
 pub(super) fn llm_response_attributes(
     config: &SemanticRetentionConfig,
     evidence: &EvidenceSnapshot,
-    raw_bytes: &[u8],
+    raw_payload_len: usize,
     http: &HttpResponseParts,
     body: &LlmResponseBody,
 ) -> BTreeMap<String, String> {
@@ -29,7 +29,7 @@ pub(super) fn llm_response_attributes(
     let mut attributes = raw_llm_response_attributes(config, evidence, &http.body, body);
     attributes.insert(
         attrs::llm_response::RAW_PAYLOAD_BYTES.to_string(),
-        raw_bytes.len().to_string(),
+        raw_payload_len.to_string(),
     );
     if body.stream {
         attributes.insert(

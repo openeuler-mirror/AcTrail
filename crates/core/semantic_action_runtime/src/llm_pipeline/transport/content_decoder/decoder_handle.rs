@@ -1,12 +1,12 @@
 use std::io;
 use std::sync::Arc;
 
-use super::super::decoder::Http1DecodeFailure;
+use super::ContentDecodeFailure;
 use super::bounded_body::BoundedBody;
 use super::decoder::Decoder;
 use super::implementations::IdentityDecoder;
 
-pub(in crate::llm_pipeline::transport::http1) struct DecoderHandle {
+pub(in crate::llm_pipeline) struct DecoderHandle {
     instance: DecoderInstance,
 }
 
@@ -31,14 +31,14 @@ impl DecoderHandle {
         }
     }
 
-    pub(in crate::llm_pipeline::transport::http1) fn is_identity(&self) -> bool {
+    pub(in crate::llm_pipeline) fn is_identity(&self) -> bool {
         matches!(self.instance, DecoderInstance::Identity { .. })
     }
 
-    pub(in crate::llm_pipeline::transport::http1) fn append(
+    pub(in crate::llm_pipeline) fn append(
         &mut self,
         bytes: &[u8],
-    ) -> Result<(), Http1DecodeFailure> {
+    ) -> Result<(), ContentDecodeFailure> {
         match &mut self.instance {
             DecoderInstance::Identity { decoder, body } => decoder.append(bytes, body),
             DecoderInstance::Stateful(decoder) => decoder.append(bytes),
@@ -46,9 +46,7 @@ impl DecoderHandle {
         .map_err(Self::failure)
     }
 
-    pub(in crate::llm_pipeline::transport::http1) fn finish(
-        &mut self,
-    ) -> Result<(), Http1DecodeFailure> {
+    pub(in crate::llm_pipeline) fn finish(&mut self) -> Result<(), ContentDecodeFailure> {
         match &mut self.instance {
             DecoderInstance::Identity { .. } => Ok(()),
             DecoderInstance::Stateful(decoder) => decoder.finish(),
@@ -56,24 +54,24 @@ impl DecoderHandle {
         .map_err(Self::failure)
     }
 
-    pub(in crate::llm_pipeline::transport::http1) fn snapshot(&self) -> Arc<Vec<u8>> {
+    pub(in crate::llm_pipeline) fn snapshot(&self) -> Arc<Vec<u8>> {
         match &self.instance {
             DecoderInstance::Identity { body, .. } => body.snapshot(),
             DecoderInstance::Stateful(decoder) => decoder.snapshot(),
         }
     }
 
-    pub(in crate::llm_pipeline::transport::http1) fn clear_identity(&mut self) {
+    pub(in crate::llm_pipeline) fn clear_identity(&mut self) {
         if let DecoderInstance::Identity { body, .. } = &mut self.instance {
             body.clear();
         }
     }
 
-    pub(super) fn failure(error: io::Error) -> Http1DecodeFailure {
+    pub(super) fn failure(error: io::Error) -> ContentDecodeFailure {
         if error.kind() == io::ErrorKind::OutOfMemory {
-            Http1DecodeFailure::BufferCapacity
+            ContentDecodeFailure::BufferCapacity
         } else {
-            Http1DecodeFailure::InvalidContentEncoding
+            ContentDecodeFailure::InvalidContentEncoding
         }
     }
 }

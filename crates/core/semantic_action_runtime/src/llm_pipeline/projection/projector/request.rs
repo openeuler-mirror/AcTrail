@@ -62,7 +62,8 @@ pub(super) fn project_stream_llm_request_action(
     codecs: &LlmCodecRegistry,
     _key: &PayloadStreamGroupKey,
     _message_start: usize,
-    raw_bytes: &[u8],
+    assembled_bytes: &[u8],
+    raw_payload_len: usize,
     mut http: HttpRequestParts<'_>,
     segments: &[&PayloadSegment],
 ) -> Option<ProjectedLlmRequestAction> {
@@ -80,7 +81,7 @@ pub(super) fn project_stream_llm_request_action(
     let attributes = llm_attributes(
         config,
         segments,
-        raw_bytes,
+        raw_payload_len,
         &http,
         &body,
         content_projection.metadata,
@@ -100,7 +101,7 @@ pub(super) fn project_stream_llm_request_action(
         if config.l4_payload.enabled || !config.l0_llm_call.retain_assembled_payload() {
             Vec::new()
         } else {
-            vec![semantic_payload_draft(first, raw_bytes)]
+            vec![semantic_payload_draft(first, assembled_bytes)]
         };
     let trajectory_history =
         content_projection
@@ -184,7 +185,7 @@ struct RequestContentMetadata {
 fn llm_attributes(
     config: &SemanticRetentionConfig,
     segments: &[&PayloadSegment],
-    raw_bytes: &[u8],
+    raw_payload_len: usize,
     http: &HttpRequestParts<'_>,
     body: &LlmRequestBody,
     content: Option<RequestContentMetadata>,
@@ -193,7 +194,7 @@ fn llm_attributes(
     let mut attributes = BTreeMap::new();
     attributes.insert(
         attrs::llm_request::RAW_PAYLOAD_BYTES.to_string(),
-        raw_bytes.len().to_string(),
+        raw_payload_len.to_string(),
     );
     attributes.insert(
         attrs::llm_request::PAYLOAD_BYTES.to_string(),

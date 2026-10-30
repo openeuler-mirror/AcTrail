@@ -31,7 +31,6 @@ pub(crate) struct LiveLlmProjection {
     pub(crate) provider_response_ids: Vec<ProjectedProviderResponseId>,
     pub(crate) payload_segments: Vec<PayloadSegment>,
     pub(crate) in_flight: Option<InFlightResponse>,
-    pub(crate) encoded_len: usize,
     pub(crate) terminal: bool,
 }
 
@@ -67,6 +66,7 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
         key,
         message_start,
         raw_bytes,
+        raw_bytes.len(),
         http,
         segments,
     );
@@ -105,7 +105,6 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_request(
         provider_response_ids: Vec::new(),
         payload_segments,
         in_flight: None,
-        encoded_len,
         terminal: true,
     })
 }
@@ -147,6 +146,7 @@ pub(in crate::llm_pipeline) fn project_decoded_http1_response(
         key,
         message_start,
         raw_bytes,
+        raw_bytes.len(),
         http,
         evidence,
         sse_cache,
@@ -167,22 +167,24 @@ pub(crate) fn project_http2_stream_request(
     message_start: usize,
     bytes: &[u8],
     body: Arc<Vec<u8>>,
+    head: &crate::Http1MessageHead,
+    wire_encoded_len: usize,
     segments: &[&PayloadSegment],
     transport_complete: bool,
 ) -> Option<LiveLlmProjection> {
-    let encoded_len = bytes.len();
+    let encoded_len = wire_encoded_len;
     let http = HttpRequestParts {
         protocol: "h2",
         message_id: message_id.to_owned(),
         scheme: super::support::plaintext_transport_scheme(segments.first()?.source_boundary),
-        method: None,
-        authority: None,
-        path: None,
+        method: head.method.clone(),
+        authority: head.authority.clone(),
+        path: head.path.clone(),
         stream_id: Some(stream_id),
-        headers_text: None,
+        headers_text: Some(head.headers_text.clone()),
         headers_hpack_base64: None,
         body: body.as_slice(),
-        declared_body_len: None,
+        declared_body_len: head.declared_body_len,
         encoded_len,
         complete: transport_complete,
     };
@@ -192,6 +194,7 @@ pub(crate) fn project_http2_stream_request(
         key,
         message_start,
         bytes,
+        wire_encoded_len,
         http,
         segments,
     );
@@ -230,7 +233,6 @@ pub(crate) fn project_http2_stream_request(
         provider_response_ids: Vec::new(),
         payload_segments,
         in_flight: None,
-        encoded_len,
         terminal: true,
     })
 }
@@ -248,27 +250,29 @@ pub(crate) fn project_http2_stream_response(
     message_start: usize,
     bytes: &[u8],
     body: Arc<Vec<u8>>,
+    head: &crate::Http1MessageHead,
+    wire_encoded_len: usize,
     evidence: &EvidenceSnapshot,
     sse_cache: &mut Option<IncrementalSseCache>,
     transport_complete: bool,
     force_materialize: bool,
 ) -> Option<LiveLlmProjection> {
-    let encoded_len = bytes.len();
+    let encoded_len = wire_encoded_len;
     let http = HttpResponseParts {
         protocol: "h2",
         message_id: message_id.to_owned(),
         scheme: super::support::plaintext_transport_scheme(
             evidence.first.as_ref()?.source_boundary,
         ),
-        status_code: None,
+        status_code: head.status_code.clone(),
         reason: None,
         stream_id: Some(stream_id),
-        headers_text: None,
+        headers_text: Some(head.headers_text.clone()),
         headers_hpack_base64: None,
         body,
         encoded_len,
         complete: transport_complete,
-        body_boundary_known: false,
+        body_boundary_known: true,
     };
     let projection = project_stream_llm_response_message_actions(
         config,
@@ -276,6 +280,7 @@ pub(crate) fn project_http2_stream_response(
         key,
         message_start,
         bytes,
+        wire_encoded_len,
         http,
         evidence,
         sse_cache,
@@ -296,7 +301,6 @@ fn live_projection_from_response(projection: LlmResponseProjection) -> LiveLlmPr
         provider_response_ids: projection.provider_response_ids,
         payload_segments: projection.payload_segments,
         in_flight: projection.in_flight,
-        encoded_len: projection.encoded_len,
         terminal: projection.terminal,
     }
 }

@@ -633,16 +633,20 @@ impl FromStr for PayloadBodyContentRetention {
 pub struct Http2ProtocolConfig {
     pub max_active_streams_per_trace: u32,
     pub max_evidence_ranges: u32,
-    pub max_frame_bytes: u64,
     pub max_connection_buffer_bytes: u64,
+    pub max_header_block_bytes: u32,
+    pub max_header_list_bytes: u32,
+    pub max_hpack_table_bytes: u32,
 }
 impl Default for Http2ProtocolConfig {
     fn default() -> Self {
         Self {
             max_active_streams_per_trace: 4096,
             max_evidence_ranges: 4096,
-            max_frame_bytes: 65_536,
             max_connection_buffer_bytes: 4_194_304,
+            max_header_block_bytes: 65_536,
+            max_header_list_bytes: 65_536,
+            max_hpack_table_bytes: 65_536,
         }
     }
 }

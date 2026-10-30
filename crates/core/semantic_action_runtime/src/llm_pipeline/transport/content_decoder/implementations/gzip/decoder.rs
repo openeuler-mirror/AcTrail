@@ -4,14 +4,12 @@ use std::sync::Arc;
 use super::super::super::bounded_body::BoundedBody;
 use super::super::super::decoder::Decoder;
 
-pub(in crate::llm_pipeline::transport::http1::content_decoder) struct GzipDecoder {
+pub(in crate::llm_pipeline::transport::content_decoder) struct GzipDecoder {
     inner: flate2::write::MultiGzDecoder<BoundedBody>,
 }
 
 impl GzipDecoder {
-    pub(in crate::llm_pipeline::transport::http1::content_decoder) fn new(
-        body: BoundedBody,
-    ) -> Self {
+    pub(in crate::llm_pipeline::transport::content_decoder) fn new(body: BoundedBody) -> Self {
         Self {
             inner: flate2::write::MultiGzDecoder::new(body),
         }

@@ -27,6 +27,7 @@
 | **受控执行** | 统一管理 Agent 启动并实时跟踪进程 |
 | **灵活定制** | 在运行时加载或卸载策略与分析插件 |
 | **可视化调查** | 通过 Web UI、CLI 和轨迹导出简化诊断 |
+| **支持的 Agent** | xiaoO、Pi、Claude Code、Codex CLI、OpenCode、Grok、deepagents-code、Qoder CLI、zcode、openclaw |
 
 ## 2 为什么需要 AcTrail
 
@@ -118,10 +119,10 @@ sudo actraild start
 
 示例：[xiaoO](https://atomgit.com/openEuler/xiaoO)（已安装并配置）
 
-使用其他 Agent 时，将下面的 `xiaoO` 替换为 `pi`、`claude`、`codex` 或 `opencode`。
+使用其他[支持的 Agent](#1-核心亮点)时，将下面的 `xiaoo` 替换为该 Agent 的启动命令。
 
 ```bash
-sudo --preserve-env=HOME,PATH actrailctl launch -- xiaoO
+sudo --preserve-env=HOME,PATH actrailctl launch -- xiaoo
 ```
 
 ### 5.4 执行任务

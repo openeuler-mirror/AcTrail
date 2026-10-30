@@ -5,14 +5,12 @@ use super::super::super::bounded_body::BoundedBody;
 use super::super::super::decoder::Decoder;
 use super::constant::BUFFER_SIZE;
 
-pub(in crate::llm_pipeline::transport::http1::content_decoder) struct BrotliDecoder {
+pub(in crate::llm_pipeline::transport::content_decoder) struct BrotliDecoder {
     inner: brotli::DecompressorWriter<BoundedBody>,
 }
 
 impl BrotliDecoder {
-    pub(in crate::llm_pipeline::transport::http1::content_decoder) fn new(
-        body: BoundedBody,
-    ) -> Self {
+    pub(in crate::llm_pipeline::transport::content_decoder) fn new(body: BoundedBody) -> Self {
         Self {
             inner: brotli::DecompressorWriter::new(body, BUFFER_SIZE),
         }
