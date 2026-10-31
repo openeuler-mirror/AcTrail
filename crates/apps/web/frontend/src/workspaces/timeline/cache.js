@@ -64,7 +64,31 @@ export class TimelineWindowCache {
       && entry.range.startMs + entry.range.spanMs >= range.startMs) };
   }
 
-  project(range) {
+  // Only the bounded published JSON is compared, never the overview history.
+  #sameValue(left, right) {
+    if (Object.is(left, right)) return true;
+    if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+    if (Array.isArray(left)) {
+      if (!Array.isArray(right) || left.length !== right.length) return false;
+      for (let index = 0; index < left.length; index += 1) {
+        if (!this.#sameValue(left[index], right[index])) return false;
+      }
+      return true;
+    }
+    if (Array.isArray(right)) return false;
+    let remaining = 0;
+    for (const key in left) {
+      if (!Object.hasOwn(left, key)) continue;
+      if (!Object.hasOwn(right, key) || !this.#sameValue(left[key], right[key])) return false;
+      remaining += 1;
+    }
+    for (const key in right) {
+      if (Object.hasOwn(right, key)) remaining -= 1;
+    }
+    return remaining === 0;
+  }
+
+  project(range, previous = null) {
     const actions = new Map();
     const contexts = new Map();
     const links = new Map();
@@ -75,7 +99,11 @@ export class TimelineWindowCache {
       for (const link of data.links) links.set(`${link.parent}:${link.child}:${link.role}`, link);
       scanned += data.scanned;
     }
-    return { actions: [...actions.values()], contextActions: [...contexts.values()],
+    const projection = { actions: [...actions.values()], contextActions: [...contexts.values()], associations: [],
       links: [...links.values()], scanned, ...this.status(range) };
+    for (const key of ['actions', 'contextActions', 'links', 'associations']) {
+      if (this.#sameValue(projection[key], previous?.[key])) projection[key] = previous[key];
+    }
+    return projection;
   }
 }

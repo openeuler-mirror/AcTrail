@@ -99,7 +99,7 @@
             v-if="timelineTab"
             :filters="timeline.filters" :loading="timelineLoading"
             :error="timelineError"
-            @apply="applyTimelineFilters" @retry="timeline.retry()"
+            @apply="applyTimelineFilters" @retry="retryTimeline"
           />
           <div v-if="showLoadingPanel" class="loading-panel">
             <span class="loading-spinner" aria-hidden="true"></span>
@@ -112,7 +112,8 @@
             v-bind="activeTabProps"
             @open-waterfall="openWaterfall"
             @load-attribution="ensureTimeAttributionForActiveTab"
-            @update:viewport="timeline.setViewport($event)"
+            @update:viewport="setTimelineViewport"
+            @update:live-follow="follow.setEnabled($event)"
           />
         </section>
       </section>
@@ -147,6 +148,9 @@ import { emptyActionTree, emptyTrajectoryGraph, emptyCommands, withCommandTrace,
 import TraceListControls from './traces/TraceListControls.vue';
 import TimelineControls from './timeline/TimelineControls.vue';
 import { TimelineWindow } from './timeline/window.js';
+import { TimelineFollow } from './timeline/live/controller.js';
+import { FOLLOW_SETTINGS } from './timeline/live/settings.js';
+import { flameAnimationDriver } from '../tabs/core/flame-graph/frame-scheduler.js';
 import NavigationStrip from '../components/navigation/NavigationStrip.vue';
 import { useModuleLocale } from '../locale';
 import { TAB_DEFINITIONS, TAB_GROUP_DEFINITIONS, TAB_IDS } from '../tabs/registry';
@@ -154,22 +158,10 @@ import strings from './locale';
 
 const props = defineProps({
   tracePages: { type: Object, required: true },
-  traces: {
-    type: Array,
-    required: true,
-  },
-  query: {
-    type: String,
-    default: '',
-  },
-  refreshNonce: {
-    type: Number,
-    default: 0,
-  },
-  pendingTraceSelection: {
-    type: Object,
-    default: null,
-  },
+  traces: { type: Array, required: true },
+  query: { type: String, default: '' },
+  refreshNonce: { type: Number, default: 0 },
+  pendingTraceSelection: { type: Object, default: null },
 });
 
 const emit = defineEmits(['active-title', 'loading', 'selection-consumed']);
@@ -218,6 +210,7 @@ const actionTree = ref(emptyActionTree());
 const trajectoryGraph = shallowRef(emptyTrajectoryGraph());
 const commands = shallowRef(emptyCommands());
 const timeline = new TimelineWindow(readTimelinePage);
+const follow = new TimelineFollow(timeline, readTraceMetadata, flameAnimationDriver);
 const waterfall = timeline.data;
 const timelineLoading = timeline.loading;
 const timelineError = timeline.error;
@@ -277,6 +270,10 @@ const activeTabProps = computed(() => {
   if (activeTab.value === TAB_IDS.waterfall || activeTab.value === TAB_IDS.flameGraph) {
     Object.assign(tabProps, timeline.viewProps);
   }
+  if (activeTab.value === TAB_IDS.flameGraph) {
+    tabProps.liveFollow = follow.enabled.value;
+    tabProps.entranceDurationMs = FOLLOW_SETTINGS.entranceMs;
+  }
   if (activeTab.value === TAB_IDS.waterfall) {
     tabProps.idleRange = timeline.filters;
     tabProps.focusInterval = waterfallFocus.value;
@@ -296,11 +293,7 @@ const metrics = computed(() => {
   ];
 });
 
-const clockFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-});
+const clockFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 function formatClock(value) {
   const millis = Number(value ?? 0);
@@ -325,6 +318,7 @@ const showLoadingPanel = computed(() => {
 });
 
 watch(selectedTraceId, async (traceId) => {
+  follow.setEnabled(false);
   if (!traceId) {
     traceDetail.value = null;
     actionTree.value = emptyActionTree();
@@ -356,6 +350,7 @@ watch(
 );
 
 watch(activeTab, async (tabId) => {
+  follow.setEnabled(false);
   if (![TAB_IDS.flameGraph, TAB_IDS.waterfall].includes(tabId)) timeline.cancel();
   const group = tabGroupsByTabId.get(tabId);
   if (group) {
@@ -408,6 +403,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  follow.dispose();
   activeTraceLoad = null;
   countsController?.abort();
   activeTreeLoad = null;
@@ -423,9 +419,7 @@ function reconcileSelectedTrace() {
   if (selectedTraceId.value == null && orderedTraces.value.length) selectedTraceId.value = orderedTraces.value[0].id;
 }
 
-function selectTrace(traceId) {
-  selectedTraceId.value = traceId;
-}
+function selectTrace(traceId) { selectedTraceId.value = traceId; }
 
 function selectTabGroup(groupId) {
   const group = tabGroupsById.get(groupId);
@@ -451,6 +445,7 @@ function selectLeafTab(tabId) {
 }
 
 async function loadTrace(traceId) {
+  follow.setEnabled(false);
   const token = Symbol();
   activeTraceLoad = token;
   countsController?.abort();
@@ -620,13 +615,22 @@ async function ensureTreeForActiveTab() {
 
 async function ensureWaterfallForActiveTab() {
   const traceId = selectedTraceId.value;
+  if (activeTab.value === TAB_IDS.flameGraph && (waterfall.value.loadedTraceId === traceId || timelineLoading.value)) timeline.ensureOverview(traceId);
   if (!traceId || !timelineTab.value || waterfall.value.loadedTraceId === traceId || timelineLoading.value) return;
-  await timeline.load(traceId, { metadata: traceDetail.value });
+  await timeline.load(traceId, { metadata: traceDetail.value, overview: activeTab.value === TAB_IDS.flameGraph });
 }
 
 function applyTimelineFilters(filters) {
-  if (selectedTraceId.value) timeline.load(selectedTraceId.value, { filters, metadata: traceDetail.value });
+  follow.setEnabled(false);
+  if (selectedTraceId.value) timeline.load(selectedTraceId.value, { filters, metadata: traceDetail.value, overview: activeTab.value === TAB_IDS.flameGraph });
 }
+
+function setTimelineViewport(viewport) {
+  follow.setEnabled(false);
+  timeline.setViewport(viewport);
+}
+
+function retryTimeline() { follow.setEnabled(false); timeline.retry(); }
 
 async function ensureTimeAttributionForActiveTab() {
   const traceId = selectedTraceId.value;
