@@ -155,6 +155,10 @@
 
 .flame-navigation > :deep(.timeline-overview) {
   --timeline-overview-gutter: 156px;
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--ui-surface);
 }
 
 .flame-scroll {
@@ -552,4 +556,35 @@
     width: 100%;
     margin-left: 0;
   }
+}
+
+.flame-follow-toggle {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-surface);
+  color: var(--ui-muted);
+  cursor: pointer;
+}
+
+.flame-follow-toggle[aria-pressed="true"] {
+  color: var(--trace-flame-agent-accent);
+  background: var(--ui-surface-raised, var(--ui-surface));
+  border-color: currentColor;
+}
+
+.flame-follow-toggle[aria-pressed="true"] svg {
+  animation: flame-follow-spin var(--flame-follow-spin-duration, 1s) linear infinite;
+}
+
+.flame-partial-hint { margin: 8px 22px; color: var(--ui-muted); font-size: 12px; }
+
+.flame-follow-toggle:disabled { opacity: 0.5; cursor: default; }
+.flame-follow-toggle:focus-visible { outline: 2px solid var(--trace-flame-agent-accent); outline-offset: 2px; }
+@keyframes flame-follow-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .flame-follow-toggle[aria-pressed="true"] svg { animation: none; }
 }

@@ -5,6 +5,27 @@ import { deriveAgentScopes, orderAgentScopes } from '../agent-scopes.js';
 import { BACKGROUND_LABEL_KEYS, AGENT_GROUP_ORDER, HARNESS_GROUP_ORDER, GROUP_LABEL_KEYS, GROUP_DESCRIPTION_KEYS, flameSummaryMarkerKind, packActivityDepths, coveredDuration, activityEnvelope, compareActivities, parseNanos, nanosDiffMs, humanize, basename } from './utils.js';
 
 export function flameActivityDetail(activity, t) {
+  if (activity.lightweight && !activity.density) {
+    return {
+      selectionId: activity.id,
+      title: activity.label,
+      kind: activity.kind,
+      rows: {
+        layer: activity.layer === 'agent' ? t('layer.agentShort') : t('layer.harnessShort'),
+        lane: t(GROUP_LABEL_KEYS[activity.group]),
+        action_id: activity.id,
+        status: activity.status,
+        start_time_unix_nanos: activity.action.start_time_unix_nanos,
+        end_time_unix_nanos: activity.action.end_time_unix_nanos ?? t('canvasTitle.running'),
+        start_offset: `+${formatOffset(activity.startOffsetMs)}`,
+        duration: activity.live ? t('canvasTitle.running') : formatOffset(activity.observedDurMs),
+        detail: t('detailRows.retainedHint'),
+      },
+      attributes: {},
+      evidence: [],
+      raw: null,
+    };
+  }
   if (activity.density) {
     return {
       selectionId: activity.id,
@@ -103,6 +124,7 @@ export function buildAgentLayer(
   const invocations = activities
     .filter((activity) => (
       activity.kind === 'agent.invocation'
+      && !activity.lightweight
       && linkedInvocationIds.has(activity.id)
     ))
     .sort(compareActivities);
@@ -218,7 +240,7 @@ function buildAgentScope(definition, activities, window, index, spawnActivity, t
   const { actionIds: _actionIds, ...scopeDefinition } = definition;
   const scopeId = definition.id;
   const trackActivities = activities.filter(
-    (activity) => activity.kind !== 'agent.invocation',
+    (activity) => activity.kind !== 'agent.invocation' || activity.lightweight,
   );
   const envelopeActivities = spawnActivity
     ? [spawnActivity]
@@ -376,6 +398,7 @@ export function activityFromAction(
     live: endNanos === null,
     action,
     backgroundKind,
+    callOrdinal,
     timingSource: summaryMarker
       ? 'observation_summary_marker'
       : (displayInterval?.source ?? 'observed'),

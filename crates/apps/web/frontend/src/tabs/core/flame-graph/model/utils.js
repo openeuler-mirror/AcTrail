@@ -231,17 +231,6 @@ export function compareActivities(left, right) {
   return left.startOffsetMs - right.startOffsetMs || String(left.id).localeCompare(String(right.id));
 }
 
-export function compareTimedActions(left, right) {
-  const byStart = parseNanos(left.start_time_unix_nanos) - parseNanos(right.start_time_unix_nanos);
-  if (byStart < 0n) {
-    return -1;
-  }
-  if (byStart > 0n) {
-    return 1;
-  }
-  return String(left.id).localeCompare(String(right.id));
-}
-
 export function parseNanos(value) {
   try {
     return BigInt(value ?? 0);

@@ -17,6 +17,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { useModuleLocale } from '../../../locale';
 import strings from './locale';
+import { ActionEntrance } from './live/action-entrance.js';
 
 const { t } = useModuleLocale(strings);
 
@@ -45,6 +46,8 @@ const props = defineProps({
     type: [String, Number],
     default: null,
   },
+  liveFollow: { type: Boolean, default: false },
+  entranceDurationMs: { type: Number, default: 450 },
 });
 
 const emit = defineEmits(['select', 'focus']);
@@ -60,6 +63,16 @@ let pointerDown = null;
 let palette = null;
 let hatchPatterns = null;
 let canvasSize = null;
+const entrance = new ActionEntrance(scheduleDraw);
+
+watch(
+  () => [props.track.activities, props.liveFollow, props.entranceDurationMs],
+  ([activities, enabled, durationMs]) => {
+    entrance.update(activities, enabled, durationMs);
+    scheduleDraw();
+  },
+  { immediate: true },
+);
 
 watch(
   () => [props.track, props.viewport.startMs, props.viewport.spanMs, props.selectedId],
@@ -102,6 +115,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  entrance.dispose();
   unregisterDraw?.();
   cancelFlameFrame(draw);
   resizeObserver?.disconnect();
@@ -145,12 +159,17 @@ function draw() {
   hatchPatterns ??= createHatchPatterns(context, palette);
   entries = buildFlameTrackFrame(props.track, props.viewport, width);
 
+  const now = performance.now();
+  let animating = false;
   for (const entry of entries) {
-    drawEntry(context, entry, width);
+    const opacity = entrance.opacity(entry.activity.id, now);
+    animating ||= opacity < 1;
+    drawEntry(context, entry, width, opacity);
   }
+  if (animating) scheduleDraw();
 }
 
-function drawEntry(context, entry, surfaceWidth) {
+function drawEntry(context, entry, surfaceWidth, entranceOpacity) {
   const activity = entry.activity;
   const left = Math.max(entry.left, -20);
   const right = Math.min(entry.left + entry.width, surfaceWidth + 20);
@@ -161,7 +180,7 @@ function drawEntry(context, entry, surfaceWidth) {
 
   const colors = palette[flameActivityPaletteKey(activity)] ?? palette.agent;
   const radius = entry.instant || activity.density ? 2 : 5;
-  const opacity = activity.density ? 0.72 : activityOpacity(activity);
+  const opacity = (activity.density ? 0.72 : activityOpacity(activity)) * entranceOpacity;
   context.globalAlpha = opacity;
   roundedRect(context, left, entry.top, width, entry.height, radius);
   if (activity.synthetic) {
@@ -178,7 +197,7 @@ function drawEntry(context, entry, surfaceWidth) {
   context.strokeStyle = colors.text;
   context.lineWidth = 1;
   context.stroke();
-  context.globalAlpha = 1;
+  context.globalAlpha = entranceOpacity;
 
   if (activity.aggregate && !activity.synthetic) {
     drawHatch(
@@ -198,10 +217,10 @@ function drawEntry(context, entry, surfaceWidth) {
   if (highlighted && !activity.synthetic) {
     roundedRect(context, left + 1, entry.top + 1, Math.max(width - 2, 1), entry.height - 2, radius);
     context.strokeStyle = activity.status === 'error' ? palette.error : palette.highlight;
-    context.globalAlpha = props.selectedId === activity.id ? 0.95 : 0.58;
+    context.globalAlpha = (props.selectedId === activity.id ? 0.95 : 0.58) * entranceOpacity;
     context.lineWidth = 2;
     context.stroke();
-    context.globalAlpha = 1;
+    context.globalAlpha = entranceOpacity;
   }
 
   if ((entry.showLabel || activity.synthetic) && width >= 12) {
@@ -210,7 +229,7 @@ function drawEntry(context, entry, surfaceWidth) {
     context.rect(Math.max(left, 0), entry.top, Math.min(width, surfaceWidth), entry.height);
     context.clip();
     context.fillStyle = colors.text;
-    context.globalAlpha = activityOpacity(activity);
+    context.globalAlpha = activityOpacity(activity) * entranceOpacity;
     context.font = palette.font;
     context.textAlign = 'left';
     context.textBaseline = 'middle';

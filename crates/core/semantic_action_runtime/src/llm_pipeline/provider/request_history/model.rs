@@ -14,6 +14,7 @@ pub(in crate::llm_pipeline) enum RequestHistoryLimit {
 #[derive(Clone)]
 pub(in crate::llm_pipeline) struct RequestHistory {
     pub(in crate::llm_pipeline) items: Arc<[HistoryItem]>,
+    #[allow(dead_code, reason = "History comparisons currently read only items.")]
     pub(in crate::llm_pipeline) system: Option<Arc<str>>,
 }
 

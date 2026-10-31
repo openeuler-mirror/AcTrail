@@ -143,16 +143,22 @@ const hostSpec = computed(() => [
 
 watch(
   () => [expanded.value, props.traceKey, originMs.value, props.viewport, props.bounds, widthPx.value],
-  scheduleFetch,
+  ([, traceKey], [, previousTraceKey] = []) => {
+    if (traceKey !== previousTraceKey) {
+      clearTimeout(timer);
+      timer = null;
+      controller?.abort();
+      controller = null;
+      loading.value = false;
+      timeline.value = null;
+      plan.value = null;
+      error.value = '';
+      hoverMs.value = null;
+    }
+    scheduleFetch();
+  },
   { immediate: true },
 );
-watch(() => props.traceKey, () => {
-  controller?.abort();
-  timeline.value = null;
-  plan.value = null;
-  error.value = '';
-  hoverMs.value = null;
-});
 
 onMounted(() => {
   resizeObserver = new ResizeObserver(([entry]) => {
@@ -212,15 +218,43 @@ function gutterValue(group, id) {
 }
 
 function scheduleFetch() {
-  clearTimeout(timer);
-  if (!expanded.value || props.traceKey == null || originMs.value == null) return;
-  const bucketMs = timeline.value?.bucket_ms ?? Infinity;
-  if (planCoversViewport(plan.value, bucketMs, props.viewport, widthPx.value)
-    && plan.value.traceKey === props.traceKey
-    && plan.value.boundsEnd >= props.bounds.startMs + props.bounds.spanMs - bucketMs) {
+  if (!expanded.value || props.traceKey == null || originMs.value == null) {
+    clearTimeout(timer);
+    timer = null;
     return;
   }
-  timer = setTimeout(fetchWindow, timeline.value ? FETCH_DELAY_MS : 0);
+  const bucketMs = timeline.value?.bucket_ms ?? Infinity;
+  // The fixed follow span can include empty space beyond the observed trace.
+  const startMs = Math.max(props.viewport.startMs, props.bounds.startMs);
+  const endMs = Math.min(props.viewport.startMs + props.viewport.spanMs, props.bounds.startMs + props.bounds.spanMs);
+  if (endMs <= startMs) {
+    clearTimeout(timer);
+    timer = null;
+    return;
+  }
+  const visible = { startMs, spanMs: endMs - startMs };
+  const visibleWidth = widthPx.value * visible.spanMs / props.viewport.spanMs;
+  if (planCoversViewport(plan.value, bucketMs, visible, visibleWidth)
+    && plan.value.traceKey === props.traceKey
+    && plan.value.boundsEnd >= props.bounds.startMs + props.bounds.spanMs - bucketMs) {
+    clearTimeout(timer);
+    timer = null;
+    return;
+  }
+  const next = planResourceQuery(originMs.value, props.viewport, props.bounds, widthPx.value);
+  // API bucket and point limits can prevent reaching the requested pixel density.
+  if (plan.value?.traceKey === props.traceKey
+    && plan.value.fromMs === next.fromMs
+    && plan.value.toMs === next.toMs
+    && plan.value.maxPoints === next.maxPoints
+    && plan.value.boundsEnd >= props.bounds.startMs + props.bounds.spanMs - bucketMs) {
+    clearTimeout(timer);
+    timer = null;
+    return;
+  }
+  // Continuous follow frames share a pending read instead of postponing it.
+  if (timer !== null || controller) return;
+  timer = setTimeout(() => { timer = null; fetchWindow(); }, FETCH_DELAY_MS);
 }
 
 async function fetchWindow() {
@@ -229,7 +263,9 @@ async function fetchWindow() {
   controller = current;
   const traceKey = props.traceKey;
   const next = planResourceQuery(originMs.value, props.viewport, props.bounds, widthPx.value);
+  const boundsEnd = props.bounds.startMs + props.bounds.spanMs;
   loading.value = true;
+  let loaded = false;
   try {
     const response = await readResourceTimeline(traceKey, {
       fromMs: next.fromMs,
@@ -237,15 +273,20 @@ async function fetchWindow() {
       maxPoints: next.maxPoints,
       signal: current.signal,
     });
-    if (traceKey !== props.traceKey) return;
+    if (current.signal.aborted || traceKey !== props.traceKey) return;
     timeline.value = response;
-    plan.value = { ...next, traceKey, boundsEnd: props.bounds.startMs + props.bounds.spanMs };
+    plan.value = { ...next, traceKey, boundsEnd };
     error.value = '';
+    loaded = true;
   } catch (failure) {
     if (failure?.name === 'AbortError') return;
     error.value = String(failure?.message ?? failure);
   } finally {
-    if (controller === current) loading.value = false;
+    if (controller === current) {
+      loading.value = false;
+      controller = null;
+      if (loaded) scheduleFetch();
+    }
   }
 }
 </script>

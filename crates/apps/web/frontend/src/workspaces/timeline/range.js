@@ -1,6 +1,6 @@
 // Anchor shared timeline coordinates and navigation limits to trace metadata.
 export class TimelineRange {
-  static fromMetadata(metadata, now = Date.now()) {
+  static fromMetadata(metadata, observed = false) {
     const trace = metadata?.trace ?? {};
     const value = raw => raw == null ? null : BigInt(raw);
     const starts = [metadata?.timeline_bounds?.start_time_unix_nanos,
@@ -9,11 +9,35 @@ export class TimelineRange {
     const startNanos = starts.reduce((a, b) => a < b ? a : b);
     const terminal = [trace.completed_at_unix_nanos, trace.exited_at_unix_nanos,
       trace.failed_at_unix_nanos].map(value).filter(v => v !== null);
-    const ends = [value(metadata?.timeline_bounds?.end_time_unix_nanos), ...terminal].filter(v => v !== null);
-    if (!terminal.length && !['completed', 'exited', 'failed'].includes(String(trace.state).toLowerCase())) ends.push(BigInt(now) * 1_000_000n);
+    const ends = [value(metadata?.timeline_bounds?.end_time_unix_nanos), ...(observed ? [] : terminal)].filter(v => v !== null);
+    if (!observed && !terminal.length && !['completed', 'exited', 'failed'].includes(String(trace.state).toLowerCase())) ends.push(BigInt(Date.now()) * 1_000_000n);
     const endNanos = ends.reduce((a, b) => a > b ? a : b, startNanos + 1_000_000n);
     return { startNanos, endNanos, spanMs: Number(endNanos - startNanos) / 1e6,
       startIso: new Date(Number(startNanos / 1_000_000n)).toISOString(),
+      endIso: new Date(Number(endNanos / 1_000_000n)).toISOString() };
+  }
+
+  static observed(metadata, actions, previous) {
+    const window = this.fromMetadata(metadata, true);
+    if (!window) throw new Error('Missing trace time bounds');
+    let endNanos = window.startNanos + 1_000_000n;
+    let lastStartNanos = window.startNanos;
+    // Only an observed endpoint can survive a refresh; initial loads include wall time.
+    if (previous?.observed && previous.endNanos > endNanos) endNanos = previous.endNanos;
+    if (previous?.observed && previous.lastStartNanos > lastStartNanos) lastStartNanos = previous.lastStartNanos;
+    for (const action of actions) {
+      if (action.start_time_unix_nanos != null) {
+        const start = BigInt(action.start_time_unix_nanos);
+        if (start > lastStartNanos) lastStartNanos = start;
+      }
+      for (const raw of [action.start_time_unix_nanos, action.end_time_unix_nanos]) {
+        if (raw == null) continue;
+        const nanos = BigInt(raw);
+        if (nanos > endNanos) endNanos = nanos;
+      }
+    }
+    return { ...window, endNanos, lastStartNanos, observed: true,
+      spanMs: Number(endNanos - window.startNanos) / 1e6,
       endIso: new Date(Number(endNanos / 1_000_000n)).toISOString() };
   }
 

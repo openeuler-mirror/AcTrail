@@ -1,14 +1,14 @@
 // Project bounded action windows onto the shared trace origin.
 import { ToolCallDisplay } from '../../../shared/toolCallDisplay.js';
-import { FLAME_GRAPH_ASSOCIATION_ROLES, BACKGROUND_LLM_KINDS, graphChildren, resolveCallRequest, collectDescendants, packActivityDepths, computeWindow, validTimedAction, compareTimedActions } from './utils.js';
+import { FLAME_GRAPH_ASSOCIATION_ROLES, BACKGROUND_LLM_KINDS, graphChildren, resolveCallRequest, collectDescendants, packActivityDepths, computeWindow, validTimedAction } from './utils.js';
 import { buildAgentLayer, buildLayer, emptyLayer, activityFromAction } from './presentation.js';
 import { derivedDisplayIntervals } from './tool-effects.js';
 
-export function buildFlameGraph(actions, links, associations = [], t, contextActions = [], timelineWindow = null) {
+export function buildFlameGraph(actions, links, associations = [], t, contextActions = [], timelineWindow = null, history = null) {
   const observedActions = (actions ?? []).filter(validTimedAction);
   const validActions = observedActions
     .filter((action) => action.kind !== 'agent.context_compaction');
-  if (!validActions.length) {
+  if (!validActions.length && (!timelineWindow || !history?.size)) {
     return { ...emptyFlameGraphModel(t), ...(timelineWindow ? { window: timelineWindow } : {}) };
   }
 
@@ -46,12 +46,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     childrenByParent,
     actionById,
   );
-  const callOrdinalById = new Map(
-    validActions
-      .filter((action) => action.kind === 'llm.call' && !backgroundKindByCall.has(action.id))
-      .sort(compareTimedActions)
-      .map((action, index) => [action.id, index + 1]),
-  );
+  const callOrdinalById = history?.ordinals();
 
   const agentActionIds = new Set();
   for (const action of validActions) {
@@ -70,7 +65,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
       layer,
       requestByCall.get(action.id) ?? null,
       backgroundKind,
-      callOrdinalById.get(action.id) ?? null,
+      callOrdinalById?.get(action.id) ?? null,
       displayIntervals.get(action.id) ?? null,
       null,
       toolDisplay,
@@ -89,6 +84,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     }
     activities.push(activity);
   }
+  history?.merge(activities, window, toolDisplay, t);
 
   const agentActivities = [];
   const harnessActivities = [];

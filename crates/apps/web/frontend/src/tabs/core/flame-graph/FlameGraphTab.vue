@@ -14,6 +14,11 @@
           </div>
         </div>
         <div class="flame-toolbar-actions">
+          <button class="flame-follow-toggle" type="button" :aria-pressed="liveFollow"
+            :aria-label="t('follow')" :title="t(liveFollow ? 'stopFollow' : 'startFollow')"
+            :disabled="!timelineWindow" @click="emit('update:live-follow', !liveFollow)">
+            <RefreshCw :size="16" aria-hidden="true" />
+          </button>
           <ToggleSwitch class="flame-message-toggle" :checked="showModelMessages"
             :label="t('modelMessages')" :aria-label="t('modelMessages')" @change="showModelMessages = $event" />
           <div class="flame-zoom-controls" :aria-label="t('zoomControls')">
@@ -35,6 +40,12 @@
         <span><i class="harness"></i> {{ t('partialOther') }}</span>
         <small>{{ t('navigationHint') }}</small>
       </div>
+      <p v-if="waterfall.hasMore || waterfall.linksTruncated" class="flame-partial-hint" role="status">
+        {{ t('partialWindow') }}
+      </p>
+      <p v-if="overviewError" class="flame-partial-hint" role="status">
+        {{ t('partialOverview') }}
+      </p>
 
       <div
         v-if="timelineWindow || model.totalActivities"
@@ -44,10 +55,10 @@
         :aria-label="t('timelineAria')"
       >
         <TimelineOverview
-          :bounds="bounds"
-          :viewport="activeViewport"
+          :bounds="overviewBounds"
+          :viewport="liveFollow ? overviewBounds : activeViewport"
           :lanes="overviewLanes"
-          :end-label="formatOffset(bounds.spanMs)"
+          :end-label="formatOffset(overviewBounds.spanMs)"
           @update:viewport="setOverviewViewport"
           @zoom="handleOverviewZoom"
         />
@@ -159,6 +170,8 @@
                     <div class="flame-track fg-time-track" :class="{ synthetic: track.synthetic }">
                       <FlameTrackCanvas
                         :track="track"
+                        :live-follow="liveFollow"
+                        :entrance-duration-ms="entranceDurationMs"
                         :viewport="canvasViewport"
                         :selected-id="selectedId"
                         @select="selectActivity"
@@ -185,6 +198,8 @@
                 <div class="flame-track fg-time-track" :class="{ synthetic: track.synthetic }">
                   <FlameTrackCanvas
                     :track="track"
+                    :live-follow="liveFollow"
+                    :entrance-duration-ms="entranceDurationMs"
                     :viewport="canvasViewport"
                     :selected-id="selectedId"
                     @select="selectActivity"
@@ -237,10 +252,11 @@
 
 <script setup>
 import { computed, markRaw, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, Layers3, Minus, Plus, RotateCcw } from '@lucide/vue';
+import { Bot, ChevronDown, ChevronRight, CornerDownRight, Layers3, Minus, Plus, RefreshCw, RotateCcw } from '@lucide/vue';
 
 import { readActionDetail, readResourceTimeline } from '../../../api.js';
 import { useModuleLocale } from '../../../locale';
+import { FOLLOW_SETTINGS } from '../../../workspaces/timeline/live/settings.js';
 import DetailPanel from '../../../components/DetailPanel.vue';
 import ToggleSwitch from '../../../components/ToggleSwitch.vue';
 import TimelineOverview from '../../../components/timeline/TimelineOverview.vue';
@@ -251,8 +267,9 @@ import FlameTrackCanvas from './FlameTrackCanvas.vue';
 import ResourceTracks from './resources/ResourceTracks.vue';
 import { resourceSummaryRows, timelineOriginMs } from './resources/model.js';
 import strings from './locale';
+import { FlameGraphHistory } from './model/history.js';
 
-const { t } = useModuleLocale(strings);
+const { t, currentLanguage } = useModuleLocale(strings);
 import {
   flameAnimationDriver,
   scheduleFlameRedraw,
@@ -266,6 +283,8 @@ import {
 } from './model';
 
 const props = defineProps({
+  liveFollow: { type: Boolean, default: false },
+  entranceDurationMs: { type: Number, default: 450 },
   timelineWindow: { type: Object, default: null },
   timelineBounds: { type: Object, default: null },
   timelineViewport: { type: Object, default: null },
@@ -282,8 +301,9 @@ const props = defineProps({
     default: '',
   },
 });
-const emit = defineEmits(['update:viewport']);
+const emit = defineEmits(['update:viewport', 'update:live-follow']);
 const model = shallowRef(emptyFlameGraphModel(t));
+const history = markRaw(new FlameGraphHistory());
 const modelBuilding = ref(false);
 const showModelMessages = ref(true);
 const viewport = computed(() => props.timelineViewport);
@@ -302,11 +322,47 @@ let modelBuildToken = 0;
 let modelIdleHandle = null;
 
 const bounds = computed(() => props.timelineBounds ?? { startMs: 0, spanMs: model.value.window.spanMs });
+const overviewBounds = computed(() => {
+  const current = bounds.value;
+  const window = props.timelineWindow;
+  if (!props.liveFollow || !window?.observed || window.activityAdvanced
+    || current.startMs + current.spanMs < window.spanMs) return current;
+  const idleMs = Math.max(Date.now() - Number(window.endNanos / 1_000_000n), 0);
+  const maxIdleMs = current.spanMs * FOLLOW_SETTINGS.idleTailRatio / (1 - FOLLOW_SETTINGS.idleTailRatio);
+  return { ...current, spanMs: current.spanMs + Math.min(idleMs, maxIdleMs) };
+});
 const activeViewport = computed(() => viewport.value ?? bounds.value);
 const filteredLayers = computed(() => filterFlameGraph(model.value, props.query, {
   showModelMessages: showModelMessages.value,
 }));
-const overviewLanes = computed(() => flameOverviewLanes({ layers: filteredLayers.value }));
+const overviewIndex = computed(() => props.waterfall.overview);
+const callOrdinals = computed(() => overviewIndex.value && history.ordinals());
+const overviewOriginNanos = computed(() => props.timelineWindow?.startNanos ?? null);
+const overviewSpanMs = computed(() => props.timelineWindow?.spanMs ?? 1);
+const overviewError = computed(() => Boolean(overviewIndex.value?.error.value));
+const overviewLanes = computed(() => {
+  const index = overviewIndex.value;
+  const originNanos = overviewOriginNanos.value;
+  if (!index || originNanos === null || String(props.query ?? '').trim()) {
+    return flameOverviewLanes({ layers: filteredLayers.value });
+  }
+  // Read the scan revision; the index itself avoids per-record Vue proxies.
+  index.revision.value;
+  const agent = { id: 'agent', tone: 'agent', intervals: [] };
+  const harness = { id: 'harness', tone: 'harness', intervals: [] };
+  for (const action of index.records.values()) {
+    if (action.kind === 'agent.context_compaction'
+      || (!showModelMessages.value && ['llm.request', 'llm.response'].includes(action.kind))) continue;
+    const startOffsetMs = Number(action.startNanos - originNanos) / 1e6;
+    const endOffsetMs = action.endNanos === null ? overviewSpanMs.value
+      : Number(action.endNanos - originNanos) / 1e6;
+    const lane = action.kind.startsWith('llm.') || action.kind === 'agent.invocation' ? agent : harness;
+    lane.intervals.push({ startOffsetMs, status: action.status,
+      durMs: action.kind === 'file.tty_io' ? 0 : Math.max(endOffsetMs - startOffsetMs, 0),
+      depth: action.kind === 'llm.request' ? 1 : action.kind === 'llm.response' ? 2 : 0 });
+  }
+  return [agent, harness];
+});
 const viewportLabel = computed(() => {
   const current = activeViewport.value;
   return current.spanMs >= bounds.value.spanMs - 0.001
@@ -323,12 +379,23 @@ const ticks = computed(() => Array.from({ length: 7 }, (_, index) => {
 }));
 
 watch(
-  () => [
-    props.waterfall?.actions,
-    props.waterfall?.links,
-    props.waterfall?.associations,
-    props.traceKey,
-    props.timelineWindow,
+  () => [props.traceKey, overviewIndex.value, overviewIndex.value?.revision.value, currentLanguage.value],
+  ([traceKey, index, , language]) => history.sync(index, traceKey, language),
+  { immediate: true, flush: 'sync' },
+);
+watch(
+  [
+    () => props.waterfall?.actions,
+    () => props.waterfall?.links,
+    () => props.waterfall?.associations,
+    () => props.traceKey,
+    () => props.waterfall?.contextActions,
+    () => props.timelineWindow?.startNanos,
+    () => props.timelineWindow?.endNanos,
+    () => props.timelineWindow?.spanMs,
+    () => overviewIndex.value?.revision.value,
+    callOrdinals,
+    currentLanguage,
   ],
   ([actions, links, associations, traceId]) => {
     scheduleModelBuild(actions, links, associations, traceId);
@@ -339,7 +406,31 @@ watch(() => props.traceKey, () => {
   collapsedAgentScopes.value = new Set();
   clearSelection();
 });
-watch(activeViewport, syncCanvasViewport, { immediate: true });
+watch(activeViewport, syncCanvasViewport, { immediate: true, flush: 'sync' });
+watch([model, () => props.liveFollow], ([next, following], [previous, wasFollowing]) => {
+  if (!following) return;
+  if (!wasFollowing) {
+    collapsedLayers.value = new Set();
+    collapsedAgentScopes.value = new Set();
+    return;
+  }
+  const previousIds = new Set(previous?.layers.flatMap(layer => layer.tracks.flatMap(track =>
+    track.activities.map(activity => activity.id))) ?? []);
+  const hasNew = tracks => tracks.some(track => track.activities.some(activity => !previousIds.has(activity.id)));
+  const layers = new Set(collapsedLayers.value);
+  const scopes = new Set(collapsedAgentScopes.value);
+  for (const layer of next.layers) {
+    if (hasNew(layer.tracks)) layers.delete(layer.id);
+    for (const scope of layer.agentScopes ?? []) {
+      if (hasNew(scope.tracks)) {
+        layers.delete(layer.id);
+        scopes.delete(scope.id);
+      }
+    }
+  }
+  collapsedLayers.value = layers;
+  collapsedAgentScopes.value = scopes;
+});
 
 const {
   panning,
@@ -381,7 +472,7 @@ function scheduleModelBuild(actions, links, associations, traceId) {
     }
     modelIdleHandle = null;
   }
-  if (!actions?.length && !links?.length) {
+  if (!actions?.length && !links?.length && !history.size) {
     model.value = { ...emptyFlameGraphModel(t), ...(props.timelineWindow ? { window: props.timelineWindow } : {}) };
     modelBuilding.value = false;
     return;
@@ -392,7 +483,7 @@ function scheduleModelBuild(actions, links, associations, traceId) {
     const isCurrent = () => token === modelBuildToken;
     if (!isCurrent()) return;
     // Flame-graph ownership must not depend on backend user-turn accounting.
-    model.value = buildFlameGraph(actions, links, associations, t, props.waterfall.contextActions, props.timelineWindow);
+    model.value = buildFlameGraph(actions, links, associations, t, props.waterfall.contextActions, props.timelineWindow, history);
     modelBuilding.value = false;
   };
   if (typeof requestIdleCallback === 'function') {
@@ -447,7 +538,7 @@ async function selectActivity(activity) {
   try {
     const action = await readActionDetail(props.traceKey, activity.id);
     if (activeDetailLoad === token && selectedId.value === activity.id) {
-      selectedDetail.value = flameActivityDetail({ ...activity, action }, t);
+      selectedDetail.value = flameActivityDetail({ ...activity, action, lightweight: false }, t);
     }
   } catch (error) {
     if (activeDetailLoad === token && selectedId.value === activity.id) {
