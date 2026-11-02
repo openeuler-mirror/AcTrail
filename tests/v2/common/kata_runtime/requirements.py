@@ -83,6 +83,7 @@ class KataCreateSpec:
     ready_timeout_seconds: float = DEFAULTS.ready_timeout_seconds
     privileged_without_host_devices: bool = DEFAULTS.privileged_without_host_devices
     snapshotter: str | None = None
+    network_namespace: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.namespace:
@@ -93,6 +94,7 @@ class KataCreateSpec:
             raise ValueError(
                 f"Kata runtime config must be absolute: {self.runtime_config}"
             )
+        _validate_network_namespace(self.network_namespace)
         if not self.command or any(not value for value in self.command):
             raise ValueError("Kata workload command must contain non-empty argv")
         if self.uid < 0 or self.gid < 0:
@@ -160,6 +162,16 @@ class KataRuntimeProfile:
             raise ValueError("containerd snapshotter must not be empty")
 
 
+def _validate_network_namespace(path: Path | None) -> None:
+    if path is None:
+        return
+    if not path.is_absolute():
+        raise ValueError(f"Kata network namespace must be absolute: {path}")
+    # The path is rendered into a `kind:path` ctr argument.
+    if ":" in str(path) or any(character.isspace() for character in str(path)):
+        raise ValueError(f"Kata network namespace path is unsafe: {path}")
+
+
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SAFE_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -184,8 +196,10 @@ class KataContainerRequirements:
     running_validator: (
         Callable[[KataTestContainer], RequirementCheck] | None
     ) = None
+    network_namespace: Path | None = None
 
     def __post_init__(self) -> None:
+        _validate_network_namespace(self.network_namespace)
         if not _SAFE_NAME.fullmatch(self.name_prefix):
             raise ValueError(
                 "Kata name prefix must contain only letters, digits, dot, "
@@ -244,6 +258,7 @@ class KataContainerRequirements:
                 self.privileged_without_host_devices
             ),
             snapshotter=self.profile.snapshotter,
+            network_namespace=self.network_namespace,
         )
 
     def validate_running(

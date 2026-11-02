@@ -576,6 +576,7 @@ class DualKataXiaooScenario:
             if traces.returncode == 0:
                 try:
                     trace_id = find_clean_trace(traces.stdout, title_prefix).trace_id
+                    (self._run_dir / f"traces-{instance}.json").write_text(traces.stdout, encoding="utf-8")
                     break
                 except RuntimeError as error:
                     last_error = str(error)
@@ -597,6 +598,7 @@ class DualKataXiaooScenario:
                 f"VM {instance} viewer summary failed: {summary.diagnostic}"
             )
         counts = parse_summary_counts(summary.stdout)
+        (self._run_dir / f"summary-{instance}.txt").write_text(summary.stdout, encoding="utf-8")
         if counts.events <= 0 or counts.network_events <= 0:
             raise RuntimeError(
                 f"VM {instance} trace lacks eBPF/network evidence: "
@@ -626,10 +628,12 @@ class DualKataXiaooScenario:
 
     @staticmethod
     def _xiaoo_config() -> str:
+        # No api_key_env: since xiaoO a26ee26d it makes xiaoO save the key next
+        # to this read-only config and exit. workload.sh passes the key through
+        # the provider default variable (DEEPSEEK_API_KEY) instead.
         return f"""[llm]
 provider = "{CASE_CONSTANTS.llm_provider}"
 model = "{CASE_CONSTANTS.llm_model}"
-api_key_env = "ACTRAIL_VIRTUAL_XIAOO_API_KEY"
 api_base = "http://{CASE_CONSTANTS.provider_host}:{CASE_CONSTANTS.provider_port}"
 max_tokens = {CASE_CONSTANTS.llm_max_tokens}
 context_window = {CASE_CONSTANTS.llm_context_window}

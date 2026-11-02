@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.identity import (
-    CloudHypervisorScenarioIdentity,
+from tests.v2.common.execution_isolation.kata.identity import (
+    ExecutionIsolationIdentity,
 )
 
 
-class FirecrackerScenarioIdentity(CloudHypervisorScenarioIdentity):
+class FirecrackerScenarioIdentity(ExecutionIsolationIdentity):
     CASE = "execution-isolation-firecracker"
     DISPLAY = "Firecracker execution-isolation"
     PLUGIN_INSTANCE = f"{CASE}.resource-alert"

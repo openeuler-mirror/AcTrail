@@ -99,7 +99,8 @@ while [ ! -f "$RELEASE_FILE" ]; do
   sleep "$ACTRAIL_XIAOO_POLL_SECONDS"
 done
 
-ACTRAIL_VIRTUAL_XIAOO_API_KEY="$LOCAL_API_KEY" \
+# Provider default variable; the config has no api_key_env (see asset_bundle.py).
+DEEPSEEK_API_KEY="$LOCAL_API_KEY" \
   "$ACTRAIL_XIAOO_BIN" --cli run \
     --config "$ACTRAIL_XIAOO_CONFIG" \
     --tools bash \

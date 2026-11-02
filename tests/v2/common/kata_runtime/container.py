@@ -499,6 +499,10 @@ class KataTestContainer:
             if not self._capabilities.runtime_config_path:
                 raise RuntimeError("ctr run does not support --runtime-config-path")
             command.extend(["--runtime-config-path", str(spec.runtime_config)])
+        if spec.network_namespace is not None:
+            if not self._capabilities.with_ns:
+                raise RuntimeError("ctr run does not support --with-ns")
+            command.extend(["--with-ns", f"network:{spec.network_namespace}"])
 
         labels = dict(spec.labels)
         labels[_RUN_LABEL] = self._run_id

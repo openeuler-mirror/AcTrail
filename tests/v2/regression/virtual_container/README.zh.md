@@ -62,7 +62,7 @@ API Token 和私钥不会写入 profile。
 单个 backend 使用两台顺序启动的长驻 Kata VM：
 
 1. base VM 依次执行 `verify`、`deny`、`launch`、`namespace`；
-2. data VM 依次执行 `tls-only`、`ebpf-only`、`combo`。
+2. data VM 先运行一次不判定的 TLS 首次发现交互（见 v2 文档“TLS 首次发现”），再依次执行 `tls-only`、`ebpf-only`、`combo`。
 
 **采集配置**：Guest 配置由 `actrailctl init` 合并产品默认值与部署设置生成。三个数据场景均使用默认 eBPF 采集，名称表示验收内容。独立的 `guest/tls-only.sh` 覆盖显式 TLS sync 后端。
 

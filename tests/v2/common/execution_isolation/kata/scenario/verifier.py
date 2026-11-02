@@ -14,13 +14,13 @@ from tests.v2.common.sandbox_alert_database import (
     SandboxAlertRecord,
 )
 
-from ..config import CloudHypervisorExecutionIsolationConfig
+from ..config import KataExecutionIsolationConfig
 from .transport import CoordinationDirectory, CoordinationFile, HostCoordination
 
 from ..constants import CASE_CONSTANTS
 
 
-class CloudHypervisorAlertVerifier:
+class SandboxAlertVerifier:
     _EXPECTED_CATEGORIES = {
         "sandbox.resource.high_cpu",
         "sandbox.resource.oom_killed",
@@ -31,7 +31,7 @@ class CloudHypervisorAlertVerifier:
 
     def __init__(
         self,
-        config: CloudHypervisorExecutionIsolationConfig,
+        config: KataExecutionIsolationConfig,
         alerts: SandboxAlertDatabase,
         coordination: Path,
         guest: GuestConsole,

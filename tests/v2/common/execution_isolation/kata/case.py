@@ -4,13 +4,13 @@ from tests.v2.common.kata_runtime.process import SubprocessRunner
 from tests.v2.common.core import TestCase, TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
 
-from .config import CloudHypervisorExecutionIsolationConfig
-from .prerequisites import CloudHypervisorExecutionIsolationPrerequisites
-from .scenario import CloudHypervisorExecutionIsolationScenario
+from .config import KataExecutionIsolationConfig
+from .prerequisites import KataExecutionIsolationPrerequisites
+from .scenario.runtime import KataExecutionIsolationScenario
 
 
-class CloudHypervisorExecutionIsolationCase(TestCase):
-    def __init__(self, config: CloudHypervisorExecutionIsolationConfig) -> None:
+class KataExecutionIsolationCase(TestCase):
+    def __init__(self, config: KataExecutionIsolationConfig) -> None:
         self._config = config
         self._validator = (
             config.repo
@@ -18,7 +18,7 @@ class CloudHypervisorExecutionIsolationCase(TestCase):
         )
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        readiness = CloudHypervisorExecutionIsolationPrerequisites(
+        readiness = KataExecutionIsolationPrerequisites(
             self._config
         ).resolve()
         if readiness.problem is not None:
@@ -46,7 +46,7 @@ class CloudHypervisorExecutionIsolationCase(TestCase):
                 TestStatus.FAILED,
                 f"{self._config.IDENTITY.DISPLAY} data config is invalid",
             )
-        return CloudHypervisorExecutionIsolationScenario(
+        return KataExecutionIsolationScenario(
             self._config,
             test_context,
             readiness.deployment,

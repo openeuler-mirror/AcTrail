@@ -8,7 +8,7 @@ OTEL_STARTUP="$ROOT_DIR/deploy/virtual-container/guest/otel-http-startup.toml"
 GUEST_UNIT="$ROOT_DIR/deploy/virtual-container/guest/actraild.service"
 SCENARIO="$ROOT_DIR/tests/v2/regression/virtual_container/v2/scenario.py"
 MATRIX="$ROOT_DIR/tests/v2/regression/virtual_container/v2/matrix.py"
-CONFIG="$ROOT_DIR/tests/v2/regression/virtual_container/v2/config.py"
+CONSTANTS="$ROOT_DIR/tests/v2/regression/virtual_container/v2/constants.py"
 CONTAINER_MANAGER="$ROOT_DIR/tests/v2/common/kata_runtime/container.py"
 NAMESPACE_ASSERTION="$ROOT_DIR/tests/v2/regression/virtual_container/assert-pid-namespace"
 INJECTOR="$ROOT_DIR/deploy/virtual-container/guest/inject-image.sh"
@@ -137,7 +137,7 @@ if grep -Fq -- 'export LD_LIBRARY_PATH' \
   "$ROOT_DIR/deploy/virtual-container/workload/actrail-launch"; then
   fail "workload launcher exports its private library path to the Agent"
 fi
-grep -Fq -- 'docker.io/library/actrail-openeuler-workload:24.09' "$CONFIG" \
+grep -Fq -- 'docker.io/library/actrail-openeuler-workload:24.09' "$CONSTANTS" \
   || fail "V2 runner does not default to the openEuler workload image"
 grep -Fq -- '[ \"${ID:-}\" = openEuler ]' "$SCENARIO" \
   || fail "V2 scenario does not assert the workload distribution"

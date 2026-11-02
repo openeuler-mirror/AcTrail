@@ -50,7 +50,7 @@ openEuler host
 5. 运行不访问 KVM 的部署契约和 Python 生命周期单元测试。
 6. 运行 preflight，验证 runtime/VMM/config/cgroup 组合。
 7. 启动一台 base VM，顺序执行 `verify/deny/launch/namespace`。
-8. 启动一台 data VM，顺序执行 `tls-only/ebpf-only/combo`。
+8. 启动一台 data VM，先运行一次不判定的 TLS 首次发现交互，再顺序执行 `tls-only/ebpf-only/combo`。
 9. 检查日志和本轮资源清理结果。
 
 ## 手动测试
@@ -88,6 +88,46 @@ GUEST_OTEL_ENDPOINT="http://127.0.0.1:14318/v1/traces"
 并先按
 [`deploy/virtual-container/vsock-egress/README.md`](../../../../../deploy/virtual-container/vsock-egress/README.md)
 安装、启用所选 backend 的 Host bridge。
+
+两种模式都需要先按
+[`deploy/virtual-container/host-collector/README.md`](../../../../../deploy/virtual-container/host-collector/README.md)
+启动 Host Collector。用例默认只读 Guest 本地 SQLite，不证明数据已离开 sandbox；要让
+用例自己断言 span 到达 Collector，设置 Collector file exporter 的输出文件：
+
+```bash
+export VIRTUAL_CONTAINER_E2E_COLLECTOR_TRACES_FILE=/var/lib/actrail/otelcol/actrail-traces.json
+# 可选，默认 30 秒
+export VIRTUAL_CONTAINER_E2E_COLLECTOR_TIMEOUT_SECONDS=30
+```
+
+设置后 data 矩阵会新增 `collector_egress` 结果：只统计本次 data VM 启动之后产生的
+span，超时未出现即失败；artifact 未带 `--otel-endpoint` 时也判失败。
+
+`network` 模式还要求测试 VM 有网卡。`ctr run` 起的 sandbox 默认没有网络，因此用例
+支持在启动每个 VM 前先准备一个网络命名空间，再以 `ctr run --with-ns network:<path>`
+加入，顺序与 Kubernetes CRI 一致：
+
+```bash
+sudo install -d /etc/actrail-cni-test
+sudo tee /etc/actrail-cni-test/net.json >/dev/null <<'JSON'
+{"cniVersion":"0.4.0","name":"actrail-cni-test","type":"bridge",
+ "bridge":"actrail-cni0","isGateway":true,"ipMasq":false,
+ "ipam":{"type":"host-local","dataDir":"/run/actrail-cni-test/ipam",
+         "ranges":[[{"subnet":"10.89.77.0/24","gateway":"10.89.77.1"}]]}}
+JSON
+
+export ACTRAIL_TEST_CNI_CONFIG=/etc/actrail-cni-test/net.json
+export VIRTUAL_CONTAINER_E2E_NETWORK_NAMESPACE_HELPER="$PWD/tests/v2/regression/virtual_container/cni-netns.sh"
+GUEST_EGRESS_MODE="network"
+GUEST_OTEL_ENDPOINT="http://10.89.77.1:4318/v1/traces"
+```
+
+此时 Collector 必须在网桥地址上可达，并在主机防火墙放行该网桥。同一个 Collector 还要
+服务 vsock-bridge（宿主 bridge 连 `127.0.0.1:4318`）时，把 `OTELCOL_OTLP_HTTP_ENDPOINT`
+改为 `0.0.0.0:4318`，并确认主机对外的防火墙区域没有放行 4318；只用 network 时也可只监听
+`10.89.77.1:4318`（网桥在第一个命名空间创建后才存在，Collector 要在其后启动）。helper 是
+任意可执行文件，约定为 `add NAME` 在最后一行输出命名空间路径、`del NAME` 回收；
+`cni-netns.sh` 只是单节点上的参考实现，不等同于真实 Kubernetes 集群验证。
 
 ### 步骤1：检查测试前提
 
@@ -351,11 +391,13 @@ grep -E \
 
 runner 使用开启 debug console、BTF/eBPF 和至少 2 vCPU 的 data Profile，顺序执行：
 
-1. `tls-only`：`SSL_write/SSL_read` 双向明文 payload 完整。
+1. `tls-only`：`SSL_write/SSL_read` 双向明文 payload 完整，内容与固定 fixture 逐字节一致。
 2. `ebpf-only`：文件行为产生非零 eBPF event。
 3. `combo`：同一 trace 同时包含 TLS、eBPF 和 network event。
 
 **采集配置**：三个场景共用由产品默认配置与 Guest 部署设置生成的 daemon 配置，使用 eBPF 采集。场景名称表示工作负载和验收内容。
+
+**TLS 首次发现**：默认的 bpf-copy 在被追踪进程映射 TLS 库之后才异步挂 uprobe，第一个进程的握手可能早于挂载，产品允许这一首次发现缺口。uprobe 挂在库文件上，因此 data VM 先用同一个 openssl 运行一次被追踪的 TLS 交互，结果只保存为 `<backend>-tls-only-discovery-payloads.txt`，不做判定；之后的 `tls-only` 和 `combo` 要求完整。这条 trace 也会计入 `collector_egress`。测试用的 openssl 经 `LD_LIBRARY_PATH` 加载自带的 libssl，而 daemon 在 exec 时规划探针尚不读取 `LD_LIBRARY_PATH`，只能依赖异步发现；产品修复动态库搜索路径后，可去掉这次发现交互，恢复对首个交互的检查。
 
 **TLS sync 专项**：独立脚本 `guest/tls-only.sh` 使用 `guest-tls-only.conf`，由 `actrailctl init --patch guest/tls-only/patch_config.toml` 生成，显式选择 `tls-sync` 并关闭 eBPF。
 

@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from tests.v2.common.core import TestCase, TestResult, TestStatus
+from tests.v2.common.docker import probe_docker_server
 from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAgentXiaooConfig
@@ -151,20 +152,12 @@ class ContainerAgentXiaooCase(TestCase):
                 "real xiaoO executable is unavailable: "
                 f"{self._config.xiaoo_bin}"
             )
-        try:
-            completed = subprocess.run(
-                ["docker", "info", "--format", "{{.ServerVersion}}"],
-                text=True,
-                capture_output=True,
-                timeout=CASE_CONSTANTS.docker_info_timeout_seconds,
-                check=False,
+        probe = probe_docker_server(None, CASE_CONSTANTS.docker_info_timeout_seconds)
+        if probe.version is None:
+            return (
+                "external container prerequisite is unavailable: Docker daemon: "
+                + probe.diagnostic
             )
-        except subprocess.TimeoutExpired:
-            return "external container prerequisite is unavailable: Docker daemon timed out"
-        if completed.returncode != 0:
-            diagnostic = (completed.stderr or completed.stdout).strip()
-            suffix = f": {diagnostic}" if diagnostic else ""
-            return "external container prerequisite is unavailable: Docker daemon" + suffix
         return None
 
     def _terminate_process_group(

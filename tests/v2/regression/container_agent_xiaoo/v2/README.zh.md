@@ -22,6 +22,10 @@ read/write 的 `observed` 和 `bytes`，关闭 `bulk_read`，以验证独立读�
 `nested_observer_runtime=` 给出路径。场景脚本的 `--runtime` 参数用于接收调用者
 管理的目录，其删除职责由调用者承担。
 
+嵌套 dockerd 运行在私有的 PID、网络和 mount namespace 中。场景先在该 mount
+namespace 内用空 tmpfs 遮住宿主 `/run/containerd`，使 dockerd 启动自己的
+containerd；否则它会接入宿主 containerd，容器进程落在嵌套 PID namespace 之外。
+
 # 运行参数
 
 本目录的 `constants.py` 使用 `ContainerAgentXiaooConstants` dataclass 定义测例默认值。
@@ -59,8 +63,11 @@ test -x "$BIN_DIR/actraild"
 test -x "$BIN_DIR/actrailctl"
 test -x "$BIN_DIR/actrailviewer"
 test -x "$XIAOO_BIN"
-docker info --format '{{.ServerVersion}}'
+docker version --format '{{.Server.Version}}'
 ```
+
+部分 Docker 版本（如 25.x）的 `docker info --format` 在 daemon 不可达时也返回 0，
+因此测例用 `docker version`，并要求退出码为 0 且输出非空版本号。
 
 ### 脚本行为与预期结果
 

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from tests.v2.common.core import TestCase, TestResult, TestStatus
+from tests.v2.common.docker import probe_docker_server
 from tests.v2.common.runner import TestingContextSingleton
 
 from .config import ContainerAutoConfig
@@ -89,13 +90,10 @@ class ContainerAutoCase(TestCase):
             )
         if shutil.which("docker") is None:
             return TestResult(TestStatus.SKIPPED, "docker is unavailable")
-        completed = subprocess.run(
-            ["docker", "info", "--format", "{{.ServerVersion}}"],
-            text=True,
-            capture_output=True,
-            timeout=CASE_CONSTANTS.docker_info_timeout_seconds,
-            check=False,
-        )
-        if completed.returncode != 0:
-            return TestResult(TestStatus.SKIPPED, "Docker daemon is unavailable")
+        probe = probe_docker_server(None, CASE_CONSTANTS.docker_info_timeout_seconds)
+        if probe.version is None:
+            return TestResult(
+                TestStatus.SKIPPED,
+                f"Docker daemon is unavailable: {probe.diagnostic}",
+            )
         return None

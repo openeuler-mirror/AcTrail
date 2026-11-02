@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from tests.v2.common.kata_runtime import GuestConsole, KataTestContainer
 
-from ..config import CloudHypervisorExecutionIsolationConfig
+from ..config import KataExecutionIsolationConfig
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class GuestSystemSandboxObserver:
     """Controls the root Guest observer without starting a workload-local daemon."""
 
     guest: GuestConsole
-    config: CloudHypervisorExecutionIsolationConfig
+    config: KataExecutionIsolationConfig
 
     CONTROL_SOCKET = "/dev/actrail/sandbox-observer-control.sock"
     READY_MARKER = "/dev/actrail/sandbox-observer.ready"

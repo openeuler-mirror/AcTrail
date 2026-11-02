@@ -4,15 +4,15 @@ from typing import ClassVar
 
 from .constants import CASE_CONSTANTS
 
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.config import (
-    CloudHypervisorExecutionIsolationConfig,
+from tests.v2.common.execution_isolation.kata.config import (
+    KataExecutionIsolationConfig,
 )
 
 from .identity import StratoVirtScenarioIdentity
 
 
 class StratoVirtExecutionIsolationConfig(
-    CloudHypervisorExecutionIsolationConfig
+    KataExecutionIsolationConfig
 ):
     CONFIG_NAMESPACE: ClassVar[str] = "EXECUTION_ISOLATION_STRATOVIRT"
     ENVIRONMENT_PREFIX: ClassVar[str] = "EXECUTION_ISOLATION_STRATOVIRT_E2E_"

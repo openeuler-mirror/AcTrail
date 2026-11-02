@@ -9,17 +9,17 @@ from unittest.mock import patch
 
 from tests.v2.common.core import TestCaseInputs
 from tests.v2.common.process import CommandResult
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.scenario.setup import (
-    CloudHypervisorScenarioSetup,
+from tests.v2.common.execution_isolation.kata.scenario.setup import (
+    ExecutionIsolationSetup,
 )
 from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.config import (
     CloudHypervisorExecutionIsolationConfig,
 )
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.case import (
-    CloudHypervisorExecutionIsolationCase,
+from tests.v2.common.execution_isolation.kata.case import (
+    KataExecutionIsolationCase,
 )
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.prerequisites import (
-    CloudHypervisorExecutionIsolationPrerequisites,
+from tests.v2.common.execution_isolation.kata.prerequisites import (
+    KataExecutionIsolationPrerequisites,
 )
 from tests.v2.regression.execution_isolation_firecracker.v2.config import (
     FirecrackerExecutionIsolationConfig,
@@ -50,7 +50,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 case = FIRECRACKER_TEST_DEFINITION.build_case(inputs)
 
-        self.assertIsInstance(case, CloudHypervisorExecutionIsolationCase)
+        self.assertIsInstance(case, KataExecutionIsolationCase)
         self.assertEqual(case._config.BACKEND, "firecracker")
 
     def test_firecracker_uses_its_kata_runtime_profile_and_vm_root(self) -> None:
@@ -99,11 +99,11 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 xiaoo=root / "xiaoo",
             )
             with patch(
-                "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
+                "tests.v2.common.execution_isolation.kata."
                 "prerequisites.DeploymentArtifacts.load",
                 return_value=deployment,
             ) as load:
-                resolved, problem = CloudHypervisorExecutionIsolationPrerequisites(
+                resolved, problem = KataExecutionIsolationPrerequisites(
                     config
                 )._deployment()
 
@@ -125,7 +125,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 workload_bundle=root / "workload",
                 guest_bundle=root / "guest",
             )
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 deployment,  # type: ignore[arg-type]
                 _RecordingRunner(),  # type: ignore[arg-type]
@@ -164,7 +164,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 workload_image_archive=manifest_archive,
                 workload_image_archive_sha256="a" * 64,
             )
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 deployment,  # type: ignore[arg-type]
                 _RecordingRunner(),  # type: ignore[arg-type]
@@ -206,11 +206,11 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 xiaoo=root / "xiaoo",
             )
             with patch(
-                "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
+                "tests.v2.common.execution_isolation.kata."
                 "prerequisites.DeploymentArtifacts.load",
                 return_value=deployment,
             ):
-                resolved, problem = CloudHypervisorExecutionIsolationPrerequisites(
+                resolved, problem = KataExecutionIsolationPrerequisites(
                     config
                 )._deployment()
 
@@ -228,7 +228,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                     inputs
                 )
             runner = _RecordingRunner()
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 None,  # type: ignore[arg-type]
                 runner,  # type: ignore[arg-type]
@@ -253,7 +253,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                     inputs
                 )
             runner = _RecordingRunner()
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 None,  # type: ignore[arg-type]
                 runner,  # type: ignore[arg-type]
@@ -280,7 +280,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                     inputs
                 )
             runner = _RecordingRunner()
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 None,  # type: ignore[arg-type]
                 runner,  # type: ignore[arg-type]

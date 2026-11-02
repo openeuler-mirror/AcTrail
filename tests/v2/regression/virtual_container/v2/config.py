@@ -39,6 +39,9 @@ class VirtualContainerConfig(CommonTestConfig):
     artifact_manifest: Path | None
     workload_bundle: Path
     capability_bundle: Path
+    collector_traces_file: Path | None = None
+    collector_timeout_seconds: int = 30
+    network_namespace_helper: Path | None = None
 
     @classmethod
     def from_environment(
@@ -182,6 +185,20 @@ class VirtualContainerConfig(CommonTestConfig):
             capability_bundle=_path_with_default(
                 "CAPABILITY_BUNDLE_DIR",
                 repo / CASE_CONSTANTS.capability_bundle_path,
+            ),
+            collector_traces_file=optional_absolute_path(
+                os.environ.get("VIRTUAL_CONTAINER_E2E_COLLECTOR_TRACES_FILE"),
+                "VIRTUAL_CONTAINER_E2E_COLLECTOR_TRACES_FILE",
+            ),
+            collector_timeout_seconds=bounded_environment_int(
+                "VIRTUAL_CONTAINER_E2E_COLLECTOR_TIMEOUT_SECONDS",
+                "30",
+                minimum=1,
+                maximum=600,
+            ),
+            network_namespace_helper=optional_absolute_path(
+                os.environ.get("VIRTUAL_CONTAINER_E2E_NETWORK_NAMESPACE_HELPER"),
+                "VIRTUAL_CONTAINER_E2E_NETWORK_NAMESPACE_HELPER",
             ),
         )
 

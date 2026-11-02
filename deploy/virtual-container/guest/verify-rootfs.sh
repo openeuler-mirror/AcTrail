@@ -172,6 +172,10 @@ assert_line /etc/actrail/operator.conf \
   'sync_event_socket_path = "/dev/actrail/tls-sync.sock"'
 assert_line /etc/actrail/operator.conf 'log_path = "/run/actrail/private/actraild.log"'
 assert_line /etc/actrail/operator.conf 'path = "/run/actrail/private/actrail.sqlite"'
+assert_line /etc/actrail/operator.conf \
+  'path = "/run/actrail/private/actrail-resources.sqlite"'
+assert_line /etc/actrail/operator.conf \
+  'plugin_config_path = "/run/actrail/private/alert-forwarding.config.json"'
 if [[ "$EXPECTED_OTEL_EXPORT_ENABLED" == "1" ]]; then
   assert_file /etc/actrail/plugins/otel-http/otel-http.config.toml
   assert_file /usr/share/actrail/plugins/otel-http/otel-http.plugin.toml

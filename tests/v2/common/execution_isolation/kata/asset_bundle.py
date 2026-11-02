@@ -7,13 +7,15 @@ from .constants import CASE_CONSTANTS
 from tests.v2.common.kata_runtime import sha256_file
 
 
-class CloudHypervisorAssetBundle:
+class ExecutionIsolationAssetBundle:
     @staticmethod
     def xiaoo_config() -> str:
+        # No api_key_env: since xiaoO a26ee26d it makes xiaoO save the key next
+        # to this read-only config and exit. workload.sh passes the key through
+        # the provider default variable (DEEPSEEK_API_KEY) instead.
         return f"""[llm]
 provider = "{CASE_CONSTANTS.llm_provider}"
 model = "{CASE_CONSTANTS.llm_model}"
-api_key_env = "ACTRAIL_VIRTUAL_XIAOO_API_KEY"
 api_base = "http://{CASE_CONSTANTS.provider_host}:{CASE_CONSTANTS.provider_port}"
 max_tokens = {CASE_CONSTANTS.llm_max_tokens}
 context_window = {CASE_CONSTANTS.llm_context_window}
