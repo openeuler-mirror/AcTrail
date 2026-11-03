@@ -18,9 +18,11 @@ use plugin_system::{
 use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
+use super::alerts::NetworkBoundaryAlerts;
 use super::audit::{NetworkAuditBuilder, NetworkDecisionSource};
 use super::request::NetworkConnectContext;
 use super::service::{NetworkControlBackend, NetworkControlService};
+use crate::services::alert_ingress::AlertIngress;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::seccomp_notify::DeferredNotification;
 use access_control::policy::network::StoredNetworkRule;
@@ -208,16 +210,24 @@ impl NetworkControlService {
         trace_runtime: &TraceRuntime,
         process_registry: &ProcessIdentityManager,
         plugins: &ControlPluginRuntime,
+        alert_ingress: &AlertIngress,
+        alerts: &mut NetworkBoundaryAlerts,
     ) -> Result<Vec<RawCollectorEvent>, ControlError> {
         let Some(backend_ref) = &self.backend else {
             return Ok(Vec::new());
         };
-        let mut backend = backend_ref.lock().map_err(|error| {
-            ControlError::new("network_control_policy", format!("lock backend: {error}"))
-        })?;
-        backend.wake.drain()?;
+        backend_ref
+            .lock()
+            .map_err(|error| {
+                ControlError::new("network_control_policy", format!("lock backend: {error}"))
+            })?
+            .wake
+            .drain()?;
         let mut events = Vec::new();
         loop {
+            let mut backend = backend_ref.lock().map_err(|error| {
+                ControlError::new("network_control_policy", format!("lock backend: {error}"))
+            })?;
             let completion = match backend.completion_receiver.try_recv() {
                 Ok(completion) => completion,
                 Err(TryRecvError::Empty) => break,
@@ -228,13 +238,22 @@ impl NetworkControlService {
                     ));
                 }
             };
+            backend.release(
+                &completion.rule,
+                completion
+                    .rule
+                    .gray_target
+                    .as_deref()
+                    .expect("gray network completion has target"),
+            )?;
+            let audit_enabled = backend.config.audit_enabled;
+            drop(backend);
             let target = completion
                 .rule
                 .gray_target
                 .as_deref()
                 .expect("gray network completion has target")
                 .to_string();
-            backend.release(&completion.rule, &target)?;
             if completion.deferred.trace_id() != completion.context.trace_id() {
                 completion.deferred.deny_errno(libc::EPERM)?;
                 return Err(ControlError::new(
@@ -288,31 +307,34 @@ impl NetworkControlService {
                 ),
             };
             respond_deferred(&completion.deferred, decision)?;
+            let audit = NetworkAuditBuilder::new(
+                &completion.context,
+                decision,
+                Some(&completion.rule),
+                source,
+                completion.latency_us,
+            );
+            audit.submit_boundary_alert(alert_ingress, trace_runtime, alerts);
             if let Some((decision, instance_id, reason)) = cache_value
-                && backend.rules.is_rule_current(&completion.rule)
                 && trace_runtime
                     .get_trace(completion.context.trace_id())
                     .is_some_and(|entry| !entry.trace.lifecycle_state.is_terminal())
             {
-                backend.cache_decision(
-                    &completion.context,
-                    &completion.rule,
-                    decision,
-                    instance_id,
-                    reason,
-                )?;
-            }
-            if backend.config.audit_enabled {
-                events.push(
-                    NetworkAuditBuilder::new(
+                let mut backend = backend_ref.lock().map_err(|error| {
+                    ControlError::new("network_control_policy", format!("lock backend: {error}"))
+                })?;
+                if backend.rules.is_rule_current(&completion.rule) {
+                    backend.cache_decision(
                         &completion.context,
+                        &completion.rule,
                         decision,
-                        Some(&completion.rule),
-                        source,
-                        completion.latency_us,
-                    )
-                    .build(process_registry)?,
-                );
+                        instance_id,
+                        reason,
+                    )?;
+                }
+            }
+            if audit_enabled {
+                events.push(audit.build(process_registry)?);
             }
         }
         Ok(events)

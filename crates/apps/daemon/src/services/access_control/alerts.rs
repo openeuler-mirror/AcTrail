@@ -9,6 +9,7 @@ use trace_runtime::registry::TraceRuntime;
 use crate::services::alert_ingress::{
     AlertIngress, BoundaryAlertAggregation, CommandExecutionBoundaryAlert,
     CommandExecutionDenySource, FileAccessBoundaryAlert, FileAccessDenySource,
+    NetworkConnectionBoundaryAlert, NetworkConnectionDenySource,
 };
 
 /// The daemon's sole aggregation state. Admission credits last the entire window,
@@ -67,7 +68,7 @@ impl LsmBoundaryAlerts {
         if audit.decision != 1
             || audit.error != 0
             || audit.rule_id.is_empty()
-            || !(1..=4).contains(&audit.domain)
+            || !(1..=5).contains(&audit.domain)
         {
             return;
         }
@@ -180,7 +181,22 @@ impl PendingDenials {
             last_observed_at: self.last,
         };
         let token = trace.trace.alert_token.clone();
-        let result = if key.domain == 4 {
+        let result = if key.domain == 5 {
+            ingress.submit_network_connection_boundary_alert(
+                key.trace_id,
+                token,
+                NetworkConnectionBoundaryAlert::new(
+                    self.resource.clone(),
+                    key.rule_id.clone(),
+                    key.owner.clone(),
+                    self.process_id,
+                    NetworkConnectionDenySource::FastPathDeny,
+                    None,
+                    None,
+                )
+                .with_aggregation(aggregation),
+            )
+        } else if key.domain == 4 {
             ingress.submit_command_execution_boundary_alert(
                 key.trace_id,
                 token,

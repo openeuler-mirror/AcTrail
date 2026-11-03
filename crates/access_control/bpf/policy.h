@@ -103,7 +103,7 @@ static __always_inline int ac_finish(struct ac_context *context, int error) {
         if (signal_result) ac_count(2);
     }
     int boundary_denial = decision && !error &&
-        context->work->key.domain <= 4 && context->work->selected.rule_id[0];
+        context->work->key.domain <= 5 && context->work->selected.rule_id[0];
     if (error || (context->work->selected.flags & AC_AUDIT) || boundary_denial)
         ac_emit(context, decision, error, signal_result);
     return decision ? -13 : 0;

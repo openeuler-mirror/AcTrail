@@ -450,6 +450,8 @@ impl OperatorDocument {
                 audit_default_allow: config.network_control.audit_default_allow,
                 pending_decision_max: config.network_control.pending_decision_max,
                 reusable_cache_max_entries: config.network_control.reusable_cache_max_entries,
+                alert_window_ms: config.network_control.alert_window_ms,
+                alert_max_groups: config.network_control.alert_max_groups,
             },
             supervision: SupervisionDocument {
                 startup_wait_ms: config.startup_wait_ms,

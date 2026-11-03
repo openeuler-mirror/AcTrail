@@ -232,6 +232,8 @@ impl StorageAttachService {
             } else {
                 command_control_config
             })?;
+        let network_boundary_alerts =
+            crate::services::network_control::NetworkBoundaryAlerts::new(&network_control_config);
         let network_control =
             NetworkControlService::new(&if !access_control_config.network.connect.is_seccomp() {
                 NetworkControlConfig::disabled()
@@ -315,6 +317,7 @@ impl StorageAttachService {
             process_seccomp,
             command_control,
             network_control,
+            network_boundary_alerts,
             pending_process_seccomp_observations: Vec::new(),
             semantic_retention: semantic_retention.clone(),
             file_observation: file_observation.clone(),

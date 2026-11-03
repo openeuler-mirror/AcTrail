@@ -12,6 +12,8 @@ pub(super) struct NetworkControlDocument {
     pub audit_default_allow: bool,
     pub pending_decision_max: u32,
     pub reusable_cache_max_entries: u32,
+    pub alert_window_ms: u32,
+    pub alert_max_groups: u32,
 }
 
 impl Default for NetworkControlDocument {
@@ -32,6 +34,8 @@ impl Default for NetworkControlDocument {
             audit_default_allow: config.audit_default_allow,
             pending_decision_max: config.pending_decision_max,
             reusable_cache_max_entries: config.reusable_cache_max_entries,
+            alert_window_ms: config.alert_window_ms,
+            alert_max_groups: config.alert_max_groups,
         }
     }
 }
@@ -59,6 +63,14 @@ impl NetworkControlDocument {
             reusable_cache_max_entries: require_positive_u32(
                 "network_control.reusable_cache_max_entries",
                 self.reusable_cache_max_entries,
+            )?,
+            alert_window_ms: require_positive_u32(
+                "network_control.alert_window_ms",
+                self.alert_window_ms,
+            )?,
+            alert_max_groups: require_positive_u32(
+                "network_control.alert_max_groups",
+                self.alert_max_groups,
             )?,
         })
     }
