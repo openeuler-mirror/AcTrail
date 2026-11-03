@@ -15,8 +15,10 @@ const FILE_DEFINITION_KEY: &str = "file-access-boundary-violation";
 const FILE_PAYLOAD_SCHEMA_ID: &str = "actrail.file-access-boundary-violation.payload.v1";
 const COMMAND_DEFINITION_KEY: &str = "command-execution-boundary-violation";
 const COMMAND_PAYLOAD_SCHEMA_ID: &str = "actrail.command-execution-boundary-violation.payload.v1";
+const NETWORK_DEFINITION_KEY: &str = "network-connection-boundary-violation";
+const NETWORK_PAYLOAD_SCHEMA_ID: &str = "actrail.network-connection-boundary-violation.payload.v1";
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(in crate::services) struct BoundaryAlertAggregation {
     pub backend: &'static str,
     pub rule_revision: u64,
@@ -176,6 +178,77 @@ impl CommandExecutionBoundaryAlert {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(in crate::services) enum NetworkConnectionDenySource {
+    FastPathDeny,
+    GrayPluginDeny,
+    GrayPluginCacheDeny,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(in crate::services) struct NetworkConnectionBoundaryAlert {
+    operation: &'static str,
+    remote_endpoint: String,
+    rule_id: String,
+    policy_owner_instance_id: String,
+    process_id: u64,
+    decision_source: NetworkConnectionDenySource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decider_plugin_instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregation: Option<BoundaryAlertAggregation>,
+}
+
+impl NetworkConnectionBoundaryAlert {
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::services) fn new(
+        remote_endpoint: String,
+        rule_id: String,
+        policy_owner_instance_id: String,
+        process_id: u64,
+        decision_source: NetworkConnectionDenySource,
+        decider_plugin_instance_id: Option<String>,
+        plugin_reason: Option<String>,
+    ) -> Self {
+        Self {
+            operation: "connect",
+            remote_endpoint,
+            rule_id,
+            policy_owner_instance_id,
+            process_id,
+            decision_source,
+            decider_plugin_instance_id,
+            plugin_reason,
+            aggregation: None,
+        }
+    }
+
+    pub(in crate::services) fn with_aggregation(
+        mut self,
+        aggregation: BoundaryAlertAggregation,
+    ) -> Self {
+        self.aggregation = Some(aggregation);
+        self
+    }
+
+    pub(super) fn into_draft(self) -> Result<AlertDraft, PluginRuntimeError> {
+        let payload_json = serde_json::to_string(&self).map_err(|error| {
+            PluginRuntimeError::new(
+                "daemon_alert_payload",
+                format!("serialize network connection boundary alert: {error}"),
+            )
+        })?;
+        Ok(AlertDraft {
+            definition_key: NETWORK_DEFINITION_KEY.to_string(),
+            payload_json,
+            deduplication_key: None,
+        })
+    }
+}
+
 pub(super) fn register(
     storage: &mut dyn StorageBackend,
 ) -> Result<Arc<AlertAdmission>, ControlError> {
@@ -201,6 +274,17 @@ pub(super) fn register(
     storage
         .register_alert_definition(&command_definition)
         .map_err(|error| ControlError::new(error.stage, error.message))?;
+    let network_definition = AlertDefinition {
+        producer_plugin_id: DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
+        definition_key: NETWORK_DEFINITION_KEY.to_string(),
+        kind: "network.connection.boundary-violation".to_string(),
+        title: "Out-of-bound network connection denied".to_string(),
+        severity: AlertSeverity::High,
+        payload_schema_id: NETWORK_PAYLOAD_SCHEMA_ID.to_string(),
+    };
+    storage
+        .register_alert_definition(&network_definition)
+        .map_err(|error| ControlError::new(error.stage, error.message))?;
     Ok(Arc::new(AlertAdmission::new(
         DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
         DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
@@ -208,6 +292,7 @@ pub(super) fn register(
         BTreeMap::from([
             (FILE_DEFINITION_KEY.to_string(), file_definition),
             (COMMAND_DEFINITION_KEY.to_string(), command_definition),
+            (NETWORK_DEFINITION_KEY.to_string(), network_definition),
         ]),
     )))
 }

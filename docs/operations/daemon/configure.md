@@ -72,6 +72,20 @@ actrailctl init \
 
 配置项的完整路径、类型、默认值和必填条件见[配置布局](../../architecture/config-layout.md)。表中默认值表示省略字段时采用的模型默认值；`profile` 模式和用户 patch 按上面的顺序覆盖这些值。字段的使用方式见 [daemon 配置参考](../../reference/configuration/daemon.md) 和 [采集配置参考](../../reference/configuration/collection.md)。
 
+## 网络拒绝告警
+
+seccomp 网络规则拒绝在首次收到时生成告警，后续拒绝按
+`network_control.alert_window_ms` 汇总，默认 60000 毫秒；trace 结束和正常停机也会提交
+剩余增量。`network_control.alert_max_groups` 默认 256，限制每窗口跨 trace 新准入的
+规则、revision 和决策来源分组；trace 结束后准入额度保留至窗口结束。每组最多产生首次
+和增量两条告警，每窗口最多尝试提交两倍分组上限的告警，超出分组容量的拒绝数量会记录
+汇总日志。载荷中的端点、进程和原因取自该增量的首条拒绝；`received_denials` 表示收到的
+拒绝数。两项配置均须大于 0。
+
+这两项配置只控制 seccomp 网络告警聚合，独立于 `access_control.backends.lsm` 聚合参数和
+`network_control.audit_enabled`。关闭审计仍会生成规则拒绝告警。默认裁决、故障回退和
+上下文捕获失败继续使用各自的审计或错误日志表达。
+
 ## 仅在线处理
 
 默认观测存储为 SQLite。需要丢弃观测写入时，在 patch 中设置：

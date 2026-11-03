@@ -9,3 +9,4 @@ pub(crate) use system::{
     CommandExecutionBoundaryAlert, CommandExecutionDenySource, FileAccessBoundaryAlert,
     FileAccessDenySource,
 };
+pub(in crate::services) use system::{NetworkConnectionBoundaryAlert, NetworkConnectionDenySource};

@@ -257,6 +257,15 @@ actrailviewer --output-format json events --trace-id "$DENIED_TRACE_ID" |
 `source="rule"`，rule ID 和 owner 正确，且 `remote`、`scope` 都严格等于
 实际 `127.0.0.1:<port>`。revision 必须与 deny dry-run 一致。
 
+该 trace 的 Web Alerts 应包含 `network.connection.boundary-violation`，producer
+为 `actraild.enforcement`，severity 为 `high`。payload 的 `operation` 为
+`connect`，`remote_endpoint` 为实际 provider endpoint，`rule_id` 为
+`xiaoo-provider-deny`，`policy_owner_instance_id` 为 `wasm.network-policy-dynamic`，
+`decision_source` 为 `fast-path-deny`。自动回归核对 Web 与 SQLite 中的告警一致，
+并确认 `process_id` 对应已保存的进程；允许和恢复阶段均不产生边界告警。
+seccomp 拒绝告警按窗口汇总；正常停机排空后，自动回归核对首次与剩余增量之和等于
+真实网络拒绝审计数，且同一规则在窗口内最多产生两条告警。
+
 ### 步骤 7：清空规则并验证恢复
 
 在 Web 中把 Configuration 改回 `{"rules":[]}`，依次 Test 和 Update；再次

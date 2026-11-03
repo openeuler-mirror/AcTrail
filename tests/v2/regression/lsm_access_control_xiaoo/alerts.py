@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import closing
 
 from tests.v2.common.actrail_runtime import ActrailRuntime
 from tests.v2.common.core import TestResult, TestStatus
@@ -24,7 +25,7 @@ class BoundaryAlertsScenario:
             ("alerts_periodic", False, CASE_CONSTANTS.periodic_alert_window_ms, CASE_CONSTANTS.alert_max_groups),
             ("alerts_capacity", False, CASE_CONSTANTS.alert_window_ms, CASE_CONSTANTS.capacity_alert_max_groups),
         ):
-            context.report_progress(name, "fresh defaults; real Xiaoo repeats file and command denials")
+            context.report_progress(name, "fresh defaults; real Xiaoo repeats file, command and network denials")
             case._audit_enabled = audit
             case._alert_window_ms = window
             case._alert_max_groups = capacity
@@ -39,11 +40,11 @@ class BoundaryAlertsScenario:
             trace_id = case._run_xiaoo(name)
             case._require_workload("deny")
             workload = json.loads(case._results.read_text(encoding="utf-8"))
-            for domain in ("file", "command"):
+            for domain in ("file", "command", "network"):
                 if workload[domain]["attempts"] != CASE_CONSTANTS.denial_repetitions or workload[domain]["denials"] != CASE_CONSTANTS.denial_repetitions:
                     raise AssertionError(f"real {domain} workload did not produce all denials: {workload}")
             alerts = self._wait_for_alerts(trace_id, capacity)
-            self._require_alerts(alerts, capacity, periodic=window == CASE_CONSTANTS.periodic_alert_window_ms)
+            self._require_alerts(alerts, capacity, port, periodic=window == CASE_CONSTANTS.periodic_alert_window_ms)
             if audit:
                 case._require_evidence(trace_id, "deny")
             stopped = case._runtime.stop()
@@ -67,18 +68,21 @@ class BoundaryAlertsScenario:
                     raise AssertionError("capacity loss was not summarized exactly once on shutdown")
             results[name] = TestResult(
                 TestStatus.PASSED,
-                f"trace-{trace_id}: {CASE_CONSTANTS.denial_repetitions * 2} actual denials, {len(alerts)} alerts; counts, bounds and retention verified",
+                f"trace-{trace_id}: {CASE_CONSTANTS.denial_repetitions * 3} actual denials, {len(alerts)} alerts; counts, bounds and retention verified",
             )
 
     def _read_alerts(self, trace_id: int) -> list[dict]:
         database = self.case._work / "data/actrail.sqlite"
-        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
             rows = connection.execute(
                 "SELECT d.kind, a.payload_json FROM alerts a "
                 "JOIN alert_definitions d USING(alert_definition_id) "
-                "WHERE a.trace_id = ? ORDER BY a.alert_id", (trace_id,),
+                "WHERE a.trace_id = ? AND d.producer_plugin_id = ? "
+                "AND d.kind IN (?, ?, ?) ORDER BY a.alert_id",
+                (trace_id, "actraild.enforcement", "file.access.boundary-violation",
+                 "command.execution.boundary-violation", "network.connection.boundary-violation"),
             ).fetchall()
-        return [{"kind": kind, "payload": json.loads(payload)} for kind, payload in rows]
+            return [{"kind": kind, "payload": json.loads(payload)} for kind, payload in rows]
 
     def _wait_for_alerts(self, trace_id: int, capacity: int) -> list[dict]:
         deadline = time.monotonic() + self.case._timeout
@@ -89,6 +93,7 @@ class BoundaryAlertsScenario:
             expected = {"lsm-file-deny": CASE_CONSTANTS.denial_repetitions}
             if capacity > 1:
                 expected["lsm-command-deny"] = CASE_CONSTANTS.denial_repetitions
+                expected["lsm-network-deny"] = CASE_CONSTANTS.denial_repetitions
             if totals == expected:
                 return alerts
             time.sleep(self.case._poll)
@@ -103,8 +108,13 @@ class BoundaryAlertsScenario:
             totals[rule] = totals.get(rule, 0) + payload["aggregation"]["received_denials"]
         return totals
 
-    def _require_alerts(self, alerts: list[dict], capacity: int, *, periodic: bool) -> None:
-        for domain in ("file", "command") if capacity > 1 else ("file",):
+    def _require_alerts(self, alerts: list[dict], capacity: int, port: int, *, periodic: bool) -> None:
+        kinds = {
+            "file": "file.access.boundary-violation",
+            "command": "command.execution.boundary-violation",
+            "network": "network.connection.boundary-violation",
+        }
+        for domain in kinds if capacity > 1 else ("file",):
             group = [alert for alert in alerts if alert["payload"]["rule_id"] == f"lsm-{domain}-deny"]
             counts = [alert["payload"]["aggregation"]["received_denials"] for alert in group]
             if counts[0] != 1 or sum(counts) != CASE_CONSTANTS.denial_repetitions:
@@ -117,7 +127,7 @@ class BoundaryAlertsScenario:
             for alert in group:
                 payload = alert["payload"]
                 aggregation = payload["aggregation"]
-                expected_kind = "file.access.boundary-violation" if domain == "file" else "command.execution.boundary-violation"
+                expected_kind = kinds[domain]
                 if alert["kind"] != expected_kind or aggregation["backend"] != "bpf-lsm":
                     raise AssertionError(f"wrong boundary alert routing: {alert}")
                 expected_revision = 0 if domain == "file" else 1
@@ -125,6 +135,12 @@ class BoundaryAlertsScenario:
                     raise AssertionError(f"wrong policy provenance: {alert}")
                 if "matched_rule_path" in payload or payload["process_id"] <= 0:
                     raise AssertionError(f"invented rule path or missing process identity: {alert}")
+                if domain == "network" and (
+                    payload["remote_endpoint"] != f"{CASE_CONSTANTS.witness_host}:{port}"
+                    or payload["operation"] != "connect"
+                    or payload["decision_source"] != "fast-path-deny"
+                ):
+                    raise AssertionError(f"network denial lost its endpoint or decision: {alert}")
                 first, last = aggregation["first_observed_at"], aggregation["last_observed_at"]
                 if (first["secs_since_epoch"], first["nanos_since_epoch"]) > (last["secs_since_epoch"], last["nanos_since_epoch"]):
                     raise AssertionError(f"invalid observation interval: {alert}")

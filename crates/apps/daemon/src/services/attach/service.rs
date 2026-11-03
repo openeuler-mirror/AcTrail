@@ -311,6 +311,7 @@ impl AttachService for StorageAttachService {
         );
         timeout = min_optional_timeout(timeout, self.storage_retention.poll_timeout());
         timeout = min_optional_timeout(timeout, self.lsm_boundary_alerts.poll_timeout());
+        timeout = min_optional_timeout(timeout, self.network_boundary_alerts.poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.file_io_poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.event_transport_loss_poll_timeout());
         Ok(timeout)

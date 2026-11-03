@@ -79,6 +79,13 @@ class NetworkPolicyXiaooCase(TestCase):
                 TestStatus.PASSED,
                 f"trace-{denied_trace} attributed EPERM to {metadata.get('rule_id')}",
             )
+            alerts = self._environment.wait_for_boundary_alerts(denied_trace)
+            if self._environment.api.alerts(baseline_trace).get("alerts"):
+                raise AssertionError("allowed baseline generated a boundary alert")
+            results["boundary_alerts"] = TestResult(
+                TestStatus.PASSED,
+                f"trace-{denied_trace}: {len(alerts)} network boundary alerts verified in SQLite and Web",
+            )
 
             test_context.report_progress(
                 "policy_recovery",
@@ -93,6 +100,11 @@ class NetworkPolicyXiaooCase(TestCase):
                 TestStatus.PASSED,
                 f"trace-{restored_trace} succeeded after source revision "
                 f"advanced to {restored_revision}",
+            )
+            self._environment.finish_boundary_assertions((baseline_trace, restored_trace), denied_trace)
+            results["allowed_alerts"] = TestResult(
+                TestStatus.PASSED,
+                "network denial deltas match received events; allowed and recovered traces have no network alerts after queue drain",
             )
 
             return TestResult(

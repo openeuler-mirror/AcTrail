@@ -62,6 +62,8 @@ impl StorageAttachService {
             resolution.attach(&mut self.collector);
         }
         self.drain_idle_detection_alerts(trace_runtime);
+        self.network_boundary_alerts
+            .flush_due(&self.alert_ingress, trace_runtime);
         self.drain_alert_ingress_impl()?;
         self.drain_post_trace_runtime_impl()?;
         warn_best_effort(

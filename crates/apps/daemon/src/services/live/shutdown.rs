@@ -113,6 +113,8 @@ impl StorageAttachService {
         }
         self.lsm_boundary_alerts
             .finish_all(&self.alert_ingress, trace_runtime);
+        self.network_boundary_alerts
+            .finish_all(&self.alert_ingress, trace_runtime);
         let export_probe = self.begin_shutdown_stage_probe(
             ShutdownDrainStage::Export,
             export_budget,
@@ -456,6 +458,8 @@ impl StorageAttachService {
                 "network_control_forget_trace",
             );
             self.lsm_boundary_alerts
+                .finish_trace(trace_id, &self.alert_ingress, trace_runtime);
+            self.network_boundary_alerts
                 .finish_trace(trace_id, &self.alert_ingress, trace_runtime);
             trace_runtime.forget_trace(trace_id);
             finalized_this_cycle += 1;

@@ -63,7 +63,7 @@ TODO：增加内核 map 发布故障注入和进程暂停恢复场景。
 设置 `LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm` 后，可选择以下独立场景：
 
 - `LSM_ACCESS_CONTROL_XIAOO_E2E_IPV6=1`：真实 Xiaoo 通过 `connect(..., 24)` 连接 IPv6 服务，覆盖 allow/deny 与 `deny_on_error` 开关的四种组合，并核验实际连接效果和规则审计。
-- `LSM_ACCESS_CONTROL_XIAOO_E2E_ALERTS=1`：真实 Xiaoo 分别触发 64 次文件拒绝和 64 次命令拒绝，验证首次告警、增量次数、trace 结束及周期摘要、容量抑制，以及关闭审计后仍有告警。正常退出后再次检查告警没有重复，普通进程事件仍被保存。
+- `LSM_ACCESS_CONTROL_XIAOO_E2E_ALERTS=1`：真实 Xiaoo 分别触发 64 次文件、命令和网络拒绝，验证首次告警、增量次数、trace 结束及周期摘要、容量抑制，以及关闭审计后仍有告警。网络告警核对实际连接端点和规则归属。正常退出后再次检查告警没有重复，普通进程事件仍被保存。
 
 告警计数表示收到并提交的拒绝事件，内核事件丢失和容量抑制不会被算作精确命中次数。
 

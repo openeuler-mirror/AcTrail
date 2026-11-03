@@ -401,6 +401,8 @@
 | `network_control.audit_default_allow` | `bool` | `false` | 否 | network_control | 审计默认策略允许的操作；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L12) |
 | `network_control.pending_decision_max` | `uint32` | `64` | 否 | network_control | 等待治理裁决的操作数量上限；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L13) |
 | `network_control.reusable_cache_max_entries` | `uint32` | `4096` | 否 | network_control | 可复用裁决缓存的条目数量上限；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L14) |
+| `network_control.alert_window_ms` | `uint32` | `60000` | 否 | network_control | seccomp 网络拒绝告警聚合窗口，毫秒，须大于 0；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L15) |
+| `network_control.alert_max_groups` | `uint32` | `256` | 否 | network_control | 每窗口跨 trace 新准入的网络规则与决策来源分组上限，须大于 0；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L16) |
 | `supervision.startup_wait_ms` | `uint64` | `30000` | 否 | supervision | CLI 等待 daemon 启动的时间上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L235) |
 | `supervision.shutdown_wait_ms` | `uint64` | `150100` | 否 | supervision | CLI 等待 daemon 关闭的时间上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L236) |
 | `supervision.poll_interval_ms` | `uint64` | `100` | 否 | supervision | 轮询间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L237) |

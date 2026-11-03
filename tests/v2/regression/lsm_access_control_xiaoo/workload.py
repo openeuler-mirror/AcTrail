@@ -34,7 +34,7 @@ class AccessWorkload:
             ("file", self._file), ("command", self._command), ("network", self._network),
             ("mkdir", self._mkdir), ("rmdir", self._rmdir),
         ):
-            attempts = self._arguments.denial_repetitions if domain in ("file", "command") else 1
+            attempts = self._arguments.denial_repetitions if domain in ("file", "command", "network") else 1
             denials = 0
             for index in range(attempts):
                 try:

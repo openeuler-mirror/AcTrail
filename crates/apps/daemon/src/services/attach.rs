@@ -96,6 +96,7 @@ pub(crate) struct StorageAttachService {
     pub(super) collector: EbpfCollector,
     pub(super) lsm_access_control: Option<std::sync::Arc<access_control::lsm::LsmController>>,
     pub(super) lsm_boundary_alerts: crate::services::access_control::LsmBoundaryAlerts,
+    pub(super) network_boundary_alerts: crate::services::network_control::NetworkBoundaryAlerts,
     pub(super) host_ebpf_preflight:
         BTreeMap<model_core::ids::ProfileName, preflight::EbpfPreflightReport>,
     pub(super) identity_reader: ProcfsIdentityReader,

@@ -5,7 +5,9 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import time
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -288,6 +290,93 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
             f"trace-{trace_id} has no governed provider-connect evidence"
         )
 
+    def wait_for_boundary_alerts(self, trace_id: int) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + self.network_config.evidence_timeout_seconds
+        alerts = []
+        while time.monotonic() < deadline:
+            self.runtime.run_checked(self.runtime.control_command("list-traces"), echo=False)
+            alerts = self.api.alerts(trace_id).get("alerts", [])
+            with closing(sqlite3.connect(f"file:{self.runtime.database_path}?mode=ro", uri=True)) as connection:
+                stored = connection.execute(
+                    "SELECT a.alert_id, d.kind, a.payload_json FROM alerts a "
+                    "JOIN alert_definitions d USING(alert_definition_id) "
+                    "WHERE a.trace_id = ? AND d.producer_plugin_id = ? ORDER BY a.alert_id",
+                    (trace_id, "actraild.enforcement"),
+                ).fetchall()
+                if not alerts or sorted(alert["alert_id"] for alert in alerts) != [row[0] for row in stored]:
+                    time.sleep(self.network_config.drain_interval_seconds)
+                    continue
+                persisted = {identifier: (kind, json.loads(payload)) for identifier, kind, payload in stored}
+                for alert in alerts:
+                    expected = {
+                        "definition_key": "network-connection-boundary-violation",
+                        "kind": "network.connection.boundary-violation",
+                        "producer_plugin_id": "actraild.enforcement",
+                        "severity": "high",
+                    }
+                    payload = alert.get("payload", {})
+                    expected_payload = {
+                        "operation": "connect",
+                        "remote_endpoint": self.provider_endpoint,
+                        "rule_id": RULE_ID,
+                        "policy_owner_instance_id": INSTANCE,
+                        "decision_source": "fast-path-deny",
+                    }
+                    if (
+                        any(alert.get(key) != value for key, value in expected.items())
+                        or any(payload.get(key) != value for key, value in expected_payload.items())
+                        or persisted[alert["alert_id"]] != (alert["kind"], payload)
+                        or not connection.execute(
+                            "SELECT 1 FROM processes WHERE process_id = ?", (payload.get("process_id"),)
+                        ).fetchone()
+                    ):
+                        raise AssertionError(f"network boundary alert lost its policy or process attribution: {alert}")
+                return alerts
+        raise AssertionError(f"trace-{trace_id} network boundary alerts did not reach SQLite and Web: {alerts}")
+
+    def finish_boundary_assertions(self, allowed_trace_ids: tuple[int, ...], denied_trace_id: int) -> None:
+        self.unload_plugin()
+        failures: list[str] = []
+        self._stop_web(failures)
+        if failures:
+            raise AssertionError("; ".join(failures))
+        stopped = self.runtime.stop()
+        if stopped is None or stopped.returncode != 0:
+            raise AssertionError(f"daemon failed to drain alerts on shutdown: {stopped}")
+        self._daemon_started = False
+        try:
+            denials = [event for event in self._network_events(denied_trace_id)
+                       if event.get("collector") == "network-control"
+                       and event["payload"].get("remote") == self.provider_endpoint
+                       and event["payload"].get("result") == -errno.EPERM]
+            with closing(sqlite3.connect(f"file:{self.runtime.database_path}?mode=ro", uri=True)) as connection:
+                rows = connection.execute(
+                    "SELECT a.payload_json FROM alerts a "
+                    "JOIN alert_definitions d USING(alert_definition_id) "
+                    "WHERE a.trace_id = ? AND d.producer_plugin_id = ? AND d.kind = ? ORDER BY a.alert_id",
+                    (denied_trace_id, "actraild.enforcement", "network.connection.boundary-violation"),
+                ).fetchall()
+                summaries = [json.loads(row[0])["aggregation"] for row in rows]
+                counts = [summary["received_denials"] for summary in summaries]
+                expected_counts = [1, len(denials) - 1] if len(denials) > 1 else [1]
+                if not denials or counts != expected_counts or any(
+                    summary["backend"] != "seccomp-user-notify" for summary in summaries
+                ):
+                    raise AssertionError(f"network denial aggregation lost counts or bounds: {len(denials)} denials, {summaries}")
+                for trace_id in allowed_trace_ids:
+                    count = connection.execute(
+                        "SELECT COUNT(*) FROM alerts a "
+                        "JOIN alert_definitions d USING(alert_definition_id) "
+                        "WHERE a.trace_id = ? AND d.kind = ?",
+                        (trace_id, "network.connection.boundary-violation"),
+                    ).fetchone()[0]
+                    if count:
+                        raise AssertionError(f"allowed trace-{trace_id} produced {count} network boundary alerts")
+        finally:
+            cleaned = self.runtime.clean(echo=False)
+            if cleaned.returncode != 0:
+                raise AssertionError(f"trace cleanup failed: {cleaned.output}")
+
     def cleanup(self) -> TestResult:
         base = super().cleanup()
         provider_failure = self._provider.stop()
@@ -322,7 +411,10 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         (
             PatchBuilder()
             .with_work_dir(self.config.work_dir)
-            .with_values({"network_control": {"rules_path": str(self._rules)}})
+            .with_values({"network_control": {
+                "rules_path": str(self._rules),
+                "alert_window_ms": int(self.network_config.launch_timeout_seconds * 1000),
+            }})
             .build()
             .save(self.config.operator_config_patch)
         )
