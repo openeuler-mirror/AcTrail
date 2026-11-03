@@ -1,0 +1,9 @@
+[package]
+name = "checkpoint"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+
+[dependencies]
+abi_stable = { version = "0.11.3", default-features = false }

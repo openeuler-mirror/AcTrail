@@ -36,6 +36,7 @@ members = [
     "crates/contracts/collector/instance",
     "crates/contracts/collector/stats",
     "crates/contracts/control_plane",
+    "crates/contracts/checkpoint",
     "crates/contracts/graph",
     "crates/contracts/payload/binding",
     "crates/contracts/payload/capability",

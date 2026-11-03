@@ -42,6 +42,15 @@
 │           └── [x] segment.rs # 定义原始段与流关闭记录
 │               ├── [x] struct RawPayloadSegment # 保留来源、流标识和采集字节
 │               └── [x] struct RawPayloadStreamClose # 表达采集侧明文流结束
+├── [ ] checkpoint/ # core 与集成动态库共用的同步 abi_stable 契约
+│   ├── [ ] Cargo.toml # 声明 ABI 类型与 trait 生成所需依赖
+│   └── [ ] src/ # 同步操作、ABI 对象、快照标识与错误
+│       ├── [ ] lib.rs # 精确导出公共契约
+│       ├── [ ] backend.rs # 同步 backend trait、统一 ABI 对象类型与动态库创建入口声明
+│       │   ├── [ ] trait RestorableCheckpointBackend # connect/disconnect 管理对接；snapshot/restore/delete 管理快照
+│       │   └── [ ] type CheckpointBackend # sabi_trait 生成的稳定对象；跨动态库直接传递
+│       ├── [ ] types.rs # ABI 稳定的 BackendConfig、含 trace_id 的 SnapshotContext 与 SnapshotId
+│       └── [ ] error.rs # ABI 稳定的 BackendError、BackendErrorKind；表达 RPC 与后端操作失败
 ├── [x] control_plane/ # ctl 与 daemon 的进程注册、生命周期上报及插件管理命令
 │   └── [x] src/ # 控制命令、响应和 trace 选择器
 │       ├── [x] command.rs # 定义管理请求及 launch 相关输入
