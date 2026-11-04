@@ -60,6 +60,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "actrail_ckpt_cxt_xiaoo"
+version = "0.9.0"
+dependencies = [
+ "abi_stable",
+ "checkpoint",
+ "serde",
+ "serde_json",
+ "socket2",
+]
+
+[[package]]
 name = "actrail_plugin_abi"
 version = "0.9.0"
 

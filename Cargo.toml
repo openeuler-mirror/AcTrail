@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "integrations/checkpoint/context/xiaoo",
     "crates/access_control",
     "crates/apps/daemon",
     "crates/apps/ctl",
