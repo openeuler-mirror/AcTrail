@@ -19,6 +19,7 @@
 │   ├── [x] vsock_gateway/ # Guest VSOCK 到 daemon TCP 的有界转发
 │   └── [x] alert_proxy/ # 独立告警代理与订阅连接
 ├── [x] core/ # 领域模型、配置与运行时
+│   ├── [ ] checkpoint/ # 通过模块 factory 按配置加载、组合 checkpoint backend
 │   ├── [x] config/ # operator 配置组合、默认值与校验
 │   │   └── [x] src/ # 按运行角色解析配置、补全默认值并校验
 │   │       └── [x] daemon/ # daemon 启动与运行参数
@@ -39,6 +40,7 @@
 │   ├── [x] vsock_gateway_runtime/ # 管理 Guest 转发会话，限制连接资源并缓存等待发送的数据
 │   └── [x] gateway_ingest_runtime/ # daemon 接收隔离环境的观测上报，并接入本地事件处理链
 ├── [x] contracts/ # 跨组件的数据类型与端口
+│   ├── [ ] checkpoint/ # 同步 abi_stable 契约；core 与集成动态库共用接口和类型
 │   ├── [x] sandbox_control/ # actrail-sb 与 Guest CLI 的连接、状态查询和拒绝结果契约
 │   └── [x] sandbox_link/ # Guest 到 gateway、gateway 到 daemon 的有界帧协议
 │       └── [x] vsock/ # Guest 到 gateway 的握手、观测批次编码与增量帧解码
