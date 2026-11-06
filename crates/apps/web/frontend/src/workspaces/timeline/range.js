@@ -12,7 +12,8 @@ export class TimelineRange {
     const ends = [value(metadata?.timeline_bounds?.end_time_unix_nanos), ...(observed ? [] : terminal)].filter(v => v !== null);
     if (!observed && !terminal.length && !['completed', 'exited', 'failed'].includes(String(trace.state).toLowerCase())) ends.push(BigInt(Date.now()) * 1_000_000n);
     const endNanos = ends.reduce((a, b) => a > b ? a : b, startNanos + 1_000_000n);
-    return { startNanos, endNanos, spanMs: Number(endNanos - startNanos) / 1e6,
+    return { startNanos, endNanos, rootProcessId: trace.root_process_id,
+      spanMs: Number(endNanos - startNanos) / 1e6,
       startIso: new Date(Number(startNanos / 1_000_000n)).toISOString(),
       endIso: new Date(Number(endNanos / 1_000_000n)).toISOString() };
   }

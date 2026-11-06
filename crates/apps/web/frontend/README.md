@@ -1,6 +1,6 @@
 # actrailweb frontend
 
-This Vue app renders the read-only AcTrail UI. Rust owns storage/API/static serving; Vue owns client-side layout, selection, lane expansion, and detail inspection. Opening a trace loads only the trace summary and action-tree root. Timeline, event, payload, process, diagnostic, and command data are requested only when their tabs are opened. The Action Tree tab loads only the root node initially; each node requests its direct children when expanded.
+This Vue app renders the AcTrail UI, including the configuration file editor. Rust owns storage/API/static serving and configuration validation; Vue owns client-side layout, selection, lane expansion, and detail inspection. Opening a trace loads only the trace summary and action-tree root. Timeline, event, payload, process, diagnostic, and command data are requested only when their tabs are opened. The Action Tree tab loads only the root node initially; each node requests its direct children when expanded.
 
 ## Build
 

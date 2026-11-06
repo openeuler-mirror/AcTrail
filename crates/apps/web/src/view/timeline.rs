@@ -36,7 +36,10 @@ impl TimelineView {
         let compact = ContextCompactDisplay::for_actions(
             storage.as_ref(),
             query.trace_id,
-            page.actions.iter().chain(&page.context_actions),
+            page.actions
+                .iter()
+                .chain(&page.context_actions)
+                .chain(page.root_command_before_window.iter()),
         )?;
         let actions = page
             .actions
@@ -48,6 +51,11 @@ impl TimelineView {
             .iter()
             .map(|action| compact.action_json(action, true))
             .collect::<Vec<_>>();
+        let root_command = page
+            .root_command_before_window
+            .as_ref()
+            .map(|action| compact.action_json(action, true))
+            .unwrap_or_else(|| "null".into());
         let links = page
             .links
             .iter()
@@ -76,8 +84,9 @@ impl TimelineView {
             .transpose()?
             .unwrap_or_else(|| "null".into());
         Ok(format!(
-            "{{\"actions\":[{}],\"context_actions\":[{}],\"links\":[{}],\"next_cursor\":{},\"has_more\":{},\"scanned\":{},\"links_truncated\":{},\"partial\":true}}",
+            "{{\"actions\":[{}],\"root_command_before_window\":{},\"context_actions\":[{}],\"links\":[{}],\"next_cursor\":{},\"has_more\":{},\"scanned\":{},\"links_truncated\":{},\"partial\":true}}",
             actions.join(","),
+            root_command,
             context.join(","),
             links.join(","),
             cursor,

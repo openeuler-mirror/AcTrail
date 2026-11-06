@@ -37,6 +37,7 @@ pub(super) struct InitialActionState {
     tool_binding: Option<i16>,
     command_kind: Option<i16>,
     command_tool_name: Option<String>,
+    command_exit_code: Option<i32>,
 }
 
 pub(super) struct ActionStateWriter<'a> {
@@ -89,6 +90,17 @@ impl<'a> ActionStateWriter<'a> {
                 )),
             })
             .transpose()?;
+        let command_exit_code = if action.kind == SemanticActionKind::CommandInvocation {
+            action
+                .attributes
+                .get(attrs::command::EXIT_CODE)
+                .and_then(|value| value.parse::<i32>().ok())
+        } else {
+            None
+        };
+        if command_exit_code.is_some() {
+            action.attributes.remove(attrs::command::EXIT_CODE);
+        }
         if action.kind == SemanticActionKind::McpToolCall {
             action.attributes.remove(attrs::mcp::EXECUTION_STATUS);
         }
@@ -102,6 +114,7 @@ impl<'a> ActionStateWriter<'a> {
             tool_binding,
             command_kind,
             command_tool_name,
+            command_exit_code,
         })
     }
 
@@ -113,11 +126,13 @@ impl<'a> ActionStateWriter<'a> {
     ) -> Result<(), SemanticActionStoreError> {
         self.connection.prepare_cached(
             "INSERT INTO semantic_action_state(action_key, end_time, status_code, completeness_code,
-                tool_result_binding, command_invocation_kind, command_tool_name, finalization_reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
+                tool_result_binding, command_invocation_kind, command_tool_name, finalization_reason,
+                command_exit_code)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
             .and_then(|mut statement| statement.execute(params![key, action.end_time.map(encode_time),
                 action_status_code(action.status), action_completeness_code(action.completeness),
-                initial.tool_binding, initial.command_kind, initial.command_tool_name, initial.finalization_reason]))
+                initial.tool_binding, initial.command_kind, initial.command_tool_name, initial.finalization_reason,
+                initial.command_exit_code]))
             .map(|_| ()).map_err(|e| Self::error("insert_semantic_action_state", e))
     }
 
@@ -157,7 +172,16 @@ impl<'a> ActionStateWriter<'a> {
                 status,
                 completeness,
                 finalization_reason,
+                command_exit_code,
             } => {
+                if command_exit_code.is_some()
+                    && update.kind != SemanticActionKind::CommandInvocation
+                {
+                    return Err(Self::error(
+                        "update_semantic_action_kind",
+                        "command exit code requires command",
+                    ));
+                }
                 let reason = finalization_reason.map(|reason| match reason {
                     SemanticActionFinalizationReason::TraceClosed => 1,
                     SemanticActionFinalizationReason::CapacityEvicted => 2,
@@ -165,7 +189,8 @@ impl<'a> ActionStateWriter<'a> {
                 self.assigned(
                     assignment_sql!(
                         "UPDATE semantic_action_state SET end_time=?5,
-                    status_code=?6, completeness_code=?7, finalization_reason=?8"
+                    status_code=?6, completeness_code=?7, finalization_reason=?8,
+                    command_exit_code=COALESCE(?9, command_exit_code)"
                     ),
                     params![
                         update.action_id,
@@ -175,7 +200,8 @@ impl<'a> ActionStateWriter<'a> {
                         end_time.map(encode_time),
                         action_status_code(*status),
                         action_completeness_code(*completeness),
-                        reason
+                        reason,
+                        command_exit_code
                     ],
                 )?
             }
@@ -415,6 +441,9 @@ impl<'a> ActionStateWriter<'a> {
         }
         if let Some(value) = row.get::<_, Option<String>>("command_tool_name")? {
             attributes.insert(attrs::command::TOOL_NAME.into(), value);
+        }
+        if let Some(value) = row.get::<_, Option<i32>>("command_exit_code")? {
+            attributes.insert(attrs::command::EXIT_CODE.into(), value.to_string());
         }
         if let Some(code) = row.get::<_, Option<i16>>("tool_result_binding")? {
             let value = match code {

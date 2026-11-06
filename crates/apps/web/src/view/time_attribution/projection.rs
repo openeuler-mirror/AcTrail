@@ -58,7 +58,6 @@ pub(super) fn project_trace_data(
     let raw_tools = tool_intervals(
         actions,
         links,
-        memberships,
         &agent_scope,
         full_scope,
         provisional,
@@ -273,7 +272,6 @@ fn latest_observation(
 fn tool_intervals(
     actions: &[SemanticAction],
     links: &[SemanticActionLink],
-    memberships: &[ProcessMembership],
     agent_scope: &AgentProcessScope,
     scope: Interval,
     _provisional: bool,
@@ -297,10 +295,6 @@ fn tool_intervals(
         })
         .map(|link| link.child_action_id.as_str())
         .collect::<BTreeSet<_>>();
-    let membership_by_process = memberships
-        .iter()
-        .map(|membership| (membership.identity.clone(), membership))
-        .collect::<BTreeMap<_, _>>();
     let mut by_process = BTreeMap::<ProcessIdentity, Vec<&SemanticAction>>::new();
     for command in commands {
         let explicitly_linked = linked_agent_commands.contains(command.action_id.as_str());
@@ -315,12 +309,12 @@ fn tool_intervals(
     }
 
     let mut output = Vec::new();
-    for (process, mut process_commands) in by_process {
+    for mut process_commands in by_process.into_values() {
         process_commands.sort_by(|left, right| {
             (left.start_time, left.action_id.as_str())
                 .cmp(&(right.start_time, right.action_id.as_str()))
         });
-        for (index, action) in process_commands.iter().enumerate() {
+        for action in &process_commands {
             let Ok(start) = system_time_nanos(action.start_time) else {
                 tracker.action_error(
                     "tool_clock_invalid",
@@ -329,19 +323,13 @@ fn tool_intervals(
                 );
                 continue;
             };
-            let next_start = process_commands
-                .get(index + 1)
-                .and_then(|next| next.end_time.or(Some(next.start_time)))
+            let end = action
+                .end_time
                 .and_then(|time| system_time_nanos(time).ok());
-            let membership_end = membership_by_process
-                .get(&process)
-                .and_then(|membership| membership.exit_status.as_ref())
-                .and_then(|exit| system_time_nanos(exit.observed_at).ok());
-            let end = next_start.or(membership_end);
             let Some(end) = end else {
                 tracker.action_warning(
                     "tool_exit_missing",
-                    "Command has no next exec or process exit; tool duration is not inferred.",
+                    "Command end time was not observed; tool duration is unavailable.",
                     &action.action_id,
                     None,
                 );
@@ -373,7 +361,7 @@ fn tool_intervals(
                 action_id: action.action_id.clone(),
                 tool_name: non_empty_attr(action, attr_keys::command::TOOL_NAME)
                     .or_else(|| inferred_tool_names.get(&action.action_id).cloned()),
-                process,
+                process: action.process,
                 agent_invocation,
             });
         }

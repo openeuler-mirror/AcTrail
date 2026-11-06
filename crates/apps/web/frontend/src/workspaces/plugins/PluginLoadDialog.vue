@@ -525,6 +525,21 @@ function submit() {
   border-color: var(--ui-accent-soft);
   background: var(--ui-accent-muted);
   color: var(--ui-accent);
+  transition:
+    background-color var(--ui-duration-fast) var(--ui-ease-out),
+    border-color var(--ui-duration-fast) var(--ui-ease-out),
+    color var(--ui-duration-fast) var(--ui-ease-out);
+}
+
+.plugin-load-actions button.primary:not(:disabled) {
+  border-color: var(--ui-text);
+  background: var(--ui-text);
+  color: var(--ui-surface-strong);
+  font-weight: var(--ui-weight-medium);
+}
+
+.plugin-load-actions button.primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--ui-text) 90%, var(--ui-surface-strong));
 }
 
 button:disabled {

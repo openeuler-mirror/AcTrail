@@ -24,7 +24,7 @@ const COLUMNS: &str = "ids.action_id, action.trace_id, action.kind_code,
  (SELECT path_text FROM file_paths WHERE trace_id=action.trace_id AND path_id=action.file_path_id) AS file_path_text,
  action.start_time, state.end_time, action.process_id, state.status_code, state.completeness_code,
  state.finalization_reason, state.failure_body_format, state.failure_http_status, state.failure_http_reason,
- state.command_invocation_kind, state.command_tool_name, state.tool_result_binding,
+ state.command_invocation_kind, state.command_tool_name, state.command_exit_code, state.tool_result_binding,
  NULL AS attributes_encoding_code";
 
 impl SqliteStorage {
@@ -132,6 +132,7 @@ impl TimelineReader<'_> {
             .retain(|candidate| boundary.is_none_or(|end| (candidate.start, candidate.key) <= end));
         let mut page = TimelinePage {
             scanned,
+            root_command_before_window: self.root_command_before_window()?,
             ..TimelinePage::default()
         };
         let mut consumed = 0;
@@ -227,6 +228,49 @@ impl TimelineReader<'_> {
             .map_err(Self::error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(Self::error)
+    }
+
+    fn root_command_before_window(&self) -> Result<Option<SemanticAction>, StorageError> {
+        let query = self.query;
+        let Some(start) = query.start_time else {
+            return Ok(None);
+        };
+        if query.after.is_some()
+            || (!query.kinds.is_empty()
+                && !query.kinds.contains(&SemanticActionKind::CommandInvocation))
+        {
+            return Ok(None);
+        }
+        let root: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT root_process_id FROM traces WHERE trace_id=?1",
+                [query.trace_id.get()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Self::error)?
+            .flatten();
+        let Some(root) = root else { return Ok(None) };
+        if query
+            .process
+            .is_some_and(|process| i64::try_from(process.get()).ok() != Some(root))
+        {
+            return Ok(None);
+        }
+        // Root identity is trace-owned. Read one indexed predecessor before
+        // checking validity; an invalid predecessor must not trigger a history scan.
+        let key = self.connection.prepare_cached(
+            "SELECT action_key FROM semantic_actions INDEXED BY idx_semantic_actions_timeline_process_kind
+             WHERE trace_id=?1 AND process_id=?2 AND kind_code=?3 AND start_time<?4
+             ORDER BY start_time DESC,action_key DESC LIMIT 1"
+        ).map_err(Self::error)?.query_row(
+            params![query.trace_id.get(), root, action_kind_code(SemanticActionKind::CommandInvocation), Self::time(start)?],
+            |row| row.get::<_, i64>(0),
+        ).optional().map_err(Self::error)?;
+        key.map(|key| self.action(key))
+            .transpose()
+            .map(Option::flatten)
     }
 
     fn action(&self, key: i64) -> Result<Option<SemanticAction>, StorageError> {

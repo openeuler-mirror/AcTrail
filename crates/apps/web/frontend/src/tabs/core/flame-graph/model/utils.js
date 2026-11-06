@@ -85,6 +85,10 @@ export function flameSummaryMarkerKind(kind) {
   return kind === 'file.tty_io';
 }
 
+export function commandEndUnknown(action, end = action.end_time_unix_nanos) {
+  return action.kind === 'command.invocation' && end == null && action.status === 'unknown';
+}
+
 export function observedInterval(action) {
   const startNanos = parseNanos(action.start_time_unix_nanos);
   return {

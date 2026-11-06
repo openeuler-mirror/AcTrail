@@ -23,7 +23,7 @@ const HELP_FLAG_LONG: &str = "--help";
 const HELP_COMMAND: &str = "help";
 
 pub const HELP_TEXT: &str = "\
-Read AcTrail traces through a read-only web UI
+Read AcTrail traces and manage local configuration through the web UI
 
 Usage:
   actrailweb help

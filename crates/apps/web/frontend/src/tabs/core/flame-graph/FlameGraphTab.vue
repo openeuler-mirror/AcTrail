@@ -239,7 +239,7 @@
     </section>
 
     <DetailPanel
-      :detail="selectedDetail"
+      :detail="displayedDetail"
       :supplemental-rows="selectedResourceRows"
       :trace-id="traceKey"
       :error="detailError"
@@ -268,6 +268,8 @@ import ResourceTracks from './resources/ResourceTracks.vue';
 import { resourceSummaryRows, timelineOriginMs } from './resources/model.js';
 import strings from './locale';
 import { FlameGraphHistory } from './model/history.js';
+import { CommandHierarchy } from './model/command-hierarchy.js';
+import { commandEndUnknown } from './model/utils.js';
 
 const { t, currentLanguage } = useModuleLocale(strings);
 import {
@@ -335,6 +337,27 @@ const activeViewport = computed(() => viewport.value ?? bounds.value);
 const filteredLayers = computed(() => filterFlameGraph(model.value, props.query, {
   showModelMessages: showModelMessages.value,
 }));
+const displayedDetail = computed(() => {
+  const detail = selectedDetail.value;
+  if (!detail) return null;
+  for (const layer of filteredLayers.value) {
+    for (const track of layer.tracks) {
+      if (track.group !== 'commands') continue;
+      const activity = track.activities.find((item) => item.id === selectedId.value);
+      if (activity) {
+        const action = detail.raw ? {
+          ...detail.raw,
+          ...activity.action,
+          attributes: { ...detail.raw.attributes, ...activity.action.attributes },
+          evidence: detail.raw.evidence,
+        } : activity.action;
+        const current = flameActivityDetail({ ...activity, action, lightweight: activity.lightweight && !detail.raw }, t);
+        return { ...current, rows: { ...current.rows, ...CommandHierarchy.detailRows(activity, t) } };
+      }
+    }
+  }
+  return detail;
+});
 const overviewIndex = computed(() => props.waterfall.overview);
 const callOrdinals = computed(() => overviewIndex.value && history.ordinals());
 const overviewOriginNanos = computed(() => props.timelineWindow?.startNanos ?? null);
@@ -354,7 +377,8 @@ const overviewLanes = computed(() => {
     if (action.kind === 'agent.context_compaction'
       || (!showModelMessages.value && ['llm.request', 'llm.response'].includes(action.kind))) continue;
     const startOffsetMs = Number(action.startNanos - originNanos) / 1e6;
-    const endOffsetMs = action.endNanos === null ? overviewSpanMs.value
+    const endOffsetMs = commandEndUnknown(action, action.endNanos) ? startOffsetMs
+      : action.endNanos === null ? overviewSpanMs.value
       : Number(action.endNanos - originNanos) / 1e6;
     const lane = action.kind.startsWith('llm.') || action.kind === 'agent.invocation' ? agent : harness;
     lane.intervals.push({ startOffsetMs, status: action.status,

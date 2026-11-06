@@ -143,10 +143,7 @@ impl LiveSemanticActionRuntime {
                 let command_output = actions
                     .iter()
                     .find(|action| action.kind == semantic_action::SemanticActionKind::ProcessExec)
-                    .map(|process_action| {
-                        self.command
-                            .observe_process_exec(event, process_action, self.mcp.enabled())
-                    });
+                    .map(|process_action| self.command.observe_process_exec(event, process_action));
                 output.actions.extend(actions);
                 if let Some(command_output) = command_output {
                     output.extend(command_output);
@@ -178,6 +175,7 @@ impl LiveSemanticActionRuntime {
                 output
             }
             EventPayload::Process(payload) if payload.operation == "exit" => {
+                output.extend(self.command.observe_process_exit(event, self.mcp.enabled()));
                 output
                     .actions
                     .extend(self.agent.observe_process_exit(event));
@@ -414,6 +412,7 @@ impl LiveSemanticActionRuntime {
         if !self.projection_enabled {
             return output;
         }
+        output.extend(self.command.finalize_trace(trace_id));
         let finalized_tool_output = self.tool.finish_trace(trace_id, finished_at);
         output.actions.extend(finalized_tool_output.actions);
         output.updates.extend(finalized_tool_output.updates);
