@@ -9,38 +9,40 @@ from tests.v2.common.kata_runtime import DeploymentArtifacts, shim_binary
 from tests.v2.common.core import TestResult, TestStatus
 from tests.v2.common.process import CommandRunner, SubprocessRunner
 
-from .config import CloudHypervisorExecutionIsolationConfig
+from .backends import ExecutionIsolationBackend
+from .config import KataExecutionIsolationConfig
 
 
 @dataclass(frozen=True)
-class CloudHypervisorExecutionIsolationReadiness:
+class KataExecutionIsolationReadiness:
     deployment: DeploymentArtifacts | None
     problem: TestResult | None
 
 
-class CloudHypervisorExecutionIsolationPrerequisites:
+class KataExecutionIsolationPrerequisites:
     """Fail-fast repository checks and skip-only external capability checks."""
 
     def __init__(
         self,
-        config: CloudHypervisorExecutionIsolationConfig,
+        config: KataExecutionIsolationConfig,
         runner: CommandRunner | None = None,
     ) -> None:
         self._config = config
+        self._backend = ExecutionIsolationBackend(config.BACKEND)
         self._runner = runner or SubprocessRunner()
 
-    def resolve(self) -> CloudHypervisorExecutionIsolationReadiness:
+    def resolve(self) -> KataExecutionIsolationReadiness:
         release_problem = self._release_problem()
         if release_problem is not None:
-            return CloudHypervisorExecutionIsolationReadiness(None, release_problem)
+            return KataExecutionIsolationReadiness(None, release_problem)
         deployment, deployment_problem = self._deployment()
         if deployment_problem is not None:
-            return CloudHypervisorExecutionIsolationReadiness(
+            return KataExecutionIsolationReadiness(
                 None,
                 deployment_problem,
             )
         external_problem = self._external_problem()
-        return CloudHypervisorExecutionIsolationReadiness(
+        return KataExecutionIsolationReadiness(
             deployment,
             external_problem,
         )
@@ -91,7 +93,7 @@ class CloudHypervisorExecutionIsolationPrerequisites:
                 expected_runtime=self._config.ctr_runtime,
                 require_xiaoo=True,
                 require_preinstalled_xiaoo=(
-                    self._config.BACKEND == "firecracker"
+                    self._backend.uses_guest_exec
                 ),
                 require_sandbox_observer=True,
             )
@@ -130,7 +132,7 @@ class CloudHypervisorExecutionIsolationPrerequisites:
                 ),
             )
         if (
-            self._config.BACKEND == "firecracker"
+            self._backend.uses_guest_exec
             and self._config.image_archive is not None
             and self._config.image_archive.resolve()
             != deployment.workload_image_archive
@@ -163,10 +165,12 @@ class CloudHypervisorExecutionIsolationPrerequisites:
         ):
             if shutil.which(command) is None:
                 reasons.append(f"{command} is unavailable")
-        if self._config.BACKEND == "firecracker" and not reasons:
-            devmapper_problem = self._firecracker_devmapper_problem()
-            if devmapper_problem is not None:
-                reasons.append(devmapper_problem)
+        if not reasons:
+            backend_problem = self._backend.external_problem(
+                self._runner, self._config.command_timeout_seconds,
+            )
+            if backend_problem is not None:
+                reasons.append(backend_problem)
         if not reasons:
             return None
         return TestResult(
@@ -175,43 +179,3 @@ class CloudHypervisorExecutionIsolationPrerequisites:
                 "external prerequisite unavailable: " + "; ".join(reasons)
             ),
         )
-
-    def _firecracker_devmapper_problem(self) -> str | None:
-        if shutil.which("dmsetup") is None:
-            return "dmsetup is unavailable for the Firecracker devmapper snapshotter"
-        plugin_type = "io.containerd.snapshotter.v1"
-        try:
-            result = self._runner.run(
-                (
-                    "ctr",
-                    "plugins",
-                    "list",
-                    f"type=={plugin_type},id==devmapper",
-                ),
-                timeout=self._config.command_timeout_seconds,
-            )
-        except (OSError, RuntimeError) as error:
-            return f"cannot inspect the containerd devmapper snapshotter: {error}"
-        if result.returncode != 0:
-            diagnostic = result.diagnostic or f"exit={result.returncode}"
-            return f"containerd devmapper snapshotter probe failed: {diagnostic}"
-        matches: list[tuple[str, ...]] = []
-        for line in result.stdout.splitlines():
-            columns = tuple(line.split())
-            if (
-                len(columns) >= 4
-                and columns[0] == plugin_type
-                and columns[1] == "devmapper"
-            ):
-                matches.append(columns)
-        if len(matches) != 1:
-            return (
-                "containerd devmapper snapshotter is not registered exactly once"
-            )
-        status = matches[0][-1].lower()
-        if status != "ok":
-            return (
-                "containerd devmapper snapshotter is unavailable: "
-                f"status={status}"
-            )
-        return None

@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 
 from tests.v2.regression.container_agent_xiaoo.v2.constants import CASE_CONSTANTS
+from tests.v2.common.docker import probe_docker_server
 
 
 class NestedDockerRuntime:
@@ -61,22 +62,25 @@ class NestedDockerRuntime:
             start_new_session=True,
         )
         deadline = time.monotonic() + timeout
+        last_probe = ""
         while time.monotonic() < deadline:
             if self._process.poll() is not None:
                 break
-            result = subprocess.run(
-                ["docker", "info", "--format", "{{.ServerVersion}}"],
-                env=self.environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
+            probe = probe_docker_server(
+                self.environment, CASE_CONSTANTS.docker_probe_timeout_seconds
             )
-            if result.returncode == 0:
+            if probe.version is not None:
                 return
+            last_probe = probe.diagnostic
             time.sleep(CASE_CONSTANTS.readiness_poll_seconds)
+        exit_status = self._process.poll()
+        reason = (
+            f"dockerd exited with status {exit_status}"
+            if exit_status is not None
+            else f"not ready after {timeout:g}s; last probe: {last_probe}"
+        )
         raise RuntimeError(
-            "nested Docker daemon did not become ready:\n"
+            f"nested Docker daemon did not become ready ({reason}):\n"
             + self._log.read_text(encoding="utf-8", errors="replace")[
                 -CASE_CONSTANTS.diagnostic_tail_characters:
             ]
@@ -145,6 +149,7 @@ def run_parent(args: argparse.Namespace) -> int:
             "unshare",
             "--pid",
             "--net",
+            "--mount",
             "--fork",
             "--mount-proc",
             "--",
@@ -183,6 +188,7 @@ def run_child(args: argparse.Namespace, runtime: Path) -> int:
     docker = NestedDockerRuntime(runtime)
     try:
         run_checked(["ip", "link", "set", "lo", "up"])
+        hide_host_containerd()
         docker.start(timeout=CASE_CONSTANTS.docker_ready_timeout_seconds)
         docker.load_image(runtime / "container-agent-xiaoo-image.tar")
         command = [
@@ -207,6 +213,24 @@ def run_child(args: argparse.Namespace, runtime: Path) -> int:
         ).returncode
     finally:
         docker.stop()
+
+
+def hide_host_containerd() -> None:
+    """Make the nested dockerd start its own containerd.
+
+    dockerd attaches to a system containerd whenever its default socket exists under
+    /run/containerd. Containers created there run outside this PID namespace, so their
+    /proc/<pid>/ns/pid is invisible here. An empty tmpfs hides the host socket inside the
+    child's private mount namespace only.
+    """
+    runtime_dir = Path(CASE_CONSTANTS.host_containerd_runtime_dir)
+    if not runtime_dir.is_dir():
+        return
+    if os.getpid() != 1:
+        raise RuntimeError(
+            "refusing to hide the host containerd outside the nested namespaces"
+        )
+    run_checked(["mount", "-t", "tmpfs", "-o", "mode=0711", "tmpfs", str(runtime_dir)])
 
 
 def ensure_host_agent_image(base_image: str, rebuild: bool, runtime: Path) -> str:

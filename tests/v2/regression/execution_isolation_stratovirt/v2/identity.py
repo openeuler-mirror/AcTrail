@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.identity import (
-    CloudHypervisorScenarioIdentity,
+from tests.v2.common.execution_isolation.kata.identity import (
+    ExecutionIsolationIdentity,
 )
 
 
-class StratoVirtScenarioIdentity(CloudHypervisorScenarioIdentity):
+class StratoVirtScenarioIdentity(ExecutionIsolationIdentity):
     CASE = "execution-isolation-stratovirt"
     DISPLAY = "StratoVirt execution-isolation"
     PLUGIN_INSTANCE = f"{CASE}.resource-alert"

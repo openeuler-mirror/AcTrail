@@ -9,8 +9,8 @@ REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 
 from tests.v2.common.runner import TestDefinition, run_one
-from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.case import (
-    CloudHypervisorExecutionIsolationCase,
+from tests.v2.common.execution_isolation.kata.case import (
+    KataExecutionIsolationCase,
 )
 
 from .config import StratoVirtExecutionIsolationConfig
@@ -22,7 +22,7 @@ TEST_DEFINITION = TestDefinition(
         "Optional StratoVirt VMM coverage using native AF_VSOCK, the Kata "
         "lifecycle profile and a real xiaoO sandbox observation path"
     ),
-    build_case=lambda inputs: CloudHypervisorExecutionIsolationCase(
+    build_case=lambda inputs: KataExecutionIsolationCase(
         StratoVirtExecutionIsolationConfig.from_environment(inputs)
     ),
 )

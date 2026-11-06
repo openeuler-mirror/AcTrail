@@ -20,21 +20,17 @@ from tests.v2.common.process import ManagedProcess, SubprocessRunner
 from tests.v2.common.runner import TestingContextSingleton
 from tests.v2.common.sandbox_alert_database import SandboxAlertDatabase
 
-from ..cloud_hypervisor import (
-    CloudHypervisorSocketInventory,
-    FirecrackerSocketInventory,
-    HybridVsockSocketInventory,
-)
-from ..config import CloudHypervisorExecutionIsolationConfig
-from .setup import CloudHypervisorScenarioSetup
+from ..backends import ExecutionIsolationBackend
+from ..config import KataExecutionIsolationConfig
+from .setup import ExecutionIsolationSetup
 from .system_observer import GuestSystemSandboxObserver
 from .transport import CoordinationDirectory
-from .verifier import CloudHypervisorAlertVerifier
+from .verifier import SandboxAlertVerifier
 
 from ..constants import CASE_CONSTANTS
 
 
-class CloudHypervisorExecutionIsolationScenario:
+class KataExecutionIsolationScenario:
     _ALERT_CATEGORIES = (
         "sandbox.resource.high_cpu",
         "sandbox.resource.oom_killed",
@@ -45,7 +41,7 @@ class CloudHypervisorExecutionIsolationScenario:
 
     def __init__(
         self,
-        config: CloudHypervisorExecutionIsolationConfig,
+        config: KataExecutionIsolationConfig,
         context: TestingContextSingleton,
         deployment: DeploymentArtifacts,
     ) -> None:
@@ -60,16 +56,12 @@ class CloudHypervisorExecutionIsolationScenario:
         self._alerts = SandboxAlertDatabase(
             self._run_dir / "data" / "sandbox-alerts.sqlite"
         )
-        self._inventory: HybridVsockSocketInventory | None
-        if config.BACKEND == "cloud-hypervisor":
-            self._inventory = CloudHypervisorSocketInventory(config.vm_root)
-        elif config.BACKEND == "firecracker":
-            self._inventory = FirecrackerSocketInventory(config.vm_root)
-        else:
-            self._inventory = None
+        self._inventory = ExecutionIsolationBackend(config.BACKEND).socket_inventory(
+            config.vm_root,
+        )
         guest = GuestConsole(self._runner)
         self._observer = GuestSystemSandboxObserver(guest, config)
-        self._setup = CloudHypervisorScenarioSetup(
+        self._setup = ExecutionIsolationSetup(
             config,
             deployment,
             self._runner,
@@ -77,7 +69,7 @@ class CloudHypervisorExecutionIsolationScenario:
             self._assets,
             self._coordination,
         )
-        self._verifier = CloudHypervisorAlertVerifier(
+        self._verifier = SandboxAlertVerifier(
             config,
             self._alerts,
             self._coordination,

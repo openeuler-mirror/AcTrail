@@ -46,6 +46,7 @@ class KataRequirementsBuilder:
         labels: tuple[tuple[str, str], ...],
         running_validator: Callable[[KataTestContainer], RequirementCheck],
         privileged_without_host_devices: bool = DEFAULTS.privileged_without_host_devices,
+        network_namespace: Path | None = None,
     ) -> KataContainerRequirements:
         backend = kata_backend(self.backend)
         snapshotter = self.snapshotter
@@ -92,4 +93,5 @@ class KataRequirementsBuilder:
             ready_timeout_seconds=self.ready_timeout_seconds,
             prepare_policy=prepare_policy,
             running_validator=running_validator,
+            network_namespace=network_namespace,
         )

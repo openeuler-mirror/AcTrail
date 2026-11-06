@@ -1,5 +1,8 @@
 # Kata VMM 共享执行隔离告警场景
 
+Cloud Hypervisor 执行隔离用例支持 `x86_64` 和 `aarch64` 宿主；两种架构均需
+可用的 KVM，以及同架构的 Kata、VMM、Guest kernel 和 xiaoO 产物。
+
 ## 快速运行
 
 完成下文的宿主前置条件并构建当前 checkout 的 release 后，从仓库根目录

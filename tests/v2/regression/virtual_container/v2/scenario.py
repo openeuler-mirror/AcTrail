@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import secrets
+import shlex
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from tests.v2.common.kata_runtime import (
@@ -24,6 +27,7 @@ from tests.v2.common.core import TestResult, TestStatus
 from tests.v2.common.runner import TestingContextSingleton
 
 from .assertions import find_clean_trace, parse_summary_counts, require_markers
+from .collector_evidence import wait_for_spans
 from .config import VirtualContainerConfig
 from .matrix import DATA_CASES, INTERFACE_CASES, TRACE_TITLE_TOKEN, DataCase
 from .prerequisites import ResolvedBackend
@@ -38,6 +42,7 @@ class VirtualContainerScenario:
         context: TestingContextSingleton,
         deployment: DeploymentArtifacts | None = None,
     ) -> None:
+        self._deployment = deployment
         self._config = config
         self._context = context
         self._runner = SubprocessRunner()
@@ -200,7 +205,11 @@ class VirtualContainerScenario:
             "starting one reusable interface VM",
         )
         try:
-            results["interface"] = self._run_interface_matrix(backend)
+            with self._network_namespace() as network_namespace:
+                results["interface"] = self._run_interface_matrix(
+                    backend,
+                    network_namespace,
+                )
         except Exception as error:
             results["interface"] = TestResult(TestStatus.FAILED, str(error))
 
@@ -227,7 +236,11 @@ class VirtualContainerScenario:
             "starting one reusable guest-root data VM",
         )
         try:
-            results["data"] = self._run_data_matrix(backend)
+            with self._network_namespace() as network_namespace:
+                results["data"] = self._run_data_matrix(
+                    backend,
+                    network_namespace,
+                )
         except Exception as error:
             results["data"] = TestResult(TestStatus.FAILED, str(error))
         return TestResult(
@@ -236,13 +249,18 @@ class VirtualContainerScenario:
             results,
         )
 
-    def _run_interface_matrix(self, backend: ResolvedBackend) -> TestResult:
+    def _run_interface_matrix(
+        self,
+        backend: ResolvedBackend,
+        network_namespace: Path | None = None,
+    ) -> TestResult:
         assert backend.runtime_config is not None
         requirements = self._requirements(
             backend.name,
             backend.runtime_config,
             profile_name="base",
             data=False,
+            network_namespace=network_namespace,
         )
         results: dict[str, TestResult] = {}
         assert self._capabilities is not None
@@ -277,6 +295,7 @@ class VirtualContainerScenario:
                     timeout=self._config.runtime_timeout_seconds,
                 )
                 output = result.stdout + result.stderr
+                (self._tmp_dir / f"{backend.name}-interface-{case.name}.txt").write_text(output, encoding="utf-8")
                 try:
                     if case.expect_failure:
                         if result.returncode == 0:
@@ -302,14 +321,20 @@ class VirtualContainerScenario:
             results,
         )
 
-    def _run_data_matrix(self, backend: ResolvedBackend) -> TestResult:
+    def _run_data_matrix(
+        self,
+        backend: ResolvedBackend,
+        network_namespace: Path | None = None,
+    ) -> TestResult:
         assert backend.data_config is not None
         requirements = self._requirements(
             backend.name,
             backend.data_config,
             profile_name="data",
             data=True,
+            network_namespace=network_namespace,
         )
+        started_unix_nano = time.time_ns()
         results: dict[str, TestResult] = {}
         assert self._capabilities is not None
         with KataTestContainer(
@@ -317,6 +342,24 @@ class VirtualContainerScenario:
             self._runner,
             self._capabilities,
         ) as vm:
+            # bpf-copy attaches TLS uprobes to a library only after the first traced process maps it, so
+            # that process may finish its handshake first (the product allows this first-discovery gap).
+            # One traced, unchecked exchange attaches them; the checked cells then cover every process.
+            # The fixture loads its libssl through LD_LIBRARY_PATH, which exec-time probe planning ignores;
+            # drop this exchange once the daemon honours LD_LIBRARY_PATH there.
+            tls_case = next((case for case in DATA_CASES if case.needs_tls), None)
+            if tls_case is not None:
+                self._context.report_progress(
+                    f"{_progress_backend(backend.name)}.data.tls",
+                    "running the unchecked first TLS discovery exchange",
+                )
+                try:
+                    self._run_data_case(vm, backend.name, tls_case, discovery_only=True)
+                except Exception as error:
+                    results["tls_discovery"] = TestResult(
+                        TestStatus.FAILED,
+                        self._failure_diagnostics(vm, error),
+                    )
             for case in DATA_CASES:
                 self._context.report_progress(
                     f"{_progress_backend(backend.name)}.data."
@@ -332,19 +375,100 @@ class VirtualContainerScenario:
                     )
                 else:
                     results[case.name] = TestResult(TestStatus.PASSED, "completed")
+            # Checked while the VM is alive: the exporter still owns its queue.
+            collector = self._collector_evidence(backend.name, started_unix_nano)
+            if collector is not None:
+                results["collector_egress"] = collector
         return TestResult(
             TestStatus.COMPOSITE,
             "three data cells in one Kata VM",
             results,
         )
 
+    def _collector_evidence(
+        self,
+        backend: str,
+        since_unix_nano: int,
+    ) -> TestResult | None:
+        traces_file = self._config.collector_traces_file
+        if traces_file is None:
+            return None
+        deployment = self._deployment
+        if deployment is None or not deployment.otel_export_enabled:
+            return TestResult(
+                TestStatus.FAILED,
+                "VIRTUAL_CONTAINER_E2E_COLLECTOR_TRACES_FILE is set, but the "
+                "Guest artifact was prepared without --otel-endpoint",
+            )
+        self._context.report_progress(
+            f"{_progress_backend(backend)}.data.collector",
+            f"waiting for spans in {traces_file}",
+        )
+        try:
+            evidence = wait_for_spans(
+                traces_file,
+                since_unix_nano,
+                self._config.collector_timeout_seconds,
+            )
+        except RuntimeError as error:
+            hint = ""
+            if (
+                deployment.egress_mode == "network"
+                and self._config.network_namespace_helper is None
+            ):
+                hint = (
+                    "; network egress needs a Guest interface, set "
+                    "VIRTUAL_CONTAINER_E2E_NETWORK_NAMESPACE_HELPER"
+                )
+            return TestResult(TestStatus.FAILED, f"{error}{hint}")
+        return TestResult(
+            TestStatus.PASSED,
+            f"{evidence.spans} span(s) in {evidence.traces} trace(s) reached the "
+            f"Host Collector over {deployment.egress_mode}",
+        )
+
+    @contextmanager
+    def _network_namespace(self) -> Iterator[Path | None]:
+        """Give one VM a pre-configured network namespace, as a CRI would."""
+
+        helper = self._config.network_namespace_helper
+        if helper is None:
+            yield None
+            return
+        name = f"actrail-v2-{secrets.token_hex(6)}"
+        created = self._runner.run(
+            [str(helper), "add", name],
+            timeout=self._config.command_timeout_seconds,
+        )
+        lines = created.stdout.strip().splitlines()
+        if created.returncode != 0 or not lines:
+            raise RuntimeError(
+                f"network namespace helper failed exit={created.returncode}: "
+                + (created.diagnostic or "no namespace path was printed")
+            )
+        try:
+            yield Path(lines[-1])
+        finally:
+            removed = self._runner.run(
+                [str(helper), "del", name],
+                timeout=self._config.command_timeout_seconds,
+            )
+            if removed.returncode != 0:
+                self._context.output.line(
+                    f"network namespace helper could not remove {name}: "
+                    + removed.diagnostic
+                )
+
     def _run_data_case(
         self,
         vm: KataTestContainer,
         backend: str,
         case: DataCase,
+        *,
+        discovery_only: bool = False,
     ) -> None:
-        title = self._trace_title(backend, f"data-{case.name}")
+        cell = f"{case.name}-discovery" if discovery_only else case.name
+        title = self._trace_title(backend, f"data-{cell}")
         server = None
         if case.needs_tls:
             server = vm.start_exec(
@@ -389,6 +513,7 @@ class VirtualContainerScenario:
                 f"guest-root workload launch failed exit={launch.returncode}: "
                 + launch.diagnostic
             )
+        (self._tmp_dir / f"{backend}-{cell}-launch.txt").write_text(launch.stdout + launch.stderr, encoding="utf-8")
         if server is not None:
             server_result = server.wait(timeout=CASE_CONSTANTS.server_completion_timeout_seconds)
             if server_result.returncode != 0:
@@ -399,12 +524,23 @@ class VirtualContainerScenario:
         if self._config.settle_seconds:
             time.sleep(self._config.settle_seconds)
         trace_id = self._wait_for_clean_trace(vm, title)
+        if discovery_only:
+            # Kept as evidence only: a missing first exchange here is the allowed discovery gap.
+            payloads = self._guest_command(
+                vm,
+                "/usr/local/bin/actrailviewer --config /etc/actrail/operator.conf "
+                f"payloads --trace-id {trace_id}",
+                check=False,
+            )
+            (self._tmp_dir / f"{backend}-{cell}-payloads.txt").write_text(payloads.stdout, encoding="utf-8")
+            return
         summary = self._guest_command(
             vm,
             "/usr/local/bin/actrailviewer --config /etc/actrail/operator.conf "
             f"summary --trace-id {trace_id}",
         )
         counts = parse_summary_counts(summary.stdout)
+        (self._tmp_dir / f"{backend}-{case.name}-summary.txt").write_text(summary.stdout, encoding="utf-8")
         require_markers(
             launch.stdout + launch.stderr,
             ("deployment_permissions_degraded=false",),
@@ -433,6 +569,15 @@ class VirtualContainerScenario:
                 ("TlsUserSpace", "SSL_write", "SSL_read", "26/26", "18/18"),
                 context=f"{case.name} payloads",
             )
+            (self._tmp_dir / f"{backend}-{case.name}-payloads.txt").write_text(payloads.stdout, encoding="utf-8")
+            for function, expected_hex in (("SSL_write", "434c49454e545f5345435245545f4d41524b45525f373738380a"),
+                                           ("SSL_read", "5345525645525f5245504c595f393933310a")):
+                segment = next(line.split()[0] for line in payloads.stdout.splitlines() if "TlsUserSpace" in line and function in line)
+                content = self._guest_command(vm, "/usr/local/bin/actrailviewer --config /etc/actrail/operator.conf "
+                    f"payload --trace-id {shlex.quote(trace_id)} --segment-id {shlex.quote(segment)} --format hex")
+                (self._tmp_dir / f"{backend}-{case.name}-{function}.hex").write_text(content.stdout, encoding="utf-8")
+                if content.stdout.strip() != expected_hex:
+                    raise RuntimeError(f"{case.name} {function} plaintext content differs from the fixed fixture")
 
     def _requirements(
         self,
@@ -441,6 +586,7 @@ class VirtualContainerScenario:
         *,
         profile_name: str,
         data: bool,
+        network_namespace: Path | None = None,
     ) -> KataContainerRequirements:
         mounts = [
             KataMount(self._workload_bundle, "/opt/actrail", read_only=True),
@@ -489,6 +635,7 @@ class VirtualContainerScenario:
             artifact_directories=tuple(artifact_directories),
             labels=(("io.actrail.test.profile", profile_name),),
             running_validator=lambda vm: self._validate_workload_ready(vm, data=data),
+            network_namespace=network_namespace,
         )
 
     def _validate_workload_ready(
@@ -544,7 +691,9 @@ class VirtualContainerScenario:
             )
             if traces.returncode == 0:
                 try:
-                    return find_clean_trace(traces.stdout, title).trace_id
+                    trace_id = find_clean_trace(traces.stdout, title).trace_id
+                    (self._tmp_dir / f"{title}-traces.json").write_text(traces.stdout, encoding="utf-8")
+                    return trace_id
                 except RuntimeError as error:
                     last_error = str(error)
             else:

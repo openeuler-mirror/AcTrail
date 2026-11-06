@@ -57,13 +57,18 @@ grep -Fqx \
   'sync_runtime_library_path = "/opt/actrail/lib/libactrail_tls_payload_probe_sync.so"' \
   "$OUTPUT/etc/actrail/operator.conf" \
   || fail "workload config has the wrong TLS probe path"
-for section in payload.socket seccomp_notify process_seccomp enforcement; do
+# Resolve the deployment patch through the real CLI so omitted default fields
+# are checked as configured. Socket payloads now use the eBPF capture profile.
+LD_LIBRARY_PATH="$GUEST_BUNDLE/lib" "$GUEST_BUNDLE/actrailctl" init \
+  --output "$WORK_DIR/rendered-workload.conf" \
+  --patch "$OUTPUT/etc/actrail/operator.conf"
+for section in seccomp_notify process_seccomp enforcement; do
   awk -v section="[$section]" '
     $0 == section { inside = 1; next }
     inside && /^\[/ { exit }
     inside && $0 == "enabled = false" { found = 1 }
     END { exit !found }
-  ' "$OUTPUT/etc/actrail/operator.conf" \
+  ' "$WORK_DIR/rendered-workload.conf" \
     || fail "Kata workload config must disable $section"
 done
 grep -Fq -- '--seccomp-notify disabled' "$OUTPUT/bin/actrail-launch" \

@@ -14,6 +14,8 @@ class ContainerAgentXiaooConstants:
     case_cleanup_grace_seconds: int = 120
     docker_info_timeout_seconds: float = 15.0
     docker_ready_timeout_seconds: float = 30.0
+    docker_probe_timeout_seconds: float = 5.0
+    host_containerd_runtime_dir: str = "/run/containerd"
     docker_stop_timeout_seconds: float = 10.0
     docker_kill_timeout_seconds: float = 5.0
     daemon_stop_timeout_seconds: float = 60.0

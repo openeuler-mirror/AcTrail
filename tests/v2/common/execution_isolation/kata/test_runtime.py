@@ -18,17 +18,21 @@ from tests.v2.regression.execution_isolation_firecracker.v2.config import (
     FirecrackerExecutionIsolationConfig,
 )
 
-from .asset_bundle import CloudHypervisorAssetBundle
-from .cloud_hypervisor import (
+from .asset_bundle import ExecutionIsolationAssetBundle
+from .backends import ExecutionIsolationBackend
+from .vsock import (
     CloudHypervisorSocketInventory,
     FirecrackerSocketInventory,
 )
-from .prerequisites import CloudHypervisorExecutionIsolationPrerequisites
-from .scenario.runtime import CloudHypervisorExecutionIsolationScenario
-from .scenario.setup import CloudHypervisorScenarioSetup
+from tests.v2.regression.execution_isolation_cloud_hypervisor.v2.config import (
+    CloudHypervisorExecutionIsolationConfig,
+)
+from .prerequisites import KataExecutionIsolationPrerequisites
+from .scenario.runtime import KataExecutionIsolationScenario
+from .scenario.setup import ExecutionIsolationSetup
 from .scenario.system_observer import GuestSystemSandboxObserver
 from .scenario.transport import FirecrackerAssetTransport, GuestCoordination
-from .scenario.verifier import CloudHypervisorAlertVerifier
+from .scenario.verifier import SandboxAlertVerifier
 
 
 class _RecordingRunner:
@@ -105,7 +109,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 self.name = name
                 return CoordinationFile()
 
-        verifier = CloudHypervisorAlertVerifier(
+        verifier = SandboxAlertVerifier(
             SimpleNamespace(
                 ready_timeout_seconds=90,
                 IDENTITY=_Identity,
@@ -152,7 +156,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 },
             ),
         ]
-        verifier = CloudHypervisorAlertVerifier(
+        verifier = SandboxAlertVerifier(
             SimpleNamespace(
                 ready_timeout_seconds=0,
                 IDENTITY=_Identity,
@@ -209,8 +213,8 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 del vm
                 events.append("trigger:guest-oom")
 
-        scenario = CloudHypervisorExecutionIsolationScenario.__new__(
-            CloudHypervisorExecutionIsolationScenario
+        scenario = KataExecutionIsolationScenario.__new__(
+            KataExecutionIsolationScenario
         )
         scenario._context = SimpleNamespace(
             report_progress=lambda step, message: events.append(
@@ -268,7 +272,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 )
 
         with tempfile.TemporaryDirectory() as raw:
-            verifier = CloudHypervisorAlertVerifier(
+            verifier = SandboxAlertVerifier(
                 SimpleNamespace(
                     ready_timeout_seconds=9,
                     IDENTITY=_Identity,
@@ -343,8 +347,8 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                     def terminate(self, *, grace_seconds: float) -> CommandResult:
                         return CommandResult(("gateway",), 0, "", "")
 
-                scenario = CloudHypervisorExecutionIsolationScenario.__new__(
-                    CloudHypervisorExecutionIsolationScenario
+                scenario = KataExecutionIsolationScenario.__new__(
+                    KataExecutionIsolationScenario
                 )
                 scenario._inventory = (
                     None if backend == "stratovirt" else Inventory()
@@ -470,8 +474,8 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             def require_alive(self, process: object, name: str) -> None:
                 events.append("gateway.alive")
 
-        scenario = CloudHypervisorExecutionIsolationScenario.__new__(
-            CloudHypervisorExecutionIsolationScenario
+        scenario = KataExecutionIsolationScenario.__new__(
+            KataExecutionIsolationScenario
         )
         scenario._inventory = Inventory()  # type: ignore[assignment]
         scenario._config = SimpleNamespace(
@@ -525,8 +529,8 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             def start(self) -> None:
                 events.append("vm.start")
 
-        scenario = CloudHypervisorExecutionIsolationScenario.__new__(
-            CloudHypervisorExecutionIsolationScenario
+        scenario = KataExecutionIsolationScenario.__new__(
+            KataExecutionIsolationScenario
         )
         scenario._inventory = None
         scenario._config = SimpleNamespace(
@@ -607,8 +611,8 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             events.append("observer.connect")
             raise RuntimeError("connect failed")
 
-        scenario = CloudHypervisorExecutionIsolationScenario.__new__(
-            CloudHypervisorExecutionIsolationScenario
+        scenario = KataExecutionIsolationScenario.__new__(
+            KataExecutionIsolationScenario
         )
         scenario._inventory = None
         scenario._config = SimpleNamespace(
@@ -726,7 +730,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
         )
 
         with patch(
-            "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
+            "tests.v2.common.execution_isolation.kata."
             "scenario.system_observer.time.sleep"
         ):
             observer.connect(  # type: ignore[arg-type]
@@ -746,7 +750,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 workload_image=config.image,
                 workload_image_archive=root / "firecracker-workload.tar",
             )
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 deployment,  # type: ignore[arg-type]
                 _RecordingRunner(),  # type: ignore[arg-type]
@@ -772,7 +776,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             config = self._firecracker_config(root)
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 SimpleNamespace(),  # type: ignore[arg-type]
                 _RecordingRunner(),  # type: ignore[arg-type]
@@ -809,7 +813,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
         for backend in ("cloud-hypervisor", "stratovirt"):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
-                setup = CloudHypervisorScenarioSetup(
+                setup = ExecutionIsolationSetup(
                     SimpleNamespace(
                         BACKEND=backend,
                         ready_timeout_seconds=9,
@@ -879,7 +883,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             )
             (assets / "xiaoo-root").chmod(0o755)
             (assets / "workload.sh").write_text("payload\n", encoding="utf-8")
-            CloudHypervisorAssetBundle.write_manifest(assets)
+            ExecutionIsolationAssetBundle.write_manifest(assets)
             guest_assets = root / "guest-assets"
             guest_assets.mkdir()
             guest_xiaoo = guest_assets / "xiaoo-real"
@@ -931,7 +935,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 "payload\n",
                 encoding="utf-8",
             )
-            CloudHypervisorAssetBundle.write_manifest(assets)
+            ExecutionIsolationAssetBundle.write_manifest(assets)
             guest_assets = root / "guest-assets"
             guest_assets.mkdir()
             (guest_assets / "xiaoo-real").write_bytes(xiaoo_payload)
@@ -976,7 +980,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 "payload\n",
                 encoding="utf-8",
             )
-            CloudHypervisorAssetBundle.write_manifest(assets)
+            ExecutionIsolationAssetBundle.write_manifest(assets)
             guest_assets = root / "guest-assets"
             guest_assets.mkdir()
             (guest_assets / "xiaoo-real").write_bytes(b"wrong-xiaoo\n")
@@ -1003,7 +1007,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 "payload\n",
                 encoding="utf-8",
             )
-            CloudHypervisorAssetBundle.write_manifest(assets)
+            ExecutionIsolationAssetBundle.write_manifest(assets)
 
             class CaptureVm:
                 calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
@@ -1065,7 +1069,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             config = self._firecracker_config(root)
-            setup = CloudHypervisorScenarioSetup(
+            setup = ExecutionIsolationSetup(
                 config,
                 SimpleNamespace(),  # type: ignore[arg-type]
                 _RecordingRunner(),  # type: ignore[arg-type]
@@ -1075,8 +1079,8 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             )
             vm = object()
             with patch(
-                "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
-                "scenario.setup.FirecrackerAssetTransport"
+                "tests.v2.common.execution_isolation.kata."
+                "backends.FirecrackerAssetTransport"
             ) as transport:
                 setup.stage_assets(vm)  # type: ignore[arg-type]
 
@@ -1135,6 +1139,52 @@ class SharedAlertRuntimeTest(unittest.TestCase):
                 firecracker_socket.close()
                 cloud_socket.close()
 
+    def test_cloud_hypervisor_architectures_preserve_external_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            with patch.dict(os.environ, {}, clear=True):
+                config = CloudHypervisorExecutionIsolationConfig.from_environment(
+                    TestCaseInputs(root, root, root)
+                )
+            prerequisite_module = (
+                "tests.v2.common.execution_isolation.kata."
+                "prerequisites"
+            )
+            cases = (
+                ("aarch64", True, None),
+                ("x86_64", True, None),
+                ("x86_64", False, "/dev/kvm is not readable and writable"),
+                ("riscv64", True, "host architecture riscv64 is not one of"),
+            )
+            for architecture, kvm_available, expected_problem in cases:
+                with (
+                    self.subTest(architecture=architecture, kvm=kvm_available),
+                    patch(
+                        f"{prerequisite_module}.platform.machine",
+                        return_value=architecture,
+                    ),
+                    patch(
+                        f"{prerequisite_module}.os.access",
+                        return_value=kvm_available,
+                    ),
+                    patch(
+                        f"{prerequisite_module}.shutil.which",
+                        return_value="/usr/bin/tool",
+                    ),
+                ):
+                    problem = KataExecutionIsolationPrerequisites(
+                        config,
+                        _RecordingRunner(),
+                    )._external_problem()
+
+                    if expected_problem is None:
+                        self.assertIsNone(problem)
+                    else:
+                        self.assertIsNotNone(problem)
+                        assert problem is not None
+                        self.assertIs(problem.status, TestStatus.SKIPPED)
+                        self.assertIn(expected_problem, problem.message)
+
     def test_firecracker_devmapper_probe_requires_ok_status(self) -> None:
         okay = CommandResult(
             ("ctr",),
@@ -1150,33 +1200,22 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             "io.containerd.snapshotter.v1 devmapper linux/amd64 error\n",
             "",
         )
-        config = SimpleNamespace(
-            command_timeout_seconds=11,
-        )
+        backend = ExecutionIsolationBackend("firecracker")
         with patch(
-            "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
-            "prerequisites.shutil.which",
+            "tests.v2.common.execution_isolation.kata."
+            "backends.shutil.which",
             return_value="/sbin/dmsetup",
         ):
             okay_runner = _RecordingRunner([okay])
-            okay_problem = CloudHypervisorExecutionIsolationPrerequisites(
-                config,  # type: ignore[arg-type]
-                okay_runner,
-            )._firecracker_devmapper_problem()
-            error_problem = CloudHypervisorExecutionIsolationPrerequisites(
-                config,  # type: ignore[arg-type]
-                _RecordingRunner([error]),
-            )._firecracker_devmapper_problem()
+            okay_problem = backend.external_problem(okay_runner, 11)
+            error_problem = backend.external_problem(_RecordingRunner([error]), 11)
         missing_runner = _RecordingRunner()
         with patch(
-            "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
-            "prerequisites.shutil.which",
+            "tests.v2.common.execution_isolation.kata."
+            "backends.shutil.which",
             return_value=None,
         ):
-            missing_problem = CloudHypervisorExecutionIsolationPrerequisites(
-                config,  # type: ignore[arg-type]
-                missing_runner,
-            )._firecracker_devmapper_problem()
+            missing_problem = backend.external_problem(missing_runner, 11)
 
         self.assertIsNone(okay_problem)
         self.assertIn("status=error", error_problem or "")
@@ -1209,22 +1248,22 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             )
             with (
                 patch(
-                    "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
+                    "tests.v2.common.execution_isolation.kata."
                     "prerequisites.platform.machine",
                     return_value="x86_64",
                 ),
                 patch(
-                    "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
+                    "tests.v2.common.execution_isolation.kata."
                     "prerequisites.os.access",
                     return_value=True,
                 ),
                 patch(
-                    "tests.v2.regression.execution_isolation_cloud_hypervisor.v2."
+                    "tests.v2.common.execution_isolation.kata."
                     "prerequisites.shutil.which",
                     return_value="/usr/bin/tool",
                 ),
             ):
-                problem = CloudHypervisorExecutionIsolationPrerequisites(
+                problem = KataExecutionIsolationPrerequisites(
                     config,
                     runner,
                 )._external_problem()

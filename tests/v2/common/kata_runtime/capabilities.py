@@ -13,6 +13,7 @@ class CtrCapabilities:
     run_user: bool
     exec_user: bool
     runtime_config_path: bool
+    with_ns: bool = False
 
     @classmethod
     def detect(
@@ -44,6 +45,7 @@ class CtrCapabilities:
                 run_help.stdout,
                 "--runtime-config-path",
             ),
+            with_ns=_has_option(run_help.stdout, "--with-ns"),
         )
 
 

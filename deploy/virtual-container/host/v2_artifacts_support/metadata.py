@@ -91,7 +91,10 @@ def default_tool_inputs(repo: Path) -> tuple[Path, ...]:
         repo
         / "tests/v2/regression/virtual_container/prepare-guest-bundle.sh",
         repo / "tests/v2/regression/virtual_container/guest",
+        repo / "tests/v2/common/execution_isolation/kata",
         repo / "tests/v2/regression/execution_isolation_cloud_hypervisor",
+        repo / "tests/v2/regression/execution_isolation_firecracker",
+        repo / "tests/v2/regression/execution_isolation_stratovirt",
     )
     files: list[Path] = []
     for root in roots:
