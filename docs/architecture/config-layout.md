@@ -3,6 +3,7 @@
 | `control.socket_path` | `string` | `"/run/actrail/control.sock"` | 否 | control | Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L11) |
 | `control.socket_mode_octal` | `string` | `"660"` | 否 | control | Unix socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L12) |
 | `control.pending_connection_max` | `uint32` | `256` | 否 | control | 待处理控制连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |
+| `control.accept_retry_delay_ms` | `uint64` | `100` | 否 | control | control socket 耗尽文件描述符后重新接入的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L14) |
 | `control.active_trace_max` | `uint32` | `128` | 否 | control | 同时活动的 trace 数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L14) |
 | `control.pid_file` | `string` | `"/run/actrail/actraild.pid"` | 否 | control | daemon PID 文件路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L15) |
 | `control.log_path` | `string` | `"/var/log/actrail/actraild.log"` | 否 | control | daemon 日志路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L16) |
@@ -153,7 +154,7 @@
 | `ebpf.tracked_process_max_entries` | `uint32` | `8192` | 否 | ebpf | eBPF 跟踪进程表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L563) |
 | `ebpf.pending_operation_max_entries` | `uint32` | `8192` | 否 | ebpf | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L564) |
 | `ebpf.fd_per_process_max_entries` | `uint32` | `64` | 否 | ebpf | 每进程跟踪的文件描述符数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L565) |
-| `ebpf.suppressed_fd_max_entries` | `uint32` | `8192` | 否 | ebpf | 被抑制的文件描述符表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L566) |
+| `ebpf.suppressed_fd_max_entries` | `uint32` | `65536` | 否 | ebpf | 被抑制的文件描述符表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L584) |
 | `ebpf.suppressed_fd_index_slots_per_process` | `uint32` | `64` | 否 | ebpf | 每进程用于索引被抑制文件描述符的槽数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L567) |
 | `ebpf.event_ring_buffer_max_bytes` | `uint32` | `33554432` | 否 | ebpf | eBPF 事件 ring buffer 字节上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L568) |
 | `ebpf.diagnostics_summary_interval_ms` | `uint32` | `10000` | 否 | ebpf | 诊断摘要输出间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L569) |
@@ -164,39 +165,51 @@
 | `ebpf.ipc_lineage.max_processes_per_trace` | `uint32` | `8192` | 否 | ebpf | 每个 trace 记录的 IPC 进程数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L7) |
 | `ebpf.ipc_lineage.max_candidate_fds_per_trace` | `uint32` | `65536` | 否 | ebpf | 每个 trace 记录的候选 IPC 文件描述符数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L8) |
 | `ebpf.ipc_lineage.max_stdio_bundles_per_trace` | `uint32` | `8192` | 否 | ebpf | 每个 trace 保留的完整 stdio 连接组合数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L9) |
-| `payload.tls.enabled` | `bool` | `true` | 否 | payload | 采集 TLS 明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L117) |
-| `payload.tls.capture_backend` | `string` | `"bpf-copy"` | 否 | payload | 明文采集后端；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L118) |
-| `payload.tls.source` | `string` | `"auto"` | 否 | payload | TLS 目标来源选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L119) |
-| `payload.tls.resolver` | `string` | `"auto"` | 否 | payload | TLS 符号和探针解析器选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L120) |
-| `payload.tls.library` | `string` | `"auto"` | 否 | payload | TLS 库类型选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L121) |
-| `payload.tls.library_path` | `string` | `"auto"` | 否 | payload | TLS 库路径；auto 表示自动发现；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L122) |
-| `payload.tls.binary_path` | `string` | `"disabled"` | 否 | payload | TLS 可执行文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L123) |
-| `payload.tls.pattern_path` | `string` | `"disabled"` | 否 | payload | TLS 机器码模式文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L124) |
-| `payload.tls.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L125) |
-| `payload.tls.max_operation_bytes` | `uint32` | `16777216` | 否 | payload | 单次操作采集的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L126) |
-| `payload.tls.ring_buffer_bytes` | `uint32` | `8388608` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L127) |
-| `payload.tls.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L128) |
-| `payload.tls.seccomp_syscalls` | `string[]` | `["write", "writev", "sendto", "sendmsg"]` | 否 | payload | 使用 seccomp 通知处理的系统调用列表；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L129) |
-| `payload.tls.diagnostics_enabled` | `bool` | `true` | 否 | payload | 输出明文采集诊断；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L130) |
-| `payload.tls.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L131) |
-| `payload.tls.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L132) |
-| `payload.tls.sync_runtime_library_path` | `string` | `"auto"` | 否 | payload | TLS sync 注入库路径；auto 表示自动选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L133) |
-| `payload.tls.sync_event_socket_path` | `string` | `"/run/actrail/tls-sync.sock"` | 否 | payload | TLS sync 事件 Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L134) |
-| `payload.tls.sync_max_frame_bytes` | `uint32` | `33554432` | 否 | payload | TLS sync 单帧字节上限，包含帧头；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L135) |
-| `payload.tls.sync_socket_mode_octal` | `string` | `"660"` | 否 | payload | TLS sync socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L136) |
-| `payload.tls.sync_match_limit` | `uint32` | `8` | 否 | payload | TLS sync 探针匹配数量上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L137) |
-| `payload.tls.binary_analysis_cache_capacity` | `uint32` | `256` | 否 | payload | 二进制分析结果缓存条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L138) |
-| `payload.tls.dynamic_discovery_capacity` | `uint32` | `128` | 否 | payload | 动态 TLS 探针发现任务与结果的总容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L139) |
-| `payload.tls.direct_startup_discovery_enabled` | `bool` | `true` | 否 | payload | 在启动时发现直接捕获所需的 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L140) |
-| `payload.tls.direct_dynamic_discovery_enabled` | `bool` | `true` | 否 | payload | 在运行时发现新出现的直接捕获 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L141) |
-| `payload.tls.dynamic_exec_plan_timeout_ms` | `uint64` | `30000` | 否 | payload | 动态执行探针计划查询时限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L142) |
-| `payload.tls.sync_flow_control_enabled` | `bool` | `true` | 否 | payload | 启用 TLS sync 流量预算控制；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L143) |
-| `payload.tls.sync_flow_sniff_bytes` | `uint32` | `65536` | 否 | payload | TLS sync 流识别阶段的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L144) |
-| `payload.tls.sync_flow_max_header_bytes` | `uint32` | `16384` | 否 | payload | TLS sync HTTP 头字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L145) |
-| `payload.tls.sync_flow_large_transfer_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 判断 HTTP/1 大数据传输的字节阈值；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L146) |
-| `payload.tls.sync_flow_unknown_stream_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 未识别流的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L147) |
-| `payload.tls.sync_flow_h2_data_probe_bytes` | `uint64` | `65536` | 否 | payload | TLS sync HTTP/2 DATA 探测字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L148) |
-| `payload.tls.java_agent_enabled` | `bool` | `false` | 否 | payload | 启用 Java Agent 明文采集；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L149) |
+| `payload.tls.enabled` | `bool` | `true` | 否 | payload | 采集 TLS 明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L119) |
+| `payload.tls.capture_backend` | `string` | `"bpf-copy"` | 否 | payload | 明文采集后端；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L120) |
+| `payload.tls.source` | `string` | `"auto"` | 否 | payload | TLS 目标来源选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L121) |
+| `payload.tls.resolver` | `string` | `"auto"` | 否 | payload | TLS 符号和探针解析器选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L122) |
+| `payload.tls.library` | `string` | `"auto"` | 否 | payload | TLS 库类型选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L123) |
+| `payload.tls.library_path` | `string` | `"auto"` | 否 | payload | TLS 库路径；auto 表示自动发现；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L124) |
+| `payload.tls.binary_path` | `string` | `"disabled"` | 否 | payload | TLS 可执行文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L125) |
+| `payload.tls.pattern_path` | `string` | `"disabled"` | 否 | payload | TLS 机器码模式文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L126) |
+| `payload.tls.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L127) |
+| `payload.tls.max_operation_bytes` | `uint32` | `16777216` | 否 | payload | 单次操作采集的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L128) |
+| `payload.tls.ring_buffer_bytes` | `uint32` | `8388608` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L129) |
+| `payload.tls.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L130) |
+| `payload.tls.seccomp_syscalls` | `string[]` | `["write", "writev", "sendto", "sendmsg"]` | 否 | payload | 使用 seccomp 通知处理的系统调用列表；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L131) |
+| `payload.tls.diagnostics_enabled` | `bool` | `true` | 否 | payload | 输出明文采集诊断；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L132) |
+| `payload.tls.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L133) |
+| `payload.tls.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L134) |
+| `payload.tls.sync_runtime_library_path` | `string` | `"auto"` | 否 | payload | TLS sync 注入库路径；auto 表示自动选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L135) |
+| `payload.tls.sync_event_socket_path` | `string` | `"/run/actrail/tls-sync.sock"` | 否 | payload | TLS sync 事件 Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L136) |
+| `payload.tls.sync_max_frame_bytes` | `uint32` | `33554432` | 否 | payload | TLS sync 单帧字节上限，包含帧头；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L137) |
+| `payload.tls.sync_trace_connection_max` | `uint32` | `128` | 否 | payload | 每 Trace 的 TLS-sync 长连接上限，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L138) |
+| `payload.tls.sync_pending_connection_max` | `uint32` | `1024` | 否 | payload | 未归属 Trace 的 TLS-sync 连接在全局连接预算中的额外额度，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L139) |
+| `payload.tls.sync_plan_queue_capacity` | `uint32` | `1024` | 否 | payload | 探针计划解析队列容量，bpf-copy 的计划解析也使用，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L140) |
+| `payload.tls.sync_fd_reserve` | `uint32` | `4096` | 否 | payload | 计算 fd 预算时为 daemon 其他用途预留的描述符数，可为 0；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L141) |
+| `payload.tls.sync_accept_retry_delay_ms` | `uint64` | `100` | 否 | payload | TLS-sync socket 耗尽 fd 后的接入重试间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L142) |
+| `payload.tls.sync_event_timeout_ms` | `uint64` | `5000` | 否 | payload | runtime 发送线程的无进度超时，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L143) |
+| `payload.tls.sync_event_shutdown_timeout_ms` | `uint64` | `100` | 否 | payload | runtime 退出时排空事件的总预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L144) |
+| `payload.tls.sync_event_batch_bytes` | `uint32` | `32768` | 否 | payload | runtime 发送批次预算及单次写入上限，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L145) |
+| `payload.tls.sync_read_buffer_bytes` | `uint32` | `65536` | 否 | payload | daemon 共享的 TLS-sync socket 读取缓冲字节数，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L146) |
+| `payload.tls.sync_read_max_bytes_per_client` | `uint32` | `1048576` | 否 | payload | 每个连接每轮读取的字节预算，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L147) |
+| `payload.tls.sync_ready_client_batch_max` | `uint32` | `128` | 否 | payload | 每轮处理的就绪连接数上限，必须为正且不超过 2147483647；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L148) |
+| `payload.tls.sync_frame_buffer_retain_max_bytes` | `uint32` | `1048576` | 否 | payload | 连接组帧缓冲清空后可保留的容量，超过即释放，0 表示清空后释放；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L149) |
+| `payload.tls.sync_socket_mode_octal` | `string` | `"660"` | 否 | payload | TLS sync socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L150) |
+| `payload.tls.sync_match_limit` | `uint32` | `8` | 否 | payload | TLS sync 探针匹配数量上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L151) |
+| `payload.tls.binary_analysis_cache_capacity` | `uint32` | `256` | 否 | payload | 二进制分析结果缓存条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L152) |
+| `payload.tls.dynamic_discovery_capacity` | `uint32` | `128` | 否 | payload | 动态 TLS 探针发现任务与结果的总容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L153) |
+| `payload.tls.direct_startup_discovery_enabled` | `bool` | `true` | 否 | payload | 在启动时发现直接捕获所需的 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L154) |
+| `payload.tls.direct_dynamic_discovery_enabled` | `bool` | `true` | 否 | payload | 在运行时发现新出现的直接捕获 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L155) |
+| `payload.tls.dynamic_exec_plan_timeout_ms` | `uint64` | `30000` | 否 | payload | 动态执行探针计划查询时限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L156) |
+| `payload.tls.sync_flow_control_enabled` | `bool` | `true` | 否 | payload | 启用 TLS sync 流量预算控制；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L157) |
+| `payload.tls.sync_flow_sniff_bytes` | `uint32` | `65536` | 否 | payload | TLS sync 流识别阶段的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L158) |
+| `payload.tls.sync_flow_max_header_bytes` | `uint32` | `16384` | 否 | payload | TLS sync HTTP 头字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L159) |
+| `payload.tls.sync_flow_large_transfer_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 判断 HTTP/1 大数据传输的字节阈值；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L160) |
+| `payload.tls.sync_flow_unknown_stream_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 未识别流的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L161) |
+| `payload.tls.sync_flow_h2_data_probe_bytes` | `uint64` | `65536` | 否 | payload | TLS sync HTTP/2 DATA 探测字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L162) |
+| `payload.tls.java_agent_enabled` | `bool` | `false` | 否 | payload | 启用 Java Agent 明文采集；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L163) |
 | `payload.stdio.enabled` | `bool` | `true` | 否 | payload | 采集标准输入输出明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L339) |
 | `payload.stdio.capture_stdin` | `bool` | `true` | 否 | payload | 采集标准输入；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L340) |
 | `payload.stdio.capture_stdout` | `bool` | `true` | 否 | payload | 采集标准输出；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L341) |

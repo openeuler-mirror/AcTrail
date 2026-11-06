@@ -66,6 +66,7 @@ TTY 同样使用此刷新间隔。`tty.operations` 默认且仅允许 `read/read
 | `socket_path` | `/run/actrail/control.sock` | ctl 与 daemon 的本地 Unix socket |
 | `socket_mode_octal` | `660` | socket 文件 mode |
 | `pending_connection_max` | `256` | 同时等待处理的 control client 上限 |
+| `accept_retry_delay_ms` | `100` | control socket 耗尽文件描述符后，重试接入的间隔 |
 | `active_trace_max` | `128` | 同时非终态 trace 的 admission 上限 |
 | `pid_file` | `/run/actrail/actraild.pid` | `start/stop/status/restart` 使用的 PID 文件 |
 | `log_path` | `/var/log/actrail/actraild.log` | 后台 daemon stdout/stderr 日志 |

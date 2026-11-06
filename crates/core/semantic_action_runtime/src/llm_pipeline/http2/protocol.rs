@@ -44,6 +44,16 @@ impl Http2Protocol {
         self.connections
             .contains_key(&ConnectionKey(identity.clone()))
     }
+    pub(in crate::llm_pipeline) fn at_frame_boundary(
+        &self,
+        identity: &PayloadStreamIdentity,
+    ) -> bool {
+        self.connections
+            .get(&ConnectionKey(identity.clone()))
+            .and_then(|connection| connection.directions.get(&LiveStreamDirection::Outbound))
+            .is_none_or(|direction| direction.decoder.buffered_bytes() == 0)
+    }
+
     pub(in crate::llm_pipeline) fn advance(
         &mut self,
         segment: &PayloadSegment,

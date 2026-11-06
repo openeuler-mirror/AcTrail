@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use config_core::capture_profile::DeploymentPermissions;
 use config_core::daemon::{
@@ -219,6 +220,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         &config.socket_path,
         config.socket_permissions,
         config.control_pending_connection_max,
+        Duration::from_millis(config.control_accept_retry_delay_ms),
         signals::shutdown_requested,
         || {
             socket_bound = true;

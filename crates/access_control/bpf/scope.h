@@ -15,10 +15,7 @@ struct ac_pending_binding {
     __u64 trace_id;
     __u64 generation;
     __u32 observer_namespace_tgid;
-    __u32 suppressed_fd_count;
     __u32 counted;
-    __u32 reserved;
-    __u8 suppressed_fds[512];
 };
 struct ac_pending_key {
     __u32 observer_namespace_tgid;
@@ -28,7 +25,7 @@ struct ac_pending_key {
 };
 
 _Static_assert(sizeof(struct ac_observer_namespace) == 24, "observer namespace ABI");
-_Static_assert(sizeof(struct ac_pending_binding) == 544, "pending binding ABI");
+_Static_assert(sizeof(struct ac_pending_binding) == 24, "pending binding ABI");
 _Static_assert(sizeof(struct ac_pending_key) == 24, "pending key ABI");
 
 #define AC_SHARED_MAP(NAME, TYPE, KEY, VALUE) \

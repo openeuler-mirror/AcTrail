@@ -28,6 +28,7 @@ impl StorageAttachService {
             ControlError::new("trace_missing", "trace disappeared after activation")
         })?;
         let trace = entry.trace.clone();
+        let tls_event_token = entry.tls_event_token.clone();
         let memberships = entry.memberships.memberships().cloned().collect::<Vec<_>>();
         if let Err(error) = persist_admitted_trace(
             self.storage.as_mut(),
@@ -74,6 +75,7 @@ impl StorageAttachService {
         Ok(TrackAddReply {
             trace_id,
             lifecycle_state: trace.lifecycle_state,
+            tls_event_token,
         })
     }
 
@@ -317,6 +319,7 @@ impl AttachService for StorageAttachService {
         timeout = min_optional_timeout(timeout, self.network_boundary_alerts.poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.file_io_poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.event_transport_loss_poll_timeout());
+        timeout = min_optional_timeout(timeout, self.tls_sync.poll_timeout());
         Ok(timeout)
     }
 

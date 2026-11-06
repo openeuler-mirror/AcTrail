@@ -1,10 +1,12 @@
 use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
 use tls_payload_sync::{
-    DEFAULT_EVENT_TIMEOUT_MS, DEFAULT_PLAN_TIMEOUT_MS, ENV_ENABLED, ENV_EVENT_FD, ENV_EVENT_SOCKET,
-    ENV_EVENT_TIMEOUT_MS, ENV_EVENT_WRITE_BUFFER_BYTES, ENV_EVENTS, ENV_FLOW_CONTROL_ENABLED,
+    DEFAULT_EVENT_BATCH_BYTES, DEFAULT_EVENT_SHUTDOWN_TIMEOUT_MS, DEFAULT_EVENT_TIMEOUT_MS,
+    DEFAULT_PLAN_TIMEOUT_MS, ENV_ENABLED, ENV_EVENT_BATCH_BYTES, ENV_EVENT_SHUTDOWN_TIMEOUT_MS,
+    ENV_EVENT_SOCKET, ENV_EVENT_TIMEOUT_MS, ENV_EVENT_TOKEN, ENV_EVENTS, ENV_FLOW_CONTROL_ENABLED,
     ENV_FLOW_H2_DATA_PROBE_BYTES, ENV_FLOW_LARGE_TRANSFER_BYTES, ENV_FLOW_MAX_HEADER_BYTES,
     ENV_FLOW_MAX_STREAMS, ENV_FLOW_SNIFF_BYTES, ENV_FLOW_UNKNOWN_STREAM_BYTES, ENV_MAX_FRAME_BYTES,
-    ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_TIMEOUT_MS, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID, FrameCodec,
+    ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_TIMEOUT_MS, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID,
+    EventClientConfig, EventRegistration, FrameCodec,
 };
 
 use crate::runtime::flow_control::FlowControlConfig;
@@ -174,66 +176,37 @@ fn optional_event_transport(
             "{ENV_EVENT_TIMEOUT_MS} exceeds the supported duration"
         ));
     }
-    let socket_path = std::env::var_os(ENV_EVENT_SOCKET).map(std::path::PathBuf::from);
-    if let Some(value) = std::env::var_os(ENV_EVENT_FD) {
-        let fd = value
-            .to_string_lossy()
-            .parse::<i32>()
-            .map_err(|error| format!("parse {ENV_EVENT_FD}: {error}"))?;
-        if fd < 0 {
-            return Err(format!("{ENV_EVENT_FD} must be non-negative: {fd}"));
-        }
-        let write_buffer_bytes = required_event_write_buffer_bytes()?;
-        let max_frame_bytes = RuntimeConfigFactory::required_max_frame_bytes()?;
-        if !event_fd_is_open(fd) {
-            let Some(path) = socket_path else {
-                return Err(format!(
-                    "{ENV_EVENT_FD}={fd} is not open and {ENV_EVENT_SOCKET} is not set"
-                ));
-            };
-            return Ok(Some(EventTransportConfig::Socket {
-                timeout,
-                path,
-                pending_byte_budget,
-                write_buffer_bytes,
-                max_frame_bytes,
-            }));
-        }
-        return Ok(Some(EventTransportConfig::InheritedFd {
-            timeout,
-            fd,
-            reconnect_path: socket_path,
-            pending_byte_budget,
-            write_buffer_bytes,
-            max_frame_bytes,
-        }));
+    let shutdown_timeout = std::time::Duration::from_millis(optional_positive_u64(
+        ENV_EVENT_SHUTDOWN_TIMEOUT_MS,
+        DEFAULT_EVENT_SHUTDOWN_TIMEOUT_MS,
+    )?);
+    if std::time::Instant::now()
+        .checked_add(shutdown_timeout)
+        .is_none()
+    {
+        return Err(format!(
+            "{ENV_EVENT_SHUTDOWN_TIMEOUT_MS} exceeds the supported duration"
+        ));
     }
+    let socket_path = std::env::var_os(ENV_EVENT_SOCKET).map(std::path::PathBuf::from);
     let Some(path) = socket_path else {
         return Ok(None);
     };
-    let write_buffer_bytes = required_event_write_buffer_bytes()?;
     let max_frame_bytes = RuntimeConfigFactory::required_max_frame_bytes()?;
-    Ok(Some(EventTransportConfig::Socket {
-        timeout,
+    let token = std::env::var(ENV_EVENT_TOKEN)
+        .map_err(|_| format!("missing required runtime env {ENV_EVENT_TOKEN}"))?;
+    Ok(Some(EventTransportConfig {
+        client: EventClientConfig {
+            timeout,
+            shutdown_timeout,
+            pending_byte_budget,
+            max_frame_bytes,
+            batch_bytes: optional_positive_usize(
+                ENV_EVENT_BATCH_BYTES,
+                DEFAULT_EVENT_BATCH_BYTES as usize,
+            )?,
+        },
         path,
-        pending_byte_budget,
-        write_buffer_bytes,
-        max_frame_bytes,
+        registration: EventRegistration { token },
     }))
-}
-
-fn event_fd_is_open(fd: i32) -> bool {
-    (unsafe { libc::fcntl(fd, libc::F_GETFD) }) >= 0
-}
-
-fn required_event_write_buffer_bytes() -> Result<usize, String> {
-    let value = std::env::var(ENV_EVENT_WRITE_BUFFER_BYTES)
-        .map_err(|_| format!("missing required runtime env {ENV_EVENT_WRITE_BUFFER_BYTES}"))?;
-    let bytes = value
-        .parse::<usize>()
-        .map_err(|error| format!("parse {ENV_EVENT_WRITE_BUFFER_BYTES}: {error}"))?;
-    if bytes == 0 {
-        return Err("sync event write buffer bytes must be positive".to_string());
-    }
-    Ok(bytes)
 }

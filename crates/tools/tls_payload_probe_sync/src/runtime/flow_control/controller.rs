@@ -6,7 +6,7 @@ use tls_payload_core::PayloadDirection;
 use super::eviction::{EvictionPolicy, LruPolicy};
 use super::text::body_looks_binary;
 use super::types::{
-    FlowControlConfig, FlowDecision, FlowDirection, FlowEmission, FlowKey, FlowSummary,
+    FlowControlConfig, FlowDecision, FlowDirection, FlowEmission, FlowKey, FlowScope, FlowSummary,
 };
 use super::{http1, http2};
 
@@ -26,6 +26,10 @@ impl FlowController {
     ) -> FlowDecision {
         if !config.enabled || payload.is_empty() {
             return FlowDecision::EmitPayload;
+        }
+        if direction == PayloadDirection::Outbound && http2::starts_with_preface(payload) {
+            self.streams.retain(|key, _| key.stream_key != stream_key);
+            self.policy.forget_stream(stream_key);
         }
         // TLS-sync does not track SSL object generations yet; keep 0 until
         // SSL_new/SSL_free lifecycle information is available.
@@ -147,13 +151,14 @@ impl FlowController {
                 self.streams.remove(&oldest);
             }
         }
+        let http2_body = matches!(key.scope, FlowScope::Http2Stream { .. });
         let state = self.streams.entry(key).or_default();
         let mut cursor = 0_usize;
         let mut altered = false;
         let mut emissions = Vec::new();
         while cursor < payload.len() {
             let current = std::mem::take(state);
-            let step = current.observe(config, direction, &payload[cursor..]);
+            let step = current.observe(config, direction, http2_body, &payload[cursor..]);
             let consumed = step.consumed;
             let pass_without_progress =
                 consumed == 0 && matches!(&step.emission, StepEmission::Pass);
@@ -225,6 +230,7 @@ impl FlowState {
         self,
         config: FlowControlConfig,
         direction: PayloadDirection,
+        http2_body: bool,
         payload: &[u8],
     ) -> FlowStep {
         match self {
@@ -232,7 +238,15 @@ impl FlowState {
                 observed,
                 prefix,
                 message_size,
-            } => observe_active(config, direction, observed, prefix, message_size, payload),
+            } => observe_active(
+                config,
+                direction,
+                http2_body,
+                observed,
+                prefix,
+                message_size,
+                payload,
+            ),
             Self::SummaryOnly {
                 observed,
                 scope,
@@ -340,6 +354,7 @@ fn observe_summary(
 fn observe_active(
     config: FlowControlConfig,
     direction: PayloadDirection,
+    http2_body: bool,
     observed: u64,
     mut prefix: Vec<u8>,
     message_size: Option<u64>,
@@ -421,9 +436,12 @@ fn observe_active(
             },
         };
     }
-    if let Some(summary) = classify_binary_prefix(config, observed_if_all, &prefix)
-        .or_else(|| classify_unknown_threshold(config, observed_if_all, &prefix))
-    {
+    // The DATA of an HTTP/2 stream is a recognized HTTP body, not an unknown stream.
+    if let Some(summary) = classify_binary_prefix(config, observed_if_all, &prefix).or_else(|| {
+        (!http2_body)
+            .then(|| classify_unknown_threshold(config, observed_if_all, &prefix))
+            .flatten()
+    }) {
         return FlowStep {
             consumed: payload.len(),
             emission: StepEmission::Summary(summary),

@@ -2,11 +2,23 @@
 use super::output::ActionBatch;
 use super::pipeline::LiveLlmProjector;
 use super::router::ProtocolRoute;
-use model_core::payload::{PayloadSegment, PayloadStreamIdentity};
+use crate::llm_pipeline::transport::http2::HTTP2_CONNECTION_PREFACE;
+use model_core::payload::{PayloadDirection, PayloadSegment, PayloadStreamIdentity};
 impl LiveLlmProjector {
     pub(super) fn observe_routed_payload(&mut self, segment: &PayloadSegment) -> ActionBatch {
-        let (route, buffered) = self.protocol_router.route(segment);
         let mut output = ActionBatch::default();
+        let identity = PayloadStreamIdentity::from_segment(segment);
+        // A client preface on a routed stream identifies a new HTTP/2 connection reusing this TLS
+        // object address, whatever the old connection spoke. Inside an HTTP/2 frame it is data.
+        // Finalize both directions before routing its first bytes.
+        if segment.direction == PayloadDirection::Outbound
+            && segment.bytes.starts_with(HTTP2_CONNECTION_PREFACE)
+            && self.protocol_router.is_routed(&identity)
+            && self.http2.at_frame_boundary(&identity)
+        {
+            output.extend(self.finalize_payload_stream(&identity, segment.observed_at));
+        }
+        let (route, buffered) = self.protocol_router.route(segment);
         match route {
             ProtocolRoute::Pending | ProtocolRoute::Discard => output.http1_handled = true,
             ProtocolRoute::DiscardHttp2 => output.http2_handled = true,

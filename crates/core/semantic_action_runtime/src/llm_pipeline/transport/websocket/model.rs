@@ -31,6 +31,8 @@ pub(in crate::llm_pipeline) enum WebSocketMessageEvent {
         bytes: Vec<u8>,
         evidence: Vec<SemanticEvidence>,
         observed_at: SystemTime,
+        /// Sequence of the last payload segment that carried the message.
+        sequence_end: u64,
     },
     Abort {
         head: WebSocketMessageHead,

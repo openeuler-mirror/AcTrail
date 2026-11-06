@@ -11,6 +11,7 @@ use control_contract::reply::{
 };
 use model_core::ids::{TraceId, TraceName};
 use model_core::process::NamespaceIdentity;
+use model_core::trace::TlsEventToken;
 
 use super::plugin::{
     decode_plugin_status_v1, decode_plugin_status_v2, decode_plugin_statuses_v1,
@@ -61,9 +62,10 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             }
         }
         Ok(ControlReply::TrackAdded(reply)) => {
-            fields.push("reply_track_added".to_string());
+            fields.push("reply_track_added_v2".to_string());
             fields.push(reply.trace_id.get().to_string());
             fields.push(reply.lifecycle_state.as_display_str().to_string());
+            fields.push(reply.tls_event_token.to_hex());
         }
         Ok(ControlReply::SeccompListenerRegistered) => {
             fields.push("reply_seccomp_listener_registered".to_string());
@@ -218,9 +220,11 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
                 status,
             })))
         }
-        "reply_track_added" => Ok(Ok(ControlReply::TrackAdded(TrackAddReply {
+        "reply_track_added_v2" => Ok(Ok(ControlReply::TrackAdded(TrackAddReply {
             trace_id: TraceId::new(parse_u64(field(&fields, 1)?, "trace_id")?),
             lifecycle_state: parse_lifecycle(field(&fields, 2)?)?,
+            tls_event_token: TlsEventToken::from_hex(field(&fields, 3)?)
+                .ok_or_else(|| ControlCodecError::new("decode", "invalid TLS event token"))?,
         }))),
         "reply_track_removed" => Ok(Ok(ControlReply::TrackRemoved)),
         "reply_turn_lifecycle_recorded" => Ok(Ok(ControlReply::TurnLifecycleRecorded)),

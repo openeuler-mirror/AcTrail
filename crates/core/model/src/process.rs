@@ -3,9 +3,8 @@
 use std::time::SystemTime;
 
 pub use process_identity::{
-    HostProcessCoordinates, InitialSuppressedFd, KernelProcessCoordinates, NamespaceIdentity,
-    NamespaceProcessCoordinates, ProcessIdentity, ProcessObservation, ProcessRecord,
-    ProcessResolutionState, ProcessSuppressedFd, SuppressedFdPurpose,
+    HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessIdentity,
+    ProcessObservation, ProcessRecord, ProcessResolutionState,
 };
 
 use crate::ids::TraceId;

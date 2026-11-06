@@ -103,7 +103,10 @@ fn scan_library_once(path: &Path, reason: &str) -> Result<(), String> {
         }
         Err(error) => {
             unclaim_library_scan(&path);
-            return Err(error);
+            target_event(format!(
+                "sync_dynamic: event=plan_unavailable binary={} error={error}\n",
+                path.display()
+            ));
         }
     }
     Ok(())
@@ -132,7 +135,28 @@ fn is_probe_library_candidate(path: &Path) -> bool {
     }
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains(".so"))
+        .is_some_and(|name| {
+            name.contains(".so")
+                && ![
+                    "libc.",
+                    "libc-",
+                    "libm.",
+                    "libm-",
+                    "libdl.",
+                    "libdl-",
+                    "librt.",
+                    "librt-",
+                    "libpthread.",
+                    "libpthread-",
+                    "ld-linux",
+                    "libgcc_s.",
+                    "libgcc_s-",
+                    "libstdc++.",
+                    "libstdc++-",
+                ]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+        })
 }
 
 fn is_own_runtime_library(path: &Path) -> bool {

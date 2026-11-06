@@ -3,6 +3,7 @@
 #define ACTRAIL_NETWORK_PROGRAMS_H
 
 #include "observe.h"
+#include "internal_socket.h"
 #include "../payload/socket_capture.h"
 
 #endif

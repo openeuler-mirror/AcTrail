@@ -126,7 +126,6 @@ impl EbpfCollector {
             observer_tgid,
             request.trace_id,
             generation,
-            &request.initial_suppressed_fds,
         ) {
             Ok(armed) => armed,
             Err(error) => {
@@ -167,7 +166,6 @@ impl EbpfCollector {
                 root_identity: request.root_identity,
                 root_observation: request.root_observation.clone(),
                 generation,
-                initial_suppressed_fds: request.initial_suppressed_fds.clone(),
                 root_working_directory,
                 armed_binding,
             },
@@ -257,7 +255,6 @@ impl EbpfCollector {
                 runtime
                     .sweep_suppressed_fds_for_process(kernel_tgid, tracked.kernel_start_time)
                     .map_err(loader_error)?;
-                cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, kernel_tgid)?;
                 runtime.untrack_pid(kernel_tgid).map_err(loader_error)?;
             }
         }
@@ -295,7 +292,6 @@ impl EbpfCollector {
                 runtime
                     .sweep_suppressed_fds_for_process(kernel_tgid, tracked.kernel_start_time)
                     .map_err(loader_error)?;
-                cleanup_suppressed_fds_for_pid(runtime, &mut self.suppressed_fds, kernel_tgid)?;
                 runtime.untrack_pid(kernel_tgid).map_err(loader_error)?;
             }
         }
@@ -305,31 +301,6 @@ impl EbpfCollector {
                 tracked.kernel_tgid,
                 tracked.kernel_start_time,
             ));
-        }
-        Ok(())
-    }
-
-    pub(super) fn register_initial_suppressed_fds(
-        &mut self,
-        trace_id: TraceId,
-        root_start_time: u64,
-        root_kernel_tgid: u32,
-        initial_fds: &[InitialSuppressedFd],
-    ) -> Result<(), CollectorError> {
-        for initial in initial_fds {
-            let map_identity = KernelProcessCoordinates {
-                pid: root_kernel_tgid,
-                start_time: root_start_time,
-            };
-            let fd = ProcessSuppressedFd {
-                process: map_identity,
-                fd: initial.fd,
-                purpose: initial.purpose,
-            };
-            self.runtime_mut()?
-                .suppress_fd(trace_id, &fd)
-                .map_err(loader_error)?;
-            self.suppressed_fds.push(TraceSuppressedFd { trace_id, fd });
         }
         Ok(())
     }
@@ -352,20 +323,6 @@ impl EbpfCollector {
         Ok(())
     }
 
-    pub(super) fn cleanup_suppressed_fds_for_process(
-        &mut self,
-        pid: u32,
-        generation: u64,
-    ) -> Result<(), CollectorError> {
-        let Some(runtime) = self.runtime.as_mut() else {
-            self.suppressed_fds.retain(|entry| {
-                entry.fd.process.pid != pid || entry.fd.process.start_time != generation
-            });
-            return Ok(());
-        };
-        cleanup_suppressed_fds_for_process(runtime, &mut self.suppressed_fds, pid, generation)
-    }
-
     pub(super) fn cancel_pending_launch(
         &mut self,
         trace_id: TraceId,
@@ -380,70 +337,6 @@ impl EbpfCollector {
         self.pending_launches.remove(&trace_id);
         Ok(deleted)
     }
-}
-
-fn cleanup_suppressed_fds_for_pid(
-    runtime: &EbpfRuntime,
-    registry: &mut Vec<TraceSuppressedFd>,
-    pid: u32,
-) -> Result<(), CollectorError> {
-    let mut retained = Vec::new();
-    for entry in std::mem::take(registry) {
-        if entry.fd.process.pid == pid {
-            runtime
-                .unsuppress_fd(&entry.fd.process, entry.fd.fd)
-                .map_err(loader_error)?;
-        } else {
-            retained.push(entry);
-        }
-    }
-    *registry = retained;
-    Ok(())
-}
-
-pub(super) fn cleanup_suppressed_fds_for_process(
-    runtime: &EbpfRuntime,
-    registry: &mut Vec<TraceSuppressedFd>,
-    pid: u32,
-    generation: u64,
-) -> Result<(), CollectorError> {
-    runtime
-        .sweep_suppressed_fds_for_process(pid, generation)
-        .map_err(loader_error)?;
-    let mut retained = Vec::new();
-    for entry in std::mem::take(registry) {
-        if entry.fd.process.pid == pid && entry.fd.process.start_time == generation {
-            runtime
-                .unsuppress_fd(&entry.fd.process, entry.fd.fd)
-                .map_err(loader_error)?;
-        } else {
-            retained.push(entry);
-        }
-    }
-    *registry = retained;
-    Ok(())
-}
-
-pub(super) fn cleanup_suppressed_fds_for_trace(
-    runtime: &EbpfRuntime,
-    registry: &mut Vec<TraceSuppressedFd>,
-    trace_id: TraceId,
-) -> Result<(), CollectorError> {
-    runtime
-        .sweep_suppressed_fds_for_trace(trace_id)
-        .map_err(loader_error)?;
-    let mut retained = Vec::new();
-    for entry in std::mem::take(registry) {
-        if entry.trace_id == trace_id {
-            runtime
-                .unsuppress_fd(&entry.fd.process, entry.fd.fd)
-                .map_err(loader_error)?;
-        } else {
-            retained.push(entry);
-        }
-    }
-    *registry = retained;
-    Ok(())
 }
 
 fn observation_from_record(record: &ProcessRecord) -> Result<ProcessObservation, CollectorError> {

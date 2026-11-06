@@ -29,7 +29,6 @@ pub fn dispatch(
             profile_name,
             tags,
             launch_mode: false,
-            initial_suppressed_fds: Vec::new(),
             launch_target: None,
             tls_probe_plans: Vec::new(),
         }),

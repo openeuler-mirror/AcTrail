@@ -11,7 +11,9 @@ use crate::llm_pipeline::websocket_source::WebSocketSourceFactory;
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::ids::TraceId;
 use model_core::payload::{PayloadDirection, PayloadStreamIdentity};
-use semantic_action::{SemanticActionKind, SemanticActionLinkRole, SemanticEvidence};
+use semantic_action::{
+    SemanticActionKind, SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -43,6 +45,7 @@ impl WebSocketProtocol {
                     bytes,
                     evidence,
                     observed_at,
+                    sequence_end,
                 } => {
                     if !config.llm_layer_enabled()
                         || head.opcode != 1
@@ -76,6 +79,7 @@ impl WebSocketProtocol {
                         &self.sources,
                         head,
                         observed_at,
+                        sequence_end,
                         byte_len,
                         value,
                         config,
@@ -112,6 +116,7 @@ impl WebSocketProtocol {
         sources: &WebSocketSourceFactory,
         head: WebSocketMessageHead,
         at: SystemTime,
+        sequence_end: u64,
         size: usize,
         value: Value,
         config: &SemanticRetentionConfig,
@@ -200,6 +205,14 @@ impl WebSocketProtocol {
             request
                 .attributes
                 .insert("websocket.stream_id".into(), requested_lane.clone());
+            request.attributes.insert(
+                attrs::payload::STREAM_KEY.into(),
+                head.identity.stream_key.to_string(),
+            );
+            request.attributes.insert(
+                attrs::payload::SEQUENCE_END.into(),
+                sequence_end.to_string(),
+            );
             let request = crate::live::action_for_live_state(request);
             output.extend(sources.bind(
                 &request.action_id,

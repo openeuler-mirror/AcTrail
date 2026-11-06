@@ -1,8 +1,8 @@
 use super::fields::{FieldReader, FieldWriter};
 use super::header::{FrameHeader, FrameKind};
 use crate::{
-    DecisionEvent, PayloadEvent, PlanLookupRequest, PlanLookupResponse, RuntimePlanDescriptor,
-    SummaryEvent, SyncError, SyncEvent, SyncResult,
+    DecisionEvent, EventRegistration, PayloadEvent, PlanLookupRequest, PlanLookupResponse,
+    RuntimePlanDescriptor, SummaryEvent, SyncError, SyncEvent, SyncResult,
 };
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -12,6 +12,7 @@ use tls_probe_point_finder::{BinaryIdentity, BinaryIdentityTypeCode};
 
 #[derive(Debug)]
 pub enum SyncMessage {
+    Register(EventRegistration),
     Event(SyncEvent),
     PlanLookup(PlanLookupRequest),
     PlanResponse(PlanLookupResponse),
@@ -29,6 +30,9 @@ impl FrameCodec {
         }
         let mut fields = FieldReader::new(body);
         let message = match header.kind() {
+            FrameKind::Register => SyncMessage::Register(EventRegistration {
+                token: fields.text()?,
+            }),
             FrameKind::Payload | FrameKind::Decision | FrameKind::Summary => {
                 SyncMessage::Event(Self::read_event(&mut fields, header.kind())?)
             }
@@ -70,6 +74,20 @@ impl FrameCodec {
         writer.write_all(&header.encode())?;
         Self::event_fields(&mut FieldWriter::new(writer), event)
     }
+    pub fn write_registration(
+        writer: &mut impl Write,
+        registration: &EventRegistration,
+        max_frame_bytes: usize,
+    ) -> SyncResult<()> {
+        let mut counter = FieldWriter::new(std::io::sink());
+        counter.text(&registration.token)?;
+        let header = FrameHeader::new(FrameKind::Register, counter.len(), max_frame_bytes)?;
+        let mut frame = Self::control_frame(header)?;
+        FieldWriter::new(&mut frame).text(&registration.token)?;
+        writer.write_all(&frame)?;
+        Ok(())
+    }
+
     pub fn write_lookup_request(
         writer: &mut impl Write,
         request: &PlanLookupRequest,

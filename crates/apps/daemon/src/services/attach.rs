@@ -422,7 +422,6 @@ impl StorageAttachService {
                 root_namespace_pid: command.root.namespace_pid,
                 profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
-                initial_suppressed_fds: command.initial_suppressed_fds.clone(),
             };
             let bind_result = if command.launch_mode {
                 let pidfd = launch_pidfd.ok_or_else(|| {

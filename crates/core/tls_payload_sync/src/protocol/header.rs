@@ -9,6 +9,7 @@ pub enum FrameKind {
     PlanLookup = 4,
     PlanFound = 5,
     PlanUnavailable = 6,
+    Register = 9,
 }
 
 impl FrameKind {
@@ -20,6 +21,7 @@ impl FrameKind {
             4 => Ok(Self::PlanLookup),
             5 => Ok(Self::PlanFound),
             6 => Ok(Self::PlanUnavailable),
+            9 => Ok(Self::Register),
             _ => Err(SyncError::new("unknown TLS frame kind")),
         }
     }

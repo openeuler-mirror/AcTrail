@@ -112,14 +112,6 @@ static __always_inline void suppressed_fd_index_value_from_fd(
     index_value->purpose = value->purpose;
 }
 
-static __always_inline void suppressed_fd_value_from_index(
-    const struct actrail_suppressed_fd_index_value *index_value,
-    struct actrail_suppressed_fd_value *value
-) {
-    value->trace_id = index_value->trace_id;
-    value->purpose = index_value->purpose;
-}
-
 static __always_inline struct actrail_suppressed_fd_value *lookup_suppressed_fd(
     __u32 pid,
     __u32 fd
@@ -354,116 +346,6 @@ static __always_inline void delete_suppressed_fd(__u32 pid, __u32 fd) {
         return;
     }
     delete_suppressed_fd_for_generation(pid, *generation, fd);
-}
-
-#ifdef ACTRAIL_BPF_LOOP
-struct actrail_suppressed_fd_inherit_ctx {
-    __u32 parent_pid;
-    __u32 child_pid;
-    __u32 slots;
-    __u32 reserved;
-    __u64 parent_generation;
-    __u64 child_generation;
-};
-
-static long inherit_suppressed_fds_for_child_step(__u32 slot, void *opaque) {
-    struct actrail_suppressed_fd_inherit_ctx *ctx = opaque;
-    struct actrail_suppressed_fd_index_key parent_index_key = {};
-    struct actrail_suppressed_fd_index_key child_index_key = {};
-    struct actrail_suppressed_fd_key child_fd_key = {};
-    struct actrail_suppressed_fd_index_value *parent_index_value;
-    struct actrail_suppressed_fd_value value = {};
-
-    if (slot >= ctx->slots) {
-        return 1;
-    }
-    fill_suppressed_fd_index_key(
-        ctx->parent_pid,
-        ctx->parent_generation,
-        slot,
-        &parent_index_key
-    );
-    parent_index_value = bpf_map_lookup_elem(&suppressed_fd_index, &parent_index_key);
-    if (!parent_index_value) {
-        return 0;
-    }
-    suppressed_fd_value_from_index(parent_index_value, &value);
-    fill_suppressed_fd_key(
-        ctx->child_pid,
-        parent_index_value->fd,
-        ctx->child_generation,
-        &child_fd_key
-    );
-    if (bpf_map_update_elem(&suppressed_fds, &child_fd_key, &value, BPF_ANY) != 0) {
-        return 0;
-    }
-    fill_suppressed_fd_index_key(
-        ctx->child_pid,
-        ctx->child_generation,
-        slot,
-        &child_index_key
-    );
-    bpf_map_update_elem(&suppressed_fd_index, &child_index_key, parent_index_value, BPF_ANY);
-    return 0;
-}
-#endif
-
-static __always_inline void inherit_suppressed_fds_for_child(
-    __u32 parent_pid,
-    __u64 parent_generation,
-    __u32 child_pid,
-    __u64 child_generation
-) {
-    __u32 slots = suppressed_fd_index_slots();
-
-    if (!parent_pid || !parent_generation || !child_pid || !child_generation || !slots) {
-        return;
-    }
-#ifdef ACTRAIL_BPF_LOOP
-    {
-        struct actrail_suppressed_fd_inherit_ctx ctx = {
-            .parent_pid = parent_pid,
-            .child_pid = child_pid,
-            .slots = slots,
-            .parent_generation = parent_generation,
-            .child_generation = child_generation,
-        };
-
-        bpf_loop(
-            ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX,
-            inherit_suppressed_fds_for_child_step,
-            &ctx,
-            0
-        );
-    }
-#else
-    struct actrail_suppressed_fd_index_key parent_index_key = {};
-    struct actrail_suppressed_fd_index_key child_index_key = {};
-    struct actrail_suppressed_fd_key child_fd_key = {};
-    __u32 slot;
-
-#pragma unroll
-    for (slot = 0; slot < ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX; slot++) {
-        struct actrail_suppressed_fd_index_value *parent_index_value;
-        struct actrail_suppressed_fd_value value = {};
-
-        if (slot >= slots) {
-            break;
-        }
-        fill_suppressed_fd_index_key(parent_pid, parent_generation, slot, &parent_index_key);
-        parent_index_value = bpf_map_lookup_elem(&suppressed_fd_index, &parent_index_key);
-        if (!parent_index_value) {
-            continue;
-        }
-        suppressed_fd_value_from_index(parent_index_value, &value);
-        fill_suppressed_fd_key(child_pid, parent_index_value->fd, child_generation, &child_fd_key);
-        if (bpf_map_update_elem(&suppressed_fds, &child_fd_key, &value, BPF_ANY) != 0) {
-            continue;
-        }
-        fill_suppressed_fd_index_key(child_pid, child_generation, slot, &child_index_key);
-        bpf_map_update_elem(&suppressed_fd_index, &child_index_key, parent_index_value, BPF_ANY);
-    }
-#endif
 }
 
 #ifdef ACTRAIL_BPF_LOOP

@@ -68,7 +68,8 @@
 │       │           └── [x] struct PeerCredentials # 保留对端进程凭据
 │       └── [x] transport/ # 控制帧及文件描述符传输编解码
 │           └── [x] src/ # Unix socket 协议实现
-│               └── [x] lib.rs # 编码控制请求响应并处理描述符传递
+│               ├── [x] lib.rs # 编码控制请求响应并处理描述符传递
+│               └── [x] reply.rs # 控制回复编解码；reply_track_added_v2 附带 Trace 的 TLS 事件凭据
 ├── [x] agent_host/ # 将 Agent launch 与执行状态接入观测控制
 │   └── [x] src/ # Agent 宿主配置和执行生命周期
 │       ├── [x] launch.rs # 安装 Agent 启动时所需的集成信息

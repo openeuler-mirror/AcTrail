@@ -259,7 +259,8 @@ impl StorageAttachService {
                 );
             }
         }
-        self.process_payload_segments_impl(trace_runtime, drain.payload_segments)
+        self.process_payload_segments_impl(trace_runtime, drain.payload_segments)?;
+        self.process_payload_stream_closes_impl(trace_runtime, drain.payload_stream_closes)
     }
 
     fn persist_tls_sync_diagnostics_impl(
@@ -270,7 +271,7 @@ impl StorageAttachService {
         let drafts = diagnostics
             .into_iter()
             .map(|diagnostic| RuntimeDropDiagnosticDraft {
-                trace_id: None,
+                trace_id: diagnostic.trace_id,
                 code: diagnostic.code,
                 message: diagnostic.message,
             })

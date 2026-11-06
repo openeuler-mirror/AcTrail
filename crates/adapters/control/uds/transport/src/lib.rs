@@ -179,8 +179,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 binary: PathBuf::from(field(&fields, 2)?),
             },
         )),
-        "track_add" | "track_add_v2" | "track_add_v3" | "track_add_v4" | "track_add_v5"
-        | "track_add_v6" | "track_add_v7" => track::TrackCodec::decode(&fields),
+        "track_add_v8" => track::TrackCodec::decode(&fields),
         "register_seccomp_listener" => Ok(ControlCommand::RegisterSeccompListener(
             RegisterSeccompListenerCommand {
                 request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),

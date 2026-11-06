@@ -15,7 +15,8 @@ use storage_factory::{
 use super::super::{
     AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig,
     ClusterConfig, ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig,
-    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
     DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
     DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
     DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
@@ -253,6 +254,7 @@ impl OperatorDocument {
                 socket_path: config.socket_path.display().to_string(),
                 socket_mode_octal: format!("{:o}", config.socket_permissions.mode),
                 pending_connection_max: config.control_pending_connection_max,
+                accept_retry_delay_ms: config.control_accept_retry_delay_ms,
                 active_trace_max: config.active_trace_max,
                 pid_file: config.pid_file.display().to_string(),
                 log_path: config.log_path.display().to_string(),
@@ -582,6 +584,10 @@ impl OperatorDocument {
             control_pending_connection_max: require_positive_u32(
                 "control.pending_connection_max",
                 self.control.pending_connection_max,
+            )?,
+            control_accept_retry_delay_ms: require_positive_u64(
+                "control.accept_retry_delay_ms",
+                self.control.accept_retry_delay_ms,
             )?,
             active_trace_max: require_positive_u32(
                 "control.active_trace_max",

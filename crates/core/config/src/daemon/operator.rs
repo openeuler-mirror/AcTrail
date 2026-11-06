@@ -27,6 +27,7 @@ use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
+pub const DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS: u64 = 100;
 pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
 pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES: [&str; 2] =
     ["~/.actrail/plugins", "/usr/share/actrail/plugins"];
@@ -48,6 +49,7 @@ pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
     pub control_pending_connection_max: u32,
+    pub control_accept_retry_delay_ms: u64,
     pub active_trace_max: u32,
     pub pid_file: PathBuf,
     /// OTel `host.id` override. `None` → daemon probes DMI product_uuid at start.

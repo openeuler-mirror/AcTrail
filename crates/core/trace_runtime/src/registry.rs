@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use collector_capability::CollectorDescriptor;
 use model_core::ids::{OtelTraceId, TraceId, TraceName};
 use model_core::process::{ExitStatus, MembershipState, ProcessIdentity, ProcessMembership};
-use model_core::trace::{TraceAlertToken, TraceLifecycleState, TraceRecord};
+use model_core::trace::{TlsEventToken, TraceAlertToken, TraceLifecycleState, TraceRecord};
 
 use crate::commands::{RootRemovalRequest, TrackTraceRequest};
 use crate::membership::MembershipIndex;
@@ -29,6 +29,7 @@ pub struct TraceEntry {
     pub sensor_plan: SensorPlan,
     pub memberships: MembershipIndex,
     pub owner: Option<TraceOwnerPrincipal>,
+    pub tls_event_token: TlsEventToken,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +81,9 @@ impl TraceRuntime {
         let mut alert_token = [0_u8; TraceAlertToken::BYTE_COUNT];
         getrandom::fill(&mut alert_token)
             .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
+        let mut tls_event_token = [0_u8; TlsEventToken::BYTE_COUNT];
+        getrandom::fill(&mut tls_event_token)
+            .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
         let mut otel_trace_id = [0_u8; OtelTraceId::BYTE_COUNT];
         getrandom::fill(&mut otel_trace_id)
             .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
@@ -119,6 +123,7 @@ impl TraceRuntime {
                 sensor_plan,
                 memberships,
                 owner: None,
+                tls_event_token: TlsEventToken::new(tls_event_token),
             },
         );
         Ok(())

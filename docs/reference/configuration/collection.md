@@ -104,20 +104,41 @@ flowchart LR
 
 ### TLS sync 事件发送
 
-- **超时配置**：TLS-sync 事件发送端通过环境变量 `TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS` 配置等待预算，默认 `100` 毫秒，必须为正整数且可表示为运行时期限。无效值在 native runtime 初始化时拒绝。该环境变量应在启动被观测命令前设置。
-- **发送期限**：连接在发送线程内完成。每个发送批次共享一个绝对期限，部分写入或中断重试不重置期限。
-- **退出处理**：退出排空使用独立的总体期限，到期后停止等待发送线程。
+- **连接凭据**：ctl 从 TrackAdd 回复取得 Trace 的 TLS 事件凭据，只在启用 TLS-sync 的 launch 中通过 `TLS_PAYLOAD_SYNC_EVENT_TOKEN` 传给子进程；该凭据由 daemon 随机生成，不与告警凭据共用；runtime 在每条事件连接上先发送登记帧。daemon 校验凭据和 Trace，不依赖发送进程仍在 `/proc` 中，因此可以接收已退出短进程的完整缓冲事件。手动配置事件 socket 时也必须提供对应 Trace 的凭据；缺少凭据时 native runtime 初始化失败。daemon、ctl 和 native runtime 必须配套更新。
+- **超时配置**：`sync_event_timeout_ms` 配置发送线程的无进度时限，默认 `5000` 毫秒。应用线程只入队，不等待 socket 写入。ctl 将配置传入新 launch 的 native runtime；直接使用 runtime 时可设置环境变量 `TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS`。值须为正整数且可表示为运行时期限，无效值在 native runtime 初始化时拒绝。
+- **连接和发送**：每个进程在发送线程内建立自己的连接，fork 子进程关闭继承连接并按需新建。connect 在期限内重试 backlog 满导致的 EAGAIN；事件每次成功写入后重置无进度时限，中断和不可写重试不重置。发送批次预算、写缓冲和单次 write 上限由 `sync_event_batch_bytes` 配置，默认 `32768` 字节；一个事件超过批次预算时仍单独发送。
+- **退出处理**：`sync_event_shutdown_timeout_ms` 配置独立的退出排空总预算，默认 `100` 毫秒，不随发送无进度时限改变；到期后停止等待发送线程。直接使用 runtime 时，对应环境变量为 `TLS_PAYLOAD_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS` 和 `TLS_PAYLOAD_SYNC_EVENT_BATCH_BYTES`。
 - **队列满载**：队列满时丢弃新事件。
 - **通道故障**：连接或发送失败时停用当前进程的事件通道。
+- **连接配额**：`sync_trace_connection_max` 默认 `128`，必须为正；按 Trace 统计已上报首个事件的长连接，子进程和子 Agent 共用配额。只查询计划的连接不占配额。超限连接关闭，对应进程停止上报且不重连；每个配额占用周期只记录首次拒绝诊断。
+- **daemon fd 预算**：启动时将 `RLIMIT_NOFILE` 至少提高到 `active_trace_max × sync_trace_connection_max + sync_pending_connection_max + sync_plan_queue_capacity × 2 + sync_fd_reserve`，默认 `23552`；不能提高时启动报错。accept 遇到 fd 耗尽时暂停监听并保留已有连接的读取，连接关闭后恢复；暂停期间按 `sync_accept_retry_delay_ms` 重试，默认 `100` 毫秒，以便解析线程释放 fd 后恢复接入。
 - **诊断输出**：发生传输失败或队列丢失时，发送线程尝试输出一条本地汇总诊断。
 - **诊断计数**：`unconfirmed_events` 统计发送端未确认送达的事件，包含丢弃项及未完成发送批次。
 - **诊断可达性**：通道故障可能导致 daemon 缺少该诊断。
+
+上述参数均在 `[payload.tls]` 中设置，修改后重启 daemon，并重新 launch 使新的发送参数进入进程。容量与等待预算如下：
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `sync_pending_connection_max` | `1024` | 未归属 Trace 的连接在全局连接预算中的额外额度 |
+| `sync_plan_queue_capacity` | `1024` | 探针计划解析队列容量，`bpf-copy` 的计划解析也使用它 |
+| `sync_fd_reserve` | `4096` | 计算 fd 预算时为 daemon 其他用途预留的描述符数，可设为 `0` |
+| `sync_accept_retry_delay_ms` | `100` | fd 耗尽后的接入重试间隔，毫秒 |
+| `sync_event_timeout_ms` | `5000` | 发送线程的无进度超时，毫秒 |
+| `sync_event_shutdown_timeout_ms` | `100` | runtime 退出排空的总预算，毫秒 |
+| `sync_event_batch_bytes` | `32768` | 发送批次预算及单次写入上限，字节 |
+| `sync_read_buffer_bytes` | `65536` | daemon 共享的 socket 读取缓冲大小，字节 |
+| `sync_read_max_bytes_per_client` | `1048576` | 每个连接每轮读取的字节预算 |
+| `sync_ready_client_batch_max` | `128` | 每轮处理的就绪连接数上限 |
+| `sync_frame_buffer_retain_max_bytes` | `1048576` | 每条连接的组帧缓冲清空后可继续保留的容量；超过就释放，`0` 表示清空后释放 |
+
+除 `sync_fd_reserve` 和 `sync_frame_buffer_retain_max_bytes` 外，上述字段均须大于零。`sync_ready_client_batch_max` 不得超过 `2147483647`。原有配置省略这些字段时使用默认值。
 
 ### TLS sync 探针查询
 
 - **超时配置**：TLS-sync 任务进程内的动态探针计划查询通过环境变量 `TLS_PAYLOAD_SYNC_PLAN_TIMEOUT_MS` 配置单次查询预算，默认 `100` 毫秒，必须为正整数且可表示为运行时期限。在启动被观测命令前设置，无效值在 native runtime 初始化时拒绝。
 - **查询期限**：连接、请求发送及完整响应读取共用一个绝对期限，部分读写及中断重试不重置期限。
-- **查询失败**：查询超时、连接或响应读取/解码失败时，按该二进制无探针点处理，并写入现有进程内计划缓存。同一缓存项不重复查询，业务继续运行。
+- **查询失败**：查询超时、连接或响应读取/解码失败时，本次跳过探针安装，业务继续运行，不写进程内计划缓存；之后遇到该二进制可重新查询。daemon 明确返回 `Unsupported` 时仍缓存。解析队列最多 `1024` 个任务，满载时直接关闭查询连接，不回复结果；取出任务时跳过已断开的请求。
 - **采集影响**：查询失败时，相关 TLS 采集会缺失，不逐查询输出告警。
 - **适用后端**：`bpf-copy` 不注入该 runtime，也不执行此查询。其启动探针发现和 daemon 侧动态发现由各自配置控制。
 

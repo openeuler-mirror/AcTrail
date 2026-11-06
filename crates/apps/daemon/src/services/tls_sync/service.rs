@@ -1,26 +1,30 @@
 //! Sync TLS payload event ingestion.
 
+#[path = "clients.rs"]
+mod clients;
 #[path = "direct.rs"]
 mod direct;
 #[path = "frame_buffer.rs"]
 mod frame_buffer;
 #[path = "launch.rs"]
 mod launch;
+#[path = "limits.rs"]
+mod limits;
 #[path = "resolver.rs"]
 mod resolver;
 #[path = "root_path.rs"]
 mod root_path;
 pub(in crate::services) use direct::{DirectObject, DirectResolution};
 pub(in crate::services) use launch::PinnedLaunchPlan;
+pub(in crate::services) use limits::configure_fd_limit;
 
 use std::collections::BTreeMap;
 use std::fs::{self, Permissions};
-use std::io::{ErrorKind, Read};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use config_core::daemon::{PayloadTlsCaptureBackend, PayloadTlsConfig};
 use control_contract::reply::{ControlError, LaunchTlsPlanReply};
@@ -30,26 +34,33 @@ use model_core::payload::{
     PayloadStreamKey, PayloadTruncationState,
 };
 use model_core::process::{NamespaceIdentity, NamespaceProcessCoordinates, ProcessObservation};
-use payload_event::RawPayloadSegment;
+use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 use storage_core::TlsFlowDiagnostic;
 use tls_payload_core::PayloadDirection as SyncDirection;
 use tls_payload_sync::{
-    FrameCodec, PayloadEvent, SummaryEvent, SyncEvent, SyncMessage, target_runtime_for_path,
+    EventRegistration, FrameCodec, PayloadEvent, SummaryEvent, target_runtime_for_path,
 };
-use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
+use self::clients::ReceiveLimits;
 use self::frame_buffer::FrameBuffer;
 use self::resolver::{ExecPlanConsumer, TlsSyncPlanResolver};
-use self::root_path::{PeerRootResolver, PinnedPeerPath};
-use crate::peer_identity::{PeerIdentity, peer_error};
+use self::root_path::{PeerRootHandle, PinnedPeerPath};
 
 pub(crate) struct TlsSyncService {
     listener: Option<UnixListener>,
-    clients: Vec<TlsSyncClient>,
+    clients: BTreeMap<u64, TlsSyncClient>,
+    client_epoll: Option<OwnedFd>,
+    accept_paused: bool,
+    accept_retry_delay: Duration,
+    client_max: usize,
+    trace_connection_max: u32,
+    trace_connections: BTreeMap<TraceId, TraceConnections>,
+    next_client: u64,
     resolver: Option<TlsSyncPlanResolver>,
     read_buffer: Vec<u8>,
-    max_frame_bytes: usize,
+    receive_limits: ReceiveLimits,
+    ready_events: Vec<libc::epoll_event>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,18 +106,23 @@ impl PinnedRuntimePath {
 #[derive(Debug, Default)]
 pub(crate) struct TlsSyncDrain {
     pub(crate) payload_segments: Vec<RawPayloadSegment>,
+    pub(crate) payload_stream_closes: Vec<RawPayloadStreamClose>,
     pub(crate) diagnostics: Vec<TlsSyncDiagnostic>,
     pub(crate) flow_diagnostics: Vec<TlsFlowDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TlsSyncDiagnostic {
+    pub(crate) trace_id: Option<TraceId>,
     pub(crate) code: String,
     pub(crate) message: String,
 }
 
 impl TlsSyncService {
-    pub(crate) fn new(config: &PayloadTlsConfig) -> Result<Self, ControlError> {
+    pub(crate) fn new(
+        config: &PayloadTlsConfig,
+        active_trace_max: u32,
+    ) -> Result<Self, ControlError> {
         if !enabled(config) {
             let resolver = if config.enabled && config.capture_backend.uses_probe_plans() {
                 Some(TlsSyncPlanResolver::new(config)?)
@@ -115,10 +131,22 @@ impl TlsSyncService {
             };
             return Ok(Self {
                 listener: None,
-                clients: Vec::new(),
+                clients: BTreeMap::new(),
+                client_epoll: None,
+                accept_paused: false,
+                accept_retry_delay: Duration::from_millis(config.sync_accept_retry_delay_ms),
+                client_max: 0,
+                trace_connection_max: config.sync_trace_connection_max,
+                trace_connections: BTreeMap::new(),
+                next_client: 0,
                 resolver,
                 read_buffer: Vec::new(),
-                max_frame_bytes: usize::default(),
+                receive_limits: ReceiveLimits {
+                    max_frame_bytes: config.sync_max_frame_bytes as usize,
+                    read_max_bytes: config.sync_read_max_bytes_per_client as usize,
+                    buffer_retain_max_bytes: config.sync_frame_buffer_retain_max_bytes as usize,
+                },
+                ready_events: Vec::new(),
             });
         }
         let max_frame_bytes = usize::try_from(config.sync_max_frame_bytes)
@@ -130,6 +158,14 @@ impl TlsSyncService {
             ));
         }
         let resolver = TlsSyncPlanResolver::new(config)?;
+        let client_epoll = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if client_epoll < 0 {
+            return Err(ControlError::new(
+                "tls_sync_epoll",
+                std::io::Error::last_os_error().to_string(),
+            ));
+        }
+        let client_epoll = unsafe { OwnedFd::from_raw_fd(client_epoll) };
         create_parent_directory(&config.sync_event_socket_path)?;
         let listener = UnixListener::bind(&config.sync_event_socket_path)
             .map_err(|error| ControlError::new("tls_sync_bind", error.to_string()))?;
@@ -143,10 +179,25 @@ impl TlsSyncService {
         .map_err(|error| ControlError::new("tls_sync_permissions", error.to_string()))?;
         Ok(Self {
             listener: Some(listener),
-            clients: Vec::new(),
+            clients: BTreeMap::new(),
+            client_epoll: Some(client_epoll),
+            accept_paused: false,
+            accept_retry_delay: Duration::from_millis(config.sync_accept_retry_delay_ms),
+            client_max: limits::client_limit(config, active_trace_max)?,
+            trace_connection_max: config.sync_trace_connection_max,
+            trace_connections: BTreeMap::new(),
+            next_client: 0,
             resolver: Some(resolver),
-            read_buffer: vec![0; read_buffer_bytes(config)?],
-            max_frame_bytes,
+            read_buffer: vec![0; config.sync_read_buffer_bytes as usize],
+            receive_limits: ReceiveLimits {
+                max_frame_bytes,
+                read_max_bytes: config.sync_read_max_bytes_per_client as usize,
+                buffer_retain_max_bytes: config.sync_frame_buffer_retain_max_bytes as usize,
+            },
+            ready_events: vec![
+                libc::epoll_event { events: 0, u64: 0 };
+                config.sync_ready_client_batch_max as usize
+            ],
         })
     }
 
@@ -154,16 +205,22 @@ impl TlsSyncService {
         let mut fds = self
             .listener
             .as_ref()
+            .filter(|_| !self.accept_paused)
             .map(AsRawFd::as_raw_fd)
             .into_iter()
             .collect::<Vec<_>>();
-        fds.extend(self.clients.iter().map(TlsSyncClient::event_poll_fd));
+        fds.extend(self.client_epoll.as_ref().map(AsRawFd::as_raw_fd));
         fds.extend(
             self.resolver
                 .as_ref()
                 .and_then(TlsSyncPlanResolver::direct_poll_fd),
         );
         fds
+    }
+
+    pub(in crate::services) fn poll_timeout(&self) -> Option<Duration> {
+        // Resolver replies can free descriptors without a client close event in this loop.
+        self.accept_paused.then_some(self.accept_retry_delay)
     }
 
     pub(in crate::services) fn submit_direct(
@@ -219,268 +276,40 @@ impl TlsSyncService {
                 "TLS sync plan resolver is disabled",
             ));
         };
-        let mut root = PeerRootResolver::new(path_view_pid);
-        resolver.resolve_launch_plan(binary, root.duplicate())
+        resolver.resolve_launch_plan(binary, PeerRootHandle::open(path_view_pid))
     }
 
     pub(crate) fn runtime_root_path_mapper(
         &self,
         path_view_pid: u32,
     ) -> Result<RuntimeRootPathMapper, ControlError> {
-        let mut root = PeerRootResolver::new(path_view_pid);
-        root.duplicate()
+        PeerRootHandle::open(path_view_pid)
             .map(|root| RuntimeRootPathMapper { root })
             .map_err(|error| ControlError::new("tls_sync_plan_root", error))
-    }
-
-    pub(crate) fn drain(
-        &mut self,
-        trace_runtime: &TraceRuntime,
-    ) -> Result<TlsSyncDrain, ControlError> {
-        self.accept_ready_clients()?;
-        let mut drain = TlsSyncDrain::default();
-        let mut retained_clients = Vec::new();
-        for mut client in std::mem::take(&mut self.clients) {
-            let result = client.read_events(
-                &mut self.read_buffer,
-                self.max_frame_bytes,
-                self.resolver.as_ref(),
-                trace_runtime,
-                &mut drain.payload_segments,
-                &mut drain.flow_diagnostics,
-            );
-            match result {
-                Ok(closed) => {
-                    if !closed {
-                        retained_clients.push(client);
-                    }
-                }
-                Err(error) => {
-                    audit_tls_peer_rejection(&client.peer, &error);
-                    drain.diagnostics.push(TlsSyncDiagnostic {
-                        code: error.code,
-                        message: error.message,
-                    });
-                }
-            }
-        }
-        self.clients = retained_clients;
-        Ok(drain)
-    }
-
-    fn accept_ready_clients(&mut self) -> Result<(), ControlError> {
-        let Some(listener) = &self.listener else {
-            return Ok(());
-        };
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let credentials = match PeerCredentials::from_stream(&stream) {
-                        Ok(credentials) => credentials,
-                        Err(error) => {
-                            tracing::warn!(
-                                target: "actrail::peer_auth",
-                                error = %error,
-                                "rejected TLS-sync connection without peer credentials"
-                            );
-                            continue;
-                        }
-                    };
-                    let peer = match PeerIdentity::resolve(credentials) {
-                        Ok(peer) => peer,
-                        Err(error) => {
-                            audit_tls_credentials_rejection(credentials, &error);
-                            continue;
-                        }
-                    };
-                    stream
-                        .set_nonblocking(true)
-                        .map_err(|error| ControlError::new("tls_sync_client", error.to_string()))?;
-                    self.clients.push(TlsSyncClient {
-                        stream,
-                        path_root: PeerRootResolver::new(peer.credentials.pid),
-                        peer,
-                        buffer: FrameBuffer::default(),
-                        process_cache: BTreeMap::new(),
-                    });
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(()),
-                Err(error) => {
-                    return Err(ControlError::new("tls_sync_accept", error.to_string()));
-                }
-            }
-        }
     }
 }
 
 struct TlsSyncClient {
+    trace: Option<TraceId>,
     stream: UnixStream,
-    path_root: PeerRootResolver,
-    peer: PeerIdentity,
+    credentials: PeerCredentials,
+    registration: Option<EventRegistration>,
     buffer: FrameBuffer,
     process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
+    /// Streams reported on this process transport, closed together when it disconnects.
+    streams: BTreeMap<PayloadStreamKey, ProcessObservation>,
 }
 
-impl TlsSyncClient {
-    fn event_poll_fd(&self) -> RawFd {
-        self.stream.as_raw_fd()
-    }
-
-    fn read_events(
-        &mut self,
-        scratch: &mut [u8],
-        max_frame_bytes: usize,
-        resolver: Option<&TlsSyncPlanResolver>,
-        trace_runtime: &TraceRuntime,
-        segments: &mut Vec<RawPayloadSegment>,
-        flow_diagnostics: &mut Vec<TlsFlowDiagnostic>,
-    ) -> Result<bool, ControlError> {
-        loop {
-            match self.stream.read(scratch) {
-                Ok(0) if self.buffer.is_empty() => return Ok(true),
-                Ok(0) => {
-                    return Err(ControlError::new(
-                        "tls_sync_event",
-                        "truncated sync frame at EOF",
-                    ));
-                }
-                Ok(read) => {
-                    self.buffer.append(&scratch[..read]);
-                    if self.drain_complete_frames(
-                        max_frame_bytes,
-                        resolver,
-                        trace_runtime,
-                        segments,
-                        flow_diagnostics,
-                    )? {
-                        return Ok(true);
-                    }
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(false),
-                Err(error) => return Err(ControlError::new("tls_sync_read", error.to_string())),
-            }
-        }
-    }
-
-    fn drain_complete_frames(
-        &mut self,
-        max_frame_bytes: usize,
-        resolver: Option<&TlsSyncPlanResolver>,
-        trace_runtime: &TraceRuntime,
-        segments: &mut Vec<RawPayloadSegment>,
-        flow_diagnostics: &mut Vec<TlsFlowDiagnostic>,
-    ) -> Result<bool, ControlError> {
-        while let Some(message) = self
-            .buffer
-            .next(max_frame_bytes)
-            .map_err(sync_event_error)?
-        {
-            let event = match message {
-                SyncMessage::Event(event) => event,
-                SyncMessage::PlanResponse(_) => {
-                    return Err(ControlError::new(
-                        "tls_sync_event",
-                        "unexpected plan response from runtime",
-                    ));
-                }
-                SyncMessage::PlanLookup(request) => {
-                    let Some(resolver) = resolver else {
-                        return Err(ControlError::new(
-                            "tls_sync_plan",
-                            "plan lookup received while resolver is disabled",
-                        ));
-                    };
-                    let response = self
-                        .stream
-                        .try_clone()
-                        .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-                    response
-                        .set_nonblocking(false)
-                        .map_err(|error| ControlError::new("tls_sync_plan", error.to_string()))?;
-                    let peer_root = self.path_root.duplicate();
-                    resolver.submit_lookup(&request.binary, peer_root, response)?;
-                    return Ok(true);
-                }
-            };
-            authorize_sync_event(&self.peer, trace_runtime, &event)?;
-            match event {
-                SyncEvent::Payload(event) => {
-                    if let Some(segment) = payload_segment(event, &mut self.process_cache)? {
-                        segments.push(segment);
-                    }
-                }
-                SyncEvent::Summary(event) => {
-                    let stream_key = format!("tls-sync:{}:{:x}", event.pid, event.stream_key);
-                    flow_diagnostics.push(TlsFlowDiagnostic {
-                        trace_id: TraceId::new(event.trace_id),
-                        stream_key,
-                        direction: match event.direction {
-                            SyncDirection::Outbound => 0,
-                            SyncDirection::Inbound => 1,
-                        },
-                        reason_code: tls_flow_reason_code(&event.reason),
-                        observed_size: event.observed_size,
-                        emitted_size: event.emitted_size,
-                        emitted_at: SystemTime::now(),
-                    });
-                    if let Some(segment) = summary_segment(event, &mut self.process_cache)? {
-                        segments.push(segment);
-                    }
-                }
-                SyncEvent::Decision(_) => {}
-            }
-        }
-        self.buffer.compact();
-        Ok(false)
-    }
+#[derive(Default)]
+struct TraceConnections {
+    active: u32,
+    rejected: u64,
 }
 
-fn authorize_sync_event(
-    peer: &PeerIdentity,
-    trace_runtime: &TraceRuntime,
-    event: &SyncEvent,
-) -> Result<(), ControlError> {
-    let trace_id = match event {
-        SyncEvent::Payload(event) => TraceId::new(event.trace_id),
-        SyncEvent::Summary(event) => TraceId::new(event.trace_id),
-        SyncEvent::Decision(event) => TraceId::new(event.trace_id),
-    };
-    let trace = trace_runtime.get_trace(trace_id).ok_or_else(|| {
-        peer_error(format!(
-            "TLS-sync event references unknown trace {trace_id}"
-        ))
-    })?;
-    let owner = trace
-        .owner
-        .as_ref()
-        .ok_or_else(|| peer_error(format!("trace {trace_id} has no live peer binding")))?;
-    peer.authorize_trace_owner(trace_id, owner)
-}
-
-fn audit_tls_peer_rejection(peer: &PeerIdentity, error: &ControlError) {
-    tracing::warn!(
-        target: "actrail::peer_auth",
-        peer_pid = peer.credentials.pid,
-        peer_uid = peer.credentials.uid,
-        peer_gid = peer.credentials.gid,
-        peer_pid_namespace = %peer.principal.pid_namespace,
-        peer_mount_namespace = %peer.principal.mount_namespace,
-        error_code = %error.code,
-        error = %error.message,
-        "closed rejected TLS-sync peer"
-    );
-}
-
-fn audit_tls_credentials_rejection(credentials: PeerCredentials, error: &ControlError) {
-    tracing::warn!(
-        target: "actrail::peer_auth",
-        peer_pid = credentials.pid,
-        peer_uid = credentials.uid,
-        peer_gid = credentials.gid,
-        error_code = %error.code,
-        error = %error.message,
-        "rejected TLS-sync peer identity"
-    );
+/// Names one TLS connection of a process. Payload segments and flow diagnostics of the same
+/// connection carry the same key.
+fn stream_key(pid: u32, connection: u64) -> String {
+    format!("tls-sync:{pid}:{connection:x}")
 }
 
 fn summary_segment(
@@ -506,7 +335,7 @@ fn summary_segment(
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: payload_direction(event.direction),
-        stream_key: PayloadStreamKey::new(format!("tls-sync:{}:{:x}", event.pid, event.stream_key)),
+        stream_key: PayloadStreamKey::new(stream_key(event.pid, event.stream_key)),
         sequence: event.sequence,
         original_size,
         captured_size,
@@ -547,7 +376,7 @@ fn payload_segment(
         source_boundary: PayloadSourceBoundary::TlsUserSpace,
         content_state: PayloadContentState::Plaintext,
         direction: payload_direction(event.direction),
-        stream_key: PayloadStreamKey::new(format!("tls-sync:{}:{:x}", event.pid, event.stream_key)),
+        stream_key: PayloadStreamKey::new(stream_key(event.pid, event.stream_key)),
         sequence: event.sequence,
         original_size: captured_size,
         captured_size,
@@ -631,11 +460,6 @@ fn create_parent_directory(socket_path: &Path) -> Result<(), ControlError> {
 
 fn enabled(config: &PayloadTlsConfig) -> bool {
     config.enabled && config.capture_backend == PayloadTlsCaptureBackend::TlsSync
-}
-
-fn read_buffer_bytes(config: &PayloadTlsConfig) -> Result<usize, ControlError> {
-    usize::try_from(config.max_segment_bytes)
-        .map_err(|error| ControlError::new("tls_sync_config", error.to_string()))
 }
 
 fn sync_event_error(error: tls_payload_sync::SyncError) -> ControlError {

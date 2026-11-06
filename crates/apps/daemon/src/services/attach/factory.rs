@@ -44,6 +44,7 @@ impl StorageAttachService {
         storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
+        active_trace_max: u32,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
@@ -71,6 +72,7 @@ impl StorageAttachService {
             storage,
             ebpf_config,
             payload_config,
+            active_trace_max,
             diagnostic_log_level,
             seccomp_notify,
             process_seccomp,
@@ -102,6 +104,7 @@ impl StorageAttachService {
         mut storage: Box<dyn StorageBackend>,
         ebpf_config: EbpfCollectorConfig,
         mut payload_config: PayloadConfig,
+        active_trace_max: u32,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify_config: SeccompNotifyConfig,
         process_seccomp_config: ProcessSeccompConfig,
@@ -183,7 +186,7 @@ impl StorageAttachService {
             })?;
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
-        let tls_sync = TlsSyncService::new(&payload_config.tls)?;
+        let tls_sync = TlsSyncService::new(&payload_config.tls, active_trace_max)?;
         let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
         let process_seccomp = ProcessSeccompService::new(
             &process_seccomp_config,

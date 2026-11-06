@@ -10,8 +10,6 @@ mod java_agent;
 pub(crate) mod permission_policy;
 #[path = "launch/seccomp.rs"]
 pub(crate) mod seccomp;
-#[path = "launch/suppress.rs"]
-mod suppress;
 #[path = "launch/target.rs"]
 mod target;
 #[path = "launch/timing.rs"]
@@ -31,9 +29,10 @@ use config_core::daemon::{
 use control_contract::command::{
     ControlCommand, ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
 };
-use control_contract::reply::{ControlError, ControlReply};
+use control_contract::reply::{ControlError, ControlReply, TrackAddReply};
 use control_contract::selector::TraceSelector;
 use model_core::ids::{RequestId, TraceId, TraceName};
+use model_core::trace::TlsEventToken;
 
 use crate::output::format_reply;
 use crate::process_ref::process_ref;
@@ -45,7 +44,6 @@ use permission_policy::{
     contract_permission_mode, permission_decision_from_reply,
 };
 use seccomp::{SeccompSetup, register_listener};
-use suppress::InheritableSuppressedFd;
 use target::LaunchTargetResolver;
 use timing::LaunchTiming;
 
@@ -203,12 +201,6 @@ pub(crate) fn run_launch(
         tags: request.tags,
         launch_mode: true,
         launch_target: Some(launch_target),
-        initial_suppressed_fds: resources
-            .event_fd
-            .as_ref()
-            .map(InheritableSuppressedFd::initial_suppressed_fd)
-            .into_iter()
-            .collect(),
         tls_probe_plans: std::mem::take(&mut resources.direct_probe_plans),
     };
     let reply = match client.send_launch_track_add(track_add, child.pidfd()) {
@@ -219,13 +211,14 @@ pub(crate) fn run_launch(
         }
     };
     timing.mark("track_add");
-    let trace_id = match track_added_trace_id(&reply) {
-        Ok(trace_id) => trace_id,
+    let added = match track_added_reply(&reply) {
+        Ok(added) => added,
         Err(error) => {
             child.terminate();
             return Err(error);
         }
     };
+    let trace_id = added.trace_id;
     println!("{}", format_reply(&reply));
     timing.mark_detail("track_added", format_args!("trace_id={trace_id}"));
 
@@ -258,12 +251,11 @@ pub(crate) fn run_launch(
     );
     let envs = match launch_envs(
         trace_id,
+        &added.tls_event_token,
         &request.control_socket_path,
         &request.agent_integration,
         &request.payload_tls_config,
-        request.payload_socket_max_segment_bytes,
         injection.as_ref(),
-        resources.event_fd.as_ref(),
         &mut timing,
     ) {
         Ok(envs) => envs,
@@ -278,8 +270,6 @@ pub(crate) fn run_launch(
         }
     };
     timing.mark_detail("launch_envs", format_args!("count={}", envs.len()));
-    drop(resources.event_fd.take());
-    timing.mark("release_injection_resources");
     if let Err(error) = child.continue_with_envs(envs) {
         child.terminate();
         remove_launch_root_best_effort(
@@ -425,28 +415,34 @@ fn register_seccomp_listener_if_needed(
 
 fn launch_envs(
     trace_id: TraceId,
+    tls_event_token: &TlsEventToken,
     control_socket_path: &Path,
     agent_integration: &AgentLaunchIntegration,
     payload_tls_config: &PayloadTlsConfig,
-    payload_socket_max_segment_bytes: u32,
     injection: &dyn LaunchInjection,
-    sync_event_fd: Option<&InheritableSuppressedFd>,
     timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
     let mut envs = injection.envs(EnvironmentContext {
         trace_id,
         config: payload_tls_config,
-        socket_max_segment_bytes: payload_socket_max_segment_bytes,
-        event_fd: sync_event_fd,
         timing,
     })?;
+    let sync_runtime = envs
+        .iter()
+        .any(|(name, _)| name == tls_payload_sync::ENV_ENABLED);
+    if sync_runtime {
+        envs.push((
+            tls_payload_sync::ENV_EVENT_TOKEN.into(),
+            tls_event_token.to_hex().into(),
+        ));
+    }
     agent_integration.append_env(trace_id, control_socket_path, &mut envs)?;
     Ok(envs)
 }
 
-fn track_added_trace_id(reply: &ControlReply) -> Result<TraceId, String> {
+fn track_added_reply(reply: &ControlReply) -> Result<&TrackAddReply, String> {
     match reply {
-        ControlReply::TrackAdded(reply) => Ok(reply.trace_id),
+        ControlReply::TrackAdded(reply) => Ok(reply),
         _ => Err("track add returned unexpected reply".to_string()),
     }
 }

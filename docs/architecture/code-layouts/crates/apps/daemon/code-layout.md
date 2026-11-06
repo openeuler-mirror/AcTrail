@@ -41,7 +41,7 @@
     │   ├── [x] struct PeerPrincipal # 表达授权主体并与 trace owner 比对。
     │   └── [x] struct PeerIdentity # 解析对端凭证，验证 root、进程引用与 trace 所有权。
     ├── [x] control_loop.rs # 推进控制连接的读取、请求处理和响应写出。
-    ├── [x] socket_loop.rs # 轮询控制连接、采集 FD 和后台截止时间，驱动整体运行循环。
+    ├── [x] socket_loop.rs # 轮询控制连接、采集 FD 和后台截止时间；fd 耗尽时暂停监听接入并每 100 ms 重试，期间继续处理已有连接和采集事件。
     │   └── [x] struct DaemonRunError # 保存守护进程运行错误的阶段代码与说明。
     ├── [x] services.rs # 声明具体服务模块并导出运行依赖构建入口。
     └── [x] services/ # 将核心组件和系统适配器接入守护进程生命周期。

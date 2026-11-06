@@ -85,6 +85,11 @@ impl EbpfProgramLoader {
         )?;
         resize_map(
             &mut open_object,
+            "pending_internal_connects",
+            self.config.pending_operation_max_entries,
+        )?;
+        resize_map(
+            &mut open_object,
             "pending_process_exec_ops",
             self.process.pending_max_entries,
         )?;
@@ -378,8 +383,7 @@ impl EbpfRuntime {
                 ),
             ));
         }
-        let launch_bindings =
-            LaunchExecBindings::from_object(&object, config.suppressed_fd_index_slots_per_process)?;
+        let launch_bindings = LaunchExecBindings::from_object(&object)?;
         let fork_trace_bindings =
             map_handle(&object, "fork_trace_bindings", "fork_trace_bindings")?;
         let observer_fork_trace_bindings = map_handle(
@@ -429,7 +433,7 @@ impl EbpfRuntime {
         let event_buffer_bytes = ring_buffer_max_bytes(config, payload);
         file::configure_file_config_map(&object, config, attach_plan)?;
         fd::configure_fd_category_config_map(&object, attach_plan, config)?;
-        let suppressed_fd_config = suppressed_fd::SuppressedFdConfig::new(&object, config)?;
+        suppressed_fd::configure_maps(&object, config, &payload.tls)?;
         tls::configure_payload_tls_map(&object, &payload.tls)?;
         stdio::configure_payload_stdio_map(&object, &payload.stdio)?;
         socket::configure_payload_socket_map(&object, &payload.socket)?;
@@ -480,7 +484,6 @@ impl EbpfRuntime {
             trace_pid_namespaces,
             suppressed_fds,
             suppressed_fd_index,
-            suppressed_fd_config,
             file_io_summaries,
             pending_tls_payload_ops,
             pending_tls_payload_ops_by_namespace,

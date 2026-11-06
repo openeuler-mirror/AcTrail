@@ -11,7 +11,6 @@ use config_core::daemon::PayloadTlsConfig;
 use control_contract::command::LaunchTlsProbePlan;
 use model_core::ids::{RequestId, TraceId};
 
-use super::suppress::InheritableSuppressedFd;
 use super::timing::LaunchTiming;
 use crate::transport::ControlClientPort;
 
@@ -26,14 +25,11 @@ pub(super) struct PreparationContext<'a> {
 pub(super) struct EnvironmentContext<'a> {
     pub trace_id: TraceId,
     pub config: &'a PayloadTlsConfig,
-    pub socket_max_segment_bytes: u32,
-    pub event_fd: Option<&'a InheritableSuppressedFd>,
     pub timing: &'a mut LaunchTiming,
 }
 
 #[derive(Default)]
 pub(super) struct InjectionResources {
-    pub event_fd: Option<InheritableSuppressedFd>,
     pub direct_probe_plans: Vec<LaunchTlsProbePlan>,
 }
 

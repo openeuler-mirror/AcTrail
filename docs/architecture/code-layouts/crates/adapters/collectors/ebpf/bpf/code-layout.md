@@ -91,13 +91,14 @@
 │   ├── [x] index.h # 分配和释放进程描述符索引槽位
 │   ├── [x] lifecycle.h # 处理描述符创建、复制、关闭及对象引用
 │   ├── [x] sweep.h # 在 fork、exec、exit 和 close_range 时有界清理描述符
-│   ├── [x] suppressed.h # 保存和继承需要排除采集的描述符
+│   ├── [x] suppressed.h # 保存需要排除采集的描述符，在 close、exec 和退出时删除；退出按索引最多清理 64 项，其余留到 Trace 结束的用户态清理
 │   │   └── [x] struct actrail_suppressed_fd_key # 用进程身份与描述符定位排除项
 │   └── [x] programs.h # 汇总 FD 生命周期 helpers，程序入口归属 units/fd/lifecycle
 ├── [x] network/ # 网络 syscall 的入口、返回和地址关联
 │   ├── [x] state.h # 保存尚未返回的网络操作
 │   │   └── [x] struct actrail_pending_net_op # 保留网络操作参数供返回阶段使用
 │   ├── [x] observe.h # 读取网络参数并构造观测事件
+│   ├── [x] internal_socket.h # 按完整路径识别 TLS-sync socket，在 connect 返回时登记排除采集
 │   └── [x] programs.h # 汇总网络与 socket 采集 helpers，程序入口归属 transport 与公共 I/O 节点
 ├── [x] file/ # 文件路径、打开、修改与 I/O 完成观测
 │   ├── [x] state.h # 保存采集配置和待完成文件操作

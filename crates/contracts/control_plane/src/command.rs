@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use agent_lifecycle_contract::{TurnLifecycleKind, UserInteractionState, WorkKind, WorkState};
 use model_core::binary_identity::BinaryIdentity;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
-use model_core::process::{InitialSuppressedFd, NamespaceIdentity};
+use model_core::process::NamespaceIdentity;
 
 use crate::selector::TraceSelector;
 
@@ -86,7 +86,6 @@ pub struct TrackAddCommand {
     pub tags: BTreeSet<String>,
     pub launch_mode: bool,
     pub launch_target: Option<LaunchTarget>,
-    pub initial_suppressed_fds: Vec<InitialSuppressedFd>,
     pub tls_probe_plans: Vec<LaunchTlsProbePlan>,
 }
 

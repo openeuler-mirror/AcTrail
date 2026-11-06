@@ -7,7 +7,7 @@
 │   ├── [x] pipeline.rs # 持有协议状态、codec 注册表及投影协调器。
 │   │   └── [x] struct LiveLlmProjector # 以 LlmActionPipeline 名称导出，拥有 HTTP/1、HTTP/2、WebSocket 状态。
 │   ├── [x] router.rs # 选择输入流对应的协议并维护协议路由身份。
-│   ├── [x] payload.rs # 执行载荷分派和本次协议输出汇总。
+│   ├── [x] payload.rs # 执行载荷分派和本次协议输出汇总；已判定协议的 stream 遇到完整出站 preface 时（旧 HTTP/2 须在帧边界）先收尾旧 stream，再重新路由新连接。
 │   └── [x] output.rs # 组成语义批次，交 live runtime 与 recording 使用。
 ├── [x] transport/ # 保留消息与帧边界，不承担 provider 语义分类。
 │   ├── [x] http1/ # 增量恢复 HTTP/1 消息边界、transfer framing 和内容编码。
@@ -25,7 +25,7 @@
 ├── [x] http1/ # 拥有 HTTP/1 协议生命周期并协调请求响应与正文消费。
 │   └── [x] protocol.rs # 将 HTTP/1 decoder 输出路由到协议观测及内容投影，交付压缩识别所需的请求与完成响应事实。
 ├── [x] http2/ # 管理 HTTP/2 连接和 stream 的内容生命周期与诊断。
-│   ├── [x] protocol.rs # 承接明文输入、流关闭及 trace 清理，交付压缩识别所需的请求、响应观测与调用绑定。
+│   ├── [x] protocol.rs # 承接明文输入、流关闭及 trace 清理，提供出站帧边界查询以识别连接地址复用，交付压缩识别所需的请求、响应观测与调用绑定。
 │   └── [x] state.rs # 保存活跃 stream 的语义解析状态。
 ├── [x] http/ # 定义供 provider 解析的共享 HTTP 请求响应值。
 ├── [x] websocket/ # 将 WebSocket 消息与 provider 会话关联并生成语义输出。

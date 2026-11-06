@@ -9,7 +9,7 @@ use model_core::binary_identity::BinaryIdentity;
 use model_core::capability::Capability;
 use model_core::ids::{ProfileName, TraceId, TraceName};
 use model_core::process::NamespaceIdentity;
-use model_core::trace::{TraceHealth, TraceLifecycleState};
+use model_core::trace::{TlsEventToken, TraceHealth, TraceLifecycleState};
 use plugin_system::PluginInstanceStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +35,8 @@ pub struct TraceListItem {
 pub struct TrackAddReply {
     pub trace_id: TraceId,
     pub lifecycle_state: TraceLifecycleState,
+    /// Authorizes this Trace's TLS event connections, including after the sender exits.
+    pub tls_event_token: TlsEventToken,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

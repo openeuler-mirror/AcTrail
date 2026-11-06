@@ -1,14 +1,13 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tls_payload_core::{
     CoreError, Decision, EqualLenRewriteProcessor, PayloadContext, PayloadDirection, RewriteRule,
     SyncProcessor,
 };
-use tls_payload_sync::{EventClient, SyncEvent};
+use tls_payload_sync::{EventClient, EventClientConfig, EventRegistration, EventTransportFds, SyncEvent};
 
 use crate::runtime::flow_control::{FlowControlConfig, FlowController, FlowDecision};
 
@@ -35,77 +34,28 @@ pub(super) struct RuntimeConfigParts {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum EventTransportConfig {
-    InheritedFd {
-        timeout: Duration,
-        fd: i32,
-        reconnect_path: Option<PathBuf>,
-        pending_byte_budget: usize,
-        write_buffer_bytes: usize,
-        max_frame_bytes: usize,
-    },
-    Socket {
-        timeout: Duration,
-        path: PathBuf,
-        pending_byte_budget: usize,
-        write_buffer_bytes: usize,
-        max_frame_bytes: usize,
-    },
+pub(super) struct EventTransportConfig {
+    pub(super) client: EventClientConfig,
+    pub(super) path: PathBuf,
+    pub(super) registration: EventRegistration,
 }
 
 impl EventTransportConfig {
-    fn connect(&self, reconnect: bool) -> Result<EventClient, String> {
-        match self {
-            Self::InheritedFd {
-                timeout,
-                fd,
-                reconnect_path,
-                pending_byte_budget,
-                write_buffer_bytes,
-                max_frame_bytes,
-            } => {
-                if reconnect {
-                    let path = reconnect_path.as_ref().ok_or_else(|| {
-                        "forked sync runtime requires TLS_PAYLOAD_SYNC_EVENT_SOCKET to reconnect"
-                            .to_string()
-                    })?;
-                    EventClient::connect(
-                        path,
-                        *pending_byte_budget,
-                        *write_buffer_bytes,
-                        *max_frame_bytes,
-                        *timeout,
-                    )
-                    .map_err(|error| {
-                        format!("reconnect sync event socket {}: {error}", path.display())
-                    })
-                } else {
-                    EventClient::connect_inherited_fd(
-                        *fd,
-                        *pending_byte_budget,
-                        *write_buffer_bytes,
-                        *max_frame_bytes,
-                        *timeout,
-                    )
-                    .map_err(|error| format!("connect inherited sync event fd {fd}: {error}"))
-                }
-            }
-            Self::Socket {
-                timeout,
-                path,
-                pending_byte_budget,
-                write_buffer_bytes,
-                max_frame_bytes,
-            } => EventClient::connect(
-                path,
-                *pending_byte_budget,
-                *write_buffer_bytes,
-                *max_frame_bytes,
-                *timeout,
-            )
-            .map_err(|error| format!("connect sync event socket {}: {error}", path.display())),
-        }
+    fn connect(&self, transport: &ProcessTransport) -> Result<EventClient, String> {
+        EventClient::connect(
+            &self.path,
+            self.client,
+            self.registration.clone(),
+            Arc::clone(&transport.fds),
+        )
+        .map_err(|error| format!("connect sync event socket {}: {error}", self.path.display()))
     }
+}
+
+#[derive(Debug)]
+struct ProcessTransport {
+    client: OnceLock<Result<EventClient, String>>,
+    fds: Arc<EventTransportFds>,
 }
 
 #[derive(Debug)]
@@ -117,8 +67,7 @@ pub(in crate::runtime) struct RuntimeConfig {
     events: EventFilter,
     trace_id: Option<u64>,
     event_transport: Option<EventTransportConfig>,
-    event_client: Mutex<Option<EventClient>>,
-    event_client_pid: AtomicU32,
+    process_transport: AtomicPtr<ProcessTransport>,
     flow_controller: Mutex<FlowController>,
     sequence: AtomicU64,
     symbol_providers: Mutex<BTreeMap<String, String>>,
@@ -134,8 +83,7 @@ impl RuntimeConfig {
             events: parts.events,
             trace_id: parts.trace_id,
             event_transport: parts.event_transport,
-            event_client: Mutex::new(None),
-            event_client_pid: AtomicU32::new(0),
+            process_transport: AtomicPtr::new(std::ptr::null_mut()),
             flow_controller: Mutex::new(FlowController::default()),
             sequence: AtomicU64::new(0),
             symbol_providers: Mutex::new(BTreeMap::new()),
@@ -194,28 +142,40 @@ impl RuntimeConfig {
             .unwrap_or_else(|| "unknown".to_string())
     }
 
-    pub(in crate::runtime) fn send_event(&self, event: SyncEvent) -> Result<(), String> {
-        let current_pid = std::process::id();
-        let mut client = self
-            .event_client
-            .try_lock()
-            .map_err(|_| "sync event client is busy or poisoned".to_string())?;
-        let previous_pid = self.event_client_pid.load(Ordering::Acquire);
-        let reconnect = previous_pid != 0 && previous_pid != current_pid;
-        if reconnect {
-            *client = None;
-        }
-        if client.is_none() {
-            let Some(transport) = &self.event_transport else {
-                return Ok(());
+    fn transport(&self) -> &ProcessTransport {
+        let mut current = self.process_transport.load(Ordering::Acquire);
+        if current.is_null() {
+            let created = Box::into_raw(Box::new(ProcessTransport {
+                client: OnceLock::new(),
+                fds: Arc::new(EventTransportFds::default()),
+            }));
+            current = match self.process_transport.compare_exchange(
+                std::ptr::null_mut(),
+                created,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => created,
+                Err(existing) => {
+                    unsafe { drop(Box::from_raw(created)) };
+                    existing
+                }
             };
-            *client = Some(transport.connect(reconnect)?);
-            self.event_client_pid.store(current_pid, Ordering::Release);
         }
-        let Some(client) = client.as_ref() else {
+        // Published transports live for the process lifetime. A fork child abandons the copy.
+        unsafe { &*current }
+    }
+
+    pub(in crate::runtime) fn send_event(&self, event: SyncEvent) -> Result<(), String> {
+        let Some(config) = &self.event_transport else {
             return Ok(());
         };
-        client.send(event).map_err(|error| error.to_string())
+        let transport = self.transport();
+        let client = transport.client.get_or_init(|| config.connect(transport));
+        match client {
+            Ok(client) => client.send(event).map_err(|error| error.to_string()),
+            Err(error) => Err(error.clone()),
+        }
     }
 
     pub(in crate::runtime) fn classify_flow(
@@ -233,19 +193,15 @@ impl RuntimeConfig {
     }
 
     pub(in crate::runtime) fn close_event_client(&self) -> Result<(), String> {
-        // A forked child cannot join the parent's worker or acquire its inherited locks.
-        if self.event_client_pid.load(Ordering::Acquire) != std::process::id() {
+        let current = self.process_transport.load(Ordering::Acquire);
+        if current.is_null() {
             return Ok(());
         }
-        let client = self
-            .event_client
-            .try_lock()
-            .map_err(|_| "sync event client is busy or poisoned".to_string())?
-            .take();
-        let Some(client) = client else {
-            return Ok(());
-        };
-        client.close().map_err(|error| error.to_string())
+        let transport = unsafe { &*current };
+        match transport.client.get() {
+            Some(Ok(client)) => client.close().map_err(|error| error.to_string()),
+            _ => Ok(()),
+        }
     }
 
     pub(in crate::runtime) fn redact_payload(&self, payload: &[u8]) -> String {
@@ -276,7 +232,26 @@ impl RuntimeConfig {
     }
 }
 
+unsafe extern "C" fn after_fork_child() {
+    if let Some(config) = CONFIG.get() {
+        let previous = config
+            .process_transport
+            .swap(std::ptr::null_mut(), Ordering::Relaxed);
+        if !previous.is_null() {
+            // No inherited mutex, Arc refcount or destructor is touched here.
+            unsafe { &*previous }.fds.close_after_fork();
+        }
+    }
+}
+
 pub(in crate::runtime) fn set(config: RuntimeConfig) -> Result<(), String> {
+    let result = unsafe { libc::pthread_atfork(None, None, Some(after_fork_child)) };
+    if result != 0 {
+        return Err(format!(
+            "register TLS-sync fork handler: {}",
+            std::io::Error::from_raw_os_error(result)
+        ));
+    }
     CONFIG
         .set(config)
         .map_err(|_| "runtime config already initialized".to_string())

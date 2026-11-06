@@ -77,15 +77,18 @@
 │   └── [x] service.rs # 处理 TLS 相关通知并协调目标进程恢复。
 │       └── [x] struct SeccompTlsService # 持有 TLS 通知处理所需运行状态。
 ├── [x] tls_sync/ # 在目标运行前解析 TLS 库路径并同步采集准备。
-│   ├── [x] service.rs # 组织 TLS 同步队列、运行依赖和完成诊断。
+│   ├── [x] service.rs # 协调每进程连接、Trace 配额、epoll 就绪读取和计划查询。
 │   │   └── [x] struct TlsSyncService # 协调计划解析、目标对象固定和同步请求排空。
+│   ├── [x] clients.rs # 接入时保留 socket 凭据，以登记帧中的 TLS 事件凭据授权事件，发送进程退出后仍接收缓冲事件；绑定 Trace 并执行配额和单轮读取预算，断开时交出已上报 stream 的 close；计划查询仍解析活进程身份。
+│   ├── [x] limits.rs # 计算连接与 fd 预算，并在启动时提高 RLIMIT_NOFILE。
 │   ├── [x] resolver.rs # 为 exec 解析所需 TLS 采集计划。
 │   │   └── [x] struct TlsSyncPlanResolver # 结合目标进程信息与运行配置生成同步计划。
+│   ├── [x] resolver_worker.rs # 从有界队列解析计划并回复，直接持有查询 socket；跳过已断开的请求。
 │   ├── [x] root_path.rs # 固定目标进程根目录及可访问对象路径。
 │   ├── [x] direct.rs # 发现目标对象并执行直接同步任务。
 │   ├── [x] launch.rs # 固定 launch 使用的同步计划和对象。
-│   └── [x] frame_buffer.rs # 缓冲同步协议帧并保留未完整读取的数据。
-├── [x] live.rs # 组织运行期事件排空和各服务推进顺序。
+│   └── [x] frame_buffer.rs # 缓冲未完整读取的帧，大帧消费完后释放超过 1 MiB 的容量。
+├── [x] live.rs # 组织运行期事件排空和各服务推进顺序；TLS-sync 的已读明文处理完后再处理上报连接断开产生的 stream close。
 ├── [x] live/ # 处理直接采集、seccomp、身份收敛与关闭阶段。
 │   ├── [x] batch.rs # 按批推进采集事件与持久化。
 │   ├── [x] reconcile.rs # 对齐采集到的进程事实与 trace 注册状态。
