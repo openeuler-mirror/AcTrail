@@ -109,9 +109,9 @@ require exactly one database child. Remote-only data is queried through the
 receiving service. Web serves workload samples at
 `GET /api/traces/{id}/resources?limit=100` on the originating host.
 
-Main storage schema version 43 requires a database created with the current
-schema. Existing version 42 databases are rejected at startup; configure a new
-database path before starting the current binaries.
+Main storage schema version 44 requires a database created with the current
+schema. Existing databases with a different schema version are rejected at
+startup; configure a new database path before starting the current binaries.
 
 ## Verification
 

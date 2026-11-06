@@ -703,6 +703,7 @@ fn validate_schema(
         "finalization_reason",
         "failure_http_status",
         "command_invocation_kind",
+        "command_exit_code",
         "tool_result_binding",
     ] {
         require_integer_column(connection, "semantic_action_state", column)?;

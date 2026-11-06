@@ -1,6 +1,8 @@
 // Derive display classification and call numbering from the overview index.
 import { activityFromAction } from './presentation.js';
 
+const MODEL_MESSAGE_KINDS = new Set(['llm.request', 'llm.response']);
+
 export class FlameGraphHistory {
   constructor() {
     this.index = null;
@@ -56,21 +58,25 @@ export class FlameGraphHistory {
     const residentIds = new Set();
     for (const activity of activities) {
       residentIds.add(activity.id);
-      if (this.index.records.has(activity.id)) {
+      if (!MODEL_MESSAGE_KINDS.has(activity.kind) && this.index.records.has(activity.id)) {
         const known = this.classifications.get(activity.id);
         if (!known || known.layer !== activity.layer || known.group !== activity.group
-          || known.modelMessage !== activity.modelMessage || known.backgroundKind !== activity.backgroundKind) {
+          || known.backgroundKind !== activity.backgroundKind) {
           this.classifications.set(activity.id, {
             layer: activity.layer,
             group: activity.group,
-            modelMessage: activity.modelMessage,
             backgroundKind: activity.backgroundKind,
           });
         }
       }
     }
     for (const record of this.index.records.values()) {
-      if (residentIds.has(record.id) || record.kind === 'agent.context_compaction') continue;
+      if (residentIds.has(record.id) || record.kind === 'agent.context_compaction'
+        || MODEL_MESSAGE_KINDS.has(record.kind)) continue;
+      const known = this.classifications.get(record.id);
+      // Timing-only summaries cannot provide command text or a verified parent.
+      // Keep them in the overview; Commands uses the detailed window actions.
+      if (known?.group === 'commands' || (!known && record.kind === 'command.invocation')) continue;
       activities.push(this.activity(record, window, toolDisplay, t));
     }
   }
@@ -99,8 +105,7 @@ export class FlameGraphHistory {
       activity.label = `${record.kind} · ${record.id}`;
     }
     activity.searchText = `${activity.label} ${record.kind} ${record.id} ${record.status}`.toLowerCase();
-    activity.modelMessage = known?.modelMessage
-      ?? ['llm.request', 'llm.response'].includes(record.kind);
+    activity.modelMessage = false;
     activity.scopeIncomplete = true;
     activity.lightweight = true;
     activity.aggregate = false;

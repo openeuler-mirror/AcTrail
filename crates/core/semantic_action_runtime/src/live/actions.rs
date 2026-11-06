@@ -30,6 +30,7 @@ impl ActionUpdateFactory {
                 status: action.status,
                 completeness: action.completeness,
                 finalization_reason,
+                command_exit_code: None,
             },
         )
     }
@@ -205,7 +206,8 @@ fn exit_action(
     let EventPayload::Process(payload) = &event.payload else {
         unreachable!("exit_action only receives process events")
     };
-    let exit_code = payload.metadata.get("exit_code");
+    let raw_exit_code = payload.metadata.get("exit_code");
+    let exit_code = raw_exit_code.and_then(|value| value.parse::<i32>().ok());
     let mut attributes = payload.metadata.clone();
     attributes.insert(
         attrs::process::OPERATION.to_string(),
@@ -217,7 +219,7 @@ fn exit_action(
             identity_action_id.to_string(),
         );
     }
-    apply_process_exit_attributes(&mut attributes, exit_code);
+    apply_process_exit_attributes(&mut attributes, raw_exit_code, exit_code);
     SemanticAction {
         action_id: event_action_id(event, kind.as_str()),
         trace_id: event.envelope.trace_id,
@@ -278,8 +280,8 @@ pub(super) fn process_fork_attempt_action(event: &DomainEvent) -> SemanticAction
     }
 }
 
-pub(super) fn process_exit_status(exit_code: Option<&String>) -> SemanticActionStatus {
-    match exit_code.and_then(|value| value.parse::<i32>().ok()) {
+pub(super) fn process_exit_status(exit_code: Option<i32>) -> SemanticActionStatus {
+    match exit_code {
         Some(0) => SemanticActionStatus::Success,
         Some(_) => SemanticActionStatus::Error,
         None => SemanticActionStatus::Unknown,
@@ -288,20 +290,21 @@ pub(super) fn process_exit_status(exit_code: Option<&String>) -> SemanticActionS
 
 fn apply_process_exit_attributes(
     attributes: &mut std::collections::BTreeMap<String, String>,
-    exit_code: Option<&String>,
+    raw_exit_code: Option<&String>,
+    exit_code: Option<i32>,
 ) {
-    let Some(exit_code) = exit_code else {
+    let Some(raw_exit_code) = raw_exit_code else {
         return;
     };
-    attributes.insert(attrs::process::EXIT_CODE.to_string(), exit_code.clone());
-    if exit_code.parse::<i32>().ok().is_some_and(|code| code != 0) {
+    attributes.insert(attrs::process::EXIT_CODE.to_string(), raw_exit_code.clone());
+    if exit_code.is_some_and(|code| code != 0) {
         attributes.insert(
             attrs::process::FAILURE_KIND.to_string(),
             "nonzero_exit".to_string(),
         );
         attributes.insert(
             attrs::process::FAILURE_SUMMARY.to_string(),
-            format!("exit code {exit_code}"),
+            format!("exit code {raw_exit_code}"),
         );
     }
 }

@@ -1,15 +1,15 @@
 //! Current semantic action storage: compact integer codes in SQLite.
 //!
-//! Schema 43 assigns WebSocketMessage 128, AgentContextCompact 129, WebSocket
-//! support links 530/531 and compact implementation links 532. Only the current
-//! schema is accepted so each stored code has one meaning.
+//! Schema 44 stores command exit codes alongside lifecycle facts. WebSocketMessage
+//! uses 128, AgentContextCompact 129, WebSocket support links 530/531 and compact
+//! implementation links 532. Only the current schema is accepted.
 
 use super::{
     ActionCompletenessCodes, ActionKindCodes, ActionStatusCodes, EvidenceKindCodes,
     LinkOriginCodes, LinkRoleCodes, SemanticActionCodebook,
 };
 
-pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 43;
+pub(in crate::semantic_actions::codebook) const SCHEMA_VERSION: i32 = 44;
 
 pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodebook =
     &SemanticActionCodebook {

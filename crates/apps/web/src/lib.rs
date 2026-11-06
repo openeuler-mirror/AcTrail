@@ -2,6 +2,8 @@
 
 #[path = "args.rs"]
 mod args;
+#[path = "configuration.rs"]
+mod configuration;
 #[path = "http.rs"]
 mod http;
 #[path = "json.rs"]

@@ -33,6 +33,8 @@ pub enum SemanticActionChange {
         status: SemanticActionStatus,
         completeness: SemanticActionCompleteness,
         finalization_reason: Option<SemanticActionFinalizationReason>,
+        /// Observed command exit code. `None` preserves any previously observed code.
+        command_exit_code: Option<i32>,
     },
     LlmResponseFailure {
         title: String,

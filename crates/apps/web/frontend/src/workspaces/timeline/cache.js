@@ -88,19 +88,54 @@ export class TimelineWindowCache {
     return remaining === 0;
   }
 
+  rootCommandSnapshot(range) {
+    let anchor = null;
+    for (const entry of this.windows) {
+      // The predecessor is owned by the query covering the viewport's left edge.
+      // Its single-row read is complete even when ordinary pages hit a budget.
+      if (entry.range.startMs <= range.startMs
+        && entry.range.startMs + entry.range.spanMs > range.startMs
+        && (!anchor || entry.sequence > anchor.sequence)) anchor = entry;
+    }
+    return anchor?.data.rootCommandSnapshot ?? null;
+  }
+
+  #rootCommand(action, processId) {
+    return processId != null && action.kind === 'command.invocation'
+      && action.process?.process_id === processId;
+  }
+
   project(range, previous = null) {
+    const snapshot = this.rootCommandSnapshot(range);
+    const rootVersions = new Map();
     const actions = new Map();
     const contexts = new Map();
     const links = new Map();
     let scanned = 0;
     for (const { data } of [...this.windows].sort((a, b) => a.sequence - b.sequence)) {
-      for (const action of data.actions) actions.set(action.id, action);
+      for (const action of data.actions) {
+        actions.set(action.id, action);
+        if (this.#rootCommand(action, snapshot?.rootProcessId)) rootVersions.set(action.id, action);
+      }
+      const root = data.rootCommandSnapshot?.action;
+      if (root && this.#rootCommand(root, snapshot?.rootProcessId)) rootVersions.set(root.id, root);
       for (const action of data.contextActions) contexts.set(action.id, action);
       for (const link of data.links) links.set(`${link.parent}:${link.child}:${link.role}`, link);
       scanned += data.scanned;
     }
+    if (snapshot) {
+      const from = BigInt(snapshot.queryFrom);
+      for (const [id, action] of actions) {
+        if (this.#rootCommand(action, snapshot.rootProcessId)
+          && BigInt(action.start_time_unix_nanos) < from) actions.delete(id);
+      }
+      if (snapshot.action) actions.set(snapshot.action.id, snapshot.action);
+      for (const [id, action] of rootVersions) {
+        if (actions.has(id)) actions.set(id, action);
+      }
+    }
     const projection = { actions: [...actions.values()], contextActions: [...contexts.values()], associations: [],
-      links: [...links.values()], scanned, ...this.status(range) };
+      links: [...links.values()], rootCommandSnapshot: snapshot, scanned, ...this.status(range) };
     for (const key of ['actions', 'contextActions', 'links', 'associations']) {
       if (this.#sameValue(projection[key], previous?.[key])) projection[key] = previous[key];
     }

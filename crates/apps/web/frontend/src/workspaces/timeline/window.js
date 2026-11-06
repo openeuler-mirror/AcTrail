@@ -164,16 +164,25 @@ export class TimelineWindow {
   }
 
   publish(range, data) {
-    if (this.overview.requested) this.overview.merge(data.actions);
+    if (this.overview.requested) this.overview.merge(this.observedActions(data));
     this.cache.add(range, data);
     this.data.value = { ...this.empty(), ...this.cache.project(this.viewport.value, this.data.value), loadedTraceId: this.traceId };
   }
 
   updateStatus() {
+    if (this.cache.rootCommandSnapshot(this.viewport.value) !== this.data.value.rootCommandSnapshot) {
+      this.data.value = { ...this.data.value, ...this.cache.project(this.viewport.value, this.data.value) };
+      return;
+    }
     const status = this.cache.status(this.viewport.value);
     if (status.hasMore !== this.data.value.hasMore || status.linksTruncated !== this.data.value.linksTruncated) {
       this.data.value = { ...this.data.value, ...status };
     }
+  }
+
+  observedActions(data) {
+    const root = data.rootCommandSnapshot?.action;
+    return root ? [...data.actions, root] : data.actions;
   }
 
   async refreshTail(readMetadata, spanMs, signal) {
@@ -192,7 +201,7 @@ export class TimelineWindow {
     const range = { startMs, spanMs: Math.max(queryBounds.startMs + queryBounds.spanMs - startMs, 1) };
     const data = await this.readWindow(range, signal, queryWindow);
     if (signal.aborted || this.traceId !== traceId) return null;
-    const window = this.overview.observed(TimelineRange.observed(metadata, data.actions, knownWindow));
+    const window = this.overview.observed(TimelineRange.observed(metadata, this.observedActions(data), knownWindow));
     window.activityAdvanced = window.endNanos > previous.endNanos || window.lastStartNanos > previous.lastStartNanos;
     const bounds = TimelineRange.bounds(window, this.filters);
     const target = { startMs: bounds.startMs + Math.max(bounds.spanMs - spanMs, 0), spanMs };
@@ -206,7 +215,7 @@ export class TimelineWindow {
     if (originShift !== 0 || data.hasMore || data.linksTruncated) this.cache.clear();
     // Retain fixed-width coverage while the observed trace is shorter than the span.
     if (this.overview.requested) {
-      this.overview.merge(data.actions);
+      this.overview.merge(this.observedActions(data));
       if (data.hasMore) this.overview.extend(traceId, this.filters, queryWindow, range);
     }
     this.cache.add(target, data);
@@ -216,6 +225,8 @@ export class TimelineWindow {
   }
 
   async readWindow(range, signal, window = this.window.value) {
+    const query = TimelineRange.query(window, range);
+    const rootCommandSnapshot = { rootProcessId: window.rootProcessId, queryFrom: query.from, action: null };
     const actions = new Map();
     const context = new Map();
     const links = new Map();
@@ -227,8 +238,11 @@ export class TimelineWindow {
       const limit = Math.min(Number(this.filters.limit), this.options.maxActions - actions.size);
       if (limit <= 0) { hasMore = true; break; }
       const result = await this.readPage(this.traceId, { ...this.filters,
-        ...TimelineRange.query(window, range), cursor, limit, signal });
+        ...query, cursor, limit, signal });
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
+      if (page === 0 && result.root_command_before_window) {
+        rootCommandSnapshot.action = markRaw(result.root_command_before_window);
+      }
       for (const action of result.actions ?? []) actions.set(action.id, markRaw(action));
       for (const action of result.context_actions ?? []) {
         if (context.has(action.id) || context.size < this.options.maxActions) context.set(action.id, markRaw(action));
@@ -246,6 +260,6 @@ export class TimelineWindow {
       cursor = result.next_cursor;
     }
     return { actions: [...actions.values()], contextActions: [...context.values()],
-      links: [...links.values()], hasMore, linksTruncated, scanned };
+      links: [...links.values()], rootCommandSnapshot, hasMore, linksTruncated, scanned };
   }
 }

@@ -53,6 +53,18 @@ export function readCurrentConfig() {
   return fetchJson('/api/config/current');
 }
 
+export function readEditableConfig() {
+  return fetchJson('/api/config/editable');
+}
+
+export function saveEditableConfig(editsJson) {
+  return fetchJson('/api/config/editable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: editsJson,
+  });
+}
+
 export function readPluginEnablement() {
   return fetchJson('/api/plugins/enabled');
 }

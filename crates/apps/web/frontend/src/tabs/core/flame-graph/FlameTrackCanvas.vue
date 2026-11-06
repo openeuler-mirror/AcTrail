@@ -18,11 +18,14 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useModuleLocale } from '../../../locale';
 import strings from './locale';
 import { ActionEntrance } from './live/action-entrance.js';
+import { CommandContext } from './command-context.js';
 
 const { t } = useModuleLocale(strings);
 
 import {
   buildFlameTrackFrame,
+  FLAME_BAR_TOP,
+  FLAME_DEPTH_PITCH,
   flameActivityPaletteKey,
   flameActivityTitle,
   hitTestFlameTrack,
@@ -159,17 +162,36 @@ function draw() {
   hatchPatterns ??= createHatchPatterns(context, palette);
   entries = buildFlameTrackFrame(props.track, props.viewport, width);
 
+  if (props.track.commandLevels) {
+    context.save();
+    context.strokeStyle = palette.guide;
+    context.globalAlpha = 0.4;
+    context.lineWidth = 1;
+    for (const band of props.track.commandLevels.slice(1)) {
+      const top = FLAME_BAR_TOP + band.depth * FLAME_DEPTH_PITCH - 2.5;
+      context.beginPath();
+      context.moveTo(0, top);
+      context.lineTo(width, top);
+      context.stroke();
+    }
+    context.restore();
+  }
+  const focusId = props.track.group === 'commands'
+    ? (hoveredActivity && !hoveredActivity.density && !hoveredActivity.synthetic ? hoveredActivity.id : props.selectedId)
+    : null;
+  const commandContext = props.track.group === 'commands' ? new CommandContext(entries, focusId) : null;
+
   const now = performance.now();
   let animating = false;
   for (const entry of entries) {
     const opacity = entrance.opacity(entry.activity.id, now);
     animating ||= opacity < 1;
-    drawEntry(context, entry, width, opacity);
+    drawEntry(context, entry, width, opacity, commandContext);
   }
   if (animating) scheduleDraw();
 }
 
-function drawEntry(context, entry, surfaceWidth, entranceOpacity) {
+function drawEntry(context, entry, surfaceWidth, entranceOpacity, commandContext) {
   const activity = entry.activity;
   const left = Math.max(entry.left, -20);
   const right = Math.min(entry.left + entry.width, surfaceWidth + 20);
@@ -179,9 +201,14 @@ function drawEntry(context, entry, surfaceWidth, entranceOpacity) {
   }
 
   const colors = palette[flameActivityPaletteKey(activity)] ?? palette.agent;
+  const command = props.track.group === 'commands' && !activity.density;
+  const related = commandContext?.contains(activity) ?? false;
+  const contextOpacity = commandContext?.active && !related ? palette.commandMuted : 1;
   const radius = entry.instant || activity.density ? 2 : 5;
-  const opacity = (activity.density ? 0.72 : activityOpacity(activity)) * entranceOpacity;
-  context.globalAlpha = opacity;
+  const opacity = (activity.density ? 0.72 : activityOpacity(activity)) * entranceOpacity * contextOpacity;
+  const commandFill = Math.min(palette.commandFillMax,
+    palette.commandFill + (activity.commandHierarchy?.level ?? 0) * palette.commandFillStep);
+  context.globalAlpha = opacity * (command && !entry.instant ? commandFill : 1);
   roundedRect(context, left, entry.top, width, entry.height, radius);
   if (activity.synthetic) {
     const gradient = context.createLinearGradient(left, 0, left + width, 0);
@@ -194,10 +221,18 @@ function drawEntry(context, entry, surfaceWidth, entranceOpacity) {
   context.fill();
 
   context.globalAlpha = opacity * 0.34;
-  context.strokeStyle = colors.text;
+  context.strokeStyle = command ? colors.fill : colors.text;
   context.lineWidth = 1;
   context.stroke();
-  context.globalAlpha = entranceOpacity;
+  context.globalAlpha = entranceOpacity * contextOpacity;
+
+  if (command && !entry.instant && entry.left >= 0) {
+    context.fillStyle = colors.fill;
+    context.globalAlpha = opacity * 0.75;
+    roundedRect(context, left + 2, entry.top + 4, 2, entry.height - 8, 1);
+    context.fill();
+    context.globalAlpha = entranceOpacity * contextOpacity;
+  }
 
   if (activity.aggregate && !activity.synthetic) {
     drawHatch(
@@ -214,13 +249,13 @@ function drawEntry(context, entry, surfaceWidth, entranceOpacity) {
   }
 
   const highlighted = props.selectedId === activity.id || hoveredActivity?.id === activity.id;
-  if (highlighted && !activity.synthetic) {
+  if ((highlighted || related) && !activity.synthetic) {
     roundedRect(context, left + 1, entry.top + 1, Math.max(width - 2, 1), entry.height - 2, radius);
     context.strokeStyle = activity.status === 'error' ? palette.error : palette.highlight;
-    context.globalAlpha = (props.selectedId === activity.id ? 0.95 : 0.58) * entranceOpacity;
-    context.lineWidth = 2;
+    context.globalAlpha = (highlighted ? 0.8 : 0.38) * entranceOpacity * contextOpacity;
+    context.lineWidth = highlighted ? 2 : 1.5;
     context.stroke();
-    context.globalAlpha = entranceOpacity;
+    context.globalAlpha = entranceOpacity * contextOpacity;
   }
 
   if ((entry.showLabel || activity.synthetic) && width >= 12) {
@@ -228,9 +263,9 @@ function drawEntry(context, entry, surfaceWidth, entranceOpacity) {
     context.beginPath();
     context.rect(Math.max(left, 0), entry.top, Math.min(width, surfaceWidth), entry.height);
     context.clip();
-    context.fillStyle = colors.text;
-    context.globalAlpha = activityOpacity(activity) * entranceOpacity;
-    context.font = palette.font;
+    context.fillStyle = command ? palette.commandText : colors.text;
+    context.globalAlpha = activityOpacity(activity) * entranceOpacity * contextOpacity;
+    context.font = command ? palette.commandFont : palette.font;
     context.textAlign = 'left';
     context.textBaseline = 'middle';
     context.fillText(activity.label, Math.max(left, 0) + 8, entry.top + entry.height / 2 + 0.5);
@@ -324,6 +359,13 @@ function readPalette(surface) {
     protocol: pair('--trace-flame-protocol-bar', '--trace-flame-protocol-bar-text', '#64748b', '#ffffff'),
     error: cssColor(styles, '--trace-flame-error-hatch', '#ff4d6d'),
     highlight: cssColor(styles, '--ui-text', '#111827'),
+    guide: cssColor(styles, '--ui-border', '#e2e8f0'),
+    commandFill: Number(cssColor(styles, '--trace-flame-command-fill-opacity', '0.14')),
+    commandFillStep: Number(cssColor(styles, '--trace-flame-command-depth-opacity-step', '0.06')),
+    commandFillMax: Number(cssColor(styles, '--trace-flame-command-max-fill-opacity', '0.44')),
+    commandMuted: Number(cssColor(styles, '--trace-flame-command-muted-opacity', '0.5')),
+    commandFont: cssColor(styles, '--trace-flame-command-font', '500 11px ui-monospace, monospace'),
+    commandText: cssColor(styles, '--trace-flame-command-text', cssColor(styles, '--ui-text', '#1f2937')),
     syntheticEnd: {
       agent: cssColor(styles, '--trace-flame-agent-accent', '#3271e8'),
       harness: cssColor(styles, '--trace-flame-harness-accent', '#dc8500'),

@@ -500,6 +500,12 @@
 }
 
 .flame-track-canvas {
+  --trace-flame-command-font: 500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --trace-flame-command-text: var(--ui-text);
+  --trace-flame-command-fill-opacity: 0.14;
+  --trace-flame-command-depth-opacity-step: 0.06;
+  --trace-flame-command-max-fill-opacity: 0.44;
+  --trace-flame-command-muted-opacity: 0.5;
   position: absolute;
   top: 0;
   left: 0;
