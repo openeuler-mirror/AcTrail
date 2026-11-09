@@ -51,6 +51,7 @@ pub fn resolve_deployment_permissions(
     probe: Option<&LaunchPlatformReport>,
 ) -> Result<PermissionDecision, String> {
     let availability = DeploymentPermissionAvailability {
+        host_ebpf_configured: configured_profile.supports_host_ebpf_observation(),
         host_ebpf: probe
             .and_then(|report| report.daemon.as_ref())
             .map(|daemon| {

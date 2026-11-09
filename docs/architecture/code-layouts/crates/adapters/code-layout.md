@@ -10,7 +10,7 @@
 │   │       │   └── [x] struct EbpfCollector # 实现 CollectorInstance，管理绑定并返回原始观测及明文段
 │   │       ├── [x] loader.rs # 定义 BPF 加载器及已挂载对象的资源所有权
 │   │       │   ├── [x] struct EbpfProgramLoader # 持有内核、明文及文件采集配置，准备观测与可选 LSM 装配
-│   │       │   └── [x] struct EbpfRuntime # 拥有事件消费者、Object、Link、绑定 map 和 TLS 状态；先停消费者再释放 BPF 对象
+│   │       │   └── [x] struct EbpfRuntime # 持有事件消费者、Object、Links、绑定 maps 和 TLS 状态，保留到 daemon 退出
 │   │       ├── [x] maps.rs # 维护 trace 对目标进程的采集绑定
 │   │       │   ├── [x] struct BindingStateMap # 保存当前绑定的用户态状态
 │   │       │   └── [x] struct TrackedProcess # 记录跟踪进程和所需采集范围
@@ -20,9 +20,8 @@
 │   │       ├── [x] capability_probe.rs # 探测内核、tracefs 和 BPF 能力
 │   │       │   └── [x] struct EbpfProbeResult # 返回环境探测结果与能力可用性
 │   │       ├── [x] loader/ # 装配挂载计划与运行中事件处理
-│   │       │   ├── [x] attach_plan/ # 将配置能力转换为实际挂载集合
-│   │       │   │   └── [x] implementation.rs # 保存最终 BPF 程序挂载计划
-│   │       │   │       └── [x] struct AttachPlan # 表达已选择的采集能力与程序
+│   │       │   ├── [x] attach_plan/ # 将固定配置需求转换为实际挂载集合
+│   │       │   │   └── [x] implementation.rs # AttachPlan 选择程序并根据实际挂载结果判断能力
 │   │       │   ├── [x] ring_decode.rs # 解码公共事件头并分发领域载荷
 │   │       │   │   ├── [x] enum KernelEvent # 区分观测、载荷和采集诊断事件
 │   │       │   │   └── [x] struct KernelEventIdentity # 保留内核事件携带的进程身份

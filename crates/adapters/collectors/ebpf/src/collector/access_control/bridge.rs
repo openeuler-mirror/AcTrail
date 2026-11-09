@@ -1,3 +1,4 @@
+//! Share the prepared governance runtime with the daemon services.
 use super::*;
 use access_control::lsm::{LsmAuditEvent, LsmController};
 use model_core::process::HostProcessCoordinates;
@@ -5,6 +6,24 @@ use model_core::process::HostProcessCoordinates;
 impl EbpfCollector {
     pub fn set_lsm_controller(&mut self, controller: Arc<LsmController>) {
         self.loader.set_lsm_controller(controller);
+    }
+
+    pub fn require_lsm_ready(&self) -> Result<(), CollectorError> {
+        if let Some(error) = self.runtime.failure() {
+            return Err(error.clone());
+        }
+        if self
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.lsm.is_some())
+        {
+            Ok(())
+        } else {
+            Err(CollectorError::new(
+                "lsm_preflight",
+                "configured LSM runtime was not prepared",
+            ))
+        }
     }
 
     pub fn lsm_poll_fd(&self) -> Option<i32> {

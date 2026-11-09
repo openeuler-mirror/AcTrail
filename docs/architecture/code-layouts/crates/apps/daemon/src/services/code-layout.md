@@ -2,14 +2,14 @@
 
 ```text
 [x] crates/apps/daemon/src/services/ # 将采集、身份、语义投影、存储与安全治理接入宿主运行循环。
-├── [x] wiring.rs # 构造存储、trace runtime 与接入服务依赖。
+├── [x] wiring.rs # 构造依赖后一次准备配置要求的观测与治理能力并集，完成后报告启动就绪。
 ├── [x] attach.rs # 定义接入服务持有的采集器、存储、身份和治理组件。
 │   └── [x] struct StorageAttachService # 统一拥有采集与持久化服务，协调已有进程接入、launch 接入和事件处理。
 ├── [x] attach/ # 接入服务的构建、权限预检、插件管理和 launch 准备。
-│   ├── [x] factory.rs # 按配置构造采集器、存储和下游服务。
-│   ├── [x] service.rs # 实现 AttachService 的进程接入与生命周期操作。
-│   ├── [x] preflight.rs # 启动前核验 eBPF 所需能力。
-│   │   └── [x] struct EbpfPreflightReport # 汇总采集器预检结果供接入判断。
+│   ├── [x] factory.rs # 按整体配置构造采集器及加载模块，保留空需求下的无内核资源状态。
+│   ├── [x] service.rs # launch 和 attach 根据准备结果选择后端，同配置复用长期 runtime。
+│   ├── [x] preflight.rs # 从实际配置汇总需求并准备一次 runtime，再只读检查各候选 Required 与实际 LSM 结果。
+│   │   └── [x] struct EbpfPreflightReport # 提供 profile 可用性快照，准备状态由 collector 的 RuntimePreparation 持有。
 │   ├── [x] plugin_config.rs # 校验插件配置与 profile 范围。
 │   │   └── [x] struct PluginConfigManager # 组织插件配置检查与应用。
 │   ├── [x] plugin_configuration.rs # 将插件配置请求转换为运行组件配置。
@@ -18,7 +18,7 @@
 │   ├── [x] logging.rs # 记录接入和初始化诊断。
 │   ├── [x] helpers.rs # 处理接入流程共用的身份、路径和配置转换。
 │   └── [x] launch/ # 在目标继续运行前准备 launch 身份与采集条件。
-│       └── [x] preparation.rs # 准备 launch 所需进程信息和运行依赖。
+│       └── [x] preparation.rs # 复用已准备能力并登记 launch 目标，必需能力缺失时拒绝当前请求。
 ├── [x] identity/ # 连接 procfs 身份、trace 注册表与控制请求身份。
 │   └── [x] service.rs # 解析进程身份并应用运行时进程事件。
 │       ├── [x] struct TraceIdentityResolver # 从进程事实解析 trace 关联身份。

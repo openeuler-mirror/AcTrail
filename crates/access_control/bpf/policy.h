@@ -27,8 +27,8 @@ static __always_inline int ac_begin(__u32 domain, struct ac_context *context) {
     struct ac_policy_value *fallback = bpf_map_lookup_elem(
         context->policy, &context->work->key);
     if (!fallback) return -13;
-    /* Exec stays attached to enroll launches before observation consumes the
-     * pending binding, including configurations that control only network. */
+    /* Scope enrollment also runs in its own exec hook. Keep lookup idempotent
+     * here: file hooks can run before exec enrollment during a launch. */
     if (!(fallback->flags & AC_ENABLED)) return 0;
     __builtin_memcpy(&context->work->selected, fallback, sizeof(*fallback));
     return 1;

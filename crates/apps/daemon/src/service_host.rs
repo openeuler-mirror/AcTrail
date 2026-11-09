@@ -472,35 +472,36 @@ where
                 Ok(ControlReply::TrackRemoved)
             }
             ControlCommand::ListTraces(command) => {
-                let items = self
-                    .wiring
-                    .trace_runtime
-                    .list_trace_records()
-                    .into_iter()
-                    .filter(|trace| {
-                        command
-                            .selector
-                            .as_ref()
-                            .map(|selector| selector.matches(trace, None))
-                            .unwrap_or(true)
-                    })
-                    .map(|trace| {
-                        Ok(TraceListItem {
-                            trace_id: trace.trace_id,
-                            display_name: trace.display_name.clone(),
-                            root_pid: self
-                                .wiring
-                                .attach_service
-                                .host_pid_for_process(trace.root_process_identity)?,
-                            root_pid_namespace: trace.root_pid_namespace.clone(),
-                            root_container_id: trace.root_container_id.clone(),
-                            lifecycle_state: trace.lifecycle_state,
-                            health: trace.health,
-                            tags: trace.tags.clone(),
-                            created_at: trace.timings.created_at,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, ControlError>>()?;
+                let mut items = Vec::new();
+                for trace in self.wiring.trace_runtime.list_trace_records() {
+                    // Apply selectors that do not need a host PID before resolving it.
+                    if let Some(selector) = &command.selector
+                        && !matches!(selector, TraceSelector::RootPid(_))
+                        && !selector.matches(trace, None)
+                    {
+                        continue;
+                    }
+                    let root_pid = self
+                        .wiring
+                        .attach_service
+                        .host_pid_for_process(trace.root_process_identity)?;
+                    if let Some(selector @ TraceSelector::RootPid(_)) = &command.selector
+                        && !selector.matches(trace, Some(root_pid))
+                    {
+                        continue;
+                    }
+                    items.push(TraceListItem {
+                        trace_id: trace.trace_id,
+                        display_name: trace.display_name.clone(),
+                        root_pid,
+                        root_pid_namespace: trace.root_pid_namespace.clone(),
+                        root_container_id: trace.root_container_id.clone(),
+                        lifecycle_state: trace.lifecycle_state,
+                        health: trace.health,
+                        tags: trace.tags.clone(),
+                        created_at: trace.timings.created_at,
+                    });
+                }
                 Ok(ControlReply::TraceList(items))
             }
             ControlCommand::Doctor(_) => Ok(ControlReply::Doctor(DoctorReply {

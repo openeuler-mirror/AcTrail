@@ -215,6 +215,10 @@ impl EbpfProgramLoader {
         &self.config
     }
 
+    pub(crate) fn requires_lsm(&self) -> bool {
+        self.lsm_controller.is_some()
+    }
+
     pub fn set_lsm_controller(
         &mut self,
         controller: std::sync::Arc<access_control::lsm::LsmController>,

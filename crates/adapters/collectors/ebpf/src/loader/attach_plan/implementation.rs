@@ -160,10 +160,6 @@ impl AttachPlan {
             .collect()
     }
 
-    pub(crate) fn is_satisfied_by(&self, attached_capabilities: &BTreeSet<Capability>) -> bool {
-        self.capabilities.is_subset(attached_capabilities)
-    }
-
     pub(crate) fn attach_priority(&self, program_name: &str) -> u8 {
         if FS_ACCESS_BASIC_PATH_PROGRAMS.contains(&program_name)
             || FILE_OPEN_PROGRAMS.contains(&program_name)

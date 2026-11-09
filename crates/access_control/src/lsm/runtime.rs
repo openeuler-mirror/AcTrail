@@ -1,3 +1,5 @@
+//! Load governance hooks with shared scope enrollment and configured decisions.
+
 use super::{audit::LsmAuditEvent, controller::LsmController, publisher::PolicyPublisher};
 use libbpf_rs::{
     Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer, RingBufferBuilder,
@@ -59,7 +61,8 @@ impl LsmRuntime {
         }
         for mut program in object.progs_mut() {
             let enabled = match program.name().to_str() {
-                Some("ac_task_alloc" | "ac_bprm_check") => true,
+                Some("ac_task_alloc" | "ac_bprm_scope") => true,
+                Some("ac_bprm_check") => controller.command_enabled(),
                 Some("ac_socket_connect") => controller.network_config.enabled,
                 Some("ac_file_open") => controller.file_domain_enabled(1),
                 Some("ac_path_mkdir") => controller.file_domain_enabled(2),
