@@ -148,7 +148,7 @@ class ResourceMetricsCase(TestCase):
             },
             "storage": {"sqlite": {"path": str(self._database)}},
             "export": {"snapshot": {"directory": str(work / "export")}},
-            "plugins": {"discovery": {"directory": str(work / "plugins")}},
+            "plugins": {"discovery": {"directory": [str(work / "plugins")]}},
             "payload": {"tls": {"sync_event_socket_path": str(work / "run/tls-sync.sock")}},
             "resource_profiling": {"collection": {"workload": {"cgroup": {"v2": {
                 "managed": {"root": str(self._cgroup)},

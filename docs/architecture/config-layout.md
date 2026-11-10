@@ -72,8 +72,8 @@
 | `export.snapshot.directory` | `string` | `"/var/lib/actrail/export"` | 否 | export | 导出快照的输出目录；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L448) |
 | `export.snapshot.payload_bytes_enabled` | `bool` | `true` | 否 | export | 快照包含 payload 字节；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L449) |
 | `export.snapshot.payload_text_enabled` | `bool` | `true` | 否 | export | 快照包含 payload 文本；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L450) |
-| `plugins.discovery.directory` | `string` | `"~/.actrail/plugins"` | 否 | plugins | 插件包发现目录；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L103) |
-| `plugins.discovery.max_packages` | `uint32` | `128` | 否 | plugins | 发现的插件包数量上限；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L104) |
+| `plugins.discovery.directory` | `string[]` | `["~/.actrail/plugins", "/usr/share/actrail/plugins"]` | 否 | plugins | 插件包发现目录列表；空列表关闭发现；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L103) |
+| `plugins.discovery.max_packages` | `uint32` | `128` | 否 | plugins | 所有发现目录合计的插件包数量上限；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L104) |
 | `plugins.discovery.manifest_max_bytes` | `uint64` | `262144` | 否 | plugins | 插件 manifest 文件字节上限；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L105) |
 | `plugins.alerts.queue_capacity` | `uint32` | `1024` | 否 | plugins | 队列容量；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L55) |
 | `plugins.alerts.writes_per_cycle` | `uint32` | `256` | 否 | plugins | 每轮持久化插件告警的数量上限；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L56) |

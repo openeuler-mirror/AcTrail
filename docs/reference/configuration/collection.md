@@ -375,7 +375,7 @@ HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: b
 压缩专属字段解析、顶层 system 分类扩展、摘要扫描、状态维护及附加复制均跳过。
 LLM 内容保留和轨迹关联分别由各自配置控制。
 
-`actrailctl init -f` 生成的默认配置包含以下全部字段：
+以下为所属配置模块的默认值，普通 `init` 导出所属模块提供的完整配置。可在 `[semantic_retention.l0_llm_call.context_compact]` 中手工配置或通过 `init --patch` 显式写入；使用 `init --filter` 时的字段选择见[配置生成规则](../../operations/daemon/configure.md)。
 
 | 字段 | 默认值 | 作用与取值要求 |
 | --- | --- | --- |

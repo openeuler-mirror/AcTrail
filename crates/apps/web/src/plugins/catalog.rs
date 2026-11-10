@@ -27,7 +27,7 @@ pub(crate) struct InstalledPluginCatalog {
 
 pub(crate) struct CatalogSnapshot {
     pub(super) config_path: Option<PathBuf>,
-    pub(super) directory: PathBuf,
+    pub(super) directory: Vec<String>,
     pub(super) packages: Vec<CatalogPackage>,
     pub(super) runtime_plugins: Vec<PluginInstanceStatus>,
     pub(super) runtime_error: Option<String>,
@@ -120,7 +120,12 @@ impl InstalledPluginCatalog {
             .collect();
         Ok(CatalogSnapshot {
             config_path: self.config_path.clone(),
-            directory: self.directory.root().to_path_buf(),
+            directory: self
+                .directory
+                .roots()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
             packages,
             runtime_plugins,
             runtime_error,

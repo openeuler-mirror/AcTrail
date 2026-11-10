@@ -1,7 +1,9 @@
 //! Command-line input for actrailweb.
 
+use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use config_core::daemon::{DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, WebAlertsConfig};
@@ -16,6 +18,7 @@ pub struct WebConfig {
     pub alerts: WebAlertsConfig,
     pub operator_config_path: Option<PathBuf>,
     pub operator_config: Option<OperatorConfig>,
+    pub(crate) operator_config_text: Option<Arc<str>>,
 }
 
 const HELP_FLAG_SHORT: &str = "-h";
@@ -71,6 +74,9 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, S
             operator_config.web.alerts = alerts;
             operator_config
         });
+    let operator_config_text = config
+        .as_ref()
+        .and_then(|config| config.operator_config_text.clone());
     Ok(WebConfig {
         storage,
         cluster_root,
@@ -81,6 +87,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<WebConfig, S
             .as_ref()
             .and_then(|config| config.operator_config_path.clone()),
         operator_config,
+        operator_config_text,
     })
 }
 
@@ -133,7 +140,9 @@ fn parse_flags(
 }
 
 fn load_config(path: &Path) -> Result<WebConfig, String> {
-    let config = OperatorConfig::load(path)?;
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("read config {}: {error}", path.display()))?;
+    let config = OperatorConfig::parse(&text)?;
     Ok(WebConfig {
         storage: config.storage.clone(),
         cluster_root: None,
@@ -142,6 +151,7 @@ fn load_config(path: &Path) -> Result<WebConfig, String> {
         alerts: config.web.alerts,
         operator_config_path: Some(path.to_path_buf()),
         operator_config: Some(config),
+        operator_config_text: Some(text.into()),
     })
 }
 

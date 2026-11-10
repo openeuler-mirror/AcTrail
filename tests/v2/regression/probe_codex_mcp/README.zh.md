@@ -237,7 +237,7 @@ toml_string() {
   printf 'root_dir = %s\n' \
     "$(toml_string "$RUNTIME_DIR/data/cluster")"
   printf '\n[plugins.discovery]\n'
-  printf 'directory = %s\n' \
+  printf 'directory = [%s]\n' \
     "$(toml_string "$RUNTIME_DIR/plugins")"
 } >"$OPERATOR_PATCH"
 

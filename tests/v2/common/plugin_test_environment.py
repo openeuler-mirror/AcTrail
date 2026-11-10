@@ -79,8 +79,8 @@ class PluginTestEnvironment:
         self._daemon_started = True
         self.api = self._start_web()
         catalog = self._wait_for_catalog()
-        self._require_catalog_package(catalog)
-        self._load_plugin()
+        package_key = self.api.package_key(self.plugin.plugin_id, self.plugin.runtime, catalog=catalog)
+        self._load_plugin(package_key)
         config_document = self.api.config(self.plugin.instance_id)
         raw_config = config_document.get("config")
         if not isinstance(raw_config, dict):
@@ -232,26 +232,9 @@ class PluginTestEnvironment:
             time.sleep(self.config.drain_interval_seconds)
         raise RuntimeError(f"plugin catalog did not become ready: {last_error}")
 
-    def _require_catalog_package(self, catalog: dict[str, Any]) -> None:
-        packages = catalog.get("packages")
-        if not isinstance(packages, list):
-            raise AssertionError("plugin catalog has no packages array")
-        found = any(
-            isinstance(item, dict)
-            and item.get("package_key") == self.plugin.package
-            and item.get("plugin_id") == self.plugin.plugin_id
-            and item.get("runtime") == self.plugin.runtime
-            and item.get("activation_ready") is True
-            for item in packages
-        )
-        if not found:
-            raise AssertionError(
-                f"catalog has no activation-ready {self.plugin.package} package"
-            )
-
-    def _load_plugin(self) -> None:
+    def _load_plugin(self, package_key: str) -> None:
         loaded = self.api.load(
-            self.plugin.package,
+            package_key,
             self.plugin.instance_id,
             self.plugin.load_grants,
         )

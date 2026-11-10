@@ -141,7 +141,7 @@ state_path = "$WORK/data/cluster-report-state.sqlite"
 root_dir = "$WORK/data/cluster"
 
 [plugins.discovery]
-directory = "$WORK/plugins"
+directory = ["$WORK/plugins"]
 EOF
 
 "$BIN/actrailctl" --config "$WORK/actraild.conf" \

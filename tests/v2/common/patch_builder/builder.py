@@ -92,12 +92,12 @@ class PatchBuilder:
                 },
                 "center": {"root_dir": str(work_dir / "data/cluster")},
             },
-            "plugins": {"discovery": {"directory": str(work_dir / "plugins")}},
+            "plugins": {"discovery": {"directory": [str(work_dir / "plugins")]}},
         })
 
     def with_plugin_directory(self, directory: Path) -> PatchBuilder:
         return self.with_values({
-            "plugins": {"discovery": {"directory": str(directory.resolve())}}
+            "plugins": {"discovery": {"directory": [str(directory.resolve())]}}
         })
 
     def with_runtime_timing(self, shutdown_wait_ms: int = DEFAULTS.shutdown_wait_ms) -> PatchBuilder:

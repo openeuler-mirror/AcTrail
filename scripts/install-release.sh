@@ -19,8 +19,8 @@ Environment:
                 Defaults to sudo.
   ACTRAIL_PLUGIN_DIR
                 Plugin installation root. Defaults to ~/.actrail/plugins for
-                the user running this script. The same absolute directory must
-                be configured as plugins.discovery.directory.
+                the user running this script. Include this absolute directory
+                in the plugins.discovery.directory array.
   ACTRAIL_CONFIG_DIR
                 System configuration root for the alert proxy and builtin
                 forwarding policy. Defaults to /etc/actrail.

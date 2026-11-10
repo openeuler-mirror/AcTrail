@@ -23,8 +23,8 @@ class ContainerAutoDeploymentTest(unittest.TestCase):
             config = tomllib.load(stream)
 
         directory = config["plugins"]["discovery"]["directory"]
-        self.assertTrue(Path(directory).is_absolute(), directory)
-        self.assertEqual(directory, "/etc/actrail/plugins")
+        self.assertEqual(directory, ["/etc/actrail/plugins"])
+        self.assertTrue(all(Path(path).is_absolute() for path in directory), directory)
 
     def test_service_wait_rejects_activating_state(self) -> None:
         completed = self._run_service_wait("activating")

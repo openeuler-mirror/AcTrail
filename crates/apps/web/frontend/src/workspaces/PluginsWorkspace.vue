@@ -6,7 +6,7 @@
           <span>{{ t('workspace.kicker') }}</span>
           <h2>{{ t('workspace.title') }}</h2>
         </div>
-        <div class="runtime-source">{{ sourceLabel }}</div>
+        <div class="runtime-source">{{ directoryLabel }}</div>
       </section>
 
       <section class="runtime-metrics">
@@ -249,8 +249,9 @@ const filteredRuntimePlugins = computed(() => filterRows(catalog.value?.runtime_
   'runtime',
 ]));
 
-const sourceLabel = computed(() => catalog.value?.directory ?? t('workspace.scanning'));
-const directoryLabel = computed(() => catalog.value?.directory ?? t('workspace.scanning'));
+const directoryLabel = computed(() => catalog.value?.directory == null
+  ? t('workspace.scanning')
+  : JSON.stringify(catalog.value.directory));
 const pluginsQuery = ref('');
 const detailRow = ref(null);
 

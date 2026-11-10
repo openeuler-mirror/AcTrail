@@ -26,7 +26,7 @@
 
 - Dashboard 首屏只读取服务状态、有限告警和共享 Trace 列表页。统计日期是输入草稿，用户点击加载后才查询 activity；KPI、模型与流量共用一份响应，展示范围取响应中的时间窗口。请求失败保留上次结果并允许重试。手动刷新只重载已经提交过的统计查询；初始化不清缓存、不触发统计。任务计数限定为当前 Trace 列表页。
 - Statistics 管理统计子页、日期范围、rollup、分页和图表筛选。
-- Config 管理当前配置文档及其加载状态。
+- Config 管理可编辑字段的值、类型、草稿及加载状态，并展示启动配置文档的只读快照。
 - Plugins 管理 catalog、运行实例、load/unload dialog 和实例配置刷新序号。
 - Traces 管理所选 Trace、活动 leaf view，以及各视图的按需数据。
 - Alerts 管理轮询间隔、严重级别筛选、告警列表和当前详情。
@@ -42,6 +42,14 @@ LLM 正文仅在用户打开详情时读取。Time attribution 由用户显式�
 `src/api.js` 集中封装浏览器 `fetch` 调用。组件调用语义化方法读取 Trace、统计、告警和配置，或提交插件生命周期与配置操作。查询结果进入 Workspace 局部状态，再由 computed view 和组件模板投影为界面。
 
 读取类请求经过 Rust HTTP router 和 View Projection。插件变更请求通过 daemon control socket 请求 `actraild` 执行。服务端失败隔离见 [Web Runtime](../web-runtime.md)。
+
+### 配置字段
+
+`ConfigEditor.vue` 使用 `/api/config/editable` 返回的 `fields` 与 `kinds` 构建编辑界面。返回字段集合由编译内嵌的交付选择策略统一决定，支持白名单与黑名单模式；字段计数与分组导航随响应生成，空分组不展示。前端校验值和类型使用相同键集，并按 `text`、`integer`、`boolean`、`string_array`、`toml` 选择通用控件，`toml` 使用单个 TOML 值的文本输入控件。
+
+`config/fields.js` 仅提供可选的标签、分组、单位和控件提示。没有展示提示的字段按配置点分路径展示于其他设置，调整选择策略并重新构建后可直接编辑。整数草稿和传输读取值保留十进制字符串，提交时输出精确 JSON 整数；已有领域字段继续应用百分比等展示转换。
+
+保存只提交发生修改的字段。文件原文的合并和完整配置校验由后端编辑器处理。`ConfigWorkspace.vue` 中的只读快照展示启动时实际读取的配置文件原文：普通 `init` 展示生成的完整默认配置项，`init --filter` 展示生成的筛选项，手写项随实际文件保留。Web 命令行覆盖作用于运行配置，摘要来自启动生效配置。保存或手工编辑文件后，重新启动 Web 更新快照。
 
 ## 构建与嵌入
 

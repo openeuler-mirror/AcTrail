@@ -147,7 +147,7 @@ enabled = false
 directory = "{work / 'export'}"
 
 [plugins.discovery]
-directory = "{work / 'plugins'}"
+directory = ["{work / 'plugins'}"]
 
 [plugins.startup]
 enabled = false

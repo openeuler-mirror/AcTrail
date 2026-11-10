@@ -28,10 +28,12 @@ pub fn run_from_env() -> Result<i32, String> {
         CtlCommand::Init {
             config_path,
             force,
+            filter,
             patch_paths,
             mode,
         } => {
-            match OperatorConfigInitializer::write(&config_path, mode, force, &patch_paths)? {
+            match OperatorConfigInitializer::write(&config_path, mode, force, filter, &patch_paths)?
+            {
                 OperatorConfigInitStatus::Created => {
                     println!("initialized config {}", config_path.display());
                 }

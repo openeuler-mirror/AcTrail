@@ -14,6 +14,9 @@
     ├── [x] entry.rs # 加载配置、创建客户端并执行一次命令
     ├── [x] entry/ # 默认配置与初始化文件写入
     │   ├── [x] init.rs # 合并初始化选项并生成 operator/profile 配置
+    │   ├── [x] init/ # 交付配置文档与文件写入
+    │   │   ├── [x] document.rs # 选择默认字段、合并显式预设和 patch，校验最终配置
+    │   │   └── [x] file.rs # 同目录临时写入与原子提交，保留覆盖权限和符号链接目标语义
     │   ├── [x] profile.toml # 初始化时的采集 profile 模板
     │   └── [x] complete.toml # 初始化时的完整配置模板
     ├── [x] dispatch.rs # 将 CtlCommand 路由到控制请求或本地 launch 流程

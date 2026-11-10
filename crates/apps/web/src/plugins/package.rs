@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -6,7 +7,7 @@ use config_core::daemon::PluginDiscoveryConfig;
 use plugin_system::{PluginCapability, PluginManifest, PluginPurpose, PluginRuntimeKind};
 
 pub(super) struct PluginDirectory {
-    root: PathBuf,
+    roots: Vec<PathBuf>,
     max_packages: usize,
     manifest_max_bytes: u64,
 }
@@ -26,123 +27,223 @@ pub(super) struct InstalledPackage {
     pub issue: Option<String>,
 }
 
+enum ScanCandidate {
+    Package { root: PathBuf, path: PathBuf },
+    Issue(Box<InstalledPackage>),
+}
+
+impl ScanCandidate {
+    fn root_issue(index: usize, path: &Path, issue: String) -> Self {
+        Self::Issue(Box::new(InstalledPackage::diagnostic(
+            path.to_path_buf(),
+            format!("root:{index}:{path:?}"),
+            issue,
+        )))
+    }
+
+    fn entry_issue(path: PathBuf, issue: String) -> Self {
+        let key = format!("{path:?}");
+        Self::Issue(Box::new(InstalledPackage::diagnostic(path, key, issue)))
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Package { path, .. } => path,
+            Self::Issue(package) => &package.package_path,
+        }
+    }
+
+    fn inspect(self, manifest_max_bytes: u64) -> InstalledPackage {
+        match self {
+            Self::Package { root, path } => {
+                InstalledPackage::inspect(&root, path, manifest_max_bytes)
+            }
+            Self::Issue(package) => *package,
+        }
+    }
+}
+
 impl PluginDirectory {
     pub fn new(config: &PluginDiscoveryConfig) -> Result<Self, String> {
         Ok(Self {
-            root: config.resolved_directory()?,
+            roots: config.resolved_directories()?,
             max_packages: usize::try_from(config.max_packages)
                 .map_err(|error| format!("plugins.discovery.max_packages overflow: {error}"))?,
             manifest_max_bytes: config.manifest_max_bytes,
         })
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
     }
 
     pub fn scan(&self) -> Result<Vec<InstalledPackage>, String> {
-        let entries = match fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(format!(
-                    "scan plugin directory {} failed: {error}",
-                    self.root.display()
-                ));
+        let mut seen_roots = BTreeSet::new();
+        let mut candidates = Vec::new();
+        let mut package_count = 0;
+        for (root_index, root) in self.roots.iter().enumerate() {
+            let canonical_root = match fs::canonicalize(root) {
+                Ok(root) => root,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => {
+                    candidates.push(ScanCandidate::root_issue(
+                        root_index,
+                        root,
+                        format!(
+                            "canonicalize plugin directory {} failed: {error}",
+                            root.display()
+                        ),
+                    ));
+                    continue;
+                }
+            };
+            if !seen_roots.insert(canonical_root.clone()) {
+                continue;
             }
-        };
-        let canonical_root = fs::canonicalize(&self.root).map_err(|error| {
-            format!(
-                "canonicalize plugin directory {} failed: {error}",
-                self.root.display()
-            )
-        })?;
-        let mut package_paths = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                format!(
-                    "read plugin directory entry in {} failed: {error}",
-                    self.root.display()
-                )
-            })?;
-            let file_type = entry.file_type().map_err(|error| {
-                format!(
-                    "read plugin package type {} failed: {error}",
-                    entry.path().display()
-                )
-            })?;
-            if file_type.is_dir() {
-                package_paths.push(entry.path());
+            let entries = match fs::read_dir(&canonical_root) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => {
+                    candidates.push(ScanCandidate::root_issue(
+                        root_index,
+                        &canonical_root,
+                        format!(
+                            "scan plugin directory {} failed: {error}",
+                            canonical_root.display()
+                        ),
+                    ));
+                    continue;
+                }
+            };
+            let first_candidate = candidates.len();
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        candidates.push(ScanCandidate::root_issue(
+                            root_index,
+                            &canonical_root,
+                            format!(
+                                "read plugin directory entry in {} failed: {error}",
+                                canonical_root.display()
+                            ),
+                        ));
+                        // An iterator error has no entry path or reliable progress.
+                        // Preserve this root's collected entries and scan the next root.
+                        break;
+                    }
+                };
+                let candidate = match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => ScanCandidate::Package {
+                        root: canonical_root.clone(),
+                        path: entry.path(),
+                    },
+                    Ok(_) => continue,
+                    Err(error) => ScanCandidate::entry_issue(
+                        entry.path(),
+                        format!(
+                            "read plugin package type {} failed: {error}",
+                            entry.path().display()
+                        ),
+                    ),
+                };
+                // Unknown entry types consume the same budget as package candidates.
+                package_count += 1;
+                if package_count > self.max_packages {
+                    return Err(format!(
+                        "plugin directories exceed configured maximum {} packages",
+                        self.max_packages
+                    ));
+                }
+                candidates.push(candidate);
             }
+            candidates[first_candidate..].sort_by(|left, right| left.path().cmp(right.path()));
         }
-        package_paths.sort();
-        if package_paths.len() > self.max_packages {
-            return Err(format!(
-                "plugin directory {} contains {} packages, exceeding configured maximum {}",
-                self.root.display(),
-                package_paths.len(),
-                self.max_packages
-            ));
+        let mut seen_plugin_ids = BTreeSet::new();
+        let mut packages = Vec::new();
+        for candidate in candidates {
+            let package = candidate.inspect(self.manifest_max_bytes);
+            if package
+                .plugin_id
+                .as_ref()
+                .is_some_and(|id| !seen_plugin_ids.insert(id.clone()))
+            {
+                continue;
+            }
+            packages.push(package);
         }
-        Ok(package_paths
-            .into_iter()
-            .map(|path| InstalledPackage::inspect(&canonical_root, path, self.manifest_max_bytes))
-            .collect())
+        Ok(packages)
     }
 }
 
 impl InstalledPackage {
-    fn inspect(canonical_root: &Path, package_path: PathBuf, manifest_max_bytes: u64) -> Self {
-        let key = package_path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| package_path.display().to_string());
-        let inspected = Self::inspect_valid(
-            canonical_root,
-            key.clone(),
-            package_path.clone(),
-            manifest_max_bytes,
-        );
-        match inspected {
-            Ok(package) => package,
-            Err(issue) => Self {
-                key,
-                package_path,
-                manifest_path: None,
-                plugin_config_path: None,
-                plugin_id: None,
-                purpose: None,
-                runtime: None,
-                requested_capabilities: Vec::new(),
-                automatic_host_grants: Vec::new(),
-                parameterized_host_grants: Vec::new(),
-                warnings: Vec::new(),
-                issue: Some(issue),
-            },
+    fn empty(package_path: PathBuf) -> Self {
+        Self {
+            key: String::new(),
+            package_path,
+            manifest_path: None,
+            plugin_config_path: None,
+            plugin_id: None,
+            purpose: None,
+            runtime: None,
+            requested_capabilities: Vec::new(),
+            automatic_host_grants: Vec::new(),
+            parameterized_host_grants: Vec::new(),
+            warnings: Vec::new(),
+            issue: None,
         }
     }
 
-    fn inspect_valid(
+    fn diagnostic(package_path: PathBuf, key: String, issue: String) -> Self {
+        let mut package = Self::empty(package_path);
+        package.key = key;
+        package.issue = Some(issue);
+        package
+    }
+
+    fn inspect(canonical_root: &Path, package_path: PathBuf, manifest_max_bytes: u64) -> Self {
+        let mut package = Self::empty(package_path);
+        if let Err(issue) = package.inspect_manifest(canonical_root, manifest_max_bytes) {
+            if package.key.is_empty() {
+                // A quoted, losslessly escaped path identifies this diagnostic row.
+                // Loadable keys are absolute UTF-8 paths and always start with '/'.
+                package.key = format!("{:?}", package.package_path);
+            }
+            package.issue = Some(issue);
+        }
+        package
+    }
+
+    fn inspect_manifest(
+        &mut self,
         canonical_root: &Path,
-        key: String,
-        package_path: PathBuf,
         manifest_max_bytes: u64,
-    ) -> Result<Self, String> {
-        Self::validate_key(&key)?;
-        let canonical_package = fs::canonicalize(&package_path).map_err(|error| {
+    ) -> Result<(), String> {
+        let canonical_path = fs::canonicalize(&self.package_path).map_err(|error| {
             format!(
                 "canonicalize plugin package {} failed: {error}",
-                package_path.display()
+                self.package_path.display()
             )
         })?;
-        if !canonical_package.starts_with(canonical_root) {
+        let key = canonical_path
+            .to_str()
+            .ok_or_else(|| {
+                format!(
+                    "plugin package path is not UTF-8: {}",
+                    self.package_path.display()
+                )
+            })?
+            .to_string();
+        self.package_path = canonical_path;
+        self.key = key;
+        if !self.package_path.starts_with(canonical_root) {
             return Err(format!(
                 "plugin package {} escapes configured directory {}",
-                canonical_package.display(),
+                self.package_path.display(),
                 canonical_root.display()
             ));
         }
-        let manifest_path = Self::find_manifest(&canonical_package)?;
+        let manifest_path = Self::find_manifest(&self.package_path)?;
         let metadata = fs::metadata(&manifest_path).map_err(|error| {
             format!(
                 "read plugin manifest metadata {} failed: {error}",
@@ -169,46 +270,34 @@ impl InstalledPackage {
                 manifest_path.display()
             )
         })?;
+        // Keep an identified package's priority even if its subsequent checks fail.
+        // Unreadable or unparseable manifests never acquire an inferred identity.
+        if !manifest.id().trim().is_empty() {
+            self.plugin_id = Some(manifest.id().to_string());
+        }
         let warnings = manifest.validate_loadable().map_err(|error| {
             format!(
                 "validate plugin manifest {} failed: {error}",
                 manifest_path.display()
             )
         })?;
-        Self::validate_manifest_assets(&canonical_package, &manifest)?;
+        Self::validate_manifest_assets(&self.package_path, &manifest)?;
         let plugin_config_path = Self::resolve_plugin_config(&manifest_path, &manifest)?;
         let (automatic_host_grants, parameterized_host_grants, activation_issue) =
             Self::classify_grants(&manifest);
-        Ok(Self {
-            key,
-            package_path: canonical_package,
-            manifest_path: Some(manifest_path),
-            plugin_config_path,
-            plugin_id: Some(manifest.id().to_string()),
-            purpose: Some(manifest.role()),
-            runtime: Some(manifest.runtime_kind()),
-            requested_capabilities: manifest
-                .capabilities()
-                .iter()
-                .map(|capability| capability.as_str().to_string())
-                .collect(),
-            automatic_host_grants,
-            parameterized_host_grants,
-            warnings,
-            issue: activation_issue,
-        })
-    }
-
-    fn validate_key(key: &str) -> Result<(), String> {
-        if key.is_empty()
-            || key
-                .chars()
-                .any(|character| !(character.is_ascii_alphanumeric() || ".-_".contains(character)))
-        {
-            return Err(format!(
-                "plugin package key {key:?} must contain only ASCII letters, digits, '.', '-', or '_'"
-            ));
-        }
+        self.manifest_path = Some(manifest_path);
+        self.plugin_config_path = plugin_config_path;
+        self.purpose = Some(manifest.role());
+        self.runtime = Some(manifest.runtime_kind());
+        self.requested_capabilities = manifest
+            .capabilities()
+            .iter()
+            .map(|capability| capability.as_str().to_string())
+            .collect();
+        self.automatic_host_grants = automatic_host_grants;
+        self.parameterized_host_grants = parameterized_host_grants;
+        self.warnings = warnings;
+        self.issue = activation_issue;
         Ok(())
     }
 

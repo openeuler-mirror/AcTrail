@@ -1,31 +1,23 @@
-import { editableGroups } from './fields';
-
-const catalog = editableGroups.flatMap(group => group.fields);
-const integerKeys = new Set(catalog.filter(field => field.type === 'integer').map(field => field.key));
-const percentKeys = new Set(catalog.filter(field => field.type === 'percent').map(field => field.key));
+import { ConfigFieldCatalog } from './fields';
 
 export class ConfigValues {
-  static assertCatalog(fields, t) {
-    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+  static assertCatalog(fields, kinds, t) {
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)
+      || !kinds || typeof kinds !== 'object' || Array.isArray(kinds)) {
       throw new Error(t('config.catalogMissing'));
     }
-    const keys = new Set();
-    for (const field of catalog) {
-      if (keys.has(field.key)) throw new Error(t('config.catalogDuplicate', { field: field.key }));
-      keys.add(field.key);
-    }
-    const missing = [...keys].filter(key => !Object.hasOwn(fields, key));
-    const unexpected = Object.keys(fields).filter(key => !keys.has(key));
+    const missing = Object.keys(kinds).filter(key => !Object.hasOwn(fields, key));
+    const unexpected = Object.keys(fields).filter(key => !Object.hasOwn(kinds, key));
     if (missing.length || unexpected.length) {
       throw new Error(t('config.catalogMismatch', { missing: missing.join(', '), unexpected: unexpected.join(', ') }));
     }
-    for (const field of catalog) {
-      const value = fields[field.key];
-      const valid = field.type === 'boolean' ? typeof value === 'boolean'
-        : field.type === 'tags' ? Array.isArray(value) && value.every(tag => typeof tag === 'string')
-        : field.type === 'integer' ? typeof value === 'string' && /^-?\d+$/.test(value)
-        : typeof value === 'string';
-      if (!valid) throw new Error(t('config.catalogType', { field: field.key }));
+    for (const [key, kind] of Object.entries(kinds)) {
+      const value = fields[key];
+      const valid = kind === 'boolean' ? typeof value === 'boolean'
+        : kind === 'string_array' ? Array.isArray(value) && value.every(item => typeof item === 'string')
+        : kind === 'integer' ? typeof value === 'string' && /^-?\d+$/.test(value)
+        : (kind === 'text' || kind === 'toml') && typeof value === 'string';
+      if (!valid) throw new Error(t('config.catalogType', { field: key }));
     }
   }
 
@@ -33,10 +25,12 @@ export class ConfigValues {
     return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]));
   }
 
-  static forEditing(fields) {
+  static forEditing(fields, kinds) {
     const values = this.clone(fields);
-    for (const key of percentKeys) {
-      if (values[key] !== 'disabled') values[key] = this.percent(values[key]);
+    for (const key of Object.keys(values)) {
+      if (ConfigFieldCatalog.field(key, kinds[key]).type === 'percent' && values[key] !== 'disabled') {
+        values[key] = this.percent(values[key]);
+      }
     }
     return values;
   }
@@ -51,10 +45,11 @@ export class ConfigValues {
     return fields ? Object.fromEntries(Object.entries(fields).filter(([key, value]) => !this.equal(value, baseline[key]))) : {};
   }
 
-  static serialize(fields, t) {
+  static serialize(fields, kinds, t) {
     const entries = Object.entries(fields).map(([key, value]) => {
-      if (!integerKeys.has(key)) {
-        const wireValue = percentKeys.has(key) && value !== 'disabled' ? this.fromPercent(value) : value;
+      if (kinds[key] !== 'integer') {
+        const wireValue = ConfigFieldCatalog.field(key, kinds[key]).type === 'percent' && value !== 'disabled'
+          ? this.fromPercent(value) : value;
         return `${JSON.stringify(key)}:${JSON.stringify(wireValue)}`;
       }
       if (!/^-?\d+$/.test(value)) throw new Error(t('config.invalidInteger', { field: key }));
