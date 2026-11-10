@@ -1,0 +1,21 @@
+[package]
+name = "actrail_ckpt_cxt_xiaoo"
+version.workspace = true
+rust-version.workspace = true
+edition = "2024"
+license = "MulanPSL-2.0"
+autotests = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+checkpoint = { path = "../../../../crates/contracts/checkpoint" }
+abi_stable = { version = "0.11.3", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+socket2 = "0.6"
+
+[[example]]
+name = "xiaoo_checkpoint_e2e"
+path = "tests/driver.rs"
