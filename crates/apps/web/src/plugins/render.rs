@@ -21,7 +21,7 @@ pub(crate) fn catalog_json(snapshot: &CatalogSnapshot) -> Result<String, String>
             "mode": "operator_config",
             "path": snapshot.config_path.as_ref().map(|path| path.display().to_string()),
         },
-        "directory": snapshot.directory.display().to_string(),
+        "directory": &snapshot.directory,
         "package_count": packages.len(),
         "runtime_available": snapshot.runtime_error.is_none(),
         "runtime_error": snapshot.runtime_error.as_deref(),

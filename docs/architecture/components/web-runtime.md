@@ -90,6 +90,22 @@ Web 启动读取下列环境变量，值必须为小于 `i64::MAX` 的正整数�
 
 节点查询沿 skeleton 和必要 block 导航，返回当前子项页或字符串页。单个 block 超过剩余预算时明确报错。字符串页通过 `offset` 和 `next_offset` 定位，通过 `value_bytes` 和 `returned_bytes` 显示完整长度和本页长度。单页预算不足以容纳下一个 UTF-8 字符时返回局部请求错误；至少 4 字节可容纳任意单个字符。页预算与 block 预算由服务端环境设置，客户端通过 `pointer`、`offset`、`limit` 选择节点与分页。具体表示见 [LLM Request 当前投影路径](llm-request-projection.md)。
 
+## 配置编辑
+
+`GET /api/config/editable` 和 `POST /api/config/editable` 通过配置文件编辑器操作 operator 配置。编辑入口仅接受 loopback 连接、匹配本机监听地址的 Host 和同源请求；POST 要求 `Content-Type: application/json`。
+
+可编辑字段始终来自 `crates/core/config_export_filter/allowlist.toml`，与 `actrailctl init --filter` 共用一份选择策略。`default` 默认为 `whitelist`，选择 `whitelist` 列表；取值为 `blacklist` 时，选择完整默认文档中排除 `blacklist` 后的叶子字段。数组整体选择，两份列表独立生效并各自校验。`actrailctl init` 默认导出完整配置，`default` 不改变 CLI 的筛选开关。
+
+策略随编译嵌入 binary，调整后重新构建；构建时无法读取策略文件的错误保存在 binary 中，使用编辑器时明确报错。Web 创建配置编辑器时解析策略，并使用 `OperatorConfig::default_hierarchical_template()` 校验字段路径。未知路径、同一列表内重复路径和非法模式使启动失败。选定路径保存在不可变有序集合中，配置编辑请求按集合查询。字符串数组由所属模块的 `OperatorConfig::is_string_array_field()` 提供类型依据，默认值为空数组时仍使用字符串数组控件；其他类型由默认文档识别。复杂数组、浮点数等值使用 TOML 文本控件，由所属模块校验其结构和值域。缺少默认值的可选项仍需定义导出与未设置值的编辑语义。
+
+GET 响应包含 `available`、`source`、`fields` 和 `kinds`。`fields` 是配置点分路径到字段值的映射，`kinds` 使用相同键集，取值为 `text`、`integer`、`boolean`、`string_array` 或 `toml`。整数以十进制字符串传输，保存时仍要求 JSON 整数。`toml` 的 GET 和 POST 值均为字符串，内容必须是单个 TOML 值，例如 `[]` 或 `[{ name = "example" }]`，不能包含额外字段或表声明。字段值按控件类型依次取可编码的配置原文、所属模块规范化配置及默认文档。禁用模块中所属模块未校验的异型值使用可编码的生效值或默认值，启动快照保留原文；后端未启用时省略的 SQLite 字段也能读取所属模块默认值。
+
+POST 请求为需要修改的路径和值的部分映射。编辑器检查选择策略和输入类型，在最新配置原文上逐键应用修改，通过所属模块解析校验后原子落盘。整数的符号与取值范围由所属模块校验，例如后代观测深度允许 `-1`，事件块压缩等级允许 `-7..=22`；无符号字段的负值会在所属模块解析时拒绝。未提交的隐藏配置及其值、注释和其他文档内容保留。字段或输入错误返回 400，已有配置非法返回 409，读写失败返回 500，错误只影响当前请求。保存后按既有启动机制加载新配置。
+
+`GET /api/config/current` 的 `text` 展示启动时一次读取的配置文件原文，字段范围由文件内容决定。普通 `actrailctl init` 展示生成的完整默认配置项，`init --filter` 展示生成的筛选后配置项；`--mode`、`--patch` 显式项和手写隐藏项随文档保留。Web 监听地址、请求读取超时及 storage 的命令行覆盖作用于运行配置，摘要来自启动生效配置。
+
+启动文档通过不可变共享字符串保存在 Web 上下文中。编辑保存后，快照继续展示启动值，重新启动 Web 后更新。
+
 ## 前端交付边界
 
 Vue 构建产物在编译期嵌入 `actrailweb` binary。Router 只向 `/` 和 `/assets/*` 返回已登记的静态资源；页面导航、组件状态和响应式布局位于浏览器。完整构建链路、组件树与页面布局见 [actrailweb 前端架构](web-frontend/README.md)。
@@ -99,6 +115,14 @@ Vue 构建产物在编译期嵌入 `actrailweb` binary。Router 只向 `/` 和 `
 ## 插件管理边界
 
 插件 catalog、package 展示和配置校验位于 Web 的 `plugins/` 模块。需要改变 daemon 运行状态的 load、unload 或 command 请求通过本地控制 socket 发送给 `actraild`；Web 不直接操作 daemon 的插件宿主。
+
+`plugins.discovery.directory` 是扫描目录数组，默认包含 `~/.actrail/plugins` 和 `/usr/share/actrail/plugins`。空数组关闭包发现；不存在的目录跳过。扫描前按规范化目录去重，按配置中的目录顺序扫描，各目录内按子目录路径排序。同一 `plugin_id` 只保留首次发现的包。已解析出非空 ID 的包即使后续校验失败，也保留其 ID 和错误并遮蔽后续同 ID 包；缺失、不可读或无法解析身份的 manifest 作为独立错误项展示，不推断 ID。所有候选包共用 `max_packages` 上限，被遮蔽的包和无法读取类型的条目也计入上限。根目录诊断不占包候选预算。
+
+`GET /api/plugins/catalog` 的 `directory` 返回按配置顺序排列的已解析路径字符串数组，空列表返回 `[]`。前端将该数组格式化为带引号的列表展示，路径中的逗号和空格属于路径内容。
+
+去重只维护本次扫描的 ID 集合，复用现有 manifest 解析结果，不加载插件运行时。`package_key` 使用规范化的完整包目录路径，前端将其作为不透明选择键传回；加载时重新扫描并匹配当前选中的包，被遮蔽的路径无法绕过发现优先级。同一插件 ID 已存在运行实例时，重复加载继续被拒绝。
+
+条目类型读取、单包路径解析、UTF-8 转换或 manifest 检查失败时，该条目通过 `issue` 展示错误，`activation_ready` 为 `false`。根目录访问失败以及无法定位条目的迭代错误也作为不可加载的诊断项返回；迭代失败后保留该根已收集的条目并继续后续根，每根至多一条根诊断。诊断键使用无损转义路径，根诊断另含根作用域及配置位置，避免与包错误项碰撞；该键不会作为文件路径发送给 daemon。全局候选预算超限仍返回当前请求错误，预算检查完成后才解析候选包的 manifest。
 
 插件管理失败只影响当前 HTTP 请求。Trace 查询和静态资源仍可继续提供；单个连接中的解析或渲染错误由该连接返回，不终止监听循环。
 

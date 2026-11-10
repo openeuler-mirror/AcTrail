@@ -33,6 +33,7 @@ pub enum CtlCommand {
     Init {
         config_path: PathBuf,
         force: bool,
+        filter: bool,
         patch_paths: Vec<PathBuf>,
         mode: Option<InitMode>,
     },
@@ -217,6 +218,7 @@ impl CtlCommandArgs {
             Self::Init(args) => Ok(CtlCommand::Init {
                 config_path: init_config_path(args.output_path, config_path, explicit_config)?,
                 force: args.force,
+                filter: args.filter,
                 patch_paths: args.patch_paths,
                 mode: args.mode,
             }),
@@ -353,6 +355,12 @@ struct InitArgs {
 
     #[arg(short = 'f', long = "force")]
     force: bool,
+
+    #[arg(
+        long,
+        help = "Filter defaults using the configured selection policy; explicit --mode and --patch values are retained"
+    )]
+    filter: bool,
 
     #[arg(
         long,

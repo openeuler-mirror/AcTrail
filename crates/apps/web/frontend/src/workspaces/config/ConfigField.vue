@@ -1,7 +1,7 @@
 <template>
   <div class="config-field" :class="{ 'is-modified': modified, 'is-wide': field.wide }" :data-config-key="field.key">
-    <label v-if="field.type !== 'tags'" :id="`${field.key}-label`" :for="field.key" class="config-field-label">{{ t(`config.${field.label}`) }}</label>
-    <span v-else :id="`${field.key}-label`" class="config-field-label">{{ t(`config.${field.label}`) }}</span>
+    <label v-if="field.type !== 'tags'" :id="`${field.key}-label`" :for="field.key" class="config-field-label">{{ label }}</label>
+    <span v-else :id="`${field.key}-label`" class="config-field-label">{{ label }}</span>
     <code>{{ field.key }}</code>
 
     <label v-if="field.type === 'boolean'" class="config-switch-control">
@@ -11,7 +11,7 @@
     </label>
 
     <fieldset v-else-if="field.type === 'tags'" :name="field.key" class="config-tags" :aria-labelledby="`${field.key}-label`">
-      <legend class="config-sr-only">{{ t('config.protectedTags') }}</legend>
+      <legend class="config-sr-only">{{ label }}</legend>
       <div v-for="(tag, index) in modelValue" :key="index" class="config-tag-row">
         <input :value="tag" type="text" :aria-label="t('config.tagIndex', { index: index + 1 })" @input="update(modelValue.map((value, i) => i === index ? $event.target.value : value))" />
         <button type="button" :aria-label="t('config.removeTag', { index: index + 1 })" @click="update(modelValue.filter((_, i) => i !== index))"><X :size="14" aria-hidden="true" /></button>
@@ -20,9 +20,23 @@
       <button class="config-add-tag" type="button" @click="update([...modelValue, ''])"><Plus :size="14" aria-hidden="true" />{{ t('config.addTag') }}</button>
     </fieldset>
 
+    <textarea
+      v-else-if="field.type === 'toml'"
+      :id="field.key"
+      :name="field.key"
+      :value="modelValue"
+      :aria-describedby="`${field.key}-toml-hint`"
+      class="config-toml-input"
+      rows="6"
+      spellcheck="false"
+      autocapitalize="none"
+      autocomplete="off"
+      @input="update($event.target.value)"
+    />
+
     <template v-else>
       <label v-if="isAlert" class="config-alert-toggle">
-        <input type="checkbox" :checked="modelValue !== 'disabled'" :aria-label="t('config.enableAlert', { label: t(`config.${field.label}`) })" @change="update($event.target.checked ? '' : 'disabled')" />
+        <input type="checkbox" :checked="modelValue !== 'disabled'" :aria-label="t('config.enableAlert', { label })" @change="update($event.target.checked ? '' : 'disabled')" />
         {{ modelValue === 'disabled' ? t('config.alertDisabled') : t('config.alertEnabled') }}
       </label>
       <span class="config-control" :class="{ 'has-unit': field.unit }">
@@ -50,6 +64,7 @@
         <span v-if="field.unit" class="config-control-unit" aria-hidden="true">{{ t(`config.units.${field.unit}`) }}</span>
       </span>
     </template>
+    <small v-if="field.type === 'toml'" :id="`${field.key}-toml-hint`">{{ t('config.tomlValue') }}</small>
     <small v-if="field.hint || field.unit" :id="`${field.key}-hint`">
       {{ field.hint ? t(`config.${field.hint}`) : t('config.unitHint', { unit: t(`config.units.${field.unit}`) }) }}
     </small>
@@ -65,6 +80,7 @@ import strings from '../locale';
 const props = defineProps({ field: { type: Object, required: true }, modelValue: { required: true }, modified: Boolean });
 const emit = defineEmits(['update:modelValue']);
 const { t } = useModuleLocale(strings);
+const label = computed(() => props.field.label ? t(`config.${props.field.label}`) : props.field.key);
 const isAlert = computed(() => ['percent', 'threshold'].includes(props.field.type));
 const update = value => emit('update:modelValue', value);
 
@@ -78,15 +94,16 @@ const update = value => emit('update:modelValue', value);
 .config-field > code { color: var(--ui-muted); font: 10px/1.5 var(--ui-mono); overflow-wrap: anywhere; }
 .config-field > small { color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
 .config-control { position: relative; display: flex; min-width: 0; align-items: center; margin-top: 3px; }
-.config-control input, .config-control select, .config-tag-row input {
+.config-control input, .config-control select, .config-tag-row input, .config-toml-input {
   width: 100%; min-width: 0; height: 40px; padding: 0 12px; border: 1px solid var(--ui-border-strong); border-radius: 6px;
   background: var(--ui-bg-base); color: var(--ui-text); font: 12px var(--ui-mono);
   transition: border-color var(--ui-duration-fast), box-shadow var(--ui-duration-fast);
 }
-.config-control input:hover, .config-control select:hover, .config-tag-row input:hover { border-color: var(--ui-border-hover); }
-.config-control input:focus, .config-control select:focus, .config-tag-row input:focus { outline: none; border-color: var(--ui-accent-strong); box-shadow: 0 0 0 3px var(--ui-accent-muted); }
+.config-control input:hover, .config-control select:hover, .config-tag-row input:hover, .config-toml-input:hover { border-color: var(--ui-border-hover); }
+.config-control input:focus, .config-control select:focus, .config-tag-row input:focus, .config-toml-input:focus { outline: none; border-color: var(--ui-accent-strong); box-shadow: 0 0 0 3px var(--ui-accent-muted); }
 .config-control select { appearance: none; padding-right: 34px; cursor: pointer; }
-.config-control input:disabled { background: var(--ui-bg-alt); color: var(--ui-muted); opacity: .6; cursor: not-allowed; }
+.config-control input:disabled, .config-toml-input:disabled { background: var(--ui-bg-alt); color: var(--ui-muted); opacity: .6; cursor: not-allowed; }
+.config-toml-input { min-height: 144px; height: auto; padding: 12px; line-height: 1.6; resize: vertical; tab-size: 2; }
 .config-control.has-unit input { padding-right: 70px; }
 .config-control input[type='number'] { appearance: textfield; }
 .config-control input::-webkit-inner-spin-button, .config-control input::-webkit-outer-spin-button { appearance: none; margin: 0; }

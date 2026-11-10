@@ -22,6 +22,24 @@ class PluginWebApi:
     def catalog(self) -> dict[str, Any]:
         return self._request("GET", "/api/plugins/catalog")
 
+    def package_key(
+        self, plugin_id: str, runtime: str = "wasm", *, catalog: dict[str, Any] | None = None,
+    ) -> str:
+        document = self.catalog() if catalog is None else catalog
+        packages = document.get("packages")
+        if not isinstance(packages, list):
+            raise AssertionError("plugin catalog has no packages array")
+        matches = [item for item in packages if isinstance(item, dict)
+                   and item.get("plugin_id") == plugin_id and item.get("runtime") == runtime]
+        if len(matches) != 1:
+            raise AssertionError(f"expected one ready {plugin_id} package, found {len(matches)}; select its catalog key explicitly")
+        if matches[0].get("activation_ready") is not True:
+            raise AssertionError(f"plugin package {plugin_id} is not activation-ready")
+        key = matches[0].get("package_key")
+        if not isinstance(key, str) or not key:
+            raise AssertionError("plugin catalog returned an invalid package key")
+        return key
+
     def load(
         self,
         package: str,
@@ -141,10 +159,10 @@ class PluginWebApi:
     ) -> dict[str, Any]:
         url = self._base_url + path
         if query:
-            url += "?" + urlencode(query)
+            url += "?" + urlencode(query, quote_via=quote)
         command = [
             self._curl,
-            "--fail",
+            "--fail-with-body",
             "--silent",
             "--show-error",
             "--noproxy",
@@ -177,7 +195,7 @@ class PluginWebApi:
         if completed.returncode != 0:
             raise RuntimeError(
                 f"{method} {url} failed with curl {completed.returncode}: "
-                f"{completed.stderr[-2000:]}"
+                f"{completed.stderr[-2000:]}\nresponse body:\n{completed.stdout}"
             )
         raw = completed.stdout
         try:

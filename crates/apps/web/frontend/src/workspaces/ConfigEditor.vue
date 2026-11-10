@@ -102,13 +102,15 @@ import { readEditableConfig, saveEditableConfig } from '../api';
 import { useModuleLocale } from '../locale';
 import strings from './locale';
 import ConfigField from './config/ConfigField.vue';
-import { editableGroups } from './config/fields';
+import { ConfigFieldCatalog } from './config/fields';
 import { ConfigValues } from './config/ConfigValues';
 
 const { t } = useModuleLocale(strings);
-const fieldCount = editableGroups.reduce((count, group) => count + group.fields.length, 0);
 const props = defineProps({ refreshNonce: { type: Number, default: 0 } });
 const fields = ref(null);
+const kinds = ref({});
+const editableGroups = computed(() => ConfigFieldCatalog.groups(kinds.value));
+const fieldCount = computed(() => Object.keys(kinds.value).length);
 // Last file response is the baseline for local change indicators and undo only.
 const baseline = ref(null);
 const source = ref('');
@@ -135,15 +137,17 @@ function reset() {
   return load({ preserveDraft: false });
 }
 
-function acceptFields(values) {
+function acceptFields(values, fieldKinds) {
   try {
-    ConfigValues.assertCatalog(values, t);
+    ConfigValues.assertCatalog(values, fieldKinds, t);
   } catch (err) {
     fields.value = null;
     baseline.value = null;
+    kinds.value = {};
     throw err;
   }
-  baseline.value = ConfigValues.forEditing(values);
+  kinds.value = { ...fieldKinds };
+  baseline.value = ConfigValues.forEditing(values, fieldKinds);
   fields.value = ConfigValues.clone(baseline.value);
 }
 
@@ -157,11 +161,14 @@ async function load({ preserveDraft = true, preserveError = false } = {}) {
     const result = await readEditableConfig();
     if (disposed) return;
     if (result.available) {
-      acceptFields(result.fields);
-      if (draft) Object.assign(fields.value, draft);
+      acceptFields(result.fields, result.kinds);
+      for (const [key, value] of Object.entries(draft ?? {})) {
+        if (Object.hasOwn(fields.value, key)) fields.value[key] = value;
+      }
     } else {
       fields.value = null;
       baseline.value = null;
+      kinds.value = {};
     }
     source.value = result.source?.path ?? '';
     unavailable.value = result.reason ?? '';
@@ -187,9 +194,9 @@ async function save(event) {
   let succeeded = false;
   saving.value = true;
   try {
-    const result = await saveEditableConfig(ConfigValues.serialize(changes.value, t));
+    const result = await saveEditableConfig(ConfigValues.serialize(changes.value, kinds.value, t));
     if (disposed) return;
-    acceptFields(result.fields);
+    acceptFields(result.fields, result.kinds);
     saved.value = true;
     succeeded = true;
   } catch (err) {

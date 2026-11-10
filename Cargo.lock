@@ -611,6 +611,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "config_export_filter"
+version = "0.9.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "const_panic"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -833,13 +841,16 @@ dependencies = [
  "agent_lifecycle_contract",
  "clap",
  "config_core",
+ "config_export_filter",
  "control_contract",
  "libc",
  "linux_platform",
  "model_core",
  "payload_capability",
+ "tempfile",
  "tls_payload_sync",
  "tls_probe_point_finder",
+ "toml",
  "uds_control_client",
 ]
 
@@ -3440,6 +3451,7 @@ version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
 dependencies = [
+ "indexmap",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -4216,6 +4228,7 @@ version = "0.9.0"
 dependencies = [
  "alert_contract",
  "config_core",
+ "config_export_filter",
  "control_contract",
  "flate2",
  "model_core",

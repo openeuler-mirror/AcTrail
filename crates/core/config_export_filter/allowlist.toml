@@ -1,0 +1,20 @@
+# Delivery configuration and Web editing share this selection policy.
+# Changes take effect when actrailctl and actrailweb are rebuilt.
+default = "whitelist"
+
+whitelist = [
+    "control.socket_path",
+    "control.pid_file",
+    "control.log_path",
+    "control.diagnostic_log_level",
+    "plugins.discovery.directory",
+    "storage.sqlite.path",
+    "storage.sqlite.busy_timeout_ms",
+    "web.listen_addr",
+    "payload.tls.sync_event_socket_path",
+    "payload.tls.redaction_policy",
+    "payload.stdio.redaction_policy",
+    "payload.socket.redaction_policy",
+]
+
+blacklist = []

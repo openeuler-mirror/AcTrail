@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use config_core::daemon::OperatorConfig;
-use resource_profiling::ResourceProfilingConfig;
 use serde_json::json;
 use toml_edit::{DocumentMut, Item, Value};
 
@@ -12,7 +11,7 @@ mod fields;
 #[path = "configuration/file.rs"]
 mod file;
 
-use fields::EDITABLE_FIELDS;
+use fields::ConfigFields;
 
 trait ConfigStore: Send + Sync {
     fn path(&self) -> &Path;
@@ -28,20 +27,22 @@ pub(super) enum ConfigSaveError {
 
 pub(super) struct ConfigEditor {
     store: Box<dyn ConfigStore>,
+    fields: ConfigFields,
     save_lock: Mutex<()>,
 }
 
 impl ConfigEditor {
-    pub(super) fn file(path: PathBuf) -> Self {
-        Self {
+    pub(super) fn file(path: PathBuf) -> Result<Self, String> {
+        Ok(Self {
             store: Box::new(file::FileConfigStore::new(path)),
+            fields: ConfigFields::load()?,
             save_lock: Mutex::new(()),
-        }
+        })
     }
 
     pub(super) fn read(&self) -> Result<String, ConfigSaveError> {
         self.read_document()?
-            .json(self.store.path())
+            .json(self.store.path(), &self.fields)
             .map_err(ConfigSaveError::Storage)
     }
 
@@ -56,7 +57,7 @@ impl ConfigEditor {
     }
 
     pub(super) fn save(&self, body: &[u8]) -> Result<String, ConfigSaveError> {
-        let edits = ConfigEdits::parse(body).map_err(ConfigSaveError::Invalid)?;
+        let edits = ConfigEdits::parse(body, &self.fields).map_err(ConfigSaveError::Invalid)?;
         let _guard = self
             .save_lock
             .lock()
@@ -66,7 +67,7 @@ impl ConfigEditor {
         let text = document.document.to_string();
         let validated = ConfigDocument::parse(&text).map_err(ConfigSaveError::Invalid)?;
         let response = validated
-            .json(self.store.path())
+            .json(self.store.path(), &self.fields)
             .map_err(ConfigSaveError::Storage)?;
         self.store
             .replace(&text)
@@ -78,7 +79,7 @@ impl ConfigEditor {
 struct ConfigEdits(BTreeMap<String, Value>);
 
 impl ConfigEdits {
-    fn parse(body: &[u8]) -> Result<Self, String> {
+    fn parse(body: &[u8], catalog: &ConfigFields) -> Result<Self, String> {
         let fields: BTreeMap<String, serde_json::Value> = serde_json::from_slice(body)
             .map_err(|error| format!("invalid config edits JSON: {error}"))?;
         if fields.is_empty() {
@@ -86,11 +87,9 @@ impl ConfigEdits {
         }
         let mut edits = BTreeMap::new();
         for (field, value) in fields {
-            let spec = EDITABLE_FIELDS
-                .iter()
-                .find(|spec| spec.key == field)
-                .ok_or_else(|| format!("config field {field} is read-only or unknown"))?;
-            edits.insert(field, spec.decode(&value)?);
+            let spec = catalog.spec(&field)?;
+            let value = spec.decode(&value)?;
+            edits.insert(field, value);
         }
         Ok(Self(edits))
     }
@@ -130,57 +129,33 @@ impl ConfigDocument {
         Ok(())
     }
 
-    fn json(&self, path: &Path) -> Result<String, String> {
-        let profiling = ResourceProfilingConfig::parse(&self.config.resource_profiling)?;
+    fn json(&self, path: &Path, catalog: &ConfigFields) -> Result<String, String> {
         let normalized: DocumentMut = self
             .config
             .to_hierarchical_toml()?
             .parse()
             .map_err(|error| format!("render config TOML failed: {error}"))?;
-        // Runtime configuration can omit an inactive backend's settings. Keep
-        // their defaults sourced from the same domain template used by init.
-        let defaults = if EDITABLE_FIELDS.iter().any(|field| {
-            Self::field(&self.document, field.key).is_none()
-                && Self::field(&normalized, field.key).is_none()
-        }) {
-            Some(
-                OperatorConfig::default_hierarchical_template()?
-                    .parse::<DocumentMut>()
-                    .map_err(|error| format!("render config defaults failed: {error}"))?,
-            )
-        } else {
-            None
-        };
         let mut fields = BTreeMap::new();
-        for spec in &EDITABLE_FIELDS {
+        let mut kinds = BTreeMap::new();
+        for spec in catalog.specs() {
+            let spec = spec?;
             let field = spec.key;
-            if let Some(value) = spec.encode_resource(&profiling) {
-                fields.insert(field, value);
-                continue;
-            }
-            let item = Self::field(&self.document, field)
-                .or_else(|| Self::field(&normalized, field))
-                .or_else(|| {
-                    defaults
-                        .as_ref()
-                        .and_then(|defaults| Self::field(defaults, field))
-                })
+            kinds.insert(field, spec.kind());
+            // Owners may leave inactive fields unvalidated. Prefer encodable source
+            // values, then the owner's effective or default representation.
+            let encode = |item: Option<&Item>| item.and_then(|item| spec.encode(item));
+            let value = encode(ConfigFields::item(&self.document, field))
+                .or_else(|| encode(ConfigFields::item(&normalized, field)))
+                .or_else(|| encode(catalog.default(field)))
                 .ok_or_else(|| format!("missing editable config field {field}"))?;
-            fields.insert(field, spec.encode(item)?);
+            fields.insert(field, value);
         }
         Ok(json!({
             "available": true,
             "source": { "mode": "operator_config", "path": path.display().to_string() },
             "fields": fields,
+            "kinds": kinds,
         })
         .to_string())
-    }
-
-    fn field<'a>(document: &'a DocumentMut, field: &str) -> Option<&'a Item> {
-        let mut item = document.as_item();
-        for part in field.split('.') {
-            item = item.get(part)?;
-        }
-        Some(item)
     }
 }

@@ -195,20 +195,22 @@ receiver 打印类似 `http://127.0.0.1:PORT/v1/traces` 的临时 endpoint；
 ```bash
 INSTANCE=manual.otel-http
 
-jq -e '
-  .packages[]
-  | select(
-      .package_key == "otel-http"
-      and .plugin_id == "otel-http"
+PACKAGE_QUERY="$(
+  jq -er '
+    [.packages[] | select(
+      .plugin_id == "otel-http"
       and .runtime == "builtin"
       and .activation_ready == true
-    )
-' "$WORK/catalog.json"
+    )]
+    | if length == 1 then .[0].package_key | @uri
+      else error("expected one ready otel-http package") end
+  ' "$WORK/catalog.json"
+)"
 
 curl -fsS -X POST \
   -H 'Content-Type: application/json' \
   --data '{"instance_id":"manual.otel-http"}' \
-  "$WEB_BASE/api/plugins/catalog/load?package=otel-http" \
+  "$WEB_BASE/api/plugins/catalog/load?package=$PACKAGE_QUERY" \
   > "$WORK/plugin-load.json"
 
 jq -e '

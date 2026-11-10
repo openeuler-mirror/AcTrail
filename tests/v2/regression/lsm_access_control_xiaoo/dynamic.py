@@ -70,7 +70,7 @@ class DynamicPolicies(PluginTestEnvironment):
         ):
             owner = self.owner(domain)
             response = self.api.load(
-                f"{domain}-policy-dynamic", owner,
+                self.api.package_key(owner), owner,
                 {f"{domain}_policy_rules_apply": [
                     {"decision": decision, grant: selector} for decision in ("allow", "deny", "gray")
                 ]},
@@ -147,7 +147,7 @@ class DynamicPolicies(PluginTestEnvironment):
         owner = self.owner("network")
         peer = "wasm.network-policy-peer"
         original = self._current_config("network")
-        loaded = self.api.load("network-policy-peer", peer, {
+        loaded = self.api.load(self.api.package_key(peer), peer, {
             "network_policy_rules_apply": [
                 {"decision": decision, "remote_scope": "127.0.0.2:*"}
                 for decision in ("allow", "deny")

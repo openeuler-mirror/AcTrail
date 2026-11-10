@@ -132,7 +132,7 @@ const networkPolicyScopes = ref([]);
 const envReadText = ref('');
 const showValidation = ref(false);
 
-const titleId = computed(() => `plugin-load-title-${props.plugin.package_key}`);
+const titleId = computed(() => `plugin-load-title-${encodeURIComponent(props.plugin.package_key)}`);
 const needsFilePolicy = computed(() => props.plugin.parameterized_host_grants
   ?.includes('file-policy.rules.apply'));
 const needsCommandPolicy = computed(() => props.plugin.parameterized_host_grants

@@ -99,6 +99,7 @@ ssh -L 18080:127.0.0.1:18080 root@192.0.2.10
 - Linux 主机支持 eBPF 和 seccomp user notification；
 - 使用 root，或具备安装 seccomp listener、加载 eBPF 等所需的等价权限；
 - 已安装 Rust 1.90 或更高版本、Node.js 18 或更高版本及仓库构建依赖；
+- 已安装 curl、jq，用于执行 REST 等价命令与解析插件 catalog；
 - Xiaoo 已安装并完成模型提供方配置，能真实响应一次 CLI 请求并使用 Bash tool；
 - `/usr/bin/bash` 存在且可执行；如果现场 Bash 是其他绝对路径，必须同步替换本文所有规则、dry-run 和 prompt 中的路径；
 - 仓库位于运行主机的本地磁盘；
@@ -407,8 +408,21 @@ command-policy.rules.apply:kind=deny,path=/usr/bin/bash
 加载操作的 REST 等价命令如下。Web 已加载成功后不要重复执行 POST；此命令用于无浏览器彩排或排障：
 
 ```bash
+COMMAND_PACKAGE_QUERY="$(
+  curl --noproxy '*' -fsS "$ACTRAIL_WEB/api/plugins/catalog" |
+    jq -er '
+      [.packages[] | select(
+        .plugin_id == "wasm.command-policy-dynamic"
+        and .runtime == "wasm"
+        and .activation_ready == true
+      )]
+      | if length == 1 then .[0].package_key | @uri
+        else error("expected one ready wasm.command-policy-dynamic package") end
+    '
+)"
+
 curl --noproxy '*' -sS -X POST \
-  "$ACTRAIL_WEB/api/plugins/catalog/load?package=command-policy-dynamic" \
+  "$ACTRAIL_WEB/api/plugins/catalog/load?package=$COMMAND_PACKAGE_QUERY" \
   -H 'Content-Type: application/json' \
   --data "{\"instance_id\":\"$COMMAND_PLUGIN\",\"grants\":{\"command_policy_rules_apply\":[{\"decision\":\"deny\",\"path_scope\":\"$BASH_EXECUTABLE\"}]}}"
 ```

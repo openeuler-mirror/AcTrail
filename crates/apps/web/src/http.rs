@@ -99,6 +99,7 @@ pub fn serve_listener(
         trace_list: trace_list::TraceListLimits::load()?,
         operator_config_path: None,
         operator_config: None,
+        operator_config_text: None,
         config_editor: None,
     };
     serve_listener_context(listener, context, budget)
@@ -120,9 +121,12 @@ fn serve_listener_with_config(
         trace_list: trace_list::TraceListLimits::load()?,
         operator_config_path: config.operator_config_path.clone(),
         operator_config: config.operator_config,
+        operator_config_text: config.operator_config_text,
         config_editor: config
             .operator_config_path
-            .map(|path| Arc::new(ConfigEditor::file(path))),
+            .map(ConfigEditor::file)
+            .transpose()?
+            .map(Arc::new),
     };
     serve_listener_context(listener, context, budget)
 }
@@ -160,6 +164,7 @@ struct WebContext {
     trace_list: trace_list::TraceListLimits,
     operator_config_path: Option<std::path::PathBuf>,
     operator_config: Option<OperatorConfig>,
+    operator_config_text: Option<Arc<str>>,
     config_editor: Option<Arc<ConfigEditor>>,
 }
 
@@ -410,6 +415,7 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         "/api/config/current" => view::current_config_json(
             context.operator_config_path.as_deref(),
             context.operator_config.as_ref(),
+            context.operator_config_text.as_deref(),
         )
         .map(Response::json),
         "/api/plugins/enabled" => view::plugin_enablement_json(

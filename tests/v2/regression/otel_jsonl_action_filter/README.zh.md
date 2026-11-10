@@ -66,7 +66,7 @@ BIN="$REPO/target/release"
 mkdir -p "$WORK"
 cat > "$WORK/actraild.patch.toml" <<EOF
 [plugins.discovery]
-directory = "$REPO/examples/plugins/builtin"
+directory = ["$REPO/examples/plugins/builtin"]
 
 [file_observation.collection.read]
 observed = true
@@ -126,15 +126,23 @@ sudo -E "$REPO/target/release/actrailweb" \
 WEB_BASE=http://127.0.0.1:18080
 INSTANCE=manual.otel-jsonl
 
-curl -fsS "$WEB_BASE/api/plugins/catalog" |
-  jq '.packages[]
-      | select(.package_key == "otel-jsonl")
-      | {package_key, plugin_id, runtime, activation_ready, issue}'
+curl -fsS "$WEB_BASE/api/plugins/catalog" > "$WORK/catalog.json"
+PACKAGE_QUERY="$(
+  jq -er '
+    [.packages[] | select(
+      .plugin_id == "otel-jsonl"
+      and .runtime == "builtin"
+      and .activation_ready == true
+    )]
+    | if length == 1 then .[0].package_key | @uri
+      else error("expected one ready otel-jsonl package") end
+  ' "$WORK/catalog.json"
+)"
 
 curl -fsS -X POST \
   -H 'Content-Type: application/json' \
   --data '{"instance_id":"manual.otel-jsonl"}' \
-  "$WEB_BASE/api/plugins/catalog/load?package=otel-jsonl" |
+  "$WEB_BASE/api/plugins/catalog/load?package=$PACKAGE_QUERY" |
   jq '.plugin | {instance_id, plugin_id, runtime, state}'
 ```
 

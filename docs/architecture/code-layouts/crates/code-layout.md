@@ -24,6 +24,7 @@
 │   │   └── [x] src/ # 按运行角色解析配置、补全默认值并校验
 │   │       └── [x] daemon/ # daemon 启动与运行参数
 │   │           └── [x] operator/ # 运维者配置；组合各领域配置组
+│   ├── [x] config_export_filter/ # 组合所属模块模板与交付选择策略，供 CLI 导出和 Web 编辑共用
 │   ├── [x] model/ # 通用身份与领域值
 │   │   └── [x] src/ # 跨领域共享的身份、事件与查询值类型
 │   ├── [x] process_identity/ # 为进程建立稳定身份，关联不同 PID 坐标，避免 PID 复用混淆观测

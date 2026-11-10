@@ -4,6 +4,7 @@
 [x] crates/core/ # 领域状态与运行协调；应用组合具体采集器、存储和传输端口。
 ├── [ ] checkpoint/ # 通过模块 factory 按配置加载、组合统一 ABI backend；内部后端类型保持私有。
 ├── [x] config/ # 组合 operator 配置，生成默认文档并校验采集能力及模块配置。
+├── [x] config_export_filter/ # 基于所属模块模板校验交付选择策略，为 CLI 导出与 Web 编辑提供统一字段集合。
 ├── [x] model/ # 定义事件、trace、membership、能力、诊断和载荷的共享领域值。
 ├── [x] process_identity/ # 拥有稳定进程身份及带代际的坐标索引，识别 PID 复用和身份冲突。
 ├── [x] trace_runtime/ # 拥有活跃 trace、membership、所有者及采集能力协商结果。

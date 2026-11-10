@@ -19,6 +19,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT))
+
+from tests.v2.common.plugin_web_api import PluginWebApi  # noqa: E402
+
 DEFAULT_RUN_DIR = ROOT / "temp/file-leakage-plugin-e2e"
 TRACE_RE = re.compile(r"trace trace-(\d+) entered Active")
 PLUGIN_INSTANCE = "actrail.file-leakage"
@@ -55,6 +59,7 @@ class FileLeakageE2E:
         )
         self.web_port = available_loopback_port()
         self.base_url = f"http://127.0.0.1:{self.web_port}"
+        self.plugin_api = PluginWebApi(self.base_url, timeout_seconds=10)
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.daemon: subprocess.Popen[str] | None = None
         self.web: subprocess.Popen[str] | None = None
@@ -187,7 +192,7 @@ payload_bytes_enabled = false
 payload_text_enabled = false
 
 [plugins.discovery]
-directory = {quote(str(self.plugin_root))}
+directory = [{quote(str(self.plugin_root))}]
 max_packages = 8
 manifest_max_bytes = 262144
 
@@ -293,24 +298,25 @@ enabled = false
 
         self.install_package(self.package_dir)
         installed = self.get_json("/api/plugins/catalog")
-        self.require_catalog(installed, {"file-leakage"})
+        package_key = self.plugin_api.package_key(PLUGIN_INSTANCE, catalog=installed)
+        self.require_catalog(installed, {package_key})
         package = installed["packages"][0]
         if not package.get("activation_ready") or package.get("loaded_instances") != []:
             raise RuntimeError(f"installed plugin is not a loadable, unloaded package: {package}")
 
         self.install_package(self.transient_package_dir)
         added = self.get_json("/api/plugins/catalog")
-        self.require_catalog(added, {"file-leakage", "file-leakage-transient"})
+        self.require_catalog(added, {package_key})
         shutil.rmtree(self.transient_package_dir)
         removed = self.get_json("/api/plugins/catalog")
-        self.require_catalog(removed, {"file-leakage"})
+        self.require_catalog(removed, {package_key})
 
-        loaded = self.post_json("/api/plugins/catalog/load?package=file-leakage")
+        loaded = self.plugin_api.load(package_key, PLUGIN_INSTANCE)
         status = loaded.get("plugin", {})
         if status.get("instance_id") != PLUGIN_INSTANCE or status.get("state") != "active":
             raise RuntimeError(f"Web did not load the discovered plugin: {loaded}")
         active = self.get_json("/api/plugins/catalog")
-        self.require_catalog(active, {"file-leakage"})
+        self.require_catalog(active, {package_key})
         package = active["packages"][0]
         if package.get("loaded_instances") != [PLUGIN_INSTANCE]:
             raise RuntimeError(f"catalog did not join the loaded instance: {package}")
@@ -351,7 +357,7 @@ enabled = false
     def require_catalog(self, catalog: dict, expected_keys: set[str]) -> None:
         if not catalog.get("available"):
             raise RuntimeError(f"plugin catalog is unavailable: {catalog}")
-        if Path(catalog.get("directory", "")) != self.plugin_root:
+        if catalog.get("directory") != [str(self.plugin_root)]:
             raise RuntimeError(f"catalog scanned the wrong directory: {catalog}")
         actual_keys = {package["package_key"] for package in catalog.get("packages", [])}
         if actual_keys != expected_keys:

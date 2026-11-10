@@ -8,6 +8,7 @@ license = "MulanPSL-2.0"
 agent_host = { path = "../../adapters/agent_host" }
 clap = { version = "4.6", features = ["derive"] }
 config_core = { path = "../../core/config" }
+config_export_filter = { path = "../../core/config_export_filter" }
 control_contract = { path = "../../contracts/control_plane" }
 agent_lifecycle_contract = { path = "../../contracts/agent_lifecycle" }
 libc = "0.2"
@@ -16,4 +17,6 @@ model_core = { path = "../../core/model" }
 payload_capability = { path = "../../contracts/payload/capability" }
 tls_payload_sync = { path = "../../core/tls_payload_sync" }
 tls_probe_point_finder = { path = "../../tools/tls_probe_point_finder" }
+tempfile = "3"
+toml = "0.8"
 uds_control_client = { path = "../../adapters/control/uds/client" }

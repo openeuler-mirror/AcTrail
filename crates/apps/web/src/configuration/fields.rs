@@ -1,75 +1,100 @@
+use config_core::daemon::OperatorConfig;
+use config_export_filter::ConfigExportFilter;
 use serde_json::{Value as JsonValue, json};
-use toml_edit::{Array, Item, Value};
+use toml_edit::{Array, DocumentMut, Item, Value};
 
-use FieldType::{Boolean, Integer, StringArray, Text};
+use FieldType::{Boolean, Integer, StringArray, Text, Toml};
 
-pub(super) const EDITABLE_FIELDS: [ConfigField; 40] = [
-    ConfigField::new("storage.retention.enabled", Boolean),
-    ConfigField::new("storage.retention.max_trace_age", Text),
-    ConfigField::new("storage.retention.protected_tags", StringArray),
-    ConfigField::new("payload.tls.redaction_policy", Text),
-    ConfigField::new("payload.stdio.redaction_policy", Text),
-    ConfigField::new("payload.socket.redaction_policy", Text),
-    ConfigField::new("payload.tls.enabled", Boolean),
-    ConfigField::new("payload.stdio.enabled", Boolean),
-    ConfigField::new("payload.socket.enabled", Boolean),
-    ConfigField::new("payload.mcp.enabled", Boolean),
-    ConfigField::new("payload.stdio.capture_stdin", Boolean),
-    ConfigField::new("payload.stdio.capture_stdout", Boolean),
-    ConfigField::new("payload.stdio.capture_stderr", Boolean),
-    ConfigField::new("payload.stdio.stdin_storage_mode", Text),
-    ConfigField::new("payload.stdio.stdout_storage_mode", Text),
-    ConfigField::new("payload.stdio.stderr_storage_mode", Text),
-    ConfigField::new("payload.tls.retention_max_bytes_per_trace", Integer),
-    ConfigField::new("payload.stdio.retention_max_bytes_per_trace", Integer),
-    ConfigField::new("payload.socket.retention_max_bytes_per_trace", Integer),
-    ConfigField::new("resource_profiling.enabled", Boolean),
-    ConfigField::new("resource_profiling.collection.host.interval_ms", Integer),
-    ConfigField::new(
-        "resource_profiling.collection.workload.interval_ms",
-        Integer,
-    ),
-    ConfigField::new("resource_profiling.alerts.cpu_alert_percent_millis", Text),
-    ConfigField::new("resource_profiling.alerts.memory_alert_current_bytes", Text),
-    ConfigField::new("resource_profiling.alerts.memory_alert_rss_kb", Text),
-    ConfigField::new(
-        "resource_profiling.storage.database.sqlite.retention.enabled",
-        Boolean,
-    ),
-    ConfigField::new(
-        "resource_profiling.storage.database.sqlite.retention.max_age_seconds",
-        Integer,
-    ),
-    ConfigField::new("idle_detection.enabled", Boolean),
-    ConfigField::new("idle_detection.threshold_secs", Text),
-    ConfigField::new("export.snapshot.payload_bytes_enabled", Boolean),
-    ConfigField::new("export.snapshot.payload_text_enabled", Boolean),
-    ConfigField::new("control.diagnostic_log_level", Text),
-    ConfigField::new("control.socket_path", Text),
-    ConfigField::new("control.pid_file", Text),
-    ConfigField::new("control.log_path", Text),
-    ConfigField::new("payload.tls.sync_event_socket_path", Text),
-    ConfigField::new("plugins.discovery.directory", Text),
-    ConfigField::new("web.listen_addr", Text),
-    ConfigField::new("storage.sqlite.path", Text),
-    ConfigField::new("storage.sqlite.busy_timeout_ms", Integer),
-];
+pub(super) struct ConfigFields {
+    filter: ConfigExportFilter,
+    defaults: DocumentMut,
+}
+
+impl ConfigFields {
+    pub(super) fn load() -> Result<Self, String> {
+        let template = OperatorConfig::default_hierarchical_template()?;
+        let value: toml::Value = template
+            .parse()
+            .map_err(|error| format!("parse config defaults failed: {error}"))?;
+        let filter = ConfigExportFilter::bundled(&value)?;
+        let defaults = toml_edit::ser::to_document(&filter.project(&value)?)
+            .map_err(|error| format!("construct editable config defaults failed: {error}"))?;
+        let fields = Self { filter, defaults };
+        for spec in fields.specs() {
+            spec?;
+        }
+        Ok(fields)
+    }
+
+    pub(super) fn specs(&self) -> impl Iterator<Item = Result<ConfigField<'_>, String>> {
+        self.filter.paths().map(|key| self.spec(key))
+    }
+
+    pub(super) fn spec<'a>(&'a self, key: &'a str) -> Result<ConfigField<'a>, String> {
+        if !self.filter.allows(key) {
+            return Err(format!("config field {key} is read-only or unknown"));
+        }
+        let item = self
+            .default(key)
+            .ok_or_else(|| format!("editable config field {key} has no owner default value"))?;
+        ConfigField::from_default(key, item)
+    }
+
+    pub(super) fn default(&self, key: &str) -> Option<&Item> {
+        Self::item(&self.defaults, key)
+    }
+
+    pub(super) fn item<'a>(document: &'a DocumentMut, key: &str) -> Option<&'a Item> {
+        key.split('.')
+            .try_fold(document.as_item(), |item, part| item.get(part))
+    }
+}
 
 enum FieldType {
     Text,
     Integer,
     Boolean,
     StringArray,
+    Toml,
 }
 
-pub(super) struct ConfigField {
-    pub(super) key: &'static str,
+pub(super) struct ConfigField<'a> {
+    pub(super) key: &'a str,
     kind: FieldType,
 }
 
-impl ConfigField {
-    const fn new(key: &'static str, kind: FieldType) -> Self {
-        Self { key, kind }
+impl<'a> ConfigField<'a> {
+    fn from_default(key: &'a str, item: &Item) -> Result<Self, String> {
+        let kind = if item.as_str().is_some() {
+            Text
+        } else if item.as_integer().is_some() {
+            Integer
+        } else if item.as_bool().is_some() {
+            Boolean
+        } else if item.as_array().is_some_and(|array| {
+            (OperatorConfig::is_string_array_field(key) || !array.is_empty())
+                && array.iter().all(|value| value.as_str().is_some())
+        }) {
+            StringArray
+        } else if item.is_value() || item.is_array_of_tables() {
+            Toml
+        } else {
+            // TODO: define export/edit semantics for absent optional values.
+            return Err(format!(
+                "editable config field {key} requires a text, integer, boolean or typed string-array owner default"
+            ));
+        };
+        Ok(Self { key, kind })
+    }
+
+    pub(super) fn kind(&self) -> &'static str {
+        match self.kind {
+            Text => "text",
+            Integer => "integer",
+            Boolean => "boolean",
+            StringArray => "string_array",
+            Toml => "toml",
+        }
     }
 
     pub(super) fn decode(&self, value: &JsonValue) -> Result<Value, String> {
@@ -84,10 +109,10 @@ impl ConfigField {
                 .map(Value::from)
                 .ok_or_else(|| invalid("a boolean")),
             Integer => {
+                // TOML integers are signed. The owning configuration module validates
+                // signedness and range when ConfigDocument::parse checks the edits;
+                // valid settings include -1 depths and negative compression levels.
                 let integer = value.as_i64().ok_or_else(|| invalid("a TOML integer"))?;
-                if integer < 0 {
-                    return Err(invalid("a nonnegative TOML integer"));
-                }
                 // The inactive SQLite backend is omitted by domain parsing.
                 if self.key == "storage.sqlite.busy_timeout_ms" && integer <= 0 {
                     return Err(invalid("a positive TOML integer"));
@@ -108,11 +133,17 @@ impl ConfigField {
                 }
                 Ok(Value::Array(array))
             }
+            Toml => value
+                .as_str()
+                .ok_or_else(|| invalid("a TOML value string"))?
+                .trim()
+                .parse::<Value>()
+                .map_err(|error| format!("invalid {} TOML value: {error}", self.key)),
         }
     }
 
-    pub(super) fn encode(&self, item: &Item) -> Result<JsonValue, String> {
-        let value = match self.kind {
+    pub(super) fn encode(&self, item: &Item) -> Option<JsonValue> {
+        match self.kind {
             Text => item.as_str().map(|value| json!(value)),
             // Decimal text keeps every TOML i64 exact in the browser. POST
             // still requires a JSON integer and preserves the file's type.
@@ -125,53 +156,11 @@ impl ConfigField {
                     .collect::<Option<Vec<_>>>()
                     .map(|values| json!(values))
             }),
-        };
-        value.ok_or_else(|| format!("invalid editable config field {}", self.key))
-    }
-
-    pub(super) fn encode_resource(
-        &self,
-        config: &resource_profiling::ResourceProfilingConfig,
-    ) -> Option<JsonValue> {
-        let threshold = |value: Option<u64>| {
-            json!(
-                value
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "disabled".into())
-            )
-        };
-        let retention = || {
-            config
-                .storage
-                .database
-                .as_ref()
-                .map(|database| database.sqlite.retention.clone())
-                .unwrap_or_default()
-        };
-        Some(match self.key {
-            "resource_profiling.enabled" => json!(config.enabled),
-            "resource_profiling.collection.host.interval_ms" => {
-                json!(config.collection.host.interval_ms.to_string())
-            }
-            "resource_profiling.collection.workload.interval_ms" => {
-                json!(config.collection.workload.interval_ms.to_string())
-            }
-            "resource_profiling.alerts.cpu_alert_percent_millis" => {
-                threshold(config.alerts.cpu_alert_percent_millis)
-            }
-            "resource_profiling.alerts.memory_alert_current_bytes" => {
-                threshold(config.alerts.memory_alert_current_bytes)
-            }
-            "resource_profiling.alerts.memory_alert_rss_kb" => {
-                threshold(config.alerts.memory_alert_rss_kb)
-            }
-            "resource_profiling.storage.database.sqlite.retention.enabled" => {
-                json!(retention().enabled)
-            }
-            "resource_profiling.storage.database.sqlite.retention.max_age_seconds" => {
-                json!(retention().max_age_seconds.to_string())
-            }
-            _ => return None,
-        })
+            Toml => item
+                .clone()
+                .into_value()
+                .ok()
+                .map(|value| json!(value.to_string().trim())),
+        }
     }
 }

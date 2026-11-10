@@ -28,7 +28,8 @@ use crate::provider_rules::ProviderRuleSetConfig;
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
 pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
-pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORY: &str = "~/.actrail/plugins";
+pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES: [&str; 2] =
+    ["~/.actrail/plugins", "/usr/share/actrail/plugins"];
 pub const DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES: u32 = 128;
 pub const DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES: u64 = 262_144;
 pub const DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY: u32 = 1024;
@@ -174,7 +175,7 @@ pub struct SandboxAlertsConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginDiscoveryConfig {
-    pub directory: PathBuf,
+    pub directory: Vec<PathBuf>,
     pub max_packages: u32,
     pub manifest_max_bytes: u64,
 }
@@ -197,42 +198,43 @@ impl Default for PluginAlertRuntimeConfig {
 }
 
 impl PluginDiscoveryConfig {
-    pub fn resolved_directory(&self) -> Result<PathBuf, String> {
-        if self.directory.is_absolute() {
-            return Ok(self.directory.clone());
-        }
-        let raw = self.directory.to_str().ok_or_else(|| {
-            format!(
-                "plugins.discovery.directory is not UTF-8: {}",
-                self.directory.display()
-            )
-        })?;
-        let suffix = if raw == "~" {
-            ""
-        } else if let Some(suffix) = raw.strip_prefix("~/") {
-            suffix
-        } else {
-            return Err(format!(
-                "plugins.discovery.directory must be absolute or start with ~/: {raw}"
-            ));
-        };
-        let home = std::env::var_os("HOME")
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "plugins.discovery.directory uses ~/ but HOME is not available".to_string()
-            })?;
-        let home = PathBuf::from(home);
-        if !home.is_absolute() {
-            return Err(format!(
-                "HOME must be absolute to resolve plugins.discovery.directory: {}",
-                home.display()
-            ));
-        }
-        Ok(if suffix.is_empty() {
-            home
-        } else {
-            home.join(suffix)
-        })
+    pub fn resolved_directories(&self) -> Result<Vec<PathBuf>, String> {
+        self.directory
+            .iter()
+            .map(|directory| {
+                if directory.is_absolute() {
+                    return Ok(directory.clone());
+                }
+                let raw = directory.to_str().ok_or_else(|| {
+                    format!(
+                        "plugins.discovery.directory entry is not UTF-8: {}",
+                        directory.display()
+                    )
+                })?;
+                let suffix = raw.strip_prefix("~/").or_else(|| (raw == "~").then_some("")).ok_or_else(|| {
+                    format!(
+                        "plugins.discovery.directory entries must be absolute, ~, or start with ~/: {raw}"
+                    )
+                })?;
+                let home = std::env::var_os("HOME")
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        "plugins.discovery.directory uses ~ but HOME is not available".to_string()
+                    })?;
+                let home = PathBuf::from(home);
+                if !home.is_absolute() {
+                    return Err(format!(
+                        "HOME must be absolute to resolve plugins.discovery.directory: {}",
+                        home.display()
+                    ));
+                }
+                Ok(if suffix.is_empty() {
+                    home
+                } else {
+                    home.join(suffix)
+                })
+            })
+            .collect()
     }
 }
 
@@ -313,6 +315,27 @@ pub fn launch_seccomp_requirements(
 }
 
 impl OperatorConfig {
+    /// Reports string element types for directly addressable operator configuration arrays.
+    /// Callers apply their field selection policy and full configuration validation separately.
+    pub fn is_string_array_field(path: &str) -> bool {
+        matches!(
+            path,
+            "capture.capabilities"
+                | "capture.opportunistic_capabilities"
+                | "capture.disabled_capabilities"
+                | "agent_invocation.commands"
+                | "agent_invocation.tool_names"
+                | "plugins.discovery.directory"
+                | "storage.retention.protected_tags"
+                | "payload.tls.seccomp_syscalls"
+                | "payload.socket.seccomp_syscalls"
+                | "process_seccomp.syscalls"
+                | "network_control.syscalls"
+                | "file_observation.tty.paths"
+                | "file_observation.tty.operations"
+        )
+    }
+
     /// The seccomp-notify capabilities this config asks a launch to install.
     /// Delegates to [`launch_seccomp_requirements`] so ctl and the daemon
     /// derive identical requirements from one place.
