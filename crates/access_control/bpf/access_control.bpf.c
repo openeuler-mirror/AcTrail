@@ -1,3 +1,4 @@
+/* Governance hooks share task scope; exec enrollment is independent of policy. */
 #include "policy.h"
 #include "directory.h"
 
@@ -62,6 +63,17 @@ int ac_path_rmdir(__u64 *ctx) {
     int previous = (int)ctx[2];
     if (previous) return previous;
     return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 3);
+}
+
+SEC("lsm/bprm_check_security")
+int ac_bprm_scope(__u64 *ctx) {
+    int previous = (int)ctx[1];
+    if (previous) return previous;
+    /* Enroll before sched_process_exec consumes the pending launch binding.
+     * A positive lookup means success, while LSM permits only a zero return. */
+    __u64 trace = 0;
+    int scoped = ac_current_trace(&trace);
+    return scoped < 0 ? scoped : 0;
 }
 
 SEC("lsm/bprm_check_security")

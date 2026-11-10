@@ -26,8 +26,8 @@
     │   │       ├── [x] build # 校验配置并构建宿主服务依赖。
     │   │       ├── [x] drain_live_events # 推进采集事件与后台服务。
     │   │       └── [x] shutdown # 驱动服务关闭与最终数据排空。
-    │   ├── [x] profiles.rs # 维护采集 profile 和仅适用于 launch 的 profile 集合。
-    │   │   └── [x] struct DaemonProfileRegistry # 持有按名称索引的 profile，提供插入与查询。
+    │   ├── [x] profiles.rs # 维护采集及 launch profiles，并提供配置实际启用的需求视图；注册候选与启用需求分别表达。
+    │   │   └── [x] struct DaemonProfileRegistry # 按名称查询 profile，供启动提取配置需求与 launch 解析同一配置。
     │   ├── [x] ebpf_resolve.rs # 解析 eBPF 采集器部署位置与可用能力。
     │   │   └── [x] struct EbpfResolution # 承载 eBPF 启动解析结果。
     │   └── [x] host_id.rs # 获取宿主身份，供 trace 和存储记录关联。

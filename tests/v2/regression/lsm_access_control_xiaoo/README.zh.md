@@ -54,6 +54,10 @@ python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
 
 TODO：增加内核 map 发布故障注入和进程暂停恢复场景。
 
+启动复用验收使用 `LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_REUSE=1`，通过 `LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm,fanotify_seccomp` 比较有、无 LSM 的配置。每组默认刷新配置并启动三次 daemon，每次运行两次真实 Xiaoo，核对 BPF program/map/link ID 不变、一次准备及加载日志，并验证退出后程序释放。`LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_SAMPLES` 可调整采样次数；`LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_BASELINE=1` 用于不提供加载计数日志的基线二进制。输出 `STARTUP_REUSE_EVIDENCE` 包含原始采样；`start_ms` 是 start 命令完成耗时，后续另行确认 RPC 可用。
+
+`LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_BOUNDARIES=1` 单独验证无 BPF 需求、移除 BPF 权限后的失败缓存、重复请求拒绝、恢复权限后重启、真实 Xiaoo attach 复用、仅 TLS 的 BPF 配置双向明文采集，以及强制 LSM 初始化失败阻止启动。该场景额外需要 `setpriv`、`bpftool` 和 `openssl`。启动场景开关应单独使用。
+
 失败时在清理前将 daemon 日志尾部写入测试输出；`LSM_ACCESS_CONTROL_XIAOO_E2E_DIAGNOSTIC_BYTES` 控制输出上限（默认 65536 字节）。
 
 同一 WASM 动态策略在 seccomp 与 LSM 后端下的访问性能对照见 [性能实验](performance/README.zh.md)。该实验显式运行，从刷新配置启动真实 Xiaoo，单独统计规则发布与访问成本。

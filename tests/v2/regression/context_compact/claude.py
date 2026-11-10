@@ -1,3 +1,5 @@
+"""Drive a real Claude Code session through native context compaction."""
+
 from __future__ import annotations
 
 import errno
@@ -29,7 +31,7 @@ class ClaudeSessionDriver:
     _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
     _TITLE_PATTERN = re.compile(r"\x1b\](?:0|2);([^\x07\x1b]*)(?:\x07|\x1b\\)")
     _CSI_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-    _TRUST_PATTERN = re.compile(r"Yes,\s*I\s*trust\s*this\s*folder")
+    _TRUST_PATTERN = re.compile(r"1\.\s*Yes,\s*I\s*trust\s*this\s*folder")
 
     def __init__(
         self, config: ContextCompactConfig, runtime: ActrailRuntime,
@@ -100,9 +102,10 @@ class ClaudeSessionDriver:
             if len(trace_ids) > 1:
                 raise RuntimeError(f"Claude launch reported multiple trace IDs: {trace_ids}")
             if not trusted and self._TRUST_PATTERN.search(self._CSI_PATTERN.sub("", output)):
-                self._trust_workspace(deadline)
-                trusted = True
+                # Select Yes by its displayed number, regardless of the cursor.
                 title_offset = len(self._output)
+                self._write(b"1")
+                trusted = True
                 continue
             titles = self._TITLE_PATTERN.findall(
                 self._output[title_offset:].decode("utf-8", errors="replace")
@@ -110,18 +113,6 @@ class ClaudeSessionDriver:
             if titles and titles[-1].startswith("✳") and len(trace_ids) == 1:
                 return int(next(iter(trace_ids)))
         raise TimeoutError(f"Claude startup timed out; PTY tail={self._tail()!r}")
-
-    def _trust_workspace(self, deadline: float) -> None:
-        # Select the empty workspace created by this driver, then wait for
-        # the menu to render the selection before confirming it.
-        offset = len(self._output)
-        self._write(b"\x1b[B")
-        while time.monotonic() < deadline:
-            self._pump(deadline)
-            if "❯" in self._output[offset:].decode("utf-8", errors="replace"):
-                self._write(b"\r")
-                return
-        raise TimeoutError("Claude did not render the workspace trust selection")
 
     def _submit(self, prompt: str) -> int:
         self._write(prompt.encode("utf-8"))

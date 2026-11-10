@@ -15,6 +15,8 @@ mod collector_file_io;
 mod collector_instance_impl;
 #[path = "collector/net_aggregation.rs"]
 mod collector_net_aggregation;
+#[path = "collector/runtime/preparation.rs"]
+mod collector_preparation;
 #[path = "collector/process_exec.rs"]
 mod collector_process_exec;
 #[path = "collector/process_fork.rs"]
@@ -72,6 +74,7 @@ use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
 use collector_net_aggregation::NetAggregator;
+use collector_preparation::RuntimePreparation;
 use collector_process_exec::ProcessExecAssembler;
 use collector_process_fork::ProcessForkAssembler;
 use collector_stdio_payload::StdioPayloadAssembler;
@@ -80,7 +83,7 @@ pub struct EbpfCollector {
     probe_result: EbpfProbeResult,
     loader: EbpfProgramLoader,
     bindings: BindingStateMap,
-    runtime: Option<EbpfRuntime>,
+    runtime: RuntimePreparation,
     file_tracker: FileTracker,
     semantic_projection_enabled: bool,
     dynamic_go_tls: DynamicGoTlsAttacher,
@@ -108,9 +111,6 @@ pub struct EbpfCollector {
     socket_iovec_limit_partials: u64,
     clock_ticks_per_second: Option<u64>,
 }
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct EbpfPreflightKey(Vec<(Capability, RequestMode)>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceSuppressedFd {
@@ -240,7 +240,7 @@ impl EbpfCollector {
                 file_tty_observation,
             ),
             bindings: BindingStateMap::default(),
-            runtime: None,
+            runtime: RuntimePreparation::default(),
             file_tracker,
             semantic_projection_enabled,
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),

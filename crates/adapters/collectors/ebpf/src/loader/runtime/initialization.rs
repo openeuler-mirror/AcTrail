@@ -294,6 +294,7 @@ impl EbpfProgramLoader {
         )?;
         configure_program_autoload(&mut open_object, attach_plan, &effective_payload)?;
 
+        LibbpfLogging::runtime_load_started();
         let object = open_object
             .load()
             .map_err(|error| LoaderError::new("load_object", error.to_string()))?;

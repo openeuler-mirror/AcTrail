@@ -189,6 +189,9 @@ impl AttachService for StorageAttachService {
             profile,
             launch_seccomp_requirements,
             &DeploymentPermissionAvailability {
+                host_ebpf_configured: self
+                    .collector
+                    .has_capability_requests(&profile.capabilities),
                 host_ebpf: Some(host_ebpf_available),
                 seccomp_notify: Some(command.seccomp_notify_available),
                 seccomp_notify_detail: command.seccomp_notify_detail.clone(),

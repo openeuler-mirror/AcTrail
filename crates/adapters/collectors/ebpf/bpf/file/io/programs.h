@@ -1,3 +1,4 @@
+/* Shared domain definitions; BPF entry programs reside in units/. */
 #ifndef ACTRAIL_FILE_IO_PROGRAMS_H
 #define ACTRAIL_FILE_IO_PROGRAMS_H
 
@@ -143,23 +144,6 @@ static __always_inline int file_io_accumulate(
         file_io_diag(ACTRAIL_FILE_IO_COUNTER_OVERFLOW);
     }
     return 0;
-}
-
-SEC("fexit/vfs_read")
-int handle_file_io_read(__u64 *ctx) {
-    return file_io_accumulate((void *)ctx[0], (__s64)ctx[4], ACTRAIL_FILE_IO_READ, 1);
-}
-SEC("fexit/vfs_readv")
-int handle_file_io_readv(__u64 *ctx) {
-    return file_io_accumulate((void *)ctx[0], (__s64)ctx[5], ACTRAIL_FILE_IO_READ, 2);
-}
-SEC("fexit/vfs_write")
-int handle_file_io_write(__u64 *ctx) {
-    return file_io_accumulate((void *)ctx[0], (__s64)ctx[4], ACTRAIL_FILE_IO_WRITE, 3);
-}
-SEC("fexit/vfs_writev")
-int handle_file_io_writev(__u64 *ctx) {
-    return file_io_accumulate((void *)ctx[0], (__s64)ctx[5], ACTRAIL_FILE_IO_WRITE, 4);
 }
 
 #endif

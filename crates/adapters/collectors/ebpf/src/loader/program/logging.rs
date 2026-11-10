@@ -31,6 +31,10 @@ impl LibbpfLogging {
         Ok(())
     }
 
+    pub(super) fn runtime_load_started() {
+        Self::print_full(PrintLevel::Info, "ebpf_runtime_load started\n".to_owned());
+    }
+
     fn debug_enabled() -> Result<bool, LoaderError> {
         let Some(value) = env::var_os(Self::DEBUG_ENV) else {
             return Ok(false);

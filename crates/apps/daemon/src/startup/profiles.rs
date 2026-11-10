@@ -37,6 +37,14 @@ impl DaemonProfileRegistry {
         self.capture_profiles.iter()
     }
 
+    pub(crate) fn configured_capture_profiles(
+        &self,
+    ) -> impl Iterator<Item = (&ProfileName, &CaptureProfile)> {
+        self.capture_profiles
+            .iter()
+            .filter(|(name, _)| !self.launch_only_profiles.contains(*name))
+    }
+
     pub(crate) fn disable_stdio_capture(&mut self) {
         for profile in self.capture_profiles.values_mut() {
             profile

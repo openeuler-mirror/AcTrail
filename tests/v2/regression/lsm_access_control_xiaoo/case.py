@@ -84,9 +84,17 @@ class LsmAccessControlXiaooCase(TestCase):
                 f'max_tokens = {CASE_CONSTANTS.llm_max_tokens}\ncontext_window = {CASE_CONSTANTS.llm_context_window}\nreasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"\n',
                 encoding="utf-8",
             )
+            if os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_BOUNDARIES") == "1":
+                from .startup.boundaries import StartupBoundariesScenario
+                StartupBoundariesScenario(self).run(context, results, port)
+                return TestResult(TestStatus.COMPOSITE, "startup preparation boundaries", results)
             selections = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS", ",".join(BackendSelection.MATRIX)).split(",")
             for selection in selections:
                 self._selection = BackendSelection(selection.strip())
+                if os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_REUSE") == "1":
+                    from .startup.reuse import StartupReuseScenario
+                    StartupReuseScenario(self).run(context, results, port)
+                    continue
                 if self._paths:
                     if self._selection.name not in ("lsm", "fanotify_seccomp"):
                         raise ValueError("path coverage requires lsm or fanotify_seccomp")

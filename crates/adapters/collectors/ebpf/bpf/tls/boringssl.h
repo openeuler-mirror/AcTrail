@@ -1,3 +1,4 @@
+/* Shared domain definitions; BPF entry programs reside in units/. */
 #ifndef ACTRAIL_TLS_BORINGSSL_H
 #define ACTRAIL_TLS_BORINGSSL_H
 
@@ -15,16 +16,6 @@ static __always_inline int store_boringssl_payload_op(
     args.buffer_ptr = ACTRAIL_UPROBE_ARG2(ctx);
     args.requested_size = ACTRAIL_UPROBE_ARG3(ctx);
     return store_tls_payload_op_args(ctx, &args);
-}
-
-SEC("uprobe")
-int handle_boringssl_write_enter(struct pt_regs *ctx) {
-    return store_boringssl_payload_op(ctx, ACTRAIL_TLS_PAYLOAD_OUTBOUND, ACTRAIL_TLS_SYMBOL_SSL_WRITE);
-}
-
-SEC("uprobe")
-int handle_boringssl_read_enter(struct pt_regs *ctx) {
-    return store_boringssl_payload_op(ctx, ACTRAIL_TLS_PAYLOAD_INBOUND, ACTRAIL_TLS_SYMBOL_SSL_READ);
 }
 
 #endif
