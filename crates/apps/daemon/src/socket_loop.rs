@@ -99,6 +99,7 @@ impl LocalDaemonServer {
     ) -> Result<(), DaemonRunError> {
         let control_fds = control_connections
             .iter()
+            .filter(|connection| connection.waiting_for().is_none())
             .map(UdsControlConnection::raw_fd)
             .collect::<Vec<_>>();
         let event_fds = self.event_poll_fds()?;
@@ -179,7 +180,26 @@ impl LocalDaemonServer {
                 Err(error) => drain_error_log.record_error(error),
             }
         }
+        self.deliver_finished_replies(control_connections);
         Ok(())
+    }
+
+    /// Hands replies to deferred requests to their connections and starts writing them. A reply
+    /// whose client has gone is dropped.
+    fn deliver_finished_replies(&mut self, control_connections: &mut Vec<UdsControlConnection>) {
+        let mut delivered = Vec::new();
+        for (ticket, reply) in self.finished_control_replies() {
+            if let Some(connection) = control_connections
+                .iter_mut()
+                .find(|connection| connection.waiting_for() == Some(ticket))
+            {
+                connection.deliver(&reply);
+                delivered.push(connection.raw_fd());
+            }
+        }
+        if !delivered.is_empty() {
+            self.progress_control_connections(control_connections, &delivered);
+        }
     }
 
     fn progress_control_connections(

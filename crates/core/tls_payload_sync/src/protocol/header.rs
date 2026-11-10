@@ -9,6 +9,8 @@ pub enum FrameKind {
     PlanLookup = 4,
     PlanFound = 5,
     PlanUnavailable = 6,
+    Release = 7,
+    HoldEnd = 8,
     Register = 9,
 }
 
@@ -21,6 +23,8 @@ impl FrameKind {
             4 => Ok(Self::PlanLookup),
             5 => Ok(Self::PlanFound),
             6 => Ok(Self::PlanUnavailable),
+            7 => Ok(Self::Release),
+            8 => Ok(Self::HoldEnd),
             9 => Ok(Self::Register),
             _ => Err(SyncError::new("unknown TLS frame kind")),
         }
@@ -62,6 +66,11 @@ impl FrameHeader {
         let body_len = u32::try_from(body_len)
             .map_err(|_| SyncError::new("TLS frame body exceeds wire length range"))?;
         Ok(Self { kind, body_len })
+    }
+
+    /// A daemon frame of fixed small size, within any usable frame limit.
+    pub(super) fn fixed(kind: FrameKind, body_len: u32) -> Self {
+        Self { kind, body_len }
     }
 
     pub(super) fn parse(bytes: &[u8], max_frame_bytes: usize) -> SyncResult<Option<Self>> {

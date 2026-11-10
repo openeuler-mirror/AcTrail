@@ -363,6 +363,15 @@ pub trait StorageBackend: crate::CgroupV1BindingStore + crate::CgroupV2BindingSt
         target_kind: &str,
         after_action_id: Option<&str>,
     ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError>;
+    /// Locates one action and its display ancestors, in the shape of
+    /// `semantic_action_display_path_to_kind`.
+    fn semantic_action_display_path_to_action(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError>;
     fn semantic_action_children_matching_kinds(
         &self,
         trace_id: TraceId,

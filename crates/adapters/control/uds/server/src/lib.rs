@@ -50,8 +50,50 @@ impl PeerCredentials {
     }
 }
 
+/// Names a request whose reply the service sends later.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ReplyTicket(u64);
+
+impl ReplyTicket {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+// Returned by `handle_request` and matched at once, never stored.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum ControlOutcome {
+    Reply(Result<ControlReply, ControlError>),
+    /// The reply comes later from `ControlService::finished_replies` with this ticket.
+    Later(ReplyTicket),
+}
+
 pub trait ControlService {
     fn handle(&mut self, command: ControlCommand) -> Result<ControlReply, ControlError>;
+
+    /// Handles one decoded request. A service that answers some requests later overrides this
+    /// and returns `ControlOutcome::Later` for them.
+    fn handle_request(
+        &mut self,
+        peer: Option<PeerCredentials>,
+        command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> ControlOutcome {
+        ControlOutcome::Reply(match peer {
+            Some(peer) => self.handle_from_peer_with_launch_pidfd(peer, command, launch_pidfd),
+            None => self.handle_with_launch_pidfd(command, launch_pidfd),
+        })
+    }
+
+    /// Replies to earlier `Later` outcomes that are ready now.
+    fn finished_replies(&mut self) -> Vec<(ReplyTicket, Result<ControlReply, ControlError>)> {
+        Vec::new()
+    }
 
     fn handle_with_launch_pidfd(
         &mut self,
@@ -100,6 +142,12 @@ pub struct UdsControlConnection {
     peer: PeerCredentials,
     reply: Option<Vec<u8>>,
     written: usize,
+    waiting: Option<ReplyTicket>,
+}
+
+enum Handled {
+    Reply(Vec<u8>),
+    Later(ReplyTicket),
 }
 
 impl<S> UdsControlServer<S>
@@ -115,7 +163,28 @@ where
     }
 
     pub fn handle_bytes_with_fds(&mut self, request: &[u8], fds: Vec<RawFd>) -> Vec<u8> {
-        self.handle_bytes_with_fds_from_peer(request, fds, None)
+        self.handle_now(request, fds, None)
+    }
+
+    /// Replies to earlier deferred requests that are ready now.
+    pub fn finished_replies(&mut self) -> Vec<(ReplyTicket, Result<ControlReply, ControlError>)> {
+        self.service.finished_replies()
+    }
+
+    /// For callers without a connection to answer on later, a deferred request is an error.
+    fn handle_now(
+        &mut self,
+        request: &[u8],
+        fds: Vec<RawFd>,
+        peer: Option<PeerCredentials>,
+    ) -> Vec<u8> {
+        match self.handle_bytes_with_fds_from_peer(request, fds, peer) {
+            Handled::Reply(reply) => reply,
+            Handled::Later(_) => uds_control_transport::encode_reply(&Err(ControlError::new(
+                "deferred_reply",
+                "this request is answered later and needs a control connection",
+            ))),
+        }
     }
 
     fn handle_bytes_with_fds_from_peer(
@@ -123,26 +192,22 @@ where
         request: &[u8],
         fds: Vec<RawFd>,
         peer: Option<PeerCredentials>,
-    ) -> Vec<u8> {
+    ) -> Handled {
         let response = match uds_control_transport::decode_command(request) {
             Ok(command) => match prepare_command_fds(command, fds) {
                 Ok(mut prepared) => {
-                    let response = match peer {
-                        Some(peer) => self.service.handle_from_peer_with_launch_pidfd(
-                            peer,
-                            prepared.command,
-                            prepared.launch_pidfd,
-                        ),
-                        None => self
-                            .service
-                            .handle_with_launch_pidfd(prepared.command, prepared.launch_pidfd),
-                    };
-                    if response.is_ok() {
-                        if let Some(fd) = prepared.injected_listener_fd.take() {
-                            let _ = fd.into_raw_fd();
-                        }
+                    let outcome =
+                        self.service
+                            .handle_request(peer, prepared.command, prepared.launch_pidfd);
+                    if matches!(outcome, ControlOutcome::Reply(Ok(_)))
+                        && let Some(fd) = prepared.injected_listener_fd.take()
+                    {
+                        let _ = fd.into_raw_fd();
                     }
-                    response
+                    match outcome {
+                        ControlOutcome::Reply(response) => response,
+                        ControlOutcome::Later(ticket) => return Handled::Later(ticket),
+                    }
                 }
                 Err(error) => Err(error),
             },
@@ -151,13 +216,13 @@ where
                 Err(ControlError::new(error.stage, error.message))
             }
         };
-        uds_control_transport::encode_reply(&response)
+        Handled::Reply(uds_control_transport::encode_reply(&response))
     }
 
     pub fn serve_connection(&mut self, stream: &mut UnixStream) -> std::io::Result<()> {
         let peer = PeerCredentials::from_stream(stream)?;
         let (request, fds) = read_request_with_fds(stream)?;
-        let reply = self.handle_bytes_with_fds_from_peer(&request, fds, Some(peer));
+        let reply = self.handle_now(&request, fds, Some(peer));
         stream.write_all(&reply)?;
         Ok(())
     }
@@ -175,6 +240,7 @@ impl UdsControlConnection {
             peer,
             reply: None,
             written: usize::default(),
+            waiting: None,
         })
     }
 
@@ -182,19 +248,36 @@ impl UdsControlConnection {
         self.stream.as_raw_fd()
     }
 
+    /// Set while the request is answered later. Such a connection is left out of polling: the
+    /// client has closed its write side, so the socket stays readable at end of stream.
+    pub fn waiting_for(&self) -> Option<ReplyTicket> {
+        self.waiting
+    }
+
+    /// Hands over the reply to a deferred request; `try_progress` then writes it.
+    pub fn deliver(&mut self, reply: &Result<ControlReply, ControlError>) {
+        self.waiting = None;
+        self.reply = Some(uds_control_transport::encode_reply(reply));
+    }
+
     pub fn try_progress<S>(&mut self, server: &mut UdsControlServer<S>) -> std::io::Result<bool>
     where
         S: ControlService,
     {
+        if self.waiting.is_some() {
+            return Ok(false);
+        }
         if self.reply.is_none() {
             match read_request_with_fds(&self.stream) {
                 Ok((request, _)) if request.is_empty() => return Ok(true),
                 Ok((request, fds)) => {
-                    self.reply = Some(server.handle_bytes_with_fds_from_peer(
-                        &request,
-                        fds,
-                        Some(self.peer),
-                    ));
+                    match server.handle_bytes_with_fds_from_peer(&request, fds, Some(self.peer)) {
+                        Handled::Reply(reply) => self.reply = Some(reply),
+                        Handled::Later(ticket) => {
+                            self.waiting = Some(ticket);
+                            return Ok(false);
+                        }
+                    }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(false),
                 Err(error) => return Err(error),

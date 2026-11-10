@@ -370,6 +370,7 @@ pub(super) struct WebDocument {
     pub listen_addr: String,
     pub request_read_timeout_ms: String,
     pub alerts: WebAlertsDocument,
+    pub checkpoints: WebCheckpointsConfig,
 }
 
 impl Default for WebDocument {
@@ -378,6 +379,7 @@ impl Default for WebDocument {
             listen_addr: "127.0.0.1:18080".to_string(),
             request_read_timeout_ms: "1000".to_string(),
             alerts: WebAlertsDocument::default(),
+            checkpoints: WebCheckpointsConfig::default(),
         }
     }
 }
@@ -414,6 +416,18 @@ impl WebAlertsDocument {
 
 impl WebDocument {
     pub(super) fn to_config(&self) -> Result<WebServerConfig, String> {
+        let checkpoints = self.checkpoints;
+        require_positive_u64(
+            "web.checkpoints.status_timeout_ms",
+            checkpoints.status_timeout_ms,
+        )?;
+        require_positive_u32(
+            "web.checkpoints.poll_interval_ms",
+            checkpoints.poll_interval_ms,
+        )?;
+        if checkpoints.poll_interval_ms > i32::MAX as u32 {
+            return Err("web.checkpoints.poll_interval_ms must not exceed 2147483647".to_string());
+        }
         Ok(WebServerConfig {
             listen_addr: self
                 .listen_addr
@@ -424,6 +438,7 @@ impl WebDocument {
                 &self.request_read_timeout_ms,
             )?,
             alerts: self.alerts.to_config()?,
+            checkpoints,
         })
     }
 }

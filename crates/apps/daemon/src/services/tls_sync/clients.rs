@@ -17,6 +17,7 @@ use trace_runtime::registry::TraceRuntime;
 use uds_control_server::PeerCredentials;
 
 use super::frame_buffer::FrameBuffer;
+use super::release::{ClientReleases, outbound_progress};
 use super::root_path::PeerRootHandle;
 use super::{
     TlsSyncClient, TlsSyncDiagnostic, TlsSyncDrain, TlsSyncService, TraceConnections,
@@ -32,9 +33,11 @@ pub(super) struct ReceiveLimits {
 }
 
 impl TlsSyncService {
+    /// Reads the ready events; `watched` tells whose LLM responses wait for checkpoint work.
     pub(in crate::services) fn drain(
         &mut self,
         trace_runtime: &TraceRuntime,
+        watched: &dyn Fn(TraceId) -> bool,
     ) -> Result<TlsSyncDrain, ControlError> {
         self.accept_ready_clients()?;
         let mut drain = TlsSyncDrain::default();
@@ -51,10 +54,16 @@ impl TlsSyncService {
                     connections: &mut self.trace_connections,
                     maximum: self.trace_connection_max,
                 },
+                watched,
                 &mut drain,
             );
             let lookup = match result {
                 Ok(ClientRead::Open) => {
+                    // A runtime told to stop waiting hears it now, whether or not a Trace is
+                    // watched. Releases are only queued after the batch's LLM requests are held.
+                    client
+                        .releases
+                        .flush(&client.stream, self.release_outbox_max_bytes);
                     self.clients.insert(id, client);
                     continue;
                 }
@@ -111,6 +120,9 @@ impl TlsSyncService {
                 }
             }
         }
+        let clients = &self.clients;
+        self.holds
+            .retain(|_, hold| clients.contains_key(&hold.client));
         Ok(drain)
     }
 
@@ -207,13 +219,16 @@ impl TlsSyncService {
                     self.clients.insert(
                         self.next_client,
                         TlsSyncClient {
+                            id: self.next_client,
                             trace: None,
                             stream,
                             credentials,
                             registration: None,
+                            holds_responses: false,
                             buffer: FrameBuffer::default(),
                             process_cache: BTreeMap::new(),
                             streams: BTreeMap::new(),
+                            releases: ClientReleases::default(),
                         },
                     );
                 }
@@ -248,6 +263,7 @@ impl TlsSyncClient {
         scratch: &mut [u8],
         limits: ReceiveLimits,
         authorization: &mut ConnectionAuthorization<'_>,
+        watched: &dyn Fn(TraceId) -> bool,
         drain: &mut TlsSyncDrain,
     ) -> Result<ClientRead, ControlError> {
         let mut read_bytes = 0;
@@ -266,12 +282,19 @@ impl TlsSyncClient {
                 Ok(read) => {
                     read_bytes += read;
                     self.buffer.append(&scratch[..read]);
-                    match self.drain_complete_frames(limits, authorization, drain)? {
+                    match self.drain_complete_frames(limits, authorization, watched, drain)? {
                         ClientRead::Open => {}
                         outcome => return Ok(outcome),
                     }
                 }
                 Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(ClientRead::Open),
+                // A runtime that exits with unread releases resets the connection; its events
+                // were all read first.
+                Err(error)
+                    if error.kind() == ErrorKind::ConnectionReset && self.buffer.is_empty() =>
+                {
+                    return Ok(ClientRead::Closed);
+                }
                 Err(error) => return Err(ControlError::new("tls_sync_read", error.to_string())),
             }
         }
@@ -282,6 +305,7 @@ impl TlsSyncClient {
         &mut self,
         limits: ReceiveLimits,
         authorization: &mut ConnectionAuthorization<'_>,
+        watched: &dyn Fn(TraceId) -> bool,
         drain: &mut TlsSyncDrain,
     ) -> Result<ClientRead, ControlError> {
         while let Some(message) = self
@@ -290,7 +314,11 @@ impl TlsSyncClient {
             .map_err(sync_event_error)?
         {
             let event = match message {
-                SyncMessage::Register(registration) => {
+                SyncMessage::Register {
+                    registration,
+                    holds_responses,
+                } => {
+                    self.holds_responses = holds_responses;
                     if self.registration.replace(registration).is_some() {
                         return Err(peer_error(
                             "TLS-sync event transport registered more than once",
@@ -303,6 +331,12 @@ impl TlsSyncClient {
                     return Err(ControlError::new(
                         "tls_sync_event",
                         "unexpected plan response from runtime",
+                    ));
+                }
+                SyncMessage::Release { .. } | SyncMessage::HoldEnd => {
+                    return Err(ControlError::new(
+                        "tls_sync_event",
+                        "unexpected release from runtime",
                     ));
                 }
                 SyncMessage::PlanLookup(request) => {
@@ -318,6 +352,12 @@ impl TlsSyncClient {
             };
             if !authorization.bind(self, trace_id, &mut drain.diagnostics)? {
                 return Ok(ClientRead::Closed);
+            }
+            if self.holds_responses
+                && let Some((trace_id, pid, connection, sequence)) = outbound_progress(&event)
+            {
+                self.releases
+                    .observe(trace_id, watched(trace_id), pid, connection, sequence);
             }
             let segment = match event {
                 SyncEvent::Payload(event) => payload_segment(event, &mut self.process_cache)?,

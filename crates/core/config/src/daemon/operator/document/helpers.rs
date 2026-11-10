@@ -41,7 +41,7 @@ pub(super) fn require_positive_u32(key: &'static str, value: u32) -> Result<u32,
     Ok(value)
 }
 
-pub(super) fn require_positive_u64(key: &'static str, value: u64) -> Result<u64, String> {
+pub(super) fn require_positive_u64(key: &str, value: u64) -> Result<u64, String> {
     if value == u64::default() {
         return Err(format!("invalid {key}: value must be positive"));
     }

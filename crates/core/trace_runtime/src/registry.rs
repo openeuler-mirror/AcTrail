@@ -59,6 +59,11 @@ impl TraceRuntime {
         }
     }
 
+    /// Advances allocation past IDs retained by another persistent store.
+    pub fn advance_trace_id_seed(&mut self, minimum: u64) {
+        self.next_trace_id = self.next_trace_id.max(minimum);
+    }
+
     pub fn reserve_trace_id(&mut self) -> TraceId {
         let trace_id = TraceId::new(self.next_trace_id);
         self.next_trace_id += 1;

@@ -24,6 +24,9 @@ mod plugins;
 mod preflight;
 #[path = "attach/service.rs"]
 mod service;
+#[path = "attach/watched.rs"]
+mod watched;
+pub(crate) use watched::{HeldLlmRequest, WatchedTraces};
 
 use collector_binding::TraceBindingRequest;
 use collector_instance::CollectorInstance;
@@ -161,6 +164,7 @@ pub(crate) struct StorageAttachService {
     /// to retroactively set command.tool.name on CommandInvocations that were persisted
     /// before their corresponding LlmResponse was processed.
     pub(super) pending_tool_names: BTreeMap<TraceId, BTreeMap<String, String>>,
+    pub(super) watched: watched::WatchedTraces,
 }
 impl StorageAttachService {
     pub(super) fn resolve_process_observation(

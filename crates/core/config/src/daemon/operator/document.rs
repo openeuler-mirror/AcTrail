@@ -16,10 +16,9 @@ use super::super::{
     AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterCenterConfig,
     ClusterConfig, ClusterReportConfig, CommandControlConfig, CommandControlGrayConfig,
     DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-    DEFAULT_FINALIZATION_POLL_INTERVAL_MS, DEFAULT_FINALIZATION_SETTLE_DELAY_MS,
-    DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS, DEFAULT_FINALIZATION_TRACES_PER_CYCLE,
-    DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_FINALIZATION_POLL_INTERVAL_MS,
+    DEFAULT_FINALIZATION_SETTLE_DELAY_MS, DEFAULT_FINALIZATION_SHUTDOWN_DRAIN_TIMEOUT_MS,
+    DEFAULT_FINALIZATION_TRACES_PER_CYCLE, DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
     DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
@@ -52,7 +51,7 @@ use super::super::{
     SemanticContentOwner, SemanticRetentionConfig, SocketPermissions, SseDataPolicy,
     SseEventContentRetention, StartupPluginFailurePolicy, StartupPluginLoadConfig,
     StartupPluginsConfig, StorageRetentionConfig, TraceFinalizationConfig, WebAlertsConfig,
-    WebServerConfig, WorkloadDiagnosticsConfig,
+    WebCheckpointsConfig, WebServerConfig, WorkloadDiagnosticsConfig,
 };
 use super::{
     OperatorConfig, validate_application_protocol_config, validate_enforcement_config,
@@ -69,6 +68,8 @@ mod alert_forwarding;
 mod app;
 #[path = "document/base/document.rs"]
 mod base;
+#[path = "document/checkpoint.rs"]
+mod checkpoint;
 #[path = "document/cluster.rs"]
 mod cluster;
 #[path = "document/command.rs"]
@@ -99,6 +100,7 @@ mod semantic;
 use alert_forwarding::*;
 use app::*;
 use base::*;
+use checkpoint::*;
 use cluster::*;
 use command::*;
 use file::*;
@@ -138,6 +140,7 @@ pub(super) struct OperatorDocument {
     application: ApplicationDocument,
     resource_profiling: toml::Table,
     provider: ProviderDocument,
+    checkpoint: CheckpointDocument,
     access_control: AccessControlConfig,
     enforcement: EnforcementDocument,
     command_control: CommandControlDocument,
@@ -170,6 +173,7 @@ impl Default for OperatorDocument {
             application: ApplicationDocument::default(),
             resource_profiling: toml::Table::new(),
             provider: ProviderDocument::default(),
+            checkpoint: CheckpointDocument::default(),
             access_control: AccessControlConfig::default(),
             enforcement: EnforcementDocument::default(),
             command_control: CommandControlDocument::default(),
@@ -311,6 +315,7 @@ impl OperatorDocument {
                     default_limit: config.web.alerts.default_limit,
                     max_limit: config.web.alerts.max_limit,
                 },
+                checkpoints: config.web.checkpoints,
             },
             cluster: ClusterDocument::from_config(&config.cluster),
             export: ExportDocument {
@@ -398,6 +403,11 @@ impl OperatorDocument {
                     .map(|provider| provider.unknown_provider_label.clone())
                     .unwrap_or_else(|| ProviderDocument::default().unknown_provider_label),
             },
+            checkpoint: CheckpointDocument::from_config(
+                config.checkpoint_catalog_path.as_deref(),
+                &config.checkpoint_backends,
+                config.checkpoint_runtime,
+            ),
             access_control: config.access_control.clone(),
             enforcement: EnforcementDocument {
                 enabled: config.enforcement.enabled,
@@ -571,10 +581,27 @@ impl OperatorDocument {
         } else {
             minimum_shutdown_wait_ms
         };
+        let checkpoint_runtime = self.checkpoint.runtime()?;
+        let minimum_shutdown_wait_ms = if self.checkpoint.enabled() {
+            minimum_shutdown_wait_ms
+                .checked_add(checkpoint_runtime.shutdown_drain_timeout_ms)
+                .ok_or_else(|| {
+                    "configured checkpoint shutdown budget overflows u64 milliseconds".to_string()
+                })?
+        } else {
+            minimum_shutdown_wait_ms
+        };
         if shutdown_wait_ms < minimum_shutdown_wait_ms {
             return Err(format!(
-                "supervision.shutdown_wait_ms must be at least {minimum_shutdown_wait_ms}ms: 3 * control.finalization.shutdown_drain_timeout_ms (terminal + unsettled semantics + export) + control.finalization.post_trace.shutdown_drain_timeout_ms + plugins.alerts.drain_timeout_ms + supervision.poll_interval_ms, plus sandbox_evidence.shutdown_drain_timeout_ms when Hand observation is enabled and sandbox_alerts.shutdown_drain_timeout_ms when Sandbox alert storage is enabled"
+                "supervision.shutdown_wait_ms must be at least {minimum_shutdown_wait_ms}ms: 3 * control.finalization.shutdown_drain_timeout_ms (terminal + unsettled semantics + export) + control.finalization.post_trace.shutdown_drain_timeout_ms + plugins.alerts.drain_timeout_ms + supervision.poll_interval_ms, plus sandbox_evidence.shutdown_drain_timeout_ms when Hand observation is enabled, sandbox_alerts.shutdown_drain_timeout_ms when Sandbox alert storage is enabled and checkpoint.runtime.shutdown_drain_timeout_ms when checkpoint is enabled"
             ));
+        }
+        // Automatic checkpoints run at the LLM requests the semantic projection recognizes.
+        if self.checkpoint.enabled()
+            && !(self.semantic_retention.projection_enabled
+                && self.semantic_retention.l0_llm_call.enabled)
+        {
+            return Err("checkpoint.enabled requires semantic_retention.projection_enabled and semantic_retention.l0_llm_call.enabled".to_string());
         }
         Ok(OperatorConfig {
             socket_path: PathBuf::from(&self.control.socket_path),
@@ -637,6 +664,9 @@ impl OperatorDocument {
             resource_profiling: self.resource_profiling.clone(),
             trace_finalization,
             provider_rule_set: self.provider.to_config(),
+            checkpoint_catalog_path: self.checkpoint.to_config()?,
+            checkpoint_backends: self.checkpoint.backends()?,
+            checkpoint_runtime,
             access_control: self.access_control.clone(),
             enforcement,
             command_control,

@@ -8,7 +8,7 @@ use std::{
 use abi_stable::library::lib_header_from_path;
 use checkpoint::{
     BackendConfig, BackendError, BackendErrorKind, CheckpointBackend, CheckpointModuleRef,
-    SnapshotContext, SnapshotId,
+    SnapshotContext, SnapshotId, TraceProcess,
 };
 use serde_json::{Value, json};
 
@@ -26,6 +26,9 @@ impl Driver {
                 self.backend
                     .connect(&SnapshotContext {
                         trace_id: trace_id.into(),
+                        trace_process: Self::trace_process()
+                            .map_err(|error| Self::invalid(&error.to_string()))?,
+                        scopes: Vec::new().into(),
                     })
                     .into_result()?;
             }
@@ -40,7 +43,10 @@ impl Driver {
                     .map_err(|error| Self::invalid(&error.to_string()))?;
                 let id = SnapshotId(bytes.into());
                 if command["op"] == "restore" {
-                    self.backend.restore(&id).into_result()?;
+                    self.backend
+                        .restore(&id)
+                        .into_result()
+                        .map_err(|failure| failure.error)?;
                 } else {
                     self.backend.delete(&id).into_result()?;
                 }
@@ -49,6 +55,32 @@ impl Driver {
             _ => return Err(Self::invalid("unknown driver operation")),
         }
         Ok(Value::Null)
+    }
+
+    fn trace_process() -> io::Result<TraceProcess> {
+        let stat = std::fs::read_to_string("/proc/self/stat")?;
+        let start_time_ticks = stat
+            .rsplit_once(')')
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .map_err(io::Error::other)?;
+        Ok(TraceProcess {
+            host_pid: std::process::id(),
+            start_time_ticks,
+            pid_namespace: std::fs::read_link("/proc/self/ns/pid")?
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+            mount_namespace: std::fs::read_link("/proc/self/ns/mnt")?
+                .to_string_lossy()
+                .into_owned()
+                .into(),
+            cwd: std::env::current_dir()?.to_string_lossy().into_owned().into(),
+        })
     }
 
     fn invalid(message: &str) -> BackendError {

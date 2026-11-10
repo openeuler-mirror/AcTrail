@@ -1,7 +1,9 @@
 //! Binds one trace to a Xiaoo session and forwards checkpoint operations.
 
-use abi_stable::std_types::RResult;
-use checkpoint::{BackendError, RestorableCheckpointBackend, SnapshotContext, SnapshotId};
+use abi_stable::std_types::{RResult, RVec};
+use checkpoint::{
+    BackendError, RestorableCheckpointBackend, RestoreFailure, SnapshotContext, SnapshotId,
+};
 
 use crate::{
     client::Client,
@@ -135,9 +137,10 @@ impl RestorableCheckpointBackend for XiaooBackend {
         self.save().map_err(BackendError::from).into()
     }
 
-    fn restore(&mut self, snapshot_id: &SnapshotId) -> RResult<(), BackendError> {
+    fn restore(&mut self, snapshot_id: &SnapshotId) -> RResult<RVec<SnapshotId>, RestoreFailure> {
         self.restore_snapshot(snapshot_id)
-            .map_err(BackendError::from)
+            .map(|()| RVec::new())
+            .map_err(|error| RestoreFailure::from(BackendError::from(error)))
             .into()
     }
 

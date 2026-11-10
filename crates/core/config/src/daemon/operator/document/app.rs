@@ -241,7 +241,7 @@ impl Default for SupervisionDocument {
     fn default() -> Self {
         Self {
             startup_wait_ms: 30_000,
-            shutdown_wait_ms: 150_100,
+            shutdown_wait_ms: 160_100,
             poll_interval_ms: 100,
         }
     }

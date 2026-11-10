@@ -20,6 +20,7 @@
     │   ├── [x] profile.toml # 初始化时的采集 profile 模板
     │   └── [x] complete.toml # 初始化时的完整配置模板
     ├── [x] dispatch.rs # 将 CtlCommand 路由到控制请求或本地 launch 流程
+    ├── [x] checkpoint.rs # 读取 --checkpoint 文件并规范化 scope 根目录；解析 checkpoint 保存、恢复、强制执行、解除暂停、删除与查询命令，格式化结果
     ├── [x] transport.rs # 为命令分派隔离具体 UDS 传输
     │   └── [x] trait ControlClientPort # send 传递控制命令；send_launch_track_add 同时借用 pidfd 完成启动注册
     ├── [x] launch.rs # 探测权限与 TLS 计划，注册停止中的子进程，启用 TLS-sync 时将 TrackAdd 返回的 TLS 事件凭据写入 TLS_PAYLOAD_SYNC_EVENT_TOKEN，然后继续执行

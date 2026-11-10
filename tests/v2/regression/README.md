@@ -52,6 +52,9 @@ workload bundle 和 xiaoO 路径，因此正常验收不需要再粘贴环境变
 
 当前已注册的资源、辅助与可选回归 case 包含以下职责：
 
+- `checkpoint_btrfs` 负责用 Btrfs backend 验证 checkpoint 的保存、恢复、删除和 Web 操作；属于默认回归集合，
+  公共入口自动构建并定位后端库。缺少系统工具或 Btrfs 内核支持时明确跳过，后端构建产物缺失时报失败。
+  运行命令与可选配置见 [Checkpoint Btrfs 验收](checkpoint_btrfs/README.zh.md)。
 - `resource_metrics_cgroup` 负责 release binaries 在 systemd delegated cgroup v2（v1 宿主上改测自建 v1 trace 范围）
   下的 exact、restart recovery、exactly-once finalization 与 timeout 验收，并检查列存储读回、
   profile 重启复用和资源 HTTP 查询，最后在独立数据库中运行 `retention` 清理小项；属于默认回归集合，

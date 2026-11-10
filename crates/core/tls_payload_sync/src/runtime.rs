@@ -10,12 +10,16 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[path = "runtime/hold.rs"]
+mod hold;
 #[path = "runtime/transport.rs"]
 mod transport;
 
+pub use hold::ResponseHold;
 pub(crate) use transport::{DeadlineStream, Endpoint};
 
 use crate::{EventRegistration, FrameCodec, SyncError, SyncEvent, SyncResult};
+use tls_payload_core::PayloadDirection;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EventClientConfig {
@@ -30,61 +34,76 @@ pub struct EventClientConfig {
 #[derive(Debug)]
 pub struct EventTransportFds {
     writer: AtomicI32,
+    reader: AtomicI32,
 }
 
 impl Default for EventTransportFds {
     fn default() -> Self {
         Self {
             writer: AtomicI32::new(-1),
+            reader: AtomicI32::new(-1),
         }
     }
 }
 
 impl EventTransportFds {
     pub fn close_after_fork(&self) {
-        let fd = self.writer.swap(-1, Ordering::Relaxed);
-        if fd >= 0 {
-            unsafe { libc::close(fd) };
+        for slot in [&self.writer, &self.reader] {
+            let fd = slot.swap(-1, Ordering::Relaxed);
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+            }
         }
     }
 
-    fn register(self: &Arc<Self>, fd: RawFd) -> FdRegistration {
-        self.writer.store(fd, Ordering::Release);
+    fn register(self: &Arc<Self>, fd: RawFd, reader: bool) -> FdRegistration {
+        let slot = if reader { &self.reader } else { &self.writer };
+        slot.store(fd, Ordering::Release);
         FdRegistration {
             fds: Arc::clone(self),
+            reader,
         }
     }
 }
 
 pub(super) struct FdRegistration {
     fds: Arc<EventTransportFds>,
+    reader: bool,
 }
 
 impl Drop for FdRegistration {
     fn drop(&mut self) {
-        self.fds.writer.store(-1, Ordering::Release);
+        let slot = if self.reader {
+            &self.fds.reader
+        } else {
+            &self.fds.writer
+        };
+        slot.store(-1, Ordering::Release);
     }
 }
 
 pub struct EventClient {
     queue: Arc<EventQueue>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    hold: Option<Arc<ResponseHold>>,
     shutdown_timeout: Duration,
 }
 
 impl EventClient {
-    /// `config.timeout` bounds sender progress; closing the client uses the separate
-    /// configured drain budget.
+    /// With `hold`, the client also reads the daemon's releases into it. `config.timeout` bounds
+    /// sender progress; closing the client uses the separate configured drain budget.
     pub fn connect(
         path: &Path,
         config: EventClientConfig,
         registration: EventRegistration,
+        hold: Option<Arc<ResponseHold>>,
         fds: Arc<EventTransportFds>,
     ) -> SyncResult<Self> {
         Self::start(
             Endpoint(path.to_path_buf()),
             config,
             registration,
+            hold,
             fds,
         )
     }
@@ -93,6 +112,7 @@ impl EventClient {
         endpoint: Endpoint,
         config: EventClientConfig,
         registration: EventRegistration,
+        hold: Option<Arc<ResponseHold>>,
         fds: Arc<EventTransportFds>,
     ) -> SyncResult<Self> {
         if config.pending_byte_budget == 0 || config.batch_bytes == 0 {
@@ -114,6 +134,7 @@ impl EventClient {
         }
         let queue = Arc::new(EventQueue::new(config.pending_byte_budget));
         let worker_queue = Arc::clone(&queue);
+        let worker_hold = hold.clone();
         let worker = thread::Builder::new()
             .name("actrail-tls-sync-event-writer".to_string())
             .spawn(move || {
@@ -122,6 +143,7 @@ impl EventClient {
                     queue: worker_queue,
                     config,
                     registration,
+                    hold: worker_hold,
                     fds,
                 }
                 .run()
@@ -130,12 +152,18 @@ impl EventClient {
         Ok(Self {
             queue,
             worker: Mutex::new(Some(worker)),
+            hold,
             shutdown_timeout: config.shutdown_timeout,
         })
     }
 
     pub fn send(&self, event: SyncEvent) -> SyncResult<()> {
-        self.queue.push(event)
+        let outbound = self.hold.as_ref().and(outbound_sequence(&event));
+        self.queue.push(event)?;
+        if let (Some(hold), Some((stream_key, sequence))) = (&self.hold, outbound) {
+            hold.sent(stream_key, sequence);
+        }
+        Ok(())
     }
 
     pub fn close(&self) -> SyncResult<()> {
@@ -343,15 +371,21 @@ struct EventWriter {
     queue: Arc<EventQueue>,
     config: EventClientConfig,
     registration: EventRegistration,
+    hold: Option<Arc<ResponseHold>>,
     fds: Arc<EventTransportFds>,
 }
 
 impl EventWriter {
     fn run(self) {
         let queue = Arc::clone(&self.queue);
+        let hold = self.hold.clone();
         let result = self.write();
         if result.is_err() {
             queue.fail();
+        }
+        // Without the transport no release can come.
+        if let Some(hold) = hold {
+            hold.end();
         }
         let dropped = queue.dropped();
         if result.is_err() || dropped != 0 {
@@ -375,7 +409,16 @@ impl EventWriter {
         let deadline = self.queue.deadline(Instant::now() + self.config.timeout)?;
         let stream = self.endpoint.connect(deadline)?;
         use std::os::fd::AsRawFd;
-        let registration = self.fds.register(stream.as_raw_fd());
+        let registration = self.fds.register(stream.as_raw_fd(), false);
+        if let Some(hold) = &self.hold {
+            let reader = stream.try_clone()?;
+            let reader_registration = self.fds.register(reader.as_raw_fd(), true);
+            let hold = Arc::clone(hold);
+            let max_frame_bytes = self.config.max_frame_bytes;
+            thread::Builder::new()
+                .name("actrail-tls-sync-release-reader".to_string())
+                .spawn(move || hold.read_releases(reader, max_frame_bytes, reader_registration))?;
+        }
         let mut stream = DeadlineStream::for_events(
             stream,
             self.config.timeout,
@@ -388,6 +431,7 @@ impl EventWriter {
         FrameCodec::write_registration(
             &mut writer,
             &self.registration,
+            self.hold.is_some(),
             self.config.max_frame_bytes,
         )?;
         writer.flush()?;
@@ -405,6 +449,19 @@ impl EventWriter {
             writer.flush()?;
             self.queue.finish_batch(batch.len());
         }
+    }
+}
+
+/// The connection and sequence of an event that carries bytes the process wrote.
+fn outbound_sequence(event: &SyncEvent) -> Option<(u64, u64)> {
+    match event {
+        SyncEvent::Payload(event) if event.direction == PayloadDirection::Outbound => {
+            Some((event.stream_key, event.sequence))
+        }
+        SyncEvent::Summary(event) if event.direction == PayloadDirection::Outbound => {
+            Some((event.stream_key, event.sequence))
+        }
+        _ => None,
     }
 }
 

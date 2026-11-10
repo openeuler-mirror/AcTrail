@@ -1,10 +1,11 @@
 //! Unix-domain-socket client adapter for control-plane consumers.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use control_contract::command::{ControlCommand, TrackAddCommand};
 use control_contract::reply::{ControlError, ControlReply};
@@ -24,24 +25,43 @@ pub trait RoundTripTransport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UdsSocketTransport {
     socket_path: PathBuf,
+    timeout: Option<Duration>,
 }
 
 impl UdsSocketTransport {
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),
+            timeout: None,
         }
+    }
+
+    /// Bounds connecting and socket I/O for callers querying a live daemon.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
     }
 
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
     }
+
+    fn connect(&self) -> io::Result<UnixStream> {
+        let Some(timeout) = self.timeout else {
+            return UnixStream::connect(&self.socket_path);
+        };
+        let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+        socket.connect_timeout(&socket2::SockAddr::unix(&self.socket_path)?, timeout)?;
+        let stream = UnixStream::from(socket);
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        Ok(stream)
+    }
 }
 
 impl RoundTripTransport for UdsSocketTransport {
     fn send(&mut self, request: Vec<u8>) -> Result<Vec<u8>, String> {
-        let mut stream =
-            UnixStream::connect(&self.socket_path).map_err(|error| error.to_string())?;
+        let mut stream = self.connect().map_err(|error| error.to_string())?;
         stream
             .write_all(&request)
             .and_then(|_| stream.shutdown(Shutdown::Write))
@@ -58,8 +78,7 @@ impl RoundTripTransport for UdsSocketTransport {
         if fds.is_empty() {
             return self.send(request);
         }
-        let mut stream =
-            UnixStream::connect(&self.socket_path).map_err(|error| error.to_string())?;
+        let mut stream = self.connect().map_err(|error| error.to_string())?;
         send_request_with_fds(&stream, &request, fds)?;
         stream
             .shutdown(Shutdown::Write)

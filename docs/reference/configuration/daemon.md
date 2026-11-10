@@ -74,6 +74,20 @@ TTY 同样使用此刷新间隔。`tty.operations` 默认且仅允许 `read/read
 
 `[control.workload_diagnostics]` 默认关闭，`interval_ms = 1000`。`[control.finalization]` 控制 trace settle 与 shutdown drain；当前 `shutdown_drain_timeout_ms = 30000`。`[control.finalization.post_trace]` 为 post-trace broker、执行与 drain 提供彼此显式的容量和时间预算。
 
+## `[checkpoint.runtime]`
+
+checkpoint 启用开关、记录库和 backend 列表仍由 `[checkpoint]` 配置。运行参数如下，时间单位均为毫秒：
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `busy_timeout_ms` | `5000` | daemon 和 Web 的 checkpoint 只读连接等待 SQLite 写锁的预算 |
+| `stop_timeout_ms` | `5000` | 恢复前等待一批进程线程组暂停的预算 |
+| `stop_poll_interval_ms` | `10` | 检查线程组暂停状态的间隔 |
+| `shutdown_drain_timeout_ms` | `10000` | daemon 停止时等待 checkpoint 工作完成的总预算 |
+| `idle_poll_interval_ms` | `10` | 停机等待期间检查工作是否完成的间隔 |
+
+各项须大于零。省略字段使用默认值；`actrailctl init` 生成的模板包含这些参数。操作步骤见 [checkpoint](../../operations/checkpoint.md)。
+
 ## `[storage]`
 
 | 字段 | 当前默认值 | 含义 |
@@ -100,6 +114,15 @@ SQLite 使用 WAL 时，备份和恢复必须包含配套 WAL/SHM 状态或在 d
 
 Web 默认监听 `127.0.0.1:18080`，request read timeout 为 `1000` ms。Web 还可能执行本地插件管理，不能直接暴露到不可信网络。
 
+`[web.checkpoints]` 配置 checkpoint 页面查询和刷新：
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `status_timeout_ms` | `500` | 查询 daemon 中 checkpoint 暂停和执行状态的超时 |
+| `poll_interval_ms` | `1500` | 有运行中 Trace 或未完成工作时，页面自动刷新的间隔 |
+
+各项须大于零，刷新间隔不得超过 `2147483647` 毫秒。状态查询超时后仍显示历史，运行状态显示为未知。Web 使用启动时加载的配置；修改后重启 `actrailweb`。首次请求失败、尚未取得刷新配置时，页面按默认 `1500` 毫秒重试。
+
 `actrailweb` 的渐进时间线预算由启动环境设置：`ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT=250`、`ACTRAIL_WEB_TIMELINE_MAX_LIMIT=1000`、`ACTRAIL_WEB_TIMELINE_CANDIDATES=2000`、`ACTRAIL_WEB_TIMELINE_LINKS=2000`。值须为正整数，默认页大小不得超过最大页大小，最大页大小不得超过候选预算。参数与分页语义见 [Web Runtime](../../architecture/components/web-runtime.md#渐进时间线查询)。
 
 显式 idle 查询预算由 `ACTRAIL_WEB_IDLE_DEFAULT_LIMIT=100`、`ACTRAIL_WEB_IDLE_MAX_LIMIT=500`、`ACTRAIL_WEB_IDLE_CANDIDATES=1000` 设置。值须为小于 `i64::MAX` 的正整数，并满足默认页大小不超过最大页大小、最大页大小不超过候选预算；无效设置使 Web 启动失败。
@@ -115,5 +138,5 @@ Snapshot 默认目录为 `/var/lib/actrail/export`，当前生成配置的 `payl
 | 字段 | 当前默认值 | 含义 |
 | --- | --- | --- |
 | `startup_wait_ms` | `30000` | `start/restart` 等待 PID 与 control socket ready 的总预算 |
-| `shutdown_wait_ms` | `5000` | supervising CLI 等待进程退出的预算 |
+| `shutdown_wait_ms` | `160100` | supervising CLI 等待进程退出的预算；不得小于各项停机排空预算之和，启用 checkpoint 时包括 `checkpoint.runtime.shutdown_drain_timeout_ms` |
 | `poll_interval_ms` | `100` | supervision 状态轮询间隔 |

@@ -12,10 +12,21 @@ use tls_probe_point_finder::{BinaryIdentity, BinaryIdentityTypeCode};
 
 #[derive(Debug)]
 pub enum SyncMessage {
-    Register(EventRegistration),
+    /// The first frame of a process connection. `holds_responses`: the process waits for releases.
+    Register {
+        registration: EventRegistration,
+        holds_responses: bool,
+    },
     Event(SyncEvent),
     PlanLookup(PlanLookupRequest),
     PlanResponse(PlanLookupResponse),
+    /// From the daemon: the outbound events of `stream_key` up to `sequence` are released.
+    Release {
+        stream_key: u64,
+        sequence: u64,
+    },
+    /// From the daemon: the process no longer waits for releases.
+    HoldEnd,
 }
 
 pub struct FrameCodec;
@@ -30,9 +41,16 @@ impl FrameCodec {
         }
         let mut fields = FieldReader::new(body);
         let message = match header.kind() {
-            FrameKind::Register => SyncMessage::Register(EventRegistration {
-                token: fields.text()?,
-            }),
+            FrameKind::Register => SyncMessage::Register {
+                registration: EventRegistration {
+                    token: fields.text()?,
+                },
+                holds_responses: match fields.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(SyncError::new("invalid TLS registration hold flag")),
+                },
+            },
             FrameKind::Payload | FrameKind::Decision | FrameKind::Summary => {
                 SyncMessage::Event(Self::read_event(&mut fields, header.kind())?)
             }
@@ -54,6 +72,11 @@ impl FrameCodec {
                     reason: fields.text()?,
                 })
             }
+            FrameKind::Release => SyncMessage::Release {
+                stream_key: fields.u64()?,
+                sequence: fields.u64()?,
+            },
+            FrameKind::HoldEnd => SyncMessage::HoldEnd,
         };
         fields.finish()?;
         Ok(message)
@@ -77,13 +100,17 @@ impl FrameCodec {
     pub fn write_registration(
         writer: &mut impl Write,
         registration: &EventRegistration,
+        holds_responses: bool,
         max_frame_bytes: usize,
     ) -> SyncResult<()> {
         let mut counter = FieldWriter::new(std::io::sink());
         counter.text(&registration.token)?;
+        counter.u8(holds_responses.into())?;
         let header = FrameHeader::new(FrameKind::Register, counter.len(), max_frame_bytes)?;
         let mut frame = Self::control_frame(header)?;
-        FieldWriter::new(&mut frame).text(&registration.token)?;
+        let mut fields = FieldWriter::new(&mut frame);
+        fields.text(&registration.token)?;
+        fields.u8(holds_responses.into())?;
         writer.write_all(&frame)?;
         Ok(())
     }
@@ -118,6 +145,16 @@ impl FrameCodec {
         Self::response_fields(&mut FieldWriter::new(&mut frame), response)?;
         writer.write_all(&frame)?;
         Ok(())
+    }
+    /// Releases the outbound events of `stream_key` up to `sequence`.
+    pub fn release_frame(stream_key: u64, sequence: u64) -> Vec<u8> {
+        let mut frame = FrameHeader::fixed(FrameKind::Release, 16).encode().to_vec();
+        frame.extend_from_slice(&stream_key.to_le_bytes());
+        frame.extend_from_slice(&sequence.to_le_bytes());
+        frame
+    }
+    pub fn hold_end_frame() -> Vec<u8> {
+        FrameHeader::fixed(FrameKind::HoldEnd, 0).encode().to_vec()
     }
     fn control_frame(header: FrameHeader) -> SyncResult<Vec<u8>> {
         let mut frame = Vec::new();

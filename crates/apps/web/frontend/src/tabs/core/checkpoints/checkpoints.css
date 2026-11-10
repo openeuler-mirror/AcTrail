@@ -1,0 +1,377 @@
+/* Checkpoints tab: the current path on the left, the selected record in the detail panel. */
+.checkpoint-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.checkpoint-layout.detail-open {
+  grid-template-columns: minmax(0, 1fr) var(--ui-detail-panel-width);
+}
+
+.checkpoint-main {
+  height: 100%;
+  overflow: auto;
+  padding: 18px 22px 32px;
+}
+
+.cp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.cp-header h2 {
+  margin: 0;
+  font-size: var(--ui-font-title);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.cp-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+}
+
+.cp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cp-button {
+  height: var(--ui-control-height-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-raised);
+  color: var(--ui-text);
+  font: inherit;
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--ui-duration-fast) var(--ui-ease-out),
+    border-color var(--ui-duration-fast) var(--ui-ease-out);
+}
+
+.cp-button:hover:not(:disabled) {
+  border-color: var(--ui-border-hover);
+  background: var(--ui-bg-hover);
+}
+
+.cp-button:focus-visible {
+  outline: 2px solid var(--ui-focus-ring-color);
+  outline-offset: 2px;
+}
+
+.cp-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.cp-button.primary {
+  border-color: transparent;
+  background: var(--ui-accent-strong);
+  color: var(--ui-on-accent);
+}
+
+.cp-button.primary:hover:not(:disabled) {
+  background: var(--ui-accent-hover);
+}
+
+.cp-button.danger {
+  color: var(--ui-danger);
+}
+
+.cp-button.danger:hover:not(:disabled) {
+  border-color: var(--ui-danger-border);
+  background: var(--ui-danger-bg);
+}
+
+.cp-button.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ui-muted);
+}
+
+.cp-button.quiet:hover:not(:disabled) {
+  color: var(--ui-text);
+}
+
+.cp-icon-button {
+  width: var(--ui-control-height-sm);
+  justify-content: center;
+  padding: 0;
+}
+
+.cp-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-left: 3px solid var(--ui-chart-6);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-raised);
+  font-size: var(--ui-font-sm);
+}
+
+.cp-notice.warning {
+  border-left-color: var(--ui-warning);
+}
+
+.cp-notice > svg {
+  flex: none;
+  color: var(--ui-chart-6);
+}
+
+.cp-notice.warning > svg {
+  color: var(--ui-warning);
+}
+
+.cp-notice > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.cp-notice strong {
+  display: block;
+  font-weight: var(--ui-weight-semibold);
+}
+
+.cp-notice small {
+  display: block;
+  margin-top: 2px;
+  color: var(--ui-muted);
+}
+
+.cp-message {
+  margin: 0 0 12px;
+  font-size: var(--ui-font-sm);
+  color: var(--ui-muted);
+}
+
+.cp-message.error {
+  color: var(--ui-danger);
+}
+
+.cp-history {
+  position: relative;
+}
+
+.cp-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cp-row {
+  position: relative;
+  min-height: 60px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  cursor: pointer;
+  transition: background-color var(--ui-duration-fast) var(--ui-ease-out);
+}
+
+.cp-row.connected::before {
+  content: '';
+  position: absolute;
+  left: 23px;
+  top: 0;
+  height: 10px;
+  border-left: 1px solid var(--ui-border-strong);
+}
+
+.cp-row:has(+ .connected)::after {
+  content: '';
+  position: absolute;
+  left: 23px;
+  top: 38px;
+  bottom: -1px;
+  border-left: 1px solid var(--ui-border-strong);
+}
+
+.cp-row.pending::before {
+  border-left-style: dashed;
+}
+
+.cp-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--trace-interactive-border);
+  border-radius: 50%;
+  background: var(--trace-interactive-bg);
+  color: var(--trace-interactive-text);
+  font: 600 var(--ui-font-sm) var(--ui-value-font);
+}
+
+.cp-row.muted .cp-node {
+  border-style: dashed;
+  border-color: var(--ui-border);
+  background: var(--ui-surface-soft);
+  color: var(--ui-muted);
+}
+
+.cp-row.failed .cp-node {
+  border-color: var(--ui-danger-border);
+  background: var(--ui-danger-bg);
+  color: var(--ui-danger);
+}
+
+.cp-row:hover {
+  background: var(--ui-accent-faint);
+}
+
+.cp-row.selected {
+  border-color: var(--ui-border);
+  background: var(--ui-surface-raised);
+  box-shadow: var(--ui-shadow);
+}
+
+.cp-row:focus-visible {
+  outline: 2px solid var(--ui-focus-ring-color);
+  outline-offset: -2px;
+}
+
+.cp-row.muted .cp-title strong {
+  color: var(--ui-text-tertiary);
+}
+
+.cp-row-text {
+  min-width: 0;
+}
+
+.cp-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.cp-title strong {
+  font-size: var(--ui-font-md);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.cp-meta {
+  margin-top: 2px;
+  color: var(--ui-muted);
+  font-family: var(--ui-value-font);
+  font-size: var(--ui-font-xs);
+}
+
+.cp-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The row's restore button shows where it is about to be used; the detail panel always has it. */
+.cp-row-actions .cp-button:not(.cp-icon-button) {
+  opacity: 0;
+  transition: opacity var(--ui-duration-fast) var(--ui-ease-out);
+}
+
+.cp-row:hover .cp-row-actions .cp-button,
+.cp-row:focus-within .cp-row-actions .cp-button,
+.cp-row.selected .cp-row-actions .cp-button {
+  opacity: 1;
+}
+
+.cp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-surface-soft);
+  color: var(--ui-muted);
+  font-size: 10px;
+  font-weight: var(--ui-weight-semibold);
+  white-space: nowrap;
+}
+
+.cp-chip.succeeded {
+  background: color-mix(in srgb, var(--ui-success) 14%, transparent);
+  color: color-mix(in srgb, var(--ui-success) 78%, var(--ui-text));
+}
+
+.cp-chip.waiting,
+.cp-chip.running {
+  background: color-mix(in srgb, var(--ui-chart-6) 14%, transparent);
+  color: color-mix(in srgb, var(--ui-chart-6) 78%, var(--ui-text));
+}
+
+.cp-chip.failed,
+.cp-chip.unknown {
+  background: var(--ui-danger-bg);
+  color: var(--ui-danger);
+}
+
+.cp-chip.warning {
+  background: var(--ui-warning-bg);
+  color: color-mix(in srgb, var(--ui-warning) 80%, var(--ui-text));
+}
+
+.cp-empty {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin-top: 48px;
+  padding: 32px 20px;
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: var(--ui-radius-md);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-sm);
+  text-align: center;
+}
+
+.cp-empty strong {
+  color: var(--ui-text);
+  font-size: var(--ui-font-lg);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.cp-spin {
+  animation: cp-spin 900ms linear infinite;
+}
+
+@keyframes cp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1100px) {
+  .checkpoint-layout.detail-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cp-spin {
+    animation: none;
+  }
+}

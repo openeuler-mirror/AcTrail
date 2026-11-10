@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub(super) struct TrackCodec;
 impl TrackCodec {
     pub(super) fn encode(fields: &mut Vec<String>, command: &TrackAddCommand) {
-        fields.push("track_add_v8".to_string());
+        fields.push("track_add_v9".to_string());
         fields.push(command.request_id.get().to_string());
         encode_process_ref(fields, &command.root);
         fields.push(command.display_name.to_string());
@@ -43,6 +43,7 @@ impl TrackCodec {
         }
         fields.push(command.tags.len().to_string());
         fields.extend(command.tags.iter().cloned());
+        super::checkpoint::encode_launch_config(fields, command.checkpoint.as_ref());
     }
     pub(super) fn decode(fields: &[String]) -> Result<ControlCommand, ControlCodecError> {
         let request_id = RequestId::new(parse_u64(field(fields, 1)?, "request_id")?);
@@ -88,6 +89,7 @@ impl TrackCodec {
         for offset in 0..tag_count {
             tags.insert(field(fields, cursor + offset)?.clone());
         }
+        let checkpoint = super::checkpoint::decode_launch_config(fields, cursor + tag_count)?.0;
         Ok(ControlCommand::TrackAdd(TrackAddCommand {
             request_id,
             root,
@@ -97,6 +99,7 @@ impl TrackCodec {
             launch_mode,
             launch_target,
             tls_probe_plans,
+            checkpoint,
         }))
     }
 }

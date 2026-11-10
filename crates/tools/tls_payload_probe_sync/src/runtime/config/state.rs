@@ -7,7 +7,9 @@ use tls_payload_core::{
     CoreError, Decision, EqualLenRewriteProcessor, PayloadContext, PayloadDirection, RewriteRule,
     SyncProcessor,
 };
-use tls_payload_sync::{EventClient, EventClientConfig, EventRegistration, EventTransportFds, SyncEvent};
+use tls_payload_sync::{
+    EventClient, EventClientConfig, EventRegistration, EventTransportFds, ResponseHold, SyncEvent,
+};
 
 use crate::runtime::flow_control::{FlowControlConfig, FlowController, FlowDecision};
 
@@ -31,6 +33,7 @@ pub(super) struct RuntimeConfigParts {
     pub(super) events: EventFilter,
     pub(super) trace_id: Option<u64>,
     pub(super) event_transport: Option<EventTransportConfig>,
+    pub(super) hold_responses: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,6 +49,7 @@ impl EventTransportConfig {
             &self.path,
             self.client,
             self.registration.clone(),
+            transport.hold.clone(),
             Arc::clone(&transport.fds),
         )
         .map_err(|error| format!("connect sync event socket {}: {error}", self.path.display()))
@@ -55,6 +59,7 @@ impl EventTransportConfig {
 #[derive(Debug)]
 struct ProcessTransport {
     client: OnceLock<Result<EventClient, String>>,
+    hold: Option<Arc<ResponseHold>>,
     fds: Arc<EventTransportFds>,
 }
 
@@ -68,6 +73,7 @@ pub(in crate::runtime) struct RuntimeConfig {
     trace_id: Option<u64>,
     event_transport: Option<EventTransportConfig>,
     process_transport: AtomicPtr<ProcessTransport>,
+    hold_responses: bool,
     flow_controller: Mutex<FlowController>,
     sequence: AtomicU64,
     symbol_providers: Mutex<BTreeMap<String, String>>,
@@ -84,6 +90,7 @@ impl RuntimeConfig {
             trace_id: parts.trace_id,
             event_transport: parts.event_transport,
             process_transport: AtomicPtr::new(std::ptr::null_mut()),
+            hold_responses: parts.hold_responses,
             flow_controller: Mutex::new(FlowController::default()),
             sequence: AtomicU64::new(0),
             symbol_providers: Mutex::new(BTreeMap::new()),
@@ -147,6 +154,9 @@ impl RuntimeConfig {
         if current.is_null() {
             let created = Box::into_raw(Box::new(ProcessTransport {
                 client: OnceLock::new(),
+                hold: self
+                    .hold_responses
+                    .then(|| Arc::new(ResponseHold::default())),
                 fds: Arc::new(EventTransportFds::default()),
             }));
             current = match self.process_transport.compare_exchange(
@@ -175,6 +185,13 @@ impl RuntimeConfig {
         match client {
             Ok(client) => client.send(event).map_err(|error| error.to_string()),
             Err(error) => Err(error.clone()),
+        }
+    }
+
+    /// Waits until the daemon released what this process wrote on the connection before.
+    pub(in crate::runtime) fn wait_for_release(&self, stream_key: usize) {
+        if let Some(hold) = &self.transport().hold {
+            hold.wait(stream_key as u64);
         }
     }
 

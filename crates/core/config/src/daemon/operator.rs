@@ -82,6 +82,11 @@ pub struct OperatorConfig {
     pub resource_profiling: toml::Table,
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
+    /// SQLite file of the checkpoint catalog; unset when checkpoints are disabled.
+    pub checkpoint_catalog_path: Option<PathBuf>,
+    /// The checkpoint integrations a Trace is composed of, in call order.
+    pub checkpoint_backends: Vec<CheckpointBackendConfig>,
+    pub checkpoint_runtime: CheckpointRuntimeConfig,
     pub access_control: AccessControlConfig,
     pub enforcement: EnforcementConfig,
     pub command_control: CommandControlConfig,
@@ -89,6 +94,37 @@ pub struct OperatorConfig {
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointBackendConfig {
+    pub name: String,
+    /// The integration's dynamic library.
+    pub library: PathBuf,
+    /// The integration's own configuration file.
+    pub config: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CheckpointRuntimeConfig {
+    pub busy_timeout_ms: u64,
+    pub stop_timeout_ms: u64,
+    pub stop_poll_interval_ms: u64,
+    pub shutdown_drain_timeout_ms: u64,
+    pub idle_poll_interval_ms: u64,
+}
+
+impl Default for CheckpointRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            busy_timeout_ms: 5_000,
+            stop_timeout_ms: 5_000,
+            stop_poll_interval_ms: 10,
+            shutdown_drain_timeout_ms: 10_000,
+            idle_poll_interval_ms: 10,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

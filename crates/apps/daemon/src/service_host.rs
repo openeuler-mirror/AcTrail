@@ -11,19 +11,40 @@ use control_contract::reply::{
 };
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId};
-use model_core::process::ProcessIdentity;
+use model_core::process::{ProcessIdentity, ProcessRecord};
 use plugin_system::PluginInstanceStatus;
 use process_identity::ProcessIdentityReader;
 use sandbox_alert_store::SandboxAlertWritePort;
 use sandbox_evidence_store::SandboxEvidenceWritePort;
-use uds_control_server::{ControlService, PeerCredentials};
+use uds_control_server::{ControlOutcome, ControlService, PeerCredentials, ReplyTicket};
 
 use crate::peer_identity::{PeerIdentity, peer_error};
 use crate::runtime_wiring::DaemonRuntimeWiring;
+use crate::services::checkpoint::CheckpointService;
 use crate::services::sandbox_plugins::{SandboxPluginManager, SandboxPluginRouteSink};
 
+mod checkpoint;
+
 pub trait AttachService {
-    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError>;
+    fn process_record(&self, process: ProcessIdentity) -> Result<ProcessRecord, ControlError>;
+    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
+        self.process_record(process)?
+            .host
+            .map(|host| host.pid)
+            .ok_or_else(|| {
+                ControlError::new(
+                    "process_host_pid",
+                    format!("process {} has no host PID", process.get()),
+                )
+            })
+    }
+    /// Starts or stops watching a Trace for another daemon service. Stopping also ends the
+    /// response waits of its processes.
+    fn watch_trace(&mut self, trace_id: model_core::ids::TraceId, watch: bool);
+    /// LLM requests of watched Traces whose responses wait for release.
+    fn take_llm_requests(&mut self) -> Vec<crate::services::attach::HeldLlmRequest>;
+    /// Lets the response of a held LLM request reach the Agent.
+    fn release_response(&mut self, hold: u64);
     fn resolve_launch_permissions(
         &mut self,
         command: &control_contract::command::ResolveLaunchPermissionsCommand,
@@ -128,6 +149,7 @@ pub struct DaemonServiceHost<A> {
     wiring: DaemonRuntimeWiring<A>,
     sandbox_plugins: SandboxPluginManager,
     pending_launch_admissions: BTreeMap<model_core::process::ProcessObservation, LaunchAdmission>,
+    checkpoint: Option<CheckpointService>,
 }
 
 impl<A> DaemonServiceHost<A> {
@@ -139,6 +161,7 @@ impl<A> DaemonServiceHost<A> {
             wiring,
             sandbox_plugins: SandboxPluginManager::new(sandbox_alerts),
             pending_launch_admissions: BTreeMap::new(),
+            checkpoint: None,
         }
     }
 
@@ -153,16 +176,23 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
-        self.wiring
+        let result = self
+            .wiring
             .attach_service
-            .drain_live_events(&mut self.wiring.trace_runtime)
+            .drain_live_events(&mut self.wiring.trace_runtime);
+        self.drain_checkpoint();
+        result
     }
 
     pub fn event_poll_fds(&self) -> Result<Vec<RawFd>, ControlError>
     where
         A: AttachService,
     {
-        self.wiring.attach_service.event_poll_fds()
+        let mut fds = self.wiring.attach_service.event_poll_fds()?;
+        if let Some(checkpoint) = &self.checkpoint {
+            fds.push(checkpoint.poll_fd());
+        }
+        Ok(fds)
     }
 
     pub fn background_poll_timeout(&self) -> Result<Option<Duration>, ControlError>
@@ -189,6 +219,9 @@ impl<A> DaemonServiceHost<A> {
     where
         A: AttachService,
     {
+        if let Some(checkpoint) = &self.checkpoint {
+            checkpoint.shutdown();
+        }
         self.wiring
             .attach_service
             .shutdown(&mut self.wiring.trace_runtime)
@@ -369,6 +402,36 @@ where
         self.dispatch_with_launch_pidfd(command, None, std::process::id())
     }
 
+    /// A checkpoint-enabled `TrackAdd` is answered after its initial checkpoint.
+    fn handle_request(
+        &mut self,
+        peer: Option<PeerCredentials>,
+        command: ControlCommand,
+        launch_pidfd: Option<OwnedFd>,
+    ) -> ControlOutcome {
+        let checkpoint = match &command {
+            ControlCommand::TrackAdd(track_add) => track_add.checkpoint.clone(),
+            _ => None,
+        };
+        let reply = match peer {
+            Some(peer) => self.handle_from_peer_with_launch_pidfd(peer, command, launch_pidfd),
+            None => self.handle_with_launch_pidfd(command, launch_pidfd),
+        };
+        match (checkpoint, reply) {
+            (Some(config), Ok(ControlReply::TrackAdded(added))) => {
+                self.start_checkpoint_launch(added, config)
+            }
+            (_, reply) => ControlOutcome::Reply(reply),
+        }
+    }
+
+    fn finished_replies(&mut self) -> Vec<(ReplyTicket, Result<ControlReply, ControlError>)> {
+        self.checkpoint
+            .as_mut()
+            .map(CheckpointService::take_finished_replies)
+            .unwrap_or_default()
+    }
+
     fn handle_with_launch_pidfd(
         &mut self,
         command: ControlCommand,
@@ -415,6 +478,15 @@ where
                 .attach_service
                 .resolve_launch_tls_plan(&command, path_view_pid)
                 .map(ControlReply::LaunchTlsPlan),
+            ControlCommand::TrackAdd(command)
+                if command.checkpoint.is_some() && self.checkpoint.is_none() =>
+            {
+                Err(checkpoint::checkpoint_disabled())
+            }
+            ControlCommand::Checkpoint(command) => self
+                .checkpoint_service()?
+                .handle(command.action)
+                .map(ControlReply::Checkpoint),
             ControlCommand::TrackAdd(command) => {
                 let active_trace_count = self
                     .wiring
@@ -699,6 +771,7 @@ where
             ControlCommand::ResolveLaunchPermissions(_)
             | ControlCommand::ResolveLaunchTlsPlan(_) => Ok(()),
             ControlCommand::TrackAdd(command) => peer.authorize_process_ref(&command.root),
+            ControlCommand::Checkpoint(command) => self.authorize_checkpoint(peer, &command.action),
             ControlCommand::RegisterSeccompListener(command) => {
                 peer.authorize_process_ref(&command.target)?;
                 self.authorize_trace_owner(peer, command.trace_id)
@@ -813,6 +886,7 @@ fn control_command_name(command: &ControlCommand) -> &'static str {
         ControlCommand::PluginConfigGet(_) => "plugin_config_get",
         ControlCommand::PluginConfigValidate(_) => "plugin_config_validate",
         ControlCommand::PluginConfigUpdate(_) => "plugin_config_update",
+        ControlCommand::Checkpoint(_) => "checkpoint",
     }
 }
 

@@ -35,7 +35,9 @@ use crate::services::application_protocol::{
 };
 use crate::services::attach::StorageAttachService;
 use crate::services::diagnostic_logging;
+use crate::services::attach::WatchedTraces;
 use crate::services::live::next_diagnostic_id_from_seed;
+use crate::services::tls_sync::TlsSyncService;
 use crate::services::payload_gate::{
     PayloadBodyRetention, PayloadBodyRetentionDecision, PayloadBodyRetentionGate,
 };
@@ -212,6 +214,8 @@ impl StorageAttachService {
                 next_payload_segment_id: &mut self.next_payload_segment_id,
                 live_export_enabled: self.export_runtime.has_semantic_consumers(),
                 recognized_agents: Vec::new(),
+                llm_holds: (!self.watched.is_empty())
+                    .then_some((&mut self.tls_sync, &mut self.watched)),
                 http1_messages: Vec::new(),
                 http1_handled: false,
                 http2_frames: Vec::new(),
@@ -236,6 +240,11 @@ impl StorageAttachService {
             let mut export_batch = SemanticActionBatch::default();
             let prepared = context.prepare_payload_segments(resolved_segments, &mut export_batch);
             let agents = std::mem::take(&mut context.recognized_agents);
+            // The batch's LLM requests are held; release everything else processed, before the
+            // batch is written to storage, which releases do not wait for.
+            if let Some((tls_sync, _)) = &mut context.llm_holds {
+                tls_sync.flush_releases();
+            }
             semantic_action_count = context.semantic_action_count;
             semantic_link_count = context.semantic_link_count;
             let (prepared, analysis_error) = match prepared {
@@ -330,6 +339,8 @@ struct PayloadTransactionContext<'a> {
     next_payload_segment_id: &'a mut u64,
     live_export_enabled: bool,
     recognized_agents: Vec<(TraceId, ProcessIdentity)>,
+    /// None when no Trace is watched, so LLM requests are not held.
+    llm_holds: Option<(&'a mut TlsSyncService, &'a mut WatchedTraces)>,
     http1_messages: Vec<semantic_action_runtime::Http1MessageEvent>,
     http1_handled: bool,
     http2_frames: Vec<semantic_action_runtime::Http2FrameObservation>,

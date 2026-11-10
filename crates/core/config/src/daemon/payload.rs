@@ -326,6 +326,7 @@ pub struct PayloadTlsConfig {
     pub sync_pending_connection_max: u32,
     pub sync_plan_queue_capacity: u32,
     pub sync_fd_reserve: u32,
+    pub sync_release_outbox_max_bytes: u32,
     pub sync_accept_retry_delay_ms: u64,
     pub sync_event_timeout_ms: u64,
     pub sync_event_shutdown_timeout_ms: u64,

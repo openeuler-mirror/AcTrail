@@ -42,15 +42,6 @@
 │           └── [x] segment.rs # 定义原始段与流关闭记录
 │               ├── [x] struct RawPayloadSegment # 保留来源、流标识和采集字节
 │               └── [x] struct RawPayloadStreamClose # 表达采集侧明文流结束
-├── [ ] checkpoint/ # core 与集成动态库共用的同步 abi_stable 契约
-│   ├── [ ] Cargo.toml # 声明 ABI 类型与 trait 生成所需依赖
-│   └── [ ] src/ # 同步操作、ABI 对象、快照标识与错误
-│       ├── [ ] lib.rs # 精确导出公共契约
-│       ├── [ ] backend.rs # 同步 backend trait、统一 ABI 对象类型与动态库创建入口声明
-│       │   ├── [ ] trait RestorableCheckpointBackend # connect/disconnect 管理对接；snapshot/restore/delete 管理快照
-│       │   └── [ ] type CheckpointBackend # sabi_trait 生成的稳定对象；跨动态库直接传递
-│       ├── [ ] types.rs # ABI 稳定的 BackendConfig、含 trace_id 的 SnapshotContext 与 SnapshotId
-│       └── [ ] error.rs # ABI 稳定的 BackendError、BackendErrorKind；表达 RPC 与后端操作失败
 ├── [x] control_plane/ # ctl 与 daemon 的进程注册、生命周期上报及插件管理命令
 │   └── [x] src/ # 控制命令、响应和 trace 选择器
 │       ├── [x] command.rs # 定义管理请求及 launch 相关输入
@@ -60,8 +51,27 @@
 │       ├── [x] reply.rs # 定义控制成功响应与错误
 │       │   ├── [x] enum ControlReply # 区分跟踪、查询、诊断与插件操作结果
 │       │   └── [x] struct LaunchTlsPlanReply # 返回 launch TLS 计划解析结果
+│       ├── [x] checkpoint.rs # checkpoint 保存、恢复与查询命令及回复
+│       │   ├── [x] struct LaunchCheckpointConfig # 随 TrackAdd 交给 daemon 的 scope，来自 --checkpoint 文件
+│       │   ├── [x] struct CheckpointCommand # 携带 request_id 和一个 CheckpointAction
+│       │   ├── [x] enum CheckpointAction # Save、Restore、Delete、Disconnect、Force、Resume、Status、List、Operations、Operation；List 带一个 CheckpointFilterMode，Status 查询当前 daemon 的暂停和工作线程状态
+│       │   ├── [x] enum CheckpointFilterMode # List 选全部、最新若干个，或某个创建时间范围内的 checkpoint
+│       │   ├── [x] enum CheckpointReply # operation 编号、受理确认、当前 held/busy 状态、checkpoint 历史、operation 列表或单个 operation
+│       │   ├── [x] struct CheckpointView # checkpoint 的 object、失效与删除状态
+│       │   └── [x] struct OperationView # operation 的阶段、结果、目标、边界和失效记录
 │       └── [x] selector.rs # 选择控制操作作用的 trace
 │           └── [x] enum TraceSelector # 表达支持的 trace 选择方式
+├── [x] checkpoint/ # core 与集成动态库共用的同步 abi_stable 契约
+│   ├── [x] Cargo.toml # 声明 ABI 类型与 trait 生成所需依赖
+│   └── [x] src/ # 同步操作、ABI 对象、快照标识与错误
+│       ├── [x] lib.rs # 精确导出公共契约
+│       ├── [x] backend.rs # 同步 backend trait、统一 ABI 对象类型与动态库创建入口声明
+│       │   ├── [x] trait RestorableCheckpointBackend # connect/disconnect 管理对接；snapshot/restore/delete 管理快照；restore 成功或失败都报告失效的快照
+│       │   ├── [x] type CheckpointBackend # sabi_trait 生成的稳定对象；跨动态库直接传递
+│       │   └── [x] struct CheckpointModule # 动态库入口表，create 按配置创建 backend，kind 声明类型
+│       ├── [x] types.rs # ABI 稳定的 BackendKind、BackendConfig、SnapshotContext、TraceProcess、SnapshotScope 与 SnapshotId
+│       │   └── [x] struct SnapshotContext # connect 时绑定的内容：Trace 编号、根进程和这个实例负责的 scope
+│       └── [x] error.rs # ABI 稳定的 BackendError、BackendErrorKind 与 RestoreFailure
 ├── [x] agent_lifecycle/ # Agent 轮次、用户交互、工作单元和会话结束事件
 │   └── [x] src/ # Agent 生命周期模型
 │       └── [x] model.rs # 定义生命周期种类及其关联字段

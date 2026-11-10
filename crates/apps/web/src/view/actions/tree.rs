@@ -5,6 +5,7 @@ use semantic_action::SemanticActionKind;
 use storage_core::{SemanticActionChildPageQuery, StorageBackend};
 
 use super::super::LlmNavMode;
+use super::super::action_path::normalize_display_path;
 use super::super::action_tree_roles::{NODE_ID_AGENT, ROOT_LINK_ROLES};
 use super::serialization::link_json;
 use super::{
@@ -177,31 +178,8 @@ pub(in crate::view) fn action_tree_llm_nav_json(
         )
         .map_err(|error| storage_error("navigate action tree LLM calls", error))?;
     let mut path = path;
-    let compact_display = ContextCompactDisplay::for_implementation_ids(
-        storage,
-        trace_id,
-        path.iter()
-            .flatten()
-            .filter(|entry| entry.kind == SemanticActionKind::LlmCall)
-            .map(|entry| entry.action_id.as_str()),
-    )?;
     if let Some(entries) = path.as_mut() {
-        for entry in entries {
-            if entry.parent_action_id.is_none()
-                && let Some(compact) = compact_display.compact_for_implementation(&entry.action_id)
-            {
-                entry.offset = storage
-                    .semantic_action_display_root_offset(
-                        trace_id,
-                        &display_roles,
-                        &compact.action_id,
-                    )
-                    .map_err(|error| storage_error("locate implementation root", error))?
-                    .ok_or_else(|| {
-                        "implementation root is absent from the root page".to_string()
-                    })?;
-            }
-        }
+        normalize_display_path(storage, trace_id, &display_roles, entries)?;
     }
     let rows = path
         .as_ref()

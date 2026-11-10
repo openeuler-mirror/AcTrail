@@ -111,6 +111,9 @@
             :is="activeTabDefinition.component"
             v-bind="activeTabProps"
             @open-waterfall="openWaterfall"
+            @open-action-tree="openActionTree"
+            @open-checkpoint="openCheckpoint"
+            @focus-consumed="actionTreeFocus = null"
             @load-attribution="ensureTimeAttributionForActiveTab"
             @update:viewport="setTimelineViewport"
             @update:live-follow="follow.setEnabled($event)"
@@ -218,6 +221,8 @@ const timelineTab = computed(() => [TAB_IDS.flameGraph, TAB_IDS.waterfall].inclu
 const timeAttribution = shallowRef(null);
 const attributionLoading = ref(false);
 const waterfallFocus = shallowRef(null);
+const actionTreeFocus = shallowRef(null);
+const checkpointFocus = shallowRef(null);
 const error = ref('');
 const loading = ref(false);
 let activeTraceLoad = null;
@@ -263,6 +268,14 @@ const activeTabProps = computed(() => {
   };
   if (activeTab.value === TAB_IDS.commands) {
     tabProps.commands = commands.value;
+  }
+  if (activeTab.value === TAB_IDS.actionTree) {
+    tabProps.focusPath = actionTreeFocus.value;
+    tabProps.refreshNonce = props.refreshNonce;
+  }
+  if (activeTab.value === TAB_IDS.checkpoints) {
+    tabProps.checkpointFocus = checkpointFocus.value;
+    tabProps.refreshNonce = props.refreshNonce;
   }
   if (activeTab.value === TAB_IDS.llmTrajectory) {
     tabProps.trajectoryGraph = trajectoryGraph.value;
@@ -319,6 +332,8 @@ const showLoadingPanel = computed(() => {
 
 watch(selectedTraceId, async (traceId) => {
   follow.setEnabled(false);
+  actionTreeFocus.value = null;
+  checkpointFocus.value = null;
   if (!traceId) {
     traceDetail.value = null;
     actionTree.value = emptyActionTree();
@@ -659,6 +674,22 @@ async function ensureTimeAttributionForActiveTab() {
   } finally {
     if (activeAttributionLoad === token) attributionLoading.value = false;
   }
+}
+
+/** From the checkpoints tab to the LLM call an operation matched. */
+function openActionTree({ path }) {
+  actionTreeFocus.value = { path, nonce: Date.now() };
+  activeTab.value = TAB_IDS.actionTree;
+}
+
+/** From a marker on an LLM call to its checkpoint or operation. */
+function openCheckpoint(marker) {
+  checkpointFocus.value = {
+    checkpointId: marker.checkpointId,
+    operationId: marker.operationId,
+    nonce: Date.now(),
+  };
+  activeTab.value = TAB_IDS.checkpoints;
 }
 
 async function openWaterfall(target) {

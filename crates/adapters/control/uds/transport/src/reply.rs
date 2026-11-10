@@ -143,6 +143,7 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             fields.push(reply.errors.len().to_string());
             fields.extend(reply.errors.iter().cloned());
         }
+        Ok(ControlReply::Checkpoint(reply)) => super::checkpoint::encode_reply(&mut fields, reply),
         Err(error) => {
             fields.push("error".to_string());
             fields.push(error.code.clone());
@@ -359,6 +360,8 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
                 },
             )))
         }
+        super::checkpoint::REPLY_OPCODE => super::checkpoint::decode_reply(&fields)
+            .map(|reply| Ok(ControlReply::Checkpoint(reply))),
         "error" => Ok(Err(ControlError::new(
             field(&fields, 1)?,
             field(&fields, 2)?,

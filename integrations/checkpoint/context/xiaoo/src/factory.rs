@@ -5,7 +5,8 @@ use abi_stable::{
     sabi_trait::prelude::TD_Opaque, std_types::RResult,
 };
 use checkpoint::{
-    BackendConfig, BackendError, CheckpointBackend, CheckpointModule, CheckpointModuleRef,
+    BackendConfig, BackendError, BackendKind, CheckpointBackend, CheckpointModule,
+    CheckpointModuleRef,
 };
 
 use crate::{backend::XiaooBackend, config::Config};
@@ -26,6 +27,7 @@ impl Factory {
 pub fn checkpoint_module() -> CheckpointModuleRef {
     CheckpointModule {
         create: Factory::create,
+        kind: BackendKind::Context,
     }
     .leak_into_prefix()
 }

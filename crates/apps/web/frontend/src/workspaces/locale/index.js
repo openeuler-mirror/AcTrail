@@ -6,6 +6,7 @@ export default {
   'en-US': {
     views: {
       actionTree: 'Actions',
+      checkpoints: 'Checkpoints',
       llmTrajectory: 'LLM Trajectory',
       flameGraph: 'Flame Graph',
       waterfall: 'Time & Waterfall',
@@ -186,6 +187,7 @@ export default {
   'zh-CN': {
     views: {
       actionTree: '动作',
+      checkpoints: 'Checkpoint',
       llmTrajectory: 'LLM轨迹',
       flameGraph: '火焰图',
       waterfall: '时间与瀑布',

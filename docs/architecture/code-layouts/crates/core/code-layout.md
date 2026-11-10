@@ -2,7 +2,6 @@
 
 ```text
 [x] crates/core/ # 领域状态与运行协调；应用组合具体采集器、存储和传输端口。
-├── [ ] checkpoint/ # 通过模块 factory 按配置加载、组合统一 ABI backend；内部后端类型保持私有。
 ├── [x] config/ # 组合 operator 配置，生成默认文档并校验采集能力及模块配置。
 ├── [x] config_export_filter/ # 基于所属模块模板校验交付选择策略，为 CLI 导出与 Web 编辑提供统一字段集合。
 ├── [x] model/ # 定义事件、trace、membership、能力、诊断和载荷的共享领域值。
@@ -15,6 +14,7 @@
 ├── [x] plugin_wasm_runtime/ # 承载 WASM 实例、受限宿主调用与 observation/control/codec 适配。
 ├── [x] resource_profiling/ # 拥有 Host/Workload 资源采集、指标、存储、告警及配置。
 ├── [x] idle_detector/ # 依据 agent 执行状态识别挂起区间，管理检测与恢复告警。
+├── [x] checkpoint/ # 拥有 checkpoint 的 scope 规划、按 Trace 调度和 backend 组装；经端口调用记录库与进程控制。
 ├── [x] tls_payload_sync/ # 定义 TLS-sync 计划、注入环境、帧协议及事件发送客户端。
 ├── [x] sandbox_agent_runtime/ # 协调 Guest 采样线程、工作单元会话和有界观测投递。
 ├── [x] vsock_gateway_runtime/ # 管理 Guest 连接身份、VSOCK 会话配额与 TCP 上游发送。

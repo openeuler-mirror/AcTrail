@@ -17,7 +17,7 @@ use config_core::daemon::{
 };
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
-use control_contract::reply::ControlError;
+use control_contract::reply::{ControlError, ControlReply};
 use plugin_system::PluginInstanceStatus;
 use sandbox_alert_sqlite::{
     SandboxAlertSqliteConfig, SandboxAlertSqliteStore, SandboxAlertSynchronous,
@@ -27,7 +27,7 @@ use sandbox_evidence_sqlite::{
 };
 use sandbox_upstream_transport::{UpstreamServerConfig, UpstreamTcpServer};
 use storage_factory::StorageConfig;
-use uds_control_server::{UdsControlConnection, UdsControlServer};
+use uds_control_server::{ReplyTicket, UdsControlConnection, UdsControlServer};
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;
@@ -377,6 +377,23 @@ impl LocalDaemonServer {
         connection: &mut UdsControlConnection,
     ) -> io::Result<bool> {
         connection.try_progress(&mut self.server)
+    }
+
+    pub fn enable_checkpoints(
+        &mut self,
+        catalog_path: &std::path::Path,
+        backends: &[config_core::daemon::CheckpointBackendConfig],
+        runtime: config_core::daemon::CheckpointRuntimeConfig,
+    ) -> Result<(), ControlError> {
+        self.server
+            .service_mut()
+            .enable_checkpoints(catalog_path, backends, runtime)
+    }
+
+    pub(crate) fn finished_control_replies(
+        &mut self,
+    ) -> Vec<(ReplyTicket, Result<ControlReply, ControlError>)> {
+        self.server.finished_replies()
     }
 
     pub(crate) fn control_event_poll_fds(&mut self) -> Result<Vec<RawFd>, ControlError> {

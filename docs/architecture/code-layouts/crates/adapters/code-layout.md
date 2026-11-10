@@ -58,18 +58,24 @@
 │       │   └── [x] src/ # 请求往返与 socket 连接实现
 │       │       └── [x] lib.rs # 定义传输接口并组合控制客户端
 │       │           ├── [x] trait RoundTripTransport # 执行一次请求与响应往返
-│       │           ├── [x] struct UdsSocketTransport # 实现 Unix socket 传输
+│       │           ├── [x] struct UdsSocketTransport # 实现 Unix socket 传输；可选设置连接与读写超时，供 Web 查询实时状态
 │       │           └── [x] struct UdsControlClient # 将控制命令交给传输并返回领域响应
 │       ├── [x] server/ # daemon 使用的 Unix socket 控制服务
 │       │   └── [x] src/ # 连接接收、对端身份与领域分发
 │       │       └── [x] lib.rs # 接收连接并调用注入的控制服务
 │       │           ├── [x] trait ControlService # 处理已解码控制请求
+│       │           │   └── [x] handle_request # 可以返回 ControlOutcome::Later；finished_replies 按 ReplyTicket 交回之后的回复
 │       │           ├── [x] struct UdsControlServer # 持有控制监听入口和服务实现
+│       │           ├── [x] struct UdsControlConnection # 读取一个请求并写出回复
+│       │           │   ├── [x] waiting_for # 返回等待中的回复编号；等待期间连接不再读取请求
+│       │           │   └── [x] deliver # 交回稍后完成的回复，由 try_progress 写出
 │       │           └── [x] struct PeerCredentials # 保留对端进程凭据
 │       └── [x] transport/ # 控制帧及文件描述符传输编解码
 │           └── [x] src/ # Unix socket 协议实现
 │               ├── [x] lib.rs # 编码控制请求响应并处理描述符传递
-│               └── [x] reply.rs # 控制回复编解码；reply_track_added_v2 附带 Trace 的 TLS 事件凭据
+│               ├── [x] optional.rs # 可选数字各占一个字段，缺省时写 none
+│               ├── [x] reply.rs # 控制回复编解码；reply_track_added_v2 附带 Trace 的 TLS 事件凭据
+│               └── [x] checkpoint.rs # checkpoint 命令逐字段编码（checkpoint_v2，含 disconnect、status 和 list 的时间范围与数量），status 回复携带 held、busy，历史类回复以一个 JSON 字段携带；track_add_v9 附带 checkpoint 配置，不再携带初始 fd
 ├── [x] agent_host/ # 将 Agent launch 与执行状态接入观测控制
 │   └── [x] src/ # Agent 宿主配置和执行生命周期
 │       ├── [x] launch.rs # 安装 Agent 启动时所需的集成信息
@@ -119,6 +125,17 @@
 │           └── [x] config.rs # 上游端点与连接预算
 │               └── [x] struct UpstreamServerConfig # 保存监听地址与服务容量
 └── [x] storage/ # 隔离观测证据和插件告警的独立 SQLite 适配
+    ├── [x] checkpoint/ # 保存 checkpoint 历史的独立 SQLite 记录库
+    │   └── [x] src/ # 记录库读写
+    │       ├── [x] lib.rs # 打开记录库并实现 CheckpointCatalog 端口
+    │       │   └── [x] struct CheckpointSqliteCatalog # 以短事务更新 operation 和 checkpoint，支持读取历史
+    │       ├── [x] reader.rs # 只读打开记录库
+    │       │   └── [x] struct CheckpointSqliteReader # 只读连接：实现协调器查询使用的 CatalogReader，也供 Web 查询 checkpoint 历史和 operation
+    │       ├── [x] schema.rs # 建表、schema 版本与 WAL 模式
+    │       ├── [x] codec.rs # 时间、JSON 与枚举列的转换
+    │       ├── [x] traces.rs # Trace 的 scope 配置、所有者、根进程、是否已结束和 disconnect 结果；结束时间只记首次值，启动收尾包含缺少结束时间的旧 Trace
+    │       ├── [x] checkpoints.rs # checkpoint、快照 ID、失效与删除记录；checkpoint 在 Trace 内从 0 编号，0 是初始保存
+    │       └── [x] operations.rs # operation 的进展、结果与边界信息
     ├── [x] sandbox/ # 保存无插件兴趣的 Guest 观测
     │   └── [x] src/ # 异步写入、只读查询与存储配置
     │       ├── [x] lib.rs # 组合证据存储的写入和生命周期能力

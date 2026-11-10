@@ -127,15 +127,29 @@ impl StorageAttachService {
 }
 
 impl AttachService for StorageAttachService {
-    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
+    fn watch_trace(&mut self, trace_id: model_core::ids::TraceId, watch: bool) {
+        self.watched.watch(trace_id, watch);
+        if !watch {
+            self.tls_sync.end_trace(trace_id);
+        }
+    }
+
+    fn take_llm_requests(&mut self) -> Vec<crate::services::attach::HeldLlmRequest> {
+        self.watched.take_llm_requests()
+    }
+
+    fn release_response(&mut self, hold: u64) {
+        self.tls_sync.release(hold);
+    }
+
+    fn process_record(&self, process: ProcessIdentity) -> Result<ProcessRecord, ControlError> {
         self.process_registry
             .record(process)
-            .and_then(|record| record.host.as_ref())
-            .map(|host| host.pid)
+            .cloned()
             .ok_or_else(|| {
                 ControlError::new(
-                    "process_host_pid",
-                    format!("process {} has no host PID", process.get()),
+                    "process_record",
+                    format!("process {} has no identity record", process.get()),
                 )
             })
     }

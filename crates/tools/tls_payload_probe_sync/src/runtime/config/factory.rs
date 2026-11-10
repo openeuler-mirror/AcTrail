@@ -4,9 +4,9 @@ use tls_payload_sync::{
     DEFAULT_PLAN_TIMEOUT_MS, ENV_ENABLED, ENV_EVENT_BATCH_BYTES, ENV_EVENT_SHUTDOWN_TIMEOUT_MS,
     ENV_EVENT_SOCKET, ENV_EVENT_TIMEOUT_MS, ENV_EVENT_TOKEN, ENV_EVENTS, ENV_FLOW_CONTROL_ENABLED,
     ENV_FLOW_H2_DATA_PROBE_BYTES, ENV_FLOW_LARGE_TRANSFER_BYTES, ENV_FLOW_MAX_HEADER_BYTES,
-    ENV_FLOW_MAX_STREAMS, ENV_FLOW_SNIFF_BYTES, ENV_FLOW_UNKNOWN_STREAM_BYTES, ENV_MAX_FRAME_BYTES,
-    ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_TIMEOUT_MS, ENV_REDACTION, ENV_RULES, ENV_TRACE_ID,
-    EventClientConfig, EventRegistration, FrameCodec,
+    ENV_FLOW_MAX_STREAMS, ENV_FLOW_SNIFF_BYTES, ENV_FLOW_UNKNOWN_STREAM_BYTES, ENV_HOLD_RESPONSES,
+    ENV_MAX_FRAME_BYTES, ENV_MAX_PAYLOAD_BYTES, ENV_PLAN_TIMEOUT_MS, ENV_REDACTION, ENV_RULES,
+    ENV_TRACE_ID, EventClientConfig, EventRegistration, FrameCodec,
 };
 
 use crate::runtime::flow_control::FlowControlConfig;
@@ -79,6 +79,7 @@ impl RuntimeConfigFactory {
                 events,
                 trace_id: optional_trace_id()?,
                 event_transport: optional_event_transport(max_payload_bytes)?,
+                hold_responses: optional_bool(ENV_HOLD_RESPONSES, false)?,
             }),
             initial_plan,
         }))

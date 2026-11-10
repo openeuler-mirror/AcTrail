@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::checkpoint::CheckpointReply;
 use crate::command::DeploymentPermissionMode;
 use model_core::binary_identity::BinaryIdentity;
 use model_core::capability::Capability;
@@ -158,6 +159,7 @@ pub enum ControlReply {
     PluginCommand(PluginCommandReply),
     PluginConfig(PluginConfigReply),
     PluginConfigValidation(PluginConfigValidationReply),
+    Checkpoint(CheckpointReply),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -45,6 +45,9 @@ impl PayloadTransactionContext<'_> {
             semantic_actions,
             &mut self.recognized_agents,
         );
+        if let Some((tls_sync, watched)) = &mut self.llm_holds {
+            StorageAttachService::hold_llm_requests(semantic_actions, tls_sync, watched);
+        }
         if self.live_export_enabled {
             export_batch.extend(semantic_actions.clone());
         }

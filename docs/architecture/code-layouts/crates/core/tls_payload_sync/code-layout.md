@@ -20,17 +20,19 @@
     │   └── [x] struct RuntimeLibrarySet # 保存 glibc 和可选 musl 注入库路径。
     ├── [x] runtime.rs # 拥有每进程连接、字节预算队列和后台写入线程，单次写入最多 32 KiB，默认无进度时限 5 秒。
     │   ├── [x] struct EventClient # 将调用线程中的事件交给有界队列，再由写入线程发送。
-    │   │   ├── [x] send # 提交 SyncEvent，并返回队列接收结果。
+    │   │   ├── [x] send # 提交 SyncEvent，并返回队列接收结果；有响应等待时记下出站事件的序号。
     │   │   └── [x] close # 停止接收，按独立、固定的 100 ms 总体期限等待已排队事件发送。
-    │   ├── [x] struct EventTransportFds # 记录写连接的 fd，供 fork 子进程无锁关闭。
+    │   ├── [x] struct EventTransportFds # 记录写连接与放行 reader 的 fd，供 fork 子进程无锁关闭。
     │   ├── [x] struct EventQueue # 控制排队字节数、生产者唤醒和队列关闭。
-    │   └── [x] struct EventWriter # 先写入连接登记帧，再组合事件帧执行批量 socket 写入。
+    │   └── [x] struct EventWriter # 先写入连接登记帧，再组合事件帧执行批量 socket 写入；有响应等待时在同一连接上启动放行读取线程，传输结束时结束等待。
     ├── [x] runtime/transport.rs # 连接期限内重试 backlog 满，事件写入采用无进度时限并受退出期限约束。
+    ├── [x] runtime/hold.rs # checkpoint launch 的响应等待。
+    │   └── [x] struct ResponseHold # 按 TLS 连接记下已入队的出站序号和 daemon 放行到的序号；读取等待放行追上入队，daemon 结束等待或连接断开后不再等待；fork 后的子进程重新开始。
     ├── [x] protocol/ # 注入端和宿主共用的二进制帧格式。
     │   ├── [x] header.rs # 解析帧头并区分消息种类。
     │   │   └── [x] struct FrameHeader # 保存帧类型与正文长度，编解码时校验固定协议版本。
     │   └── [x] codec.rs # 在类型化消息与帧字节之间转换。
-    │       ├── [x] enum SyncMessage # 表示连接登记、同步事件、计划查询及查询响应。
+    │       ├── [x] enum SyncMessage # 表示连接登记、同步事件、计划查询及查询响应，以及 daemon 发给 runtime 的放行与结束等待。
     │       └── [x] struct FrameCodec # 编解码同步协议帧并校验输入边界。
     └── [x] target.rs # 识别目标 ELF 使用的运行库族及文件代际。
         ├── [x] enum LibcFamily # 区分 glibc 与 musl 运行库族。

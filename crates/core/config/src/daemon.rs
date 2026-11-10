@@ -112,16 +112,16 @@ pub use logging::{
 };
 pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
-    AlertForwardingConfig, DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS,
-    DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-    DEFAULT_OPERATOR_CONFIG_PATH, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
-    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
-    DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
-    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, HandObservationConfig, OperatorConfig,
-    OperatorConfigInitStatus, PluginAlertRuntimeConfig, PluginDiscoveryConfig, SandboxAlertsConfig,
-    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
-    StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
-    launch_seccomp_requirements,
+    AlertForwardingConfig, CheckpointBackendConfig, CheckpointRuntimeConfig,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
+    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
+    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES,
+    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
+    HandObservationConfig, OperatorConfig, OperatorConfigInitStatus, PluginAlertRuntimeConfig,
+    PluginDiscoveryConfig, SandboxAlertsConfig, SandboxAlertsSynchronousConfig,
+    SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig, StartupPluginsConfig, launch_seccomp_requirements,
 };
 pub use payload::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
@@ -160,6 +160,23 @@ pub struct WebServerConfig {
     pub listen_addr: SocketAddr,
     pub request_read_timeout: Option<Duration>,
     pub alerts: WebAlertsConfig,
+    pub checkpoints: WebCheckpointsConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebCheckpointsConfig {
+    pub status_timeout_ms: u64,
+    pub poll_interval_ms: u32,
+}
+
+impl Default for WebCheckpointsConfig {
+    fn default() -> Self {
+        Self {
+            status_timeout_ms: 500,
+            poll_interval_ms: 1_500,
+        }
+    }
 }
 
 pub const DEFAULT_WEB_ALERTS_LIMIT: u32 = 30;

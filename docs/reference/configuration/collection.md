@@ -123,6 +123,7 @@ flowchart LR
 | `sync_pending_connection_max` | `1024` | 未归属 Trace 的连接在全局连接预算中的额外额度 |
 | `sync_plan_queue_capacity` | `1024` | 探针计划解析队列容量，`bpf-copy` 的计划解析也使用它 |
 | `sync_fd_reserve` | `4096` | 计算 fd 预算时为 daemon 其他用途预留的描述符数，可设为 `0` |
+| `sync_release_outbox_max_bytes` | `1048576` | 单条进程连接发生写阻塞时，尚未写出的回执上限；超限关闭该连接 |
 | `sync_accept_retry_delay_ms` | `100` | fd 耗尽后的接入重试间隔，毫秒 |
 | `sync_event_timeout_ms` | `5000` | 发送线程的无进度超时，毫秒 |
 | `sync_event_shutdown_timeout_ms` | `100` | runtime 退出排空的总预算，毫秒 |

@@ -9,6 +9,7 @@ use model_core::binary_identity::BinaryIdentity;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use model_core::process::NamespaceIdentity;
 
+use crate::checkpoint::{CheckpointCommand, LaunchCheckpointConfig};
 use crate::selector::TraceSelector;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +88,8 @@ pub struct TrackAddCommand {
     pub launch_mode: bool,
     pub launch_target: Option<LaunchTarget>,
     pub tls_probe_plans: Vec<LaunchTlsProbePlan>,
+    /// Present when the launch protects files with checkpoints.
+    pub checkpoint: Option<LaunchCheckpointConfig>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -230,4 +233,5 @@ pub enum ControlCommand {
     PluginConfigGet(PluginConfigGetCommand),
     PluginConfigValidate(PluginConfigValidateCommand),
     PluginConfigUpdate(PluginConfigUpdateCommand),
+    Checkpoint(CheckpointCommand),
 }

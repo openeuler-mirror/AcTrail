@@ -46,46 +46,93 @@ impl SqliteStorage {
             target_kind,
             after_action_id.filter(|value| !value.is_empty()),
         )?;
-        let Some(mut current) = target else {
-            return Ok(None);
-        };
-
-        let mut reverse_path = Vec::new();
-        let mut visited = BTreeSet::new();
-        loop {
-            if !visited.insert(current.action_key) {
-                return Err(SemanticActionStoreError::new(
-                    "semantic_action_display_path_to_kind",
-                    "cycle in semantic action display parents",
-                ));
-            }
-            let parent = selected_parent(
-                &connection,
-                trace_id,
-                current.action_key,
-                selected_parent_roles,
-            )?;
-            let offset = sibling_offset(
-                &connection,
-                trace_id,
-                parent.as_ref().map(|value| value.action_key),
-                &current,
-                display_parent_roles,
-            )?;
-            reverse_path.push(SemanticActionDisplayPathEntry {
-                parent_action_id: parent.as_ref().map(|value| value.action_id.clone()),
-                action_id: current.action_id,
-                offset,
-                kind: current.kind,
-            });
-            let Some(parent) = parent else {
-                break;
-            };
-            current = parent;
-        }
-        reverse_path.reverse();
-        Ok(Some(reverse_path))
+        target
+            .map(|target| {
+                display_path(
+                    &connection,
+                    trace_id,
+                    target,
+                    display_parent_roles,
+                    selected_parent_roles,
+                )
+            })
+            .transpose()
     }
+
+    /// The display path to one action, like `semantic_action_display_path_to_kind`.
+    pub fn semantic_action_display_path_to_action(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, SemanticActionStoreError> {
+        if self.is_purged(trace_id) {
+            return Err(SemanticActionStoreError::new(
+                "semantic_action_display_path_to_action",
+                "trace has been purged",
+            ));
+        }
+        if display_parent_roles.is_empty() {
+            return Ok(None);
+        }
+        let connection = self.connection().borrow();
+        action_position_by_id(&connection, trace_id, action_id)?
+            .map(|target| {
+                display_path(
+                    &connection,
+                    trace_id,
+                    target,
+                    display_parent_roles,
+                    selected_parent_roles,
+                )
+            })
+            .transpose()
+    }
+}
+
+fn display_path(
+    connection: &Connection,
+    trace_id: TraceId,
+    mut current: ActionPosition,
+    display_parent_roles: &[&str],
+    selected_parent_roles: &[&str],
+) -> Result<Vec<SemanticActionDisplayPathEntry>, SemanticActionStoreError> {
+    let mut reverse_path = Vec::new();
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(current.action_key) {
+            return Err(SemanticActionStoreError::new(
+                "semantic_action_display_path_to_kind",
+                "cycle in semantic action display parents",
+            ));
+        }
+        let parent = selected_parent(
+            connection,
+            trace_id,
+            current.action_key,
+            selected_parent_roles,
+        )?;
+        let offset = sibling_offset(
+            connection,
+            trace_id,
+            parent.as_ref().map(|value| value.action_key),
+            &current,
+            display_parent_roles,
+        )?;
+        reverse_path.push(SemanticActionDisplayPathEntry {
+            parent_action_id: parent.as_ref().map(|value| value.action_id.clone()),
+            action_id: current.action_id,
+            offset,
+            kind: current.kind,
+        });
+        let Some(parent) = parent else {
+            break;
+        };
+        current = parent;
+    }
+    reverse_path.reverse();
+    Ok(reverse_path)
 }
 
 fn navigation_target(

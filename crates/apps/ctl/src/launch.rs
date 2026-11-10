@@ -15,6 +15,7 @@ mod target;
 #[path = "launch/timing.rs"]
 mod timing;
 
+use control_contract::checkpoint::LaunchCheckpointConfig;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -70,6 +71,7 @@ pub(crate) struct LaunchRequest {
     pub supervision_poll_interval_ms: u64,
     pub ebpf_seccomp_policy: DeploymentPermissionPolicy,
     pub agent_integration: AgentLaunchIntegration,
+    pub checkpoint: Option<LaunchCheckpointConfig>,
     pub argv: Vec<String>,
 }
 
@@ -193,6 +195,7 @@ pub(crate) fn run_launch(
     timing.mark("resolve_child_process_ref");
 
     let track_add_request_id = next_request_id(request_id)?;
+    let checkpoint_enabled = request.checkpoint.is_some();
     let track_add = TrackAddCommand {
         request_id: track_add_request_id,
         root: child_ref.clone(),
@@ -202,6 +205,7 @@ pub(crate) fn run_launch(
         launch_mode: true,
         launch_target: Some(launch_target),
         tls_probe_plans: std::mem::take(&mut resources.direct_probe_plans),
+        checkpoint: request.checkpoint,
     };
     let reply = match client.send_launch_track_add(track_add, child.pidfd()) {
         Ok(reply) => reply,
@@ -256,6 +260,7 @@ pub(crate) fn run_launch(
         &request.agent_integration,
         &request.payload_tls_config,
         injection.as_ref(),
+        checkpoint_enabled,
         &mut timing,
     ) {
         Ok(envs) => envs,
@@ -420,6 +425,7 @@ fn launch_envs(
     agent_integration: &AgentLaunchIntegration,
     payload_tls_config: &PayloadTlsConfig,
     injection: &dyn LaunchInjection,
+    checkpoint_enabled: bool,
     timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
     let mut envs = injection.envs(EnvironmentContext {
@@ -437,6 +443,12 @@ fn launch_envs(
         ));
     }
     agent_integration.append_env(trace_id, control_socket_path, &mut envs)?;
+    // Each launch owns its response-holding policy, including when launched inside an Agent.
+    let hold_responses = checkpoint_enabled && sync_runtime;
+    envs.push((
+        tls_payload_sync::ENV_HOLD_RESPONSES.into(),
+        if hold_responses { "1" } else { "0" }.into(),
+    ));
     Ok(envs)
 }
 

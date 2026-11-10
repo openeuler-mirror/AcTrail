@@ -27,6 +27,9 @@ pub const ENV_REDACTION: &str = "TLS_PAYLOAD_SYNC_REDACTION";
 pub const ENV_EVENTS: &str = "TLS_PAYLOAD_SYNC_EVENTS";
 pub const ENV_TRACE_ID: &str = "TLS_PAYLOAD_SYNC_TRACE_ID";
 pub const ENV_EVENT_TOKEN: &str = "TLS_PAYLOAD_SYNC_EVENT_TOKEN";
+/// Set for checkpoint launches: a TLS read waits until the daemon releases what the process wrote
+/// before it on the same connection.
+pub const ENV_HOLD_RESPONSES: &str = "TLS_PAYLOAD_SYNC_HOLD_RESPONSES";
 pub const ENV_EVENT_SOCKET: &str = "TLS_PAYLOAD_SYNC_EVENT_SOCKET";
 pub const ENV_EVENT_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS";
 pub const ENV_EVENT_SHUTDOWN_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS";

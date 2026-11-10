@@ -856,6 +856,23 @@ impl StorageBackend for SqliteStorage {
         .map_err(StorageError::from)
     }
 
+    fn semantic_action_display_path_to_action(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<Vec<storage_core::SemanticActionDisplayPathEntry>>, StorageError> {
+        SqliteStorage::semantic_action_display_path_to_action(
+            self,
+            trace_id,
+            display_parent_roles,
+            selected_parent_roles,
+            action_id,
+        )
+        .map_err(StorageError::from)
+    }
+
     fn semantic_action_children_matching_kinds(
         &self,
         trace_id: TraceId,

@@ -367,6 +367,7 @@ impl StorageAttachService {
             provider_classifier,
             provider_classification_enabled,
             pending_tool_names: BTreeMap::new(),
+            watched: Default::default(),
         })
     }
 }

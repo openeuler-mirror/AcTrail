@@ -202,6 +202,15 @@ impl DeadlineStream {
     }
 }
 
+impl Drop for DeadlineStream {
+    fn drop(&mut self) {
+        if self.progress.is_some() {
+            // Wake the release reader and let the daemon see EOF when the writer stops.
+            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
 impl Read for DeadlineStream {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {

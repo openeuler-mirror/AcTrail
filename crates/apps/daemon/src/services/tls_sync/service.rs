@@ -10,6 +10,8 @@ mod frame_buffer;
 mod launch;
 #[path = "limits.rs"]
 mod limits;
+#[path = "release.rs"]
+mod release;
 #[path = "resolver.rs"]
 mod resolver;
 #[path = "root_path.rs"]
@@ -44,6 +46,7 @@ use uds_control_server::PeerCredentials;
 
 use self::clients::ReceiveLimits;
 use self::frame_buffer::FrameBuffer;
+use self::release::{ClientReleases, Hold};
 use self::resolver::{ExecPlanConsumer, TlsSyncPlanResolver};
 use self::root_path::{PeerRootHandle, PinnedPeerPath};
 
@@ -53,10 +56,14 @@ pub(crate) struct TlsSyncService {
     client_epoll: Option<OwnedFd>,
     accept_paused: bool,
     accept_retry_delay: Duration,
+    release_outbox_max_bytes: usize,
     client_max: usize,
     trace_connection_max: u32,
     trace_connections: BTreeMap<TraceId, TraceConnections>,
     next_client: u64,
+    /// LLM requests whose responses wait for checkpoint work.
+    holds: BTreeMap<u64, Hold>,
+    next_hold: u64,
     resolver: Option<TlsSyncPlanResolver>,
     read_buffer: Vec<u8>,
     receive_limits: ReceiveLimits,
@@ -135,10 +142,13 @@ impl TlsSyncService {
                 client_epoll: None,
                 accept_paused: false,
                 accept_retry_delay: Duration::from_millis(config.sync_accept_retry_delay_ms),
+                release_outbox_max_bytes: config.sync_release_outbox_max_bytes as usize,
                 client_max: 0,
                 trace_connection_max: config.sync_trace_connection_max,
                 trace_connections: BTreeMap::new(),
                 next_client: 0,
+                holds: BTreeMap::new(),
+                next_hold: 0,
                 resolver,
                 read_buffer: Vec::new(),
                 receive_limits: ReceiveLimits {
@@ -183,10 +193,13 @@ impl TlsSyncService {
             client_epoll: Some(client_epoll),
             accept_paused: false,
             accept_retry_delay: Duration::from_millis(config.sync_accept_retry_delay_ms),
+            release_outbox_max_bytes: config.sync_release_outbox_max_bytes as usize,
             client_max: limits::client_limit(config, active_trace_max)?,
             trace_connection_max: config.sync_trace_connection_max,
             trace_connections: BTreeMap::new(),
             next_client: 0,
+            holds: BTreeMap::new(),
+            next_hold: 0,
             resolver: Some(resolver),
             read_buffer: vec![0; config.sync_read_buffer_bytes as usize],
             receive_limits: ReceiveLimits {
@@ -290,14 +303,18 @@ impl TlsSyncService {
 }
 
 struct TlsSyncClient {
+    id: u64,
     trace: Option<TraceId>,
     stream: UnixStream,
     credentials: PeerCredentials,
     registration: Option<EventRegistration>,
+    /// The runtime waits for releases: it was launched with checkpoints.
+    holds_responses: bool,
     buffer: FrameBuffer,
     process_cache: BTreeMap<TlsSyncProcessCacheKey, ProcessObservation>,
     /// Streams reported on this process transport, closed together when it disconnects.
     streams: BTreeMap<PayloadStreamKey, ProcessObservation>,
+    releases: ClientReleases,
 }
 
 #[derive(Default)]
@@ -307,7 +324,7 @@ struct TraceConnections {
 }
 
 /// Names one TLS connection of a process. Payload segments and flow diagnostics of the same
-/// connection carry the same key.
+/// connection carry the same key; LLM requests are held by it.
 fn stream_key(pid: u32, connection: u64) -> String {
     format!("tls-sync:{pid}:{connection:x}")
 }
