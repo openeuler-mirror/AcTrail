@@ -1,4 +1,16 @@
+//! Own logical process identities and their authoritative coordinate indexes.
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, RwLock};
+
+/// Read-only access to the manager-owned boot-time index.
+#[derive(Clone, Debug, Default)]
+pub struct HostProcessLookup(Arc<RwLock<BTreeMap<(u32, u64), ProcessIdentity>>>);
+
+impl HostProcessLookup {
+    pub fn lookup(&self, pid: u32, start_boottime_ns: u64) -> Option<ProcessIdentity> {
+        self.0.read().ok()?.get(&(pid, start_boottime_ns)).copied()
+    }
+}
 
 use crate::{
     HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessIdentity,
@@ -34,20 +46,24 @@ pub struct ProcessIdentityManager {
     identity_block_end: u64,
     records: BTreeMap<ProcessIdentity, ProcessRecord>,
     by_host_start_ticks: BTreeMap<(u32, u64), ProcessIdentity>,
-    by_host_start_boottime: BTreeMap<(u32, u64), ProcessIdentity>,
+    by_host_start_boottime: HostProcessLookup,
     by_namespace: BTreeMap<NamespaceProcessCoordinates, ProcessIdentity>,
     active_by_host_pid: BTreeMap<u32, ProcessIdentity>,
     active_by_namespace_pid: BTreeMap<(NamespaceIdentity, u32), ProcessIdentity>,
 }
 
 impl ProcessIdentityManager {
+    pub fn host_lookup(&self) -> HostProcessLookup {
+        self.by_host_start_boottime.clone()
+    }
+
     pub fn new(next_identity: u64) -> Self {
         Self {
             next_identity,
             identity_block_end: u64::MAX,
             records: BTreeMap::new(),
             by_host_start_ticks: BTreeMap::new(),
-            by_host_start_boottime: BTreeMap::new(),
+            by_host_start_boottime: HostProcessLookup::default(),
             by_namespace: BTreeMap::new(),
             active_by_host_pid: BTreeMap::new(),
             active_by_namespace_pid: BTreeMap::new(),
@@ -67,7 +83,7 @@ impl ProcessIdentityManager {
             identity_block_end: block_end,
             records: BTreeMap::new(),
             by_host_start_ticks: BTreeMap::new(),
-            by_host_start_boottime: BTreeMap::new(),
+            by_host_start_boottime: HostProcessLookup::default(),
             by_namespace: BTreeMap::new(),
             active_by_host_pid: BTreeMap::new(),
             active_by_namespace_pid: BTreeMap::new(),
@@ -230,9 +246,9 @@ impl ProcessIdentityManager {
             if let Some(start_boottime_ns) = host.start_boottime_ns
                 && let Some(identity) = self
                     .by_host_start_boottime
-                    .get(&(host.pid, start_boottime_ns))
+                    .lookup(host.pid, start_boottime_ns)
             {
-                candidates.insert(*identity);
+                candidates.insert(identity);
             }
             if let Some(identity) = self.active_by_host_pid.get(&host.pid)
                 && self
@@ -363,6 +379,9 @@ impl ProcessIdentityManager {
         }
         if let Some(start_boottime_ns) = host.start_boottime_ns {
             self.by_host_start_boottime
+                .0
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
                 .insert((host.pid, start_boottime_ns), identity);
         }
     }

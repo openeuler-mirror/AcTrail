@@ -26,7 +26,7 @@ Web 只读启动快照使用启动时读取的配置文件原文：普通 `init`
 
 | 字段 | 默认值 | 所需输出 |
 | --- | --- | --- |
-| `writable_open` | `true` | 可写、创建或截断打开的意图及结果；打开成功不代表实际发生写入 |
+| `writable_open` | `true` | 可写、创建或截断打开的意图及打开结果 |
 | `path_mutations` | `true` | rename、unlink、mkdir、rmdir、truncate 等路径修改及结果 |
 | `fd_mutations` | `false` | ftruncate、共享可写 mmap 等需要 FD 路径关联的修改及结果 |
 
@@ -112,26 +112,96 @@ SQLite 使用 WAL 时，备份和恢复必须包含配套 WAL/SHM 状态或在 d
 
 ## `[web]` 与 `[export.snapshot]`
 
-Web 默认监听 `127.0.0.1:18080`，request read timeout 为 `1000` ms。Web 还可能执行本地插件管理，不能直接暴露到不可信网络。
-
-`[web.checkpoints]` 配置 checkpoint 页面查询和刷新：
+Web 提供本地分析与插件管理，部署范围为可信网络。
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
-| `status_timeout_ms` | `500` | 查询 daemon 中 checkpoint 暂停和执行状态的超时 |
-| `poll_interval_ms` | `1500` | 有运行中 Trace 或未完成工作时，页面自动刷新的间隔 |
+| `web.listen_addr` | `"127.0.0.1:18080"` | HTTP 监听地址 |
+| `web.request_read_timeout_ms` | `"1000"` | 请求读取超时，单位毫秒，使用字符串配置。`"disabled"` 关闭超时 |
 
-各项须大于零，刷新间隔不得超过 `2147483647` 毫秒。状态查询超时后仍显示历史，运行状态显示为未知。Web 使用启动时加载的配置；修改后重启 `actrailweb`。首次请求失败、尚未取得刷新配置时，页面按默认 `1500` 毫秒重试。
+### Checkpoint 页面
 
-`actrailweb` 的渐进时间线预算由启动环境设置：`ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT=250`、`ACTRAIL_WEB_TIMELINE_MAX_LIMIT=1000`、`ACTRAIL_WEB_TIMELINE_CANDIDATES=2000`、`ACTRAIL_WEB_TIMELINE_LINKS=2000`。值须为正整数，默认页大小不得超过最大页大小，最大页大小不得超过候选预算。参数与分页语义见 [Web Runtime](../../architecture/components/web-runtime.md#渐进时间线查询)。
+以下字段属于 `[web.checkpoints]`，单位为毫秒。
 
-显式 idle 查询预算由 `ACTRAIL_WEB_IDLE_DEFAULT_LIMIT=100`、`ACTRAIL_WEB_IDLE_MAX_LIMIT=500`、`ACTRAIL_WEB_IDLE_CANDIDATES=1000` 设置。值须为小于 `i64::MAX` 的正整数，并满足默认页大小不超过最大页大小、最大页大小不超过候选预算；无效设置使 Web 启动失败。
+| 字段 | 默认值 | 取值范围 | 含义 |
+| --- | --- | --- | --- |
+| `status_timeout_ms` | `500` | 大于 `0` | 查询 daemon 中 checkpoint 暂停和执行状态的超时 |
+| `poll_interval_ms` | `1500` | `1..=2147483647` | 有运行中 Trace 或未完成工作时，页面自动刷新的间隔 |
 
-正文查询预算由 `ACTRAIL_WEB_CONTENT_MAX_BYTES=16777216`、`ACTRAIL_WEB_CONTENT_NODE_MAX_ITEMS=250`、`ACTRAIL_WEB_CONTENT_NODE_PREVIEW_BYTES=65536` 和 `ACTRAIL_WEB_CONTENT_NODE_BLOCK_BYTES=8388608` 设置，分别限制正文返回字节、节点页大小、叶子与普通 HTTP 正文默认页大小及请求内 block 读取。普通 HTTP 正文复用 block 预算限制解码量，每页重新解码相关正文，不缓存完整正文。各项须为小于 `i64::MAX` 的正整数；无效设置使 Web 启动失败。读取超过预算返回当前请求错误。字段语义见 [Web Runtime](../../architecture/components/web-runtime.md#正文查询预算)。
+| 条件 | 行为 |
+| --- | --- |
+| 修改配置 | 重启 `actrailweb` 后生效 |
+| 状态查询超时 | 继续显示历史，运行状态显示为未知 |
+| 首次请求失败，尚未取得刷新配置 | 按默认 `1500` 毫秒重试 |
 
-本地与 Cluster trace 列表使用 `ACTRAIL_WEB_TRACES_DEFAULT_LIMIT=50`、`ACTRAIL_WEB_TRACES_MAX_LIMIT=250`，须为小于 `i64::MAX` 的正整数并满足默认每页数量不超过最大每页数量；无效配置使 Web 启动失败。列表按 `page` 和 `limit` 直接查询，返回过滤后的准确总数与总页数；配置不限制计数或跳页时扫描的元数据行数。
+### 查询环境变量
 
-Snapshot 默认目录为 `/var/lib/actrail/export`，当前生成配置的 `payload_bytes_enabled` 与 `payload_text_enabled` 都为 `true`。它们控制 graph JSON 的 payload 内容，不等同于 LLM semantic body export 或实时 OTEL attribute mode。
+`actrailweb` 在启动时读取以下环境变量。
+
+| 查询类型 | 配置表 | 接口约定 |
+| --- | --- | --- |
+| Trace 列表 | [列表限制](#trace-列表环境变量) | [列表分页](../protocols/web-api.md#trace-列表) |
+| 时间线 | [时间线限制](#时间线环境变量) | [时间线接口](../protocols/web-api.md#时间线) |
+| Idle 区间 | [Idle 限制](#idle-环境变量) | [Idle 查询](../protocols/web-api.md#idle-区间) |
+| 正文 | [正文限制](#正文环境变量) | [正文分页](../protocols/web-api.md#正文分页) |
+
+#### Trace 列表环境变量
+
+| 环境变量 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `ACTRAIL_WEB_TRACES_DEFAULT_LIMIT` | `50` | 默认每页条目数 |
+| `ACTRAIL_WEB_TRACES_MAX_LIMIT` | `250` | 客户端可请求的每页条目数上限 |
+
+#### 时间线环境变量
+
+| 环境变量 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `ACTRAIL_WEB_TIMELINE_DEFAULT_LIMIT` | `250` | 默认每页动作数 |
+| `ACTRAIL_WEB_TIMELINE_MAX_LIMIT` | `1000` | 客户端可请求的每页动作数上限 |
+| `ACTRAIL_WEB_TIMELINE_CANDIDATES` | `2000` | 单页候选扫描上限 |
+| `ACTRAIL_WEB_TIMELINE_LINKS` | `2000` | 单页直接关联读取上限 |
+
+#### Idle 环境变量
+
+| 环境变量 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `ACTRAIL_WEB_IDLE_DEFAULT_LIMIT` | `100` | 默认每页区间数 |
+| `ACTRAIL_WEB_IDLE_MAX_LIMIT` | `500` | 客户端可请求的每页区间数上限 |
+| `ACTRAIL_WEB_IDLE_CANDIDATES` | `1000` | 单页候选扫描上限 |
+
+#### 正文环境变量
+
+| 环境变量 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `ACTRAIL_WEB_CONTENT_MAX_BYTES` | `16777216` | LLM request、MCP content 与普通 HTTP 正文的 `max_bytes` 上限 |
+| `ACTRAIL_WEB_CONTENT_NODE_MAX_ITEMS` | `250` | 节点页的子项数量上限 |
+| `ACTRAIL_WEB_CONTENT_NODE_PREVIEW_BYTES` | `65536` | 字符串叶子与普通 HTTP 正文默认单页 UTF-8 字节上限 |
+| `ACTRAIL_WEB_CONTENT_NODE_BLOCK_BYTES` | `8388608` | 请求内 block 累计读取字节上限，同时限制普通 HTTP 正文的单次解码量 |
+
+#### 校验与读取规则
+
+| 范围 | 启动校验条件 |
+| --- | --- |
+| 全部环境变量 | 正整数，且小于 `i64::MAX` |
+| Trace 列表 | `DEFAULT_LIMIT <= MAX_LIMIT` |
+| 时间线、Idle | 各自满足 `DEFAULT_LIMIT <= MAX_LIMIT <= CANDIDATES` |
+
+校验失败时，Web 启动失败。
+
+| 查询 | 读取行为 |
+| --- | --- |
+| 本地与 Cluster Trace 列表 | 按 `page` 和 `limit` 查询，返回过滤后的准确总数与总页数 |
+| Trace 计数与跳页 | 按查询需要扫描元数据，页大小上限只限制返回条目数 |
+| 普通 HTTP 正文 | 每页重新读取并解码相关正文，读取与解码受 block 字节上限约束 |
+| 正文读取超出上限 | 返回当前请求错误 |
+
+### Snapshot 导出
+
+| 配置项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `export.snapshot.directory` | `"/var/lib/actrail/export"` | Snapshot 输出位置 |
+| `export.snapshot.payload_bytes_enabled` | `true` | 在 graph JSON 中导出 payload 字节内容 |
+| `export.snapshot.payload_text_enabled` | `true` | 在 graph JSON 中导出 payload 文本内容 |
 
 ## `[supervision]`
 

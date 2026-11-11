@@ -221,6 +221,7 @@ impl StorageAttachService {
                     Some(file_policy_host),
                     Some(command_policy_host),
                     Some(network_policy_host),
+                    self.storage_config.path(),
                 )?;
                 self.control_plugins.add_decider(decider, manifest_warnings)
             }
@@ -618,6 +619,7 @@ fn build_control_decider_from_manifest(
     file_policy_host: Option<std::sync::Arc<dyn plugin_system::FilePolicyHost>>,
     command_policy_host: Option<std::sync::Arc<dyn plugin_system::CommandPolicyHost>>,
     network_policy_host: Option<std::sync::Arc<dyn plugin_system::NetworkPolicyHost>>,
+    storage_path: Option<&Path>,
 ) -> Result<Box<dyn ControlDecider>, ControlError> {
     match manifest.runtime_kind() {
         PluginRuntimeKind::Wasm => {
@@ -629,6 +631,7 @@ fn build_control_decider_from_manifest(
                 file_policy_host,
                 command_policy_host,
                 network_policy_host,
+                storage_path,
             )
             .map_err(|error| ControlError::new(error.code, error.message))?;
             Ok(Box::new(decider))

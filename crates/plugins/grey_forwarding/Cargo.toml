@@ -1,0 +1,15 @@
+[package]
+name = "actrail_grey_forwarding"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macros", "realloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+wee_alloc = { version = "0.4", default-features = false }
+
+[workspace]

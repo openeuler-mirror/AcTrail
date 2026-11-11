@@ -29,6 +29,7 @@ impl GreyContext {
             domain => return Err(format!("unknown LSM grey domain {domain}")),
         };
         Ok(ControlDecisionRequest {
+            logical_process_id: None,
             decision_id: format!("lsm:{}", request.request_id),
             trace_id: event.trace_id.to_string(),
             subject,

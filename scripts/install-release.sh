@@ -103,6 +103,7 @@ binaries=(
   actrail-sb
   actrail-vsock-gateway
   actraild-alert-proxy
+  actraild-grey-proxy
   actrailviewer
   actrailweb
 )

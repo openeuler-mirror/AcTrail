@@ -9,6 +9,7 @@ members = [
     "crates/apps/web",
     "crates/apps/vsock_gateway",
     "crates/apps/alert_proxy",
+    "crates/apps/grey_proxy",
     "crates/apps/sb",
     "crates/core/model",
     "crates/core/linux_platform",

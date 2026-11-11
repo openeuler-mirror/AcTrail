@@ -94,6 +94,7 @@ pub(crate) struct StorageAttachService {
     pub(super) host_id: Option<String>,
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
+    pub(super) storage_config: storage_factory::StorageConfig,
     pub(super) process_registry: ProcessIdentityManager,
     pub(super) process_id_block_size: u64,
     pub(super) collector: EbpfCollector,

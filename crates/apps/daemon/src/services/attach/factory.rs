@@ -42,6 +42,7 @@ impl StorageAttachService {
     pub(in crate::services) fn new(
         profiles: DaemonProfileRegistry,
         storage: Box<dyn StorageBackend>,
+        storage_config: storage_factory::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         active_trace_max: u32,
@@ -70,6 +71,7 @@ impl StorageAttachService {
         Self::new_with_provider_classifier(
             profiles,
             storage,
+            storage_config,
             ebpf_config,
             payload_config,
             active_trace_max,
@@ -102,6 +104,7 @@ impl StorageAttachService {
     pub(in crate::services) fn new_with_provider_classifier(
         mut profiles: DaemonProfileRegistry,
         mut storage: Box<dyn StorageBackend>,
+        storage_config: storage_factory::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         mut payload_config: PayloadConfig,
         active_trace_max: u32,
@@ -219,6 +222,7 @@ impl StorageAttachService {
                     },
                     std::sync::Arc::new(crate::services::access_control::LsmPluginDecider(
                         control_plugins.downgrade(),
+                        process_registry.host_lookup(),
                     )),
                 )
                 .map_err(|message| {
@@ -290,6 +294,7 @@ impl StorageAttachService {
             host_id: crate::host_id::get(),
             launch_seccomp_requirements,
             storage,
+            storage_config,
             process_registry,
             process_id_block_size: block_size,
             collector,

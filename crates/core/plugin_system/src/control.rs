@@ -331,6 +331,8 @@ impl ControlActorProcessIdentity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlDecisionRequest {
+    /// Logical storage identity supplied by the daemon when already known.
+    pub logical_process_id: Option<u64>,
     pub decision_id: String,
     pub trace_id: String,
     pub subject: ControlSubject,

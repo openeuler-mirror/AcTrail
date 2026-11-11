@@ -63,6 +63,7 @@
 │   └── [x] service.rs # 管理文件治理运行依赖与请求排空。
 │       └── [x] struct FileEnforcementService # 持有文件治理状态并驱动文件权限事件处理。
 ├── [x] access_control/ # 将 LSM 访问结果投影为审计记录与边界告警。
+│   ├── [x] grey.rs # LsmPluginDecider 在调用插件前查询权威进程索引并传入已知逻辑进程 ID，未关联时保留缺失状态。
 │   ├── [x] descriptor.rs # 描述 LSM 访问控制运行能力。
 │   │   └── [x] struct LsmAccessControl # 提供 LSM 访问控制描述及配置适配入口。
 │   ├── [x] audit.rs # 将内核访问事实映射为统一审计事件。

@@ -151,6 +151,10 @@ pub(super) fn plugin_command_request_val(request: &PluginCommandRequest) -> Val 
 pub(super) fn decision_request_val(request: &ControlDecisionRequest) -> Val {
     Val::Record(vec![
         (
+            "logical-process-id".into(),
+            Val::Option(request.logical_process_id.map(|id| Box::new(Val::U64(id)))),
+        ),
+        (
             component_abi::decision_request::DECISION_ID.to_string(),
             Val::String(request.decision_id.clone()),
         ),

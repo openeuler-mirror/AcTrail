@@ -17,6 +17,7 @@
 │   ├── [x] cluster/ # reporter 与 center；bundle、索引及上报状态
 │   ├── [x] sb/ # actrail-sb；Guest 采集服务组合
 │   ├── [x] vsock_gateway/ # Guest VSOCK 到 daemon TCP 的有界转发
+│   ├── [x] grey_proxy/ # WASM grey 运行时托管的子进程；查询近期进程动作并请求外部裁决；详见 apps/grey_proxy/code-layout.md
 │   └── [x] alert_proxy/ # 独立告警代理与订阅连接
 ├── [x] core/ # 领域模型、配置与运行时
 │   ├── [x] config/ # operator 配置组合、默认值与校验

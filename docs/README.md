@@ -4,6 +4,8 @@ AcTrail 观测并治理 AI Agent 的真实活动，提供行为证据、语义�
 
 | 文档 | 内容 |
 | --- | --- |
+| [Agent 观测对比](comparison/agent-observation.md) | 日志、SDK tracing、代理、系统观测与 Langfuse 能力表 |
+| [Agent 治理对比](comparison/agent-governance.md) | Docker＋iptables、Landlock、nsjail、bubblewrap 与 BPF LSM 策略能力表 |
 | [快速开始](getting-started/quickstart.md) | 启动 daemon、运行 Agent、查询观测结果 |
 | [能力概览](concepts/capabilities.md)与[采集清单](concepts/collection-observation-checklist.md) | 安全调查能力、证据来源与输出 |
 | [运行模型](concepts/runtime-model.md)与[安全模型](concepts/security-model.md) | trace、数据、身份与权限边界 |

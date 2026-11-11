@@ -143,6 +143,7 @@ interface types {
   }
 
   record decision-request {
+    logical-process-id: option<u64>,
     decision-id: string,
     trace-id: string,
     task-id: option<string>,

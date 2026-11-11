@@ -20,6 +20,8 @@
 │       ├── [x] timeline.rs # 时间线游标、范围与分页结果
 │       │   ├── [x] struct TimelineQuery # 描述时间线查询方向和范围
 │       │   └── [x] struct TimelinePage # 返回带游标的时间线记录
+│       ├── [x] recent_actions.rs # 同进程近期动作的独立有界 ID 查询
+│       │   └── [x] struct RecentActionsQuery # 按 trace、进程、种类、时间范围和数量选择最新 ID
 │       ├── [x] trace_page.rs # trace 列表分页与数量汇总
 │       │   ├── [x] struct TracePageQuery # 保存 trace 筛选与分页条件
 │       │   └── [x] struct TraceCounts # 汇总 trace 关联数据数量
@@ -83,6 +85,9 @@
             │   ├── [x] store/ # 保存动作及其增量状态。
             │   │   └── [x] state.rs # 保存动作状态与属性更新。
             │   ├── [x] query.rs # 查询语义动作与关系记录。
+            │   ├── [x] timeline/ # 轻量时间线与独立近期 ID 查询
+            │   │   ├── [x] reader.rs # 保留简略时间线的热字段查询
+            │   │   └── [x] recent.rs # RecentActionsReader 反向索引选择有限 ID，供调用方按需读取详情
             │   ├── [x] root_tree.rs # 查询展示根节点与子项信息。
             │   ├── [x] root_tree/ # 组织展示根节点查询。
             │   └── [x] navigation.rs # 查询动作展示路径与位置。

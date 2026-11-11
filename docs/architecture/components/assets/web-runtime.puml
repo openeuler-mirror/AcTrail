@@ -1,27 +1,30 @@
 @startuml
+!include <C4/C4_Component>
 skinparam defaultFontName "WenQuanYi Micro Hei"
-skinparam componentStyle rectangle
-left to right direction
+LAYOUT_TOP_DOWN()
 
-title actrailweb 当前组件与请求路径
+title actrailweb 组件与请求路径
 
-actor "安全分析师" as Analyst
-component "HTTP Server\n每连接一个工作线程" as Http
-component "Router\nhealth、API、静态资源" as Router
-component "View Projection\ntrace、action tree、统计、告警" as View
-component "Plugin Administration\n配置与 daemon 控制" as Plugins
-component "Embedded Vue SPA" as Spa
-database "AcTrail Storage\n只读打开" as Storage
-folder "Cluster root\n远端 trace 索引" as Cluster
-component "actraild control socket" as Daemon
+Container(browser, "浏览器", "Vue SPA", "展示观测数据，提交配置与插件操作")
+Container_Boundary(web, "actrailweb HTTP 服务") {
+    Component(router, "HTTP 入口", "Rust", "http::route\n监听、请求分发与响应压缩\nGET /health：请求处理状态")
+    Component(assets, "静态资源", "render::asset", "GET /、GET /assets/*\n返回编译时嵌入的页面与资源")
+    Component(view, "View Projection", "view", "GET /api/traces、/api/traces/{id}/…\n统计与告警 API\nGET /api/config/current：启动配置快照")
+    Component(config, "配置编辑器", "ConfigHttp / ConfigEditor", "GET /api/config/editable：读取字段\nPOST /api/config/editable：校验并保存")
+    Component(plugins, "插件管理", "PluginHttp", "GET /api/plugins/catalog\nPOST /api/plugins/catalog/load\nPOST /api/plugins/runtime/{unload,command}")
+}
+ContainerDb(storage, "本地 Storage", "SQLite", "本地模式：以只读方式查询")
+ContainerDb(cluster, "Cluster root", "中心索引与 trace.sqlite", "Cluster 模式：按 trace_uid 定位快照")
+ContainerDb(operator, "Operator 配置", "配置文件", "保存可编辑字段与其他配置")
+Container(daemon, "actraild", "本地控制 socket", "执行插件 load、unload 与 command")
 
-Analyst --> Http : HTTP
-Http --> Router : 解析请求
-Router --> Spa : / 与 /assets/*
-Router --> View : trace / stats / alert API
-Router --> Plugins : plugin API
-View --> Storage : 本地模式
-View --> Cluster : cluster 模式
-Plugins --> Daemon : load / unload 等控制
-Router --> Analyst : JSON / CSV / assets
+Rel(browser, router, "HTTP 请求 → JSON / CSV / 页面响应", "HTTP")
+Rel(router, assets, "render::asset → 静态资源")
+Rel(router, view, "trace、stats、alert 查询 → JSON / CSV")
+Rel(router, config, "ConfigHttp::route → 字段 / 保存结果")
+Rel(router, plugins, "PluginHttp::route → catalog / 操作结果")
+Rel(view, storage, "查询 → 观测记录", "只读")
+Rel(view, cluster, "按 UID 查询 → 快照记录", "只读")
+Rel(config, operator, "ConfigEditor::read / save → 配置值 / 保存结果")
+Rel(plugins, daemon, "load / unload / command → 执行结果", "control socket")
 @enduml

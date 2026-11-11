@@ -1,7 +1,8 @@
 状态标记：`[ ]` 待实现，`[/]` 修改中，`[x]` 已完成，`[-]` 待删除或迁移。
 
 ```text
-[x] crates/plugins/ # 告警转发、隔离资源告警的内置插件
+[x] crates/plugins/ # 内置插件与 WASM 插件实现
+├── [x] grey_forwarding/ # WASM 控制插件；使用运行时提供的连接信息，将待决动作、trace 和逻辑进程 ID 发送至 grey_proxy，返回裁决或调用失败
 ├── [x] alert_forwarding/ # 依据类别过滤告警，向当前连接提供非阻塞投递入口
 │   └── [x] src/ # 转发配置、连接代际与投递状态
 │       ├── [x] lib.rs # 导出配置、插件运行时和投递结果
