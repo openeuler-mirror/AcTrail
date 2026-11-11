@@ -96,10 +96,6 @@ class LsmAccessControlXiaooCase(TestCase):
             selections = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS", ",".join(BackendSelection.MATRIX)).split(",")
             for selection in selections:
                 self._selection = BackendSelection(selection.strip())
-                if os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_REUSE") == "1":
-                    from .startup.reuse import StartupReuseScenario
-                    StartupReuseScenario(self).run(context, results, port)
-                    continue
                 if self._network_semantics or self._network_ranges:
                     from .network_semantics.scenario import NetworkSemanticsScenario
                     if self._network_ranges:
@@ -117,6 +113,10 @@ class LsmAccessControlXiaooCase(TestCase):
                 if self._continued:
                     from .continued.scenario import ContinuedAccessScenario
                     ContinuedAccessScenario(self).run(context, results, port)
+                    continue
+                if os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_REUSE") == "1":
+                    from .startup.reuse import StartupReuseScenario
+                    StartupReuseScenario(self).run(context, results, port)
                     continue
                 if self._paths:
                     if self._selection.name not in ("lsm", "fanotify_seccomp"):

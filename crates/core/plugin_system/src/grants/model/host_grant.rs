@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PluginHostGrant {
+    HttpRequest,
     PayloadRead,
     PayloadReadSource {
         source: String,
@@ -46,6 +47,9 @@ pub enum PluginHostGrant {
 
 impl PluginHostGrant {
     pub fn parse(raw: &str) -> Result<Self, String> {
+        if raw == "http.request" {
+            return Ok(Self::HttpRequest);
+        }
         if raw == "payload-read" {
             return Ok(Self::PayloadRead);
         }
@@ -137,6 +141,7 @@ impl PluginHostGrant {
 
     pub fn capability(&self) -> PluginCapability {
         match self {
+            Self::HttpRequest => PluginCapability::HttpRequest,
             Self::PayloadRead | Self::PayloadReadSource { .. } => PluginCapability::PayloadRead,
             Self::ContextQuery => PluginCapability::ContextQuery,
             Self::TraceAnalysisRead => PluginCapability::TraceAnalysisRead,
@@ -169,6 +174,7 @@ impl PluginHostGrant {
 
     pub fn to_wire(&self) -> String {
         match self {
+            Self::HttpRequest => "http.request".to_string(),
             Self::PayloadRead => "payload-read".to_string(),
             Self::PayloadReadSource { source } => format!("payload-read:source={source}"),
             Self::ContextQuery => "context-query".to_string(),

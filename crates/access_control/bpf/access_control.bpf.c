@@ -21,10 +21,8 @@ static __always_inline int ac_file_access(struct file *file, __u32 mask, int use
     __u32 first = mask & 1 ? 1 : (mask & 2 ? 6 : 7);
     int ready = ac_begin(first, &context);
     if (ready <= 0) return ready;
-    long length = use_d_path
-        ? ac_d_path(&file->f_path, (char *)context.work->key.resource, AC_RESOURCE_BYTES)
-        : ac_path_resource(context.work, &file->f_path);
-    if (!use_d_path && !length) return 0;
+    long length = 0;
+    int resolved = 0;
     /* Open, read and write share one path resolution and one policy snapshot. */
     #pragma unroll
     for (__u32 index = 0; index < 3; index++) {
@@ -35,43 +33,65 @@ static __always_inline int ac_file_access(struct file *file, __u32 mask, int use
             if (ready < 0) return ready;
             if (!ready) continue;
         }
-        int result = ac_finish(&context, ac_path_candidates(&context, length));
+        ready = ac_prepare_resource(&context);
+        if (ready < 0) return ready;
+        if (!ready) continue;
+        /* Resolve only when one of this operation's domains needs the path. */
+        if (!resolved) {
+            length = use_d_path
+                ? ac_d_path(&file->f_path, (char *)context.work->key.resource, AC_RESOURCE_BYTES)
+                : ac_path_resource(context.work, &file->f_path);
+            if (!use_d_path && !length) return 0;
+            resolved = 1;
+        }
+        int error = ac_path_candidates(&context, length);
+        /* Set after the BPF subprogram call so LLVM eliminates the sleepable
+         * kfunc entirely from permission, mprotect and file_truncate hooks. */
+        context.can_wait = use_d_path;
+        int result = ac_finish(&context, error);
         if (result) return result;
     }
     return 0;
 }
 
-static __always_inline int ac_file_path(struct file *file, __u32 domain) {
+static __always_inline int ac_exec_path(struct linux_binprm *bprm) {
     struct ac_context context = {};
-    int ready = ac_begin(domain, &context);
+    int ready = ac_begin(4, &context);
     if (ready <= 0) return ready;
-    long length = ac_d_path(&file->f_path,
+    ready = ac_prepare_resource(&context);
+    if (ready <= 0) return ready;
+    long length = ac_d_path(&bprm->file->f_path,
         (char *)context.work->key.resource, AC_RESOURCE_BYTES);
     int error = ac_path_candidates(&context, length);
-    return ac_finish(&context, error);
+    return ac_finish_exec(&context, error, bprm);
 }
 
 static __always_inline int ac_directory_path(
-    struct path *directory, struct dentry *entry, __u32 domain
+    struct path *directory, struct dentry *entry, __u32 domain,
+    struct ac_context *context
 ) {
-    struct ac_context context = {};
-    int ready = ac_begin(domain, &context);
+    int ready = ac_begin(domain, context);
     if (ready <= 0) return ready;
-    int length = ac_directory_resource(context.work, directory, entry);
-    int error = ac_path_candidates(&context, length);
-    return ac_finish(&context, error);
+    ready = ac_prepare_resource(context);
+    if (ready <= 0) return ready;
+    int length = ac_directory_resource(context->work, directory, entry);
+    int error = ac_path_candidates(context, length);
+    return ac_finish(context, error);
 }
 
-static __always_inline int ac_path_access(struct path *path, __u32 domain) {
-    struct ac_context context = {};
-    int ready = ac_begin(domain, &context);
+static __always_inline int ac_path_access(
+    struct path *path, __u32 domain, struct ac_context *context
+) {
+    int ready = ac_begin(domain, context);
     if (ready <= 0) return ready;
-    int length = ac_path_resource(context.work, path);
+    ready = ac_prepare_resource(context);
+    if (ready <= 0) return ready;
+    int length = ac_path_resource(context->work, path);
     if (!length) return 0;
-    return ac_finish(&context, ac_path_candidates(&context, length));
+    return ac_finish(context, ac_path_candidates(context, length));
 }
 
-SEC("lsm/file_open")
+AC_RESOURCE_HOOK("file_open")
 int ac_file_open(__u64 *ctx) {
     int previous = (int)ctx[1];
     if (previous) return previous;
@@ -90,7 +110,7 @@ int ac_file_permission(__u64 *ctx) {
     return ac_file_access(file, (mask & 4 ? 2 : 0) | (mask & 10 ? 4 : 0), 0);
 }
 
-SEC("lsm/mmap_file")
+AC_RESOURCE_HOOK("mmap_file")
 int ac_mmap_file(__u64 *ctx) {
     int previous = (int)ctx[4];
     if (previous) return previous;
@@ -130,48 +150,54 @@ int ac_task_alloc(__u64 *ctx) {
     return 0;
 }
 
-SEC("lsm/path_mkdir")
+AC_RESOURCE_HOOK("path_mkdir")
 int ac_path_mkdir(__u64 *ctx) {
     int previous = (int)ctx[3];
     if (previous) return previous;
-    return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 2);
+    struct ac_context context = {};
+    return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 2, &context);
 }
 
-SEC("lsm/path_rmdir")
+AC_RESOURCE_HOOK("path_rmdir")
 int ac_path_rmdir(__u64 *ctx) {
     int previous = (int)ctx[2];
     if (previous) return previous;
-    return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 3);
+    struct ac_context context = {};
+    return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 3, &context);
 }
 
-SEC("lsm/path_unlink")
+AC_RESOURCE_HOOK("path_unlink")
 int ac_path_unlink(__u64 *ctx) {
     int previous = (int)ctx[2];
     if (previous) return previous;
     /* Deletion is independent of opening or changing the file contents. */
-    return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 8);
+    struct ac_context context = {};
+    return ac_directory_path((struct path *)ctx[0], (struct dentry *)ctx[1], 8, &context);
 }
 
-SEC("lsm/path_chmod")
+AC_RESOURCE_HOOK("path_chmod")
 int ac_path_chmod(__u64 *ctx) {
     int previous = (int)ctx[2];
     if (previous) return previous;
-    return ac_path_access((struct path *)ctx[0], 9);
+    struct ac_context context = {};
+    return ac_path_access((struct path *)ctx[0], 9, &context);
 }
 
-SEC("lsm/path_chown")
+AC_RESOURCE_HOOK("path_chown")
 int ac_path_chown(__u64 *ctx) {
     int previous = (int)ctx[3];
     if (previous) return previous;
-    return ac_path_access((struct path *)ctx[0], 9);
+    struct ac_context context = {};
+    return ac_path_access((struct path *)ctx[0], 9, &context);
 }
 
 /* Truncation changes file contents even when no write syscall is issued. */
-SEC("lsm/path_truncate")
+AC_RESOURCE_HOOK("path_truncate")
 int ac_path_truncate(__u64 *ctx) {
     int previous = (int)ctx[1];
     if (previous) return previous;
-    return ac_path_access((struct path *)ctx[0], 7);
+    struct ac_context context = {};
+    return ac_path_access((struct path *)ctx[0], 7, &context);
 }
 
 SEC("lsm/file_truncate")
@@ -182,39 +208,49 @@ int ac_file_truncate(__u64 *ctx) {
 }
 
 /* Both names participate in rename/link policy. */
-SEC("lsm/path_rename")
+AC_RESOURCE_HOOK("path_rename")
 int ac_path_rename(__u64 *ctx) {
     int previous = (int)ctx[5];
     if (previous) return previous;
     struct path *old_dir = (void *)ctx[0], *new_dir = (void *)ctx[2];
     struct dentry *old_entry = (void *)ctx[1], *new_entry = (void *)ctx[3];
-    int result = ac_directory_path(old_dir, old_entry, 10);
-    if (result) return result;
     struct ac_context context = {};
+    int result = ac_directory_path(old_dir, old_entry, 10, &context);
+    if (result || !context.policy) return result;
     int ready = ac_begin(10, &context);
     if (ready <= 0) return ready;
-    int length = ac_directory_resource(context.work, new_dir, new_entry);
-    result = ac_finish(&context, ac_path_candidates(&context, length));
-    if (result) return result;
+    int length = 0;
+    ready = ac_prepare_resource(&context);
+    if (ready < 0) return ready;
+    int resolved = ready;
+    if (resolved) {
+        length = ac_directory_resource(context.work, new_dir, new_entry);
+        result = ac_finish(&context, ac_path_candidates(&context, length));
+        if (result) return result;
+    }
     /* Exchange and same-inode renames keep both objects. Reuse the target
      * path and snapshot when ordinary replacement also requires delete. */
     struct inode *target = new_entry->d_inode;
     if ((ctx[4] & 2) || !target || target == old_entry->d_inode) return 0;
     ready = ac_select_domain(8, &context);
     if (ready <= 0) return ready;
+    ready = ac_prepare_resource(&context);
+    if (ready <= 0) return ready;
+    if (!resolved) length = ac_directory_resource(context.work, new_dir, new_entry);
     return ac_finish(&context, ac_path_candidates(&context, length));
 }
 
-SEC("lsm/path_link")
+AC_RESOURCE_HOOK("path_link")
 int ac_path_link(__u64 *ctx) {
     int previous = (int)ctx[3];
     if (previous) return previous;
     struct path *new_dir = (void *)ctx[1];
     /* VFS validates equal source/target mounts before this hook. */
     struct path source = { .mnt = new_dir->mnt, .dentry = (void *)ctx[0] };
-    int result = ac_path_access(&source, 11);
-    if (result) return result;
-    return ac_directory_path(new_dir, (void *)ctx[2], 11);
+    struct ac_context context = {};
+    int result = ac_path_access(&source, 11, &context);
+    if (result || !context.policy) return result;
+    return ac_directory_path(new_dir, (void *)ctx[2], 11, &context);
 }
 
 SEC("lsm/bprm_check_security")
@@ -228,21 +264,23 @@ int ac_bprm_scope(__u64 *ctx) {
     return scoped < 0 ? scoped : 0;
 }
 
-SEC("lsm/bprm_check_security")
+AC_RESOURCE_HOOK("bprm_check_security")
 int ac_bprm_check(__u64 *ctx) {
     int previous = (int)ctx[1];
     if (previous) return previous;
     struct linux_binprm *bprm = (struct linux_binprm *)ctx[0];
-    return ac_file_path(bprm->file, 4);
+    return ac_exec_path(bprm);
 }
 
 /* Each action selects its own policy domain and actual socket protocol. */
-SEC("lsm/socket_connect")
+AC_RESOURCE_HOOK("socket_connect")
 int ac_socket_connect(__u64 *ctx) {
     int previous = (int)ctx[3];
     if (previous) return previous;
     struct ac_context context = {};
     int ready = ac_begin(5, &context);
+    if (ready <= 0) return ready;
+    ready = ac_prepare_resource(&context);
     if (ready <= 0) return ready;
     int protocol = ac_network_protocol(context.work, (void *)ctx[0]);
     if (protocol <= 0) return protocol ? ac_finish(&context, protocol) : 0;
@@ -250,12 +288,14 @@ int ac_socket_connect(__u64 *ctx) {
     return ac_network_finish(&context, bytes);
 }
 
-SEC("lsm/socket_sendmsg")
+AC_RESOURCE_HOOK("socket_sendmsg")
 int ac_socket_sendmsg(__u64 *ctx) {
     int previous = (int)ctx[3];
     if (previous) return previous;
     struct ac_context context = {};
     int ready = ac_begin(12, &context);
+    if (ready <= 0) return ready;
+    ready = ac_prepare_resource(&context);
     if (ready <= 0) return ready;
     int protocol = ac_network_protocol(context.work, (void *)ctx[0]);
     if (protocol <= 0) return protocol ? ac_finish(&context, protocol) : 0;
@@ -263,12 +303,14 @@ int ac_socket_sendmsg(__u64 *ctx) {
     return ac_network_finish(&context, bytes);
 }
 
-SEC("lsm/socket_bind")
+AC_RESOURCE_HOOK("socket_bind")
 int ac_socket_bind(__u64 *ctx) {
     int previous = (int)ctx[3];
     if (previous) return previous;
     struct ac_context context = {};
     int ready = ac_begin(13, &context);
+    if (ready <= 0) return ready;
+    ready = ac_prepare_resource(&context);
     if (ready <= 0) return ready;
     int protocol = ac_network_protocol(context.work, (void *)ctx[0]);
     if (protocol <= 0) return protocol ? ac_finish(&context, protocol) : 0;
@@ -276,12 +318,14 @@ int ac_socket_bind(__u64 *ctx) {
     return ac_network_finish(&context, bytes);
 }
 
-SEC("lsm/socket_listen")
+AC_RESOURCE_HOOK("socket_listen")
 int ac_socket_listen(__u64 *ctx) {
     int previous = (int)ctx[2];
     if (previous) return previous;
     struct ac_context context = {};
     int ready = ac_begin(14, &context);
+    if (ready <= 0) return ready;
+    ready = ac_prepare_resource(&context);
     if (ready <= 0) return ready;
     int protocol = ac_network_protocol(context.work, (void *)ctx[0]);
     if (protocol <= 0) return protocol ? ac_finish(&context, protocol) : 0;

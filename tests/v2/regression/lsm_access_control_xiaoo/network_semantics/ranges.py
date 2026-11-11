@@ -84,7 +84,7 @@ class NetworkRangesScenario(NetworkSemanticsScenario):
     def require_grant_boundaries(self):
         dynamic = self.case._dynamic
         owner = "wasm.network-policy-restricted"
-        loaded = dynamic.api.load("network-policy-dynamic", owner, {"network_policy_rules_apply": [
+        loaded = dynamic.api.load(dynamic.api.package_key("wasm.network-policy-dynamic"), owner, {"network_policy_rules_apply": [
             {"decision": decision, "endpoint_scope": endpoint}
             for decision in ("allow", "deny")
             for endpoint in ("127.0.0.2/31:100-200", "[::/126]:100-200")

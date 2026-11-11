@@ -61,12 +61,13 @@ class RetainedBenchmark:
             raise RuntimeError("real Xiaoo is required")
         self.xiaoo = Path(binary).resolve()
 
-    def patches(self, work, enabled, port):
+    def patches(self, work, backend, port):
+        enabled = backend != "off"
         capabilities = ["proc-lifecycle", "net-transport", "socket-plaintext-payload"]
         if enabled:
             capabilities += ["enforcement-file-permission-lsm", "enforcement-network-connect-lsm"]
-        (work / "file.rules").write_text(f'bench-file allow open {work / "file"}\n')
-        (work / "network.rules").write_text(f"bench-network allow connect 127.0.0.2:{port}\n")
+        (work / "file.rules").write_text("" if backend == "empty" else f'bench-file allow open {work / "file"}\n')
+        (work / "network.rules").write_text("" if backend == "empty" else f"bench-network allow connect 127.0.0.2:{port}\n")
         patch = work / "patch.toml"
         values = {
             "capture": {"profile_name": "retained-access-benchmark", "capabilities": capabilities,
@@ -99,7 +100,7 @@ class RetainedBenchmark:
             "--results", str(result_path),
         ])
         provider = WorkloadProvider(REPO, work, command, self.args.timeout)
-        patches = self.patches(work, backend == "lsm", peer.port)
+        patches = self.patches(work, backend, peer.port)
         runtime = ActrailRuntime(REPO, self.args.bin_dir, self.args.command_timeout, self.output,
                                  work / "actraild.conf", operator_config_patches=patches)
         try:
@@ -147,7 +148,7 @@ class RetainedBenchmark:
         )
         root = Path(tempfile.mkdtemp(prefix="actrail-retained-"))
         data = {"kernel": platform.release(), "architecture": platform.machine(),
-                "scope": "same binaries, fresh defaults; control off vs LSM on; identical observation; audit off",
+                "scope": "same binaries, fresh defaults; control off vs LSM empty/explicit rules; identical observation; audit off",
                 "timing": "pread/pwrite of 1 byte and sendall of 64 bytes; pre-opened FD and connected TCP",
                 "measurements": []}
         try:

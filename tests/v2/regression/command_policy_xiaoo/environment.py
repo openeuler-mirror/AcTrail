@@ -65,6 +65,10 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
                 plugin_id=INSTANCE,
                 runtime="wasm",
                 load_grants={
+                    "http_request": True,
+                    "env_read": ["UNUSED_PLUGIN_GRANT"],
+                    "file_policy_rules_apply": [{"decision": "deny", "path_scope": "/unused"}],
+                    "network_policy_rules_apply": [{"decision": "deny", "endpoint_scope": "127.0.0.1:9"}],
                     "command_policy_rules_apply": [
                         {
                             "decision": "deny",
@@ -379,6 +383,19 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             encoding="utf-8",
         )
 
+    def _load_plugin(self, package_key: str) -> None:
+        # Extra grants cannot replace the command scope declared by this plugin.
+        missing = dict(self.plugin.load_grants)
+        missing.pop("command_policy_rules_apply")
+        try:
+            self.api.load(package_key, INSTANCE, missing)
+        except RuntimeError as error:
+            if "command-policy.rules.apply requires at least one" not in str(error):
+                raise
+        else:
+            raise AssertionError("plugin loaded without its required command scope")
+        super()._load_plugin(package_key)
+
     def _require_load_grant(self) -> None:
         grants = self.loaded_plugin.get("host_grants")
         expected = (
@@ -387,6 +404,9 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         )
         if not isinstance(grants, list) or expected not in grants:
             raise AssertionError(f"loaded plugin missed {expected}: {grants}")
+        extra = ("http.request", "env-read", "file-policy.rules.apply", "network-policy.rules.apply")
+        if any(grant.startswith(extra) for grant in grants):
+            raise AssertionError(f"plugin received undeclared capabilities: {grants}")
 
     def dry_run_revision(self) -> str:
         output = self._plugin_command(

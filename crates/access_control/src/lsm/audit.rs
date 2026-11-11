@@ -35,30 +35,32 @@ impl LsmAuditEvent {
         };
         let domain = u32_at(40);
         let resource = &raw[312..824];
-        let resource = if matches!(domain, 5 | 12..=14) && u32_at(48) == 0 {
-            let (ip, port_offset) = match resource[1] {
-                4 => (
-                    IpAddr::V4(Ipv4Addr::from(
-                        <[u8; 4]>::try_from(&resource[2..6]).unwrap(),
-                    )),
-                    6,
-                ),
-                6 => (
-                    IpAddr::V6(Ipv6Addr::from(
-                        <[u8; 16]>::try_from(&resource[2..18]).unwrap(),
-                    )),
-                    18,
-                ),
-                _ => return Err("LSM network audit has invalid address family".into()),
+        // A decision transport error still has the endpoint resolved by the hook.
+        let resource =
+            if matches!(domain, 5 | 12..=14) && (u32_at(48) == 0 || matches!(resource[1], 4 | 6)) {
+                let (ip, port_offset) = match resource[1] {
+                    4 => (
+                        IpAddr::V4(Ipv4Addr::from(
+                            <[u8; 4]>::try_from(&resource[2..6]).unwrap(),
+                        )),
+                        6,
+                    ),
+                    6 => (
+                        IpAddr::V6(Ipv6Addr::from(
+                            <[u8; 16]>::try_from(&resource[2..18]).unwrap(),
+                        )),
+                        18,
+                    ),
+                    _ => return Err("LSM network audit has invalid address family".into()),
+                };
+                SocketAddr::new(
+                    ip,
+                    u16::from_be_bytes(resource[port_offset..port_offset + 2].try_into().unwrap()),
+                )
+                .to_string()
+            } else {
+                string(resource)
             };
-            SocketAddr::new(
-                ip,
-                u16::from_be_bytes(resource[port_offset..port_offset + 2].try_into().unwrap()),
-            )
-            .to_string()
-        } else {
-            string(resource)
-        };
         Ok(Self {
             revision: u64_at(0),
             trace_id: u64_at(8),

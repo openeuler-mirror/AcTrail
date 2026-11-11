@@ -1,5 +1,10 @@
 | 配置项 | 类型 | 默认值 | 必填 | 所属模块 | 说明 |
 | --- | --- | --- | --- | --- | --- |
+| `host.http.allowed_urls` | `string[]` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 插件 manifest 配置。授予 `http.request` 要求配置该列表。HTTP 或 HTTPS 完整地址精确匹配，禁用代理和重定向。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
+| `host.http.timeout_ms` | `uint64` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | HTTP 请求时长上限，单位为毫秒且必须大于 0。授权和管理命令中还受调用剩余时间扣除收尾预留后的限制。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
+| `host.http.finish_reserve_ms` | `uint64` | `30` | 否 | plugin_system / plugin_wasm_runtime | 为插件处理 HTTP 结果和返回预留的毫秒数。0 关闭预留。调用剩余时间不大于预留时，不发送请求并返回错误。没有调用截止时间时不扣除。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
+| `host.http.request_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 请求正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
+| `host.http.response_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 响应正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
 | `control.socket_path` | `string` | `"/run/actrail/control.sock"` | 否 | control | Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L11) |
 | `control.socket_mode_octal` | `string` | `"660"` | 否 | control | Unix socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L12) |
 | `control.pending_connection_max` | `uint32` | `256` | 否 | control | 待处理控制连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |
@@ -390,6 +395,9 @@
 | `access_control.backends.lsm.alert_max_groups` | `uint32` | `256` | 否 | access_control | 每个窗口接纳的边界告警组数量上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L152) |
 | `access_control.backends.lsm.deny_on_error` | `bool` | `true` | 否 | access_control | 无法解析资源时拒绝访问；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L154) |
 | `access_control.backends.lsm.deny_signal` | `string` | `"none"` | 否 | access_control | 拒绝访问后发送的信号：none、stop 或 kill；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L156) |
+| `access_control.backends.lsm.grey.mode` | `string` | `"auto"` | 否 | access_control | `auto` 在 LSM 后端启用时尝试加载模块，不可用则使用普通 LSM 和规则 fallback。`required` 要求动态 grey 可用。`disabled` 跳过加载。其他后端不加载模块 |
+| `access_control.backends.lsm.grey.device_path` | `string` | `"/dev/actrail_lsm_grey"` | 否 | access_control | 内核裁决设备路径；启用时不能为空，启动时必须成功独占打开 |
+| `access_control.backends.lsm.grey.workers` | `uint32` | `4` | 否 | access_control | 并行读取请求并执行插件的线程数；启用时必须大于 0。等待请求和超时状态由内核模块管理，插件预算取内核截止时间的剩余时长 |
 | `enforcement.enabled` | `bool` | `true` | 否 | enforcement | 启用文件访问治理；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L141) |
 | `enforcement.scope` | `string` | `"trace"` | 否 | enforcement | 文件治理作用域；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L142) |
 | `enforcement.rules_path` | `string` | `"/etc/actrail/enforcement-rules.conf"` | 否 | enforcement | 规则文件路径；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L143) |

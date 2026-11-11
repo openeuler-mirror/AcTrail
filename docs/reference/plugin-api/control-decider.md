@@ -37,6 +37,53 @@ AcTrail 通过 component model 向 WIT component 传入结构化 `decision-reque
 
 需要动态发布网络规则的 component 使用 `managed-network-control-plugin` world。它在管理命令和运行时配置接口之外导入独立的 `actrail:plugin/network-control-host@0.4.0`；普通控制插件不会因此获得网络策略写权限。
 
+## HTTP 请求
+
+需要 HTTP 访问的 WIT component 使用 `http-control-plugin` world，调用 `actrail:plugin/http-host@0.4.0`：
+
+```wit
+record http-request {
+  method: string,
+  url: string,
+  headers: list<tuple<string, string>>,
+  body: list<u8>,
+}
+record http-response {
+  status: u16,
+  headers: list<tuple<string, string>>,
+  body: list<u8>,
+}
+request: func(request: http-request) -> result<http-response, string>;
+```
+
+插件选择方法、已授权 URL、请求头和正文。宿主返回 HTTP 状态码、响应头和字节正文。HTTP 错误状态也作为响应返回，由插件解释。网络失败、超时和超出大小限制返回 `err(string)`。插件可处理错误，或将错误返回给 daemon，由匹配规则的 fallback 决定访问结果。
+
+在 manifest 声明能力和 HTTP 限制，并在加载实例时授予 `http.request`。
+
+通过 Web 加载 API 时，在 `grants` 对象中设置 `"http_request": true`。该选项默认关闭。
+
+```toml
+[host]
+capabilities = ["http.request"]
+
+[host.http]
+allowed_urls = ["http://127.0.0.1:18765/analyze"]
+timeout_ms = 500
+finish_reserve_ms = 30
+request_max_bytes = 65536
+response_max_bytes = 65536
+```
+
+`allowed_urls`、`timeout_ms`、`request_max_bytes` 和 `response_max_bytes` 均必填。`allowed_urls` 为允许访问的完整 HTTP 或 HTTPS URL 列表，请求地址必须与列表中的地址完全匹配。宿主禁用代理和重定向。超时和字节限制必须大于零。实例加载时检查配置。
+
+字节限制作用于请求与响应正文。传输层管理 `Host`、`Content-Length` 和 `Transfer-Encoding` 请求头，插件不能覆盖这些字段。接口不允许 CONNECT 隧道。
+
+`finish_reserve_ms` 可选，默认 30 毫秒，设为 0 可关闭预留。它为插件处理 HTTP 结果和完成调用预留时间。在 `decide` 和管理命令中，HTTP 超时取 `timeout_ms` 与“当前调用剩余时间减去收尾预留时间”的较小值。剩余时间不大于预留时间时，宿主直接返回错误，不发送请求。没有调用截止时间时，仅使用 `timeout_ms`。
+
+重复请求共享所属调用的截止时间。单个 HTTP 请求的连接、发送、响应头和响应体读取共享总超时。收尾预留不会延长调用总预算。插件继续执行超过总预算时，仍可能发生超时 trap。
+
+安全分析插件可以使用此接口请求独立服务。访问上下文的 JSON 格式、服务协议及响应到 allow/deny 的转换均由插件实现。此类服务应位于受控 agent 的进程树之外，并读取自己的规则和模板目录。
+
 ## 调用流程：WASM Core Module
 
 ```mermaid
@@ -295,11 +342,13 @@ WIT component 入口：
 | `syscall` | string | `execve` 或 `execveat`。 |
 | `requested-path` | string | tracee 原始请求路径。 |
 | `resolved-path` | string | tracee namespace 内解析已有符号链接后的绝对路径。 |
-| `argv` | list<string> | 在配置的数量、单参数和总字节上限内完整复制的 argv。 |
+| `argv` | list<string> | 完整的 argv；采集失败或超限时不进入插件决策。 |
 | `execveat-dirfd` | option<s32> | `execveat` dirfd；`execve` 为 none。 |
 | `execveat-flags` | option<u64> | `execveat` flags；`execve` 为 none。 |
 
-argv 超过任一限制时，daemon 直接使用 `command_control.failure_decision`，不会调用插件。WIT component 使用结构化 record；WASM core module 的 `command_execution_current_context_query` 使用版本化长度前缀二进制响应，以避免 JSON 转义放大。
+seccomp 后端的 argv 超过采集限制时，daemon 使用 `command_control.failure_decision`。LSM 后端的 exec grey kfunc 从当前 `linux_binprm` 对应的新进程映像读取内核已复制的参数。模块参数 `argv_max_count` 和 `argv_arg_max_bytes` 分别限制参数数量和单参数字节数（含 NUL），默认上限为 16 和 256。超限、读取失败或无效 syscall 上下文会直接拒绝本次执行，不使用允许型 fallback；成功交给插件的 LSM argv 完整。`requested_path` 来自内核的 `bprm->filename`，execveat 时可能是内核生成的 `/dev/fd/...` 路径。参数一致性设计见 [LSM Grey 命令执行授权](../../architecture/components/lsm-grey-exec.md)。
+
+WIT component 使用结构化 record。WASM core module 的 `command_execution_current_context_query` 使用版本化长度前缀二进制响应返回完整 argv。
 
 动态命令路由使用以下 grants：
 
@@ -335,7 +384,7 @@ WIT component 入口：
 
 ### 网络动作上下文与动态网络路由
 
-网络规则包含 `operation`、`protocol` 和 `endpoint`。connect/send 使用远端端点，bind/listen 使用本地端点。动态配置默认 connect/any。LSM 执行四项操作的 allow/deny，seccomp 仅接受 connect/any。授权要求操作相同，协议及端点范围覆盖规则。网络审计记录实际操作、协议和对应方向的端点。
+网络规则包含 `operation`、`protocol` 和 `endpoint`。connect/send 使用远端端点，bind/listen 使用本地端点。动态配置默认 connect/any。LSM 执行四项操作的 allow/deny，并可通过[动态裁决配置](../../operations/daemon/configure.md#lsm-动态裁决)将 grey 请求交给控制插件。未启用该配置时，grey 按规则的 fallback 裁决。seccomp 仅接受 connect/any。授权要求操作相同，协议及端点范围覆盖规则。网络审计记录实际操作、协议和对应方向的端点。
 
 网络 gray 决策的 `target-summary` 仍然只用于展示和诊断，插件不得解析该字符串作为稳定策略输入。需要结构化目标的 WIT component 必须声明并获得 `network-action.current-context-query`，然后通过 `network-control-host.network-action-current-context-query("c", "network-action.v1")` 查询：
 

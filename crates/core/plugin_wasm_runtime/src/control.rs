@@ -60,6 +60,12 @@ pub fn build_wasm_control_decider(
     })?;
     match wasm.abi {
         PluginWasmAbi::LegacyModule => {
+            if host_grants.can_request_http() {
+                return Err(PluginRuntimeError::new(
+                    "wasm_runtime",
+                    "http.request requires a WIT component plugin",
+                ));
+            }
             if host_grants.can_query_current_network_action_context()
                 || host_grants.can_read_network_policy_rules()
                 || host_grants.can_match_dry_run_network_policy_rules()

@@ -1,6 +1,8 @@
+//! Queries and builtin rules for a backend-bound file policy store.
+
 use super::super::model::StoredPolicyRule;
 use super::super::scope::PathScope;
-use super::super::types::{BuiltinIgnoreMark, EnforcementRule};
+use super::super::types::{BuiltinIgnoreMark, EnforcementRule, RuleDecision};
 use super::EnforcementRules;
 use plugin_system::{
     FilePolicyDecision, FilePolicyListFilter, FilePolicyListResult, FilePolicyMatchDryRunRequest,
@@ -9,32 +11,6 @@ use plugin_system::{
 use std::path::{Path, PathBuf};
 
 impl EnforcementRules {
-    /// Reject operation-specific rules that the selected backend cannot enforce.
-    pub fn validate_operations(
-        &self,
-        operations: &config_core::daemon::FileControlConfig,
-    ) -> Result<(), String> {
-        if !operations.open.is_lsm() {
-            for rule in &self.effective_rules {
-                if matches!(
-                    rule.operation,
-                    FilePolicyOperation::Read
-                        | FilePolicyOperation::Write
-                        | FilePolicyOperation::Delete
-                        | FilePolicyOperation::Attr
-                        | FilePolicyOperation::Rename
-                        | FilePolicyOperation::Link
-                ) {
-                    return Err(format!(
-                        "file operation {} requires access_control.file.open backend lsm",
-                        rule.operation.as_str()
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn find_path(
         &self,
         operation: FilePolicyOperation,
@@ -97,6 +73,15 @@ impl EnforcementRules {
             .iter()
             .map(StoredPolicyRule::execution_view)
             .collect()
+    }
+
+    /// Preserve the decision budget while compiling the same ordered execution views.
+    pub(crate) fn effective_lsm_rule_views(
+        &self,
+    ) -> impl Iterator<Item = (FilePolicyRuleView, &RuleDecision)> {
+        self.effective_rules
+            .iter()
+            .map(|rule| (rule.execution_view(), &rule.rule.decision))
     }
 
     pub fn list(

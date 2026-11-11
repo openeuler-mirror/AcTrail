@@ -1,0 +1,16 @@
+# Fixed settings for the external security service scenario.
+[supervision]
+startup_wait_ms = 120000
+
+[access_control.backends.lsm.grey]
+device_path = "/dev/actrail_lsm_grey"
+workers = 4
+
+[enforcement]
+audit_enabled = true
+
+[command_control.gray]
+fallback = "allow"
+
+[storage.retention]
+enabled = false

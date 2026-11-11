@@ -13,7 +13,7 @@ from ..dynamic import DynamicPolicies
 
 
 class NetworkSemanticsScenario(ContinuedAccessScenario):
-    phases = ("tcp", "udp", "connect", "bind", "listen", "restore")
+    phases = ("empty", "tcp", "udp", "connect", "bind", "listen", "restore")
     requires_lsm = True
 
     def __init__(self, case):
@@ -41,7 +41,7 @@ class NetworkSemanticsScenario(ContinuedAccessScenario):
         owner = dynamic.owner("network")
         dynamic.api.unload(owner)
         self.require_grant_boundaries()
-        loaded = dynamic.api.load("network-policy-dynamic", owner, {
+        loaded = dynamic.api.load(dynamic.api.package_key("wasm.network-policy-dynamic"), owner, {
             "network_policy_rules_apply": [
                 {"decision": decision, "operation": operation, "protocol": "any", "endpoint_scope": "*"}
                 for decision in ("allow", "deny") for operation in ("connect", "send", "bind", "listen")
@@ -77,7 +77,8 @@ class NetworkSemanticsScenario(ContinuedAccessScenario):
                     self.verify_network(phase if lsm or not self.requires_lsm else "restore", json.loads(destination.read_text()))
                     phases[phase] = TestResult(TestStatus.PASSED, "actual sends, peer data, connections, bind and listen effects verified")
                 trace = agent.result(timeout=case._config.launch_timeout_seconds)
-                required = {f"network-{phase}-{version}": "deny" for phase in self.phases[:-1] for version in (4, 6)} if lsm else {}
+                required = {rule["rule_id"]: "deny" for phase in self.phases[:-1]
+                            for rule in self.rules(phase)[:2]} if lsm else {}
                 case._require_evidence(trace, "allow", required)
                 if lsm or not self.requires_lsm:
                     self.verify_audit(trace)
@@ -88,7 +89,7 @@ class NetworkSemanticsScenario(ContinuedAccessScenario):
                     (self.root / f"go-{phase}").touch()
 
     def rules(self, phase):
-        if phase == "restore":
+        if phase in ("empty", "restore"):
             return []
         operation = "send" if phase in ("tcp", "udp") else phase
         protocol = "udp" if phase == "udp" else "tcp"
@@ -157,7 +158,7 @@ class NetworkSemanticsScenario(ContinuedAccessScenario):
     def require_grant_boundaries(self):
         dynamic = self.case._dynamic
         owner = "wasm.network-policy-restricted"
-        loaded = dynamic.api.load("network-policy-dynamic", owner, {"network_policy_rules_apply": [
+        loaded = dynamic.api.load(dynamic.api.package_key("wasm.network-policy-dynamic"), owner, {"network_policy_rules_apply": [
             {"decision": "deny", "operation": "connect", "protocol": "tcp", "endpoint_scope": "127.0.0.2:*"}
         ]})
         if loaded.get("plugin", {}).get("state") != "active":

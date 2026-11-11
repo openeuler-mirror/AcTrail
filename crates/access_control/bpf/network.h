@@ -143,7 +143,9 @@ static __attribute__((noinline)) int ac_network_finish(struct ac_context *contex
     if (!bytes) return 0;
     __u8 endpoint[20];
     __builtin_memcpy(endpoint, context->work->key.resource, sizeof(endpoint));
-    __u32 prefixes = context->work->selected.reserved;
+    __u32 prefixes = context->selected->reserved;
+    struct ac_policy_value *best = 0;
+    __u32 rank = context->selected->rank;
     __u16 port = bytes == 6 ? ((__u16)endpoint[6] << 8) | endpoint[7]
         : ((__u16)endpoint[18] << 8) | endpoint[19];
     context->work->key.resource[4] = endpoint[1];
@@ -159,13 +161,19 @@ static __attribute__((noinline)) int ac_network_finish(struct ac_context *contex
         context->work->key.resource[1] = prefix;
         context->work->key.resource[2] = masked >> 8;
         context->work->key.resource[3] = masked;
-        ac_candidate(context, bytes == 6 ? 9 : 21);
+        ac_candidate(context, bytes == 6 ? 9 : 21, &best, &rank);
         context->work->key.resource[0] = 0;
-        ac_candidate(context, bytes == 6 ? 9 : 21);
+        ac_candidate(context, bytes == 6 ? 9 : 21, &best, &rank);
     }
+    if (best) context->selected = best;
     /* Audit always carries the original protocol and full endpoint. */
-    __builtin_memset(context->work->key.resource, 0, 24);
-    __builtin_memcpy(context->work->key.resource, endpoint, sizeof(endpoint));
+    if (bytes == 6) {
+        __builtin_memcpy(context->work->key.resource, endpoint, 8);
+        context->resource_length = 8;
+    } else {
+        __builtin_memcpy(context->work->key.resource, endpoint, 20);
+        context->resource_length = 20;
+    }
     return ac_finish(context, 0);
 }
 

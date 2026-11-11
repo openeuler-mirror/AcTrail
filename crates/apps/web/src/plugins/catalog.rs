@@ -1,3 +1,5 @@
+//! Plugin catalog, management operations and declared capability grants.
+
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -49,6 +51,8 @@ pub(crate) struct PluginLoadOptions {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PluginGrantOptions {
+    #[serde(default)]
+    http_request: bool,
     #[serde(default)]
     file_policy_rules_apply: Vec<FilePolicyApplyGrantOption>,
     #[serde(default)]
@@ -355,94 +359,75 @@ impl InstalledPluginCatalog {
 }
 
 impl PluginGrantOptions {
-    fn resolve(self, package: &InstalledPackage) -> Result<Vec<String>, String> {
-        let needs_file_policy = package
-            .parameterized_host_grants
-            .iter()
-            .any(|capability| capability == "file-policy.rules.apply");
-        let needs_env_read = package
-            .parameterized_host_grants
-            .iter()
-            .any(|capability| capability == "env-read");
-        let needs_command_policy = package
-            .parameterized_host_grants
-            .iter()
-            .any(|capability| capability == "command-policy.rules.apply");
-        let needs_network_policy = package
-            .parameterized_host_grants
-            .iter()
-            .any(|capability| capability == "network-policy.rules.apply");
-        if needs_file_policy && self.file_policy_rules_apply.is_empty() {
-            return Err(
-                "file-policy.rules.apply requires at least one decision and path scope".to_string(),
-            );
-        }
-        if !needs_file_policy && !self.file_policy_rules_apply.is_empty() {
-            return Err("plugin did not request file-policy.rules.apply".to_string());
-        }
-        if needs_command_policy && self.command_policy_rules_apply.is_empty() {
-            return Err(
-                "command-policy.rules.apply requires at least one decision and executable scope"
-                    .to_string(),
-            );
-        }
-        if !needs_command_policy && !self.command_policy_rules_apply.is_empty() {
-            return Err("plugin did not request command-policy.rules.apply".to_string());
-        }
-        if needs_network_policy && self.network_policy_rules_apply.is_empty() {
-            return Err(
-                "network-policy.rules.apply requires at least one decision and remote endpoint scope"
-                    .to_string(),
-            );
-        }
-        if !needs_network_policy && !self.network_policy_rules_apply.is_empty() {
-            return Err("plugin did not request network-policy.rules.apply".to_string());
-        }
-        if needs_env_read && self.env_read.is_empty() {
-            return Err("env-read requires at least one environment variable name".to_string());
-        }
-        if !needs_env_read && !self.env_read.is_empty() {
-            return Err("plugin did not request env-read".to_string());
-        }
-
+    fn resolve(mut self, package: &InstalledPackage) -> Result<Vec<String>, String> {
         let mut values = package.automatic_host_grants.clone();
-        for option in self.file_policy_rules_apply {
-            let decision = FilePolicyDecision::from_wire(&option.decision)?;
-            values.push(
-                PluginHostGrant::FilePolicyRulesApply {
-                    decision,
-                    path: option.path_scope,
+        // Resolve only declared capabilities. Extra user grants have no effect.
+        for capability in &package.parameterized_host_grants {
+            match capability.as_str() {
+                "http.request" if !self.http_request => {
+                    return Err("plugin requires an explicit http.request grant".to_string());
                 }
-                .to_wire(),
-            );
-        }
-        for option in self.command_policy_rules_apply {
-            let decision = CommandPolicyDecision::from_wire(&option.decision)?;
-            values.push(
-                PluginHostGrant::CommandPolicyRulesApply {
-                    decision,
-                    path: option.path_scope,
+                "http.request" => values.push(PluginHostGrant::HttpRequest.to_wire()),
+                "file-policy.rules.apply" if self.file_policy_rules_apply.is_empty() => {
+                    return Err(
+                        "file-policy.rules.apply requires at least one decision and path scope"
+                            .to_string(),
+                    );
                 }
-                .to_wire(),
-            );
-        }
-        for option in self.network_policy_rules_apply {
-            let decision = NetworkPolicyDecision::from_wire(&option.decision)?;
-            values.push(
-                PluginHostGrant::NetworkPolicyRulesApply {
-                    decision,
-                    endpoint: option.endpoint_scope,
-                    operation: option.operation,
-                    protocol: option.protocol,
+                "file-policy.rules.apply" => {
+                    for option in self.file_policy_rules_apply.drain(..) {
+                        values.push(
+                            PluginHostGrant::FilePolicyRulesApply {
+                                decision: FilePolicyDecision::from_wire(&option.decision)?,
+                                path: option.path_scope,
+                            }
+                            .to_wire(),
+                        );
+                    }
                 }
-                .to_wire(),
-            );
+                "command-policy.rules.apply" if self.command_policy_rules_apply.is_empty() => {
+                    return Err("command-policy.rules.apply requires at least one decision and executable scope".to_string());
+                }
+                "command-policy.rules.apply" => {
+                    for option in self.command_policy_rules_apply.drain(..) {
+                        values.push(
+                            PluginHostGrant::CommandPolicyRulesApply {
+                                decision: CommandPolicyDecision::from_wire(&option.decision)?,
+                                path: option.path_scope,
+                            }
+                            .to_wire(),
+                        );
+                    }
+                }
+                "network-policy.rules.apply" if self.network_policy_rules_apply.is_empty() => {
+                    return Err("network-policy.rules.apply requires at least one decision and remote endpoint scope".to_string());
+                }
+                "network-policy.rules.apply" => {
+                    for option in self.network_policy_rules_apply.drain(..) {
+                        values.push(
+                            PluginHostGrant::NetworkPolicyRulesApply {
+                                decision: NetworkPolicyDecision::from_wire(&option.decision)?,
+                                endpoint: option.endpoint_scope,
+                                operation: option.operation,
+                                protocol: option.protocol,
+                            }
+                            .to_wire(),
+                        );
+                    }
+                }
+                "env-read" if self.env_read.is_empty() => {
+                    return Err(
+                        "env-read requires at least one environment variable name".to_string()
+                    );
+                }
+                "env-read" => values.extend(
+                    self.env_read
+                        .drain(..)
+                        .map(|name| PluginHostGrant::EnvRead { name }.to_wire()),
+                ),
+                _ => (),
+            }
         }
-        values.extend(
-            self.env_read
-                .into_iter()
-                .map(|name| PluginHostGrant::EnvRead { name }.to_wire()),
-        );
         PluginHostGrants::parse(&values)?;
         Ok(values)
     }
