@@ -130,7 +130,10 @@ impl<'a> NetworkAuditBuilder<'a> {
         );
         if let Some(rule) = self.rule {
             metadata.insert("rule_id".to_string(), rule.rule_id.clone());
-            metadata.insert("policy_remote_scope".to_string(), rule.remote.to_string());
+            metadata.insert(
+                "policy_endpoint_scope".to_string(),
+                rule.endpoint.to_string(),
+            );
             metadata.insert(
                 "policy_owner_instance_id".to_string(),
                 rule.owner_instance_id.clone(),

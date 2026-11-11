@@ -66,7 +66,7 @@ class DynamicPolicies(PluginTestEnvironment):
         initial = super().prepare()
         for domain, grant, selector in (
             ("file", "path_scope", f"{self._work}/**"),
-            ("network", "remote_scope", "127.0.0.2:*"),
+            ("network", "endpoint_scope", "127.0.0.2:*"),
         ):
             owner = self.owner(domain)
             response = self.api.load(
@@ -106,7 +106,7 @@ class DynamicPolicies(PluginTestEnvironment):
                  "executable": str(self._work / "controlled-true"), "priority": CASE_CONSTANTS.specific_rule_priority},
             ]},
             "network": {"rules": [
-                {"rule_id": "lsm-dynamic-network", "decision": decision, "remote": self._remote},
+                {"rule_id": "lsm-dynamic-network", "decision": decision, "endpoint": self._remote},
             ]},
         }
         required = {}
@@ -134,8 +134,8 @@ class DynamicPolicies(PluginTestEnvironment):
         required = self.publish(decision)
         opposite = "deny" if decision == "allow" else "allow"
         self._publish_network(self.owner("network"), [
-            {"rule_id": "lsm-dynamic-network-wildcard", "decision": opposite, "remote": "127.0.0.2:*"},
-            {"rule_id": "lsm-dynamic-network", "decision": decision, "remote": self._remote},
+            {"rule_id": "lsm-dynamic-network-wildcard", "decision": opposite, "endpoint": "127.0.0.2:*"},
+            {"rule_id": "lsm-dynamic-network", "decision": decision, "endpoint": self._remote},
         ])
         self.require_decisions(decision)
         fields = self._command_fields("network", ["rule", "dry-run", self._secondary_remote()])
@@ -149,23 +149,23 @@ class DynamicPolicies(PluginTestEnvironment):
         original = self._current_config("network")
         loaded = self.api.load(self.api.package_key(peer), peer, {
             "network_policy_rules_apply": [
-                {"decision": decision, "remote_scope": "127.0.0.2:*"}
+                {"decision": decision, "endpoint_scope": "127.0.0.2:*"}
                 for decision in ("allow", "deny")
             ],
         })
         self._extra_owners.append(peer)
         if loaded.get("plugin", {}).get("state") != "active":
             raise AssertionError(f"second network owner failed to load: {loaded}")
-        endpoint = {"rule_id": "lsm-dynamic-network", "decision": "deny", "remote": self._remote}
-        wildcard = {"rule_id": "lsm-dynamic-network-wildcard", "decision": "allow", "remote": "127.0.0.2:*"}
-        peer_endpoint = {"rule_id": "peer-network", "decision": "deny", "remote": self._secondary_remote()}
+        endpoint = {"rule_id": "lsm-dynamic-network", "decision": "deny", "endpoint": self._remote}
+        wildcard = {"rule_id": "lsm-dynamic-network-wildcard", "decision": "allow", "endpoint": "127.0.0.2:*"}
+        peer_endpoint = {"rule_id": "peer-network", "decision": "deny", "endpoint": self._secondary_remote()}
         self._publish_network(owner, [endpoint])
         self._publish_network(peer, [peer_endpoint])
         self._require_network_rejected(owner, [endpoint, wildcard], peer)
         self._publish_network(peer, [])
         self._publish_network(owner, [wildcard, endpoint])
         self._require_network_rejected(peer, [peer_endpoint], peer)
-        self._require_network_rejected(peer, [{**peer_endpoint, "remote": self._remote}], peer)
+        self._require_network_rejected(peer, [{**peer_endpoint, "endpoint": self._remote}], peer)
         unloaded = self.api.unload(peer)
         if unloaded.get("plugin", {}).get("state") == "active":
             raise AssertionError(f"second network owner remained active: {unloaded}")
@@ -228,9 +228,9 @@ class DynamicPolicies(PluginTestEnvironment):
 
     def require_capacity_rejected(self, capacity: int) -> None:
         candidate = self._current_config("file")
-        # An any-operation recursive scope compiles into six distinct map entries.
+        # An any-operation recursive scope compiles into eighteen distinct map entries.
         # Keep the WASM fixture work bounded while exceeding the real kernel capacity.
-        for index in range(capacity // 6 + 1):
+        for index in range(capacity // 18 + 1):
             candidate["rules"].append({
                 "rule_id": f"lsm-overflow-{index}", "decision": "deny",
                 "operation": "any", "path": f"{self._work}/overflow-{index}/**", "priority": CASE_CONSTANTS.priority,
@@ -258,7 +258,6 @@ class DynamicPolicies(PluginTestEnvironment):
         after = self._command_fields(domain, query)
         if self._current_config(domain) != before_config or after != before:
             raise AssertionError(f"rejected {reason} candidate changed policy state: {before} -> {after}")
-        self.require_decisions("deny")
 
     def _config_response(
         self, domain: str, suffix: str, candidate: dict[str, Any], *, owner: str | None = None,

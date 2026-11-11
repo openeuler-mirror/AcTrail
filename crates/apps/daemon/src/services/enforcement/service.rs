@@ -195,6 +195,7 @@ impl FileEnforcementService {
 }
 
 struct FileBackend {
+    operations: FileControlConfig,
     handle: Option<FanotifyHandle>,
     lsm: Option<Arc<access_control::lsm::LsmController>>,
     wake_fd: WakeFd,
@@ -223,6 +224,7 @@ impl FileBackend {
                 .iter()
                 .map(|rule| (rule.rule_id.clone(), rule.path.clone())),
         )?;
+        rules.validate_operations(&operations)?;
         let handle = if operations.open.is_fanotify() {
             Some(FanotifyHandle::new(config.event_buffer_bytes)?)
         } else {
@@ -267,6 +269,7 @@ impl FileBackend {
             in_flight_by_instance: BTreeMap::new(),
             seccomp_syscalls: operations.seccomp_syscalls().into_iter().collect(),
             seccomp_path_max_bytes: config.seccomp_path_max_bytes,
+            operations,
         })
     }
 
@@ -365,6 +368,7 @@ impl FileBackend {
     }
 
     fn replace_rules(&mut self, candidate: EnforcementRules) -> Result<(), String> {
+        candidate.validate_operations(&self.operations)?;
         let current_directories = self
             .rules
             .mark_directories()

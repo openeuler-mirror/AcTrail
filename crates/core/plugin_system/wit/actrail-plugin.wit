@@ -190,6 +190,12 @@ interface types {
   enum file-policy-operation {
     any,
     open,
+    read,
+    write,
+    delete,
+    attr,
+    rename,
+    link,
     mkdir,
     rmdir,
   }
@@ -497,6 +503,9 @@ interface types {
     execveat-flags: option<u64>,
   }
 
+  enum network-policy-operation { connect, send, bind, listen }
+  enum network-policy-protocol { any, tcp, udp }
+
   enum network-policy-decision {
     default,
     allow,
@@ -517,7 +526,9 @@ interface types {
   record network-policy-rule-draft {
     rule-id: option<string>,
     decision: network-policy-decision,
-    remote: string,
+    operation: network-policy-operation,
+    protocol: network-policy-protocol,
+    endpoint: string,
     gray-target: option<string>,
     timeout-ms: option<u64>,
     concurrency-limit: option<u32>,
@@ -553,14 +564,18 @@ interface types {
 
   record network-policy-list-filter {
     decision: option<network-policy-decision>,
-    remote: option<string>,
+    operation: option<network-policy-operation>,
+    protocol: option<network-policy-protocol>,
+    endpoint: option<string>,
   }
 
   record network-policy-rule-view {
     rule-id: string,
     owner-instance-id: string,
     decision: network-policy-decision,
-    remote: string,
+    operation: network-policy-operation,
+    protocol: network-policy-protocol,
+    endpoint: string,
     gray-target: option<string>,
     timeout-ms: option<u64>,
     concurrency-limit: option<u32>,
@@ -576,7 +591,9 @@ interface types {
   }
 
   record network-policy-match-dry-run-request {
-    remote: string,
+    operation: network-policy-operation,
+    protocol: network-policy-protocol,
+    endpoint: string,
   }
 
   record network-policy-match-dry-run-result {
@@ -584,7 +601,7 @@ interface types {
     decision: network-policy-decision,
     rule-id: option<string>,
     owner-instance-id: option<string>,
-    resolved-remote: string,
+    resolved-endpoint: string,
     rule-revision: option<u64>,
     source-revision: u64,
   }

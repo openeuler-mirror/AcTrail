@@ -102,7 +102,7 @@ AcTrail 只接受这些短 token 和 query 名称，不接受长字段 token。
 
 - 文件访问先由 fanotify 和本地黑白灰名单筛选；白名单和黑名单不需要调用插件。
 - 灰名单或显式命中某个插件实例的策略才会调用控制决策插件。
-- 网络 connect 热路径先查询规范化 `SocketAddr` 精确索引，仅在未命中时查询 `IpAddr` 全端口索引；没有规则时直接采用 `network_control.default_decision`，不会进入 WASM，也不会遍历规则。
+- 网络 connect 按现有 IP 前缀从长到短查询，每个命中网段用端口区间索引选择规则。索引在发布时构建。没有规则时采用 `network_control.default_decision`。
 - 网络 gray 调用从 seccomp 事件循环延后到有界 worker；全局 pending、每规则并发和目标实例并发任一达到上限时立即使用规则 fallback。
 - 插件需要额外上下文时，应通过已授权 hostcall 按需查询，不应要求 AcTrail 在每次请求里主动携带完整上下文。
 - 可复用结论应通过 `reusable` 返回，让 AcTrail 在当前 trace/task 范围内减少重复调用。
@@ -250,6 +250,16 @@ WIT component 控制插件通过 hostcall 查询当前决策上下文和文件�
 | `concurrency-limit` | option<u32> | 插件并发限制。 |
 | `fallback` | option<string> | 超时或错误 fallback。 |
 
+文件规则的 `operation` 支持 `any/open/read/write/delete/attr/rename/link/mkdir/rmdir`。`open` 控制打开门禁，打开时还检查请求的读写权限。已有 FD 的读写分别检查 `read/write`。文件映射需要 `read`，共享可写映射还需要 `write`。私有写时复制映射需要 `read`。
+
+`delete` 控制 unlink 删除目录项。`attr` 控制 chmod/chown 修改模式、属主和属组，包含 FD 形式调用。删除和属性规则分别独立于文件读写规则。
+
+`write` 同时控制 truncate、ftruncate 和 O_TRUNC 截断。拒绝截断时保留文件长度和内容。
+
+`rename` 同时检查源路径和目标路径，覆盖已有目标还需要目标的 `delete` 权限。`RENAME_EXCHANGE` 检查双方的 `rename` 权限。同 inode 的两个名字之间执行 rename 时保留双方名字。`link` 同时检查已有源路径和新目标路径。
+
+`read/write/delete/attr/rename/link` 需要启用 LSM 文件后端。其他后端拒绝显式指定这些操作的规则。`any` 匹配所选后端支持的文件操作。文件默认决策分别应用于各项操作。
+
 策略批量更新使用独立的文件策略规则接口。插件需要声明并获得 `file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute-scope>` grant，然后调用规则更新接口。动态 gray 规则的 `gray-target` 使用 control-plugin 实例索引，发布时允许目标尚未 active；实际请求到达时目标不可用则拒绝。
 
 文件和命令规则保留声明路径用于列表、规则身份与授权。启动加载或 upsert 时，在 daemon 的文件系统视图中解析已有符号链接，绑定执行路径；目标及后续路径组件可以尚未创建。例如声明 A 时 A 指向 B，规则绑定 B；A 改为指向 C 后仍治理 B，重新 upsert 才绑定 C。绑定的是路径名，B 处普通文件被替换后仍受该规则治理。其他规则发布和 owner 撤销不会重新解析保留规则。
@@ -325,6 +335,8 @@ WIT component 入口：
 
 ### 网络动作上下文与动态网络路由
 
+网络规则包含 `operation`、`protocol` 和 `endpoint`。connect/send 使用远端端点，bind/listen 使用本地端点。动态配置默认 connect/any。LSM 执行四项操作的 allow/deny，seccomp 仅接受 connect/any。授权要求操作相同，协议及端点范围覆盖规则。网络审计记录实际操作、协议和对应方向的端点。
+
 网络 gray 决策的 `target-summary` 仍然只用于展示和诊断，插件不得解析该字符串作为稳定策略输入。需要结构化目标的 WIT component 必须声明并获得 `network-action.current-context-query`，然后通过 `network-control-host.network-action-current-context-query("c", "network-action.v1")` 查询：
 
 | 字段 | WIT 类型 | 含义 |
@@ -344,15 +356,21 @@ WIT component 入口：
 | `network-policy.rules.read` | 读取当前静态与动态 owner 合并后的规则及 revision。 |
 | `network-policy.rules.match-dry-run` | 对一个精确数字 endpoint 查询实际命中 owner、决策和 revision。 |
 | `network-policy.rules.validate` | 校验一批 AON patch，不修改路由。 |
-| `network-policy.rules.apply:kind=<allow\|deny\|gray>,remote=<*\|numeric-ip:port\|numeric-ip:*>` | 只允许发布指定决策类型和远端范围；IPv6 使用 `[ip]:port` 或 `[ip]:*`。 |
+| `network-policy.rules.apply:kind=<allow\|deny\|gray>,operation=<connect\|send\|bind\|listen>,protocol=<any\|tcp\|udp>,endpoint=<scope>` | 限定决策、操作、协议与地址/端口范围。IPv6 地址或 CIDR 使用方括号。 |
 
-`network-policy-apply-request` 包含精确 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。每条动态 rule draft 使用 `remote` 表达精确数字 IPv4/IPv6 endpoint 或单 IP 全端口 selector；静态规则使用相同 selector 语法，实际规则不接受裸 `*`。grant 的 `*` 覆盖全部 selector，`IP:*` 覆盖同 IP 的全端口和精确 endpoint，精确 grant 只覆盖自身。规则不提供 priority；同一 owner 可以同时配置 `IP:*` 和该 IP 的精确 endpoint，匹配时精确 endpoint 优先。所有静态规则属于同一静态 owner，同样支持全端口规则及端口例外。相同 selector 的重复规则，以及不同 owner 之间的全端口与精确 endpoint 重叠，会使整批请求 rejected。gray 规则还必须同时提供非自身的 `gray-target`、正数 `timeout-ms`、正数 `concurrency-limit` 和 `allow|deny` fallback。allow/deny 规则不得携带这些 gray 字段。
+`network-policy-apply-request` 包含 `base-revision`、`mutation-id`、可选 `reason` 和 `upsert/delete` items。每条规则的 `endpoint` 组合数字 IP 或 CIDR 与端口范围。端口可以是单值、闭区间或 `*`。例如 `192.0.2.1:443`、`192.0.2.0/24:8000-8100` 和 `[2001:db8::/48]:*`。CIDR 的主机位会归零。规则不接受裸 `*`。
 
-`network_control.rules_path` 指定的静态文件每行使用以下格式。`remote` 支持 `192.0.2.1:443`、`192.0.2.1:*`、`[2001:db8::1]:443` 和 `[2001:db8::1]:*`；其中 `*` 匹配该 IP 的全部端口。`sync-plugin` 规则需要选择支持同步插件决策的 seccomp 后端。
+grant 的 `*` 覆盖全部地址和端口。其他 grant 使用相同的范围语法，规则的全部地址和端口必须包含在单条 grant 内。发布授权还要求操作相同、协议范围包含规则的协议。
+
+匹配时依次选择更长的 IP 前缀、更窄的端口范围和具体协议。同等范围按 owner 和 rule ID 排序。同一 owner 可以发布更具体的例外。不同 owner 的范围在操作、协议、地址和端口上同时相交时，整批请求被拒绝。相同操作、协议和规范化范围的重复规则也被拒绝。
+
+gray 规则必须提供非自身的 `gray-target`、正数 `timeout-ms`、正数 `concurrency-limit` 和 `allow|deny` fallback。allow/deny 规则不得携带 gray 字段。
+
+`network_control.rules_path` 指定的静态文件使用相同的范围语法。`sync-plugin` 规则使用 seccomp 同步决策后端。每行格式如下：
 
 ```text
-<rule-id> <allow|deny> connect <remote>
-<rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <remote>
+<rule-id> <allow|deny> <connect|send|bind|listen> <endpoint> [protocol <any|tcp|udp>]
+<rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <endpoint>
 ```
 
 `network-control-host` 的 WIT component 入口如下；这些入口不向 WASM core module 提供，声明网络策略管理能力的 core module 会在加载时失败。只做 gray 决策且需要结构化网络上下文的 component 使用最小 `network-control-plugin` world；同时提供管理命令和运行时配置的策略 publisher 使用 `managed-network-control-plugin`：
@@ -366,7 +384,11 @@ WIT component 入口：
 | `network-policy-rules-validate(request)` | `result<network-policy-apply-result, string>` |
 | `network-policy-rules-apply(request)` | `result<network-policy-apply-result, string>` |
 
-v1 网络控制作用于 `AF_INET`/`AF_INET6` 的 `connect(2)` 调用；传输层协议需另行确认。规则 selector 由数字 IP 与精确端口或全端口 `*` 组成；端口不支持任意区间。IPv6 scope ID 只进入 gray 决策上下文和审计，不参与 v1 本地规则匹配。审计中的 `remote` 保留实际 `IP:port`，命中规则时 `policy_remote_scope` 记录精确或 `IP:*` selector。它不解析域名、不做 DNS 或反向 DNS、不支持 CIDR、TLS SNI 和代理后的最终目标，也不覆盖 `sendto(2)`、AF_UNIX、继承或预先建立的连接、未安装 seccomp listener 的 attach 流程以及非 `SYS_connect` 的异步 I/O 路径。
+LSM 按操作和协议控制 `AF_INET`/`AF_INET6` 的连接、发送、绑定和监听。审计保存实际协议与完整端点，绑定和监听使用 `local_endpoint`，连接和发送使用 `remote_endpoint`。LSM 不接受带 IPv6 scope ID 的规则。
+
+seccomp 使用 CIDR 和端口范围匹配 `connect(2)`，只接受 `operation=connect`、`protocol=any`。它不控制后续发送、绑定或监听。审计中的 `remote` 保存实际端点，`policy_endpoint_scope` 保存命中规则的范围。
+
+未指定 IPv6 zone 的规则匹配任意 scope ID。seccomp 的精确端点可用 `%id` 限定 scope ID，例如 `[fe80::1%2]:443`。
 
 需要支持 `actraild plugin cmd` 的控制插件使用 WIT world `managed-control-plugin`。它在 `control-plugin` 的基础上额外导出管理命令入口：
 

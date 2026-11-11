@@ -15,6 +15,7 @@ pub struct LsmAuditEvent {
     pub rule_id: String,
     pub owner: String,
     pub resource: String,
+    pub protocol: u8,
     pub retain_audit: bool,
 }
 
@@ -34,19 +35,19 @@ impl LsmAuditEvent {
         };
         let domain = u32_at(40);
         let resource = &raw[312..824];
-        let resource = if domain == 5 && u32_at(48) == 0 {
-            let (ip, port_offset) = match resource[0] {
+        let resource = if matches!(domain, 5 | 12..=14) && u32_at(48) == 0 {
+            let (ip, port_offset) = match resource[1] {
                 4 => (
                     IpAddr::V4(Ipv4Addr::from(
-                        <[u8; 4]>::try_from(&resource[1..5]).unwrap(),
+                        <[u8; 4]>::try_from(&resource[2..6]).unwrap(),
                     )),
-                    5,
+                    6,
                 ),
                 6 => (
                     IpAddr::V6(Ipv6Addr::from(
-                        <[u8; 16]>::try_from(&resource[1..17]).unwrap(),
+                        <[u8; 16]>::try_from(&resource[2..18]).unwrap(),
                     )),
-                    17,
+                    18,
                 ),
                 _ => return Err("LSM network audit has invalid address family".into()),
             };
@@ -72,6 +73,11 @@ impl LsmAuditEvent {
             rule_id: string(&raw[56..184]),
             owner: string(&raw[184..312]),
             resource,
+            protocol: if matches!(domain, 5 | 12..=14) {
+                raw[312]
+            } else {
+                0
+            },
             retain_audit: u64_at(824) != 0,
         })
     }

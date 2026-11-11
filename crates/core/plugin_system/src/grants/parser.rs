@@ -1,4 +1,7 @@
-use crate::{CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision};
+use crate::{
+    CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision, NetworkPolicyOperation,
+    NetworkPolicyProtocol,
+};
 
 use super::model::PluginHostGrant;
 use super::validation::GrantValidator;
@@ -33,16 +36,38 @@ impl ScopedApplyGrantParser {
     }
 
     pub(super) fn network(value: &str) -> Result<PluginHostGrant, String> {
-        let (decision, remote) = Self::fields(
-            value,
-            "network-policy.rules.apply",
-            "remote",
-            "*, a numeric IP endpoint, or an IP any-port selector",
+        let mut fields = std::collections::BTreeMap::new();
+        for part in value.split(',') {
+            let (key, value) = part
+                .split_once('=')
+                .ok_or("network grant expects key=value")?;
+            if !matches!(key, "kind" | "operation" | "protocol" | "endpoint")
+                || fields.insert(key, value).is_some()
+            {
+                return Err(format!("invalid or repeated network grant field {key}"));
+            }
+        }
+        let decision = NetworkPolicyDecision::from_wire(
+            fields.get("kind").ok_or("network grant requires kind")?,
         )?;
-        let decision = NetworkPolicyDecision::from_wire(&decision)?;
         GrantValidator::network_decision(decision)?;
-        let remote = GrantValidator::network_remote_scope(&remote)?.to_string();
-        Ok(PluginHostGrant::NetworkPolicyRulesApply { decision, remote })
+        let operation = NetworkPolicyOperation::from_wire(
+            fields.get("operation").copied().unwrap_or("connect"),
+        )?;
+        let protocol =
+            NetworkPolicyProtocol::from_wire(fields.get("protocol").copied().unwrap_or("any"))?;
+        let endpoint = GrantValidator::network_endpoint_scope(
+            fields
+                .get("endpoint")
+                .ok_or("network grant requires endpoint")?,
+        )?
+        .to_string();
+        Ok(PluginHostGrant::NetworkPolicyRulesApply {
+            decision,
+            operation,
+            protocol,
+            endpoint,
+        })
     }
 
     fn fields(

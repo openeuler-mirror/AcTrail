@@ -1,7 +1,10 @@
-//! Dynamic INET-connect policy contracts exposed to control plugins.
+//! Network policy contracts exposed to control plugins.
+mod action;
+mod selector;
+pub use action::{NetworkPolicyOperation, NetworkPolicyProtocol};
+pub use selector::NetworkPolicyEndpointSelector;
 
 use std::fmt::{Display, Formatter};
-use std::net::{IpAddr, SocketAddr};
 
 use actrail_plugin_abi::control::network_policy as network_policy_abi;
 
@@ -63,90 +66,28 @@ impl NetworkPolicyDecision {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum NetworkPolicyRemoteSelector {
-    Endpoint(SocketAddr),
-    AnyPort(IpAddr),
-}
-
-impl NetworkPolicyRemoteSelector {
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        if let Some(raw_ip) = raw.strip_suffix(":*") {
-            let (raw_ip, bracketed) = match raw_ip
-                .strip_prefix('[')
-                .and_then(|value| value.strip_suffix(']'))
-            {
-                Some(value) => (value, true),
-                None => (raw_ip, false),
-            };
-            let ip = raw_ip.parse::<IpAddr>().map_err(|error| {
-                format!("network remote {raw} must contain a numeric IP before :*: {error}")
-            })?;
-            match (ip, bracketed) {
-                (IpAddr::V4(_), true) => {
-                    return Err(format!(
-                        "network remote {raw} must not bracket an IPv4 address"
-                    ));
-                }
-                (IpAddr::V6(_), false) => {
-                    return Err(format!(
-                        "network remote {raw} must bracket an IPv6 address as [ip]:*"
-                    ));
-                }
-                _ => {}
-            }
-            return Ok(Self::AnyPort(ip));
-        }
-        raw.parse::<SocketAddr>()
-            .map(Self::Endpoint)
-            .map_err(|error| {
-                format!(
-                    "network remote {raw} must be a numeric IP endpoint or IP any-port selector: {error}"
-                )
-            })
-    }
-}
-
-impl Display for NetworkPolicyRemoteSelector {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Endpoint(endpoint) => endpoint.fmt(formatter),
-            Self::AnyPort(IpAddr::V4(ip)) => write!(formatter, "{ip}:*"),
-            Self::AnyPort(IpAddr::V6(ip)) => write!(formatter, "[{ip}]:*"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum NetworkPolicyRemoteGrantScope {
+pub enum NetworkPolicyEndpointGrantScope {
     All,
-    Selector(NetworkPolicyRemoteSelector),
+    Selector(NetworkPolicyEndpointSelector),
 }
 
-impl NetworkPolicyRemoteGrantScope {
+impl NetworkPolicyEndpointGrantScope {
     pub fn parse(raw: &str) -> Result<Self, String> {
         if raw == "*" {
             return Ok(Self::All);
         }
-        NetworkPolicyRemoteSelector::parse(raw).map(Self::Selector)
+        NetworkPolicyEndpointSelector::parse(raw).map(Self::Selector)
     }
 
-    pub fn covers(self, selector: NetworkPolicyRemoteSelector) -> bool {
+    pub fn covers(self, selector: NetworkPolicyEndpointSelector) -> bool {
         match self {
             Self::All => true,
-            Self::Selector(NetworkPolicyRemoteSelector::AnyPort(ip)) => {
-                ip == match selector {
-                    NetworkPolicyRemoteSelector::Endpoint(endpoint) => endpoint.ip(),
-                    NetworkPolicyRemoteSelector::AnyPort(ip) => ip,
-                }
-            }
-            Self::Selector(NetworkPolicyRemoteSelector::Endpoint(endpoint)) => {
-                selector == NetworkPolicyRemoteSelector::Endpoint(endpoint)
-            }
+            Self::Selector(scope) => scope.covers(selector),
         }
     }
 }
 
-impl Display for NetworkPolicyRemoteGrantScope {
+impl Display for NetworkPolicyEndpointGrantScope {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::All => formatter.write_str("*"),
@@ -188,7 +129,9 @@ pub enum NetworkPolicyApplyStatus {
 pub struct NetworkPolicyRuleDraft {
     pub rule_id: Option<String>,
     pub decision: NetworkPolicyDecision,
-    pub remote: String,
+    pub operation: NetworkPolicyOperation,
+    pub protocol: NetworkPolicyProtocol,
+    pub endpoint: String,
     pub gray_target: Option<String>,
     pub timeout_ms: Option<u64>,
     pub concurrency_limit: Option<u32>,
@@ -231,7 +174,9 @@ pub struct NetworkPolicyRuleView {
     pub rule_id: String,
     pub owner_instance_id: String,
     pub decision: NetworkPolicyDecision,
-    pub remote: String,
+    pub operation: NetworkPolicyOperation,
+    pub protocol: NetworkPolicyProtocol,
+    pub endpoint: String,
     pub gray_target: Option<String>,
     pub timeout_ms: Option<u64>,
     pub concurrency_limit: Option<u32>,
@@ -243,7 +188,9 @@ pub struct NetworkPolicyRuleView {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NetworkPolicyListFilter {
     pub decision: Option<NetworkPolicyDecision>,
-    pub remote: Option<String>,
+    pub operation: Option<NetworkPolicyOperation>,
+    pub protocol: Option<NetworkPolicyProtocol>,
+    pub endpoint: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -255,7 +202,9 @@ pub struct NetworkPolicyListResult {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkPolicyMatchDryRunRequest {
-    pub remote: String,
+    pub operation: NetworkPolicyOperation,
+    pub protocol: NetworkPolicyProtocol,
+    pub endpoint: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -264,7 +213,7 @@ pub struct NetworkPolicyMatchDryRunResult {
     pub decision: NetworkPolicyDecision,
     pub rule_id: Option<String>,
     pub owner_instance_id: Option<String>,
-    pub resolved_remote: String,
+    pub resolved_endpoint: String,
     pub rule_revision: Option<u64>,
     pub source_revision: u64,
 }

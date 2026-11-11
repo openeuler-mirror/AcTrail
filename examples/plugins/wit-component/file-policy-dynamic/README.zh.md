@@ -67,7 +67,7 @@ release 安装程序把候选插件安装到：
 | --- | --- | --- |
 | `rule_id` | 新规则可省略 | 插件拥有的稳定规则 ID。提交新规则时由插件生成，例如 `dynamic-1`。 |
 | `decision` | 是 | `allow`、`deny` 或 `gray`。 |
-| `operation` | 否 | `any`、`open`、`mkdir` 或 `rmdir`。默认 `any`，同时匹配文件打开、目录创建和目录删除。 |
+| `operation` | 否 | `any`、`open`、`read`、`write`、`delete`、`attr`、`rename`、`link`、`mkdir` 或 `rmdir`。默认 `any`，匹配所选后端支持的文件操作。`read/write/delete/attr/rename/link` 需要 LSM 文件后端。 |
 | `path` | 是 | 声明的绝对文件或目录路径，可使用符号链接或尚未创建的目标；发布时绑定执行路径，并校验 grant 覆盖范围。 |
 | `priority` | 是 | 路由优先级，数值越大优先级越高。默认值为 `10`。 |
 | `gray_target` | gray 必填 | 接收同步判定的控制插件实例索引；非 gray 规则不能填写。 |
@@ -147,10 +147,10 @@ open
 | --- | --- | --- |
 | `help` | 否 | 显示插件支持的命令。 |
 | `rule list` | 否 | 列出插件当前内存配置中的规则。 |
-| `rule dry-run <path> [--operation open\|mkdir\|rmdir]` | 否 | 查询 actraild 合并后的路由匹配结果；省略 operation 时查询 `open`。 |
-| `rule upsert allow <path> [--operation any\|open\|mkdir\|rmdir] [--priority N]` | 是 | 新增 allow 规则；省略 operation 时使用 `any`。 |
-| `rule upsert deny <path> [--operation any\|open\|mkdir\|rmdir] [--priority N]` | 是 | 新增 deny 规则；省略 operation 时使用 `any`。 |
-| `rule upsert gray <path> [--operation any\|open\|mkdir\|rmdir] [--priority N] --gray-target INDEX` | 是 | 新增 gray 规则；省略 operation 时使用 `any`。 |
+| `rule dry-run <path> [--operation open\|read\|write\|delete\|attr\|rename\|link\|mkdir\|rmdir]` | 否 | 查询 actraild 合并后的路由匹配结果；省略 operation 时查询 `open`。 |
+| `rule upsert allow <path> [--operation any\|open\|read\|write\|delete\|attr\|rename\|link\|mkdir\|rmdir] [--priority N]` | 是 | 新增 allow 规则；省略 operation 时使用 `any`。 |
+| `rule upsert deny <path> [--operation any\|open\|read\|write\|delete\|attr\|rename\|link\|mkdir\|rmdir] [--priority N]` | 是 | 新增 deny 规则；省略 operation 时使用 `any`。 |
+| `rule upsert gray <path> [--operation any\|open\|read\|write\|delete\|attr\|rename\|link\|mkdir\|rmdir] [--priority N] --gray-target INDEX` | 是 | 新增 gray 规则；省略 operation 时使用 `any`。 |
 | `rule delete <rule-id>` | 是 | 删除插件配置中的指定规则。 |
 
 ## 验证实际访问结果

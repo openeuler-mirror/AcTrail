@@ -162,5 +162,5 @@ pub mod command_policy {
 
 pub mod network_policy {
     pub const DECISION: &str = "decision";
-    pub const REMOTE: &str = "remote";
+    pub const ENDPOINT: &str = "endpoint";
 }

@@ -63,8 +63,15 @@ impl LsmRuntime {
             let enabled = match program.name().to_str() {
                 Some("ac_task_alloc" | "ac_bprm_scope") => true,
                 Some("ac_bprm_check") => controller.command_enabled(),
-                Some("ac_socket_connect") => controller.network_config.enabled,
-                Some("ac_file_open") => controller.file_domain_enabled(1),
+                Some(
+                    "ac_socket_connect" | "ac_socket_sendmsg" | "ac_socket_bind"
+                    | "ac_socket_listen",
+                ) => controller.network_config.enabled,
+                Some(
+                    "ac_file_open" | "ac_file_permission" | "ac_mmap_file" | "ac_file_mprotect"
+                    | "ac_path_unlink" | "ac_path_chmod" | "ac_path_chown" | "ac_path_truncate"
+                    | "ac_file_truncate" | "ac_path_rename" | "ac_path_link",
+                ) => controller.file_domain_enabled(1),
                 Some("ac_path_mkdir") => controller.file_domain_enabled(2),
                 Some("ac_path_rmdir") => controller.file_domain_enabled(3),
                 _ => false,

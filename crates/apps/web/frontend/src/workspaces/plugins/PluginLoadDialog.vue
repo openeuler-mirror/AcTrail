@@ -62,6 +62,7 @@
 
           <PolicyScopeEditor
             v-if="needsNetworkPolicy"
+            network
             v-model="networkPolicyScopes"
             :title="t('load.networkTitle')"
             :description="t('load.networkDescription')"
@@ -208,6 +209,7 @@ function reset() {
 function newScope(kind) {
   return {
     key: `${kind}-policy-scope-initial`,
+    ...(kind === 'network' ? { operation: 'connect', protocol: 'any' } : {}),
     path_scope: '',
     decisions: ['allow', 'deny', 'gray'],
   };
@@ -227,7 +229,7 @@ function validateScopes(scopes, label) {
 
 function validateNetworkScopes(scopes) {
   for (const scope of scopes) {
-    if (!scope.path_scope || (scope.path_scope !== '*' && !looksLikeNumericRemoteScope(scope.path_scope))) {
+    if (!scope.path_scope?.trim()) {
       return t('load.endpointInvalid');
     }
     if (scope.decisions.length === 0) {
@@ -235,20 +237,6 @@ function validateNetworkScopes(scopes) {
     }
   }
   return '';
-}
-
-function looksLikeNumericRemoteScope(value) {
-  const ipv4 = value.match(/^([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\*|[0-9]{1,5})$/);
-  if (ipv4) {
-    return ipv4[1].split('.').every((part) => Number(part) <= 255)
-      && (ipv4[2] === '*' || Number(ipv4[2]) <= 65535);
-  }
-  const ipv6 = value.match(/^\[([0-9A-Fa-f:.]+)\]:(\*|[0-9]{1,5})$/);
-  return Boolean(
-    ipv6
-    && ipv6[1].includes(':')
-    && (ipv6[2] === '*' || Number(ipv6[2]) <= 65535),
-  );
 }
 
 function close() {
@@ -276,7 +264,9 @@ function submit() {
       network_policy_rules_apply: needsNetworkPolicy.value
         ? networkPolicyScopes.value.flatMap((scope) => scope.decisions.map((decision) => ({
           decision,
-          remote_scope: scope.path_scope,
+          endpoint_scope: scope.path_scope,
+          operation: scope.operation,
+          protocol: scope.protocol,
         })))
         : [],
       env_read: needsEnvRead.value ? envRead.value : [],

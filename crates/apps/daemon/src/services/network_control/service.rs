@@ -63,6 +63,9 @@ impl NetworkControlService {
         }
         let rules = NetworkPolicyStore::load(&config.rules_path)
             .map_err(|message| ControlError::new("network_control_policy", message))?;
+        rules
+            .validate_seccomp()
+            .map_err(|message| ControlError::new("network_control_policy", message))?;
         let queue_capacity = usize::try_from(config.pending_decision_max).map_err(|error| {
             ControlError::new(
                 "network_control_config",
@@ -498,9 +501,13 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
         request: &NetworkPolicyApplyRequest,
     ) -> Result<NetworkPolicyApplyResult, PluginRuntimeError> {
         let backend = self.lock_backend()?;
-        Ok(backend
+        let result = backend
             .rules
-            .validate_apply(owner_instance_id, grants, request))
+            .validate_apply(owner_instance_id, grants, request);
+        let mut candidate = backend.rules.clone();
+        candidate.apply(owner_instance_id, grants, request.clone());
+        candidate.validate_seccomp().map_err(policy_runtime_error)?;
+        Ok(result)
     }
 
     fn rules_apply(
@@ -510,7 +517,10 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
         request: NetworkPolicyApplyRequest,
     ) -> Result<NetworkPolicyApplyResult, PluginRuntimeError> {
         let mut backend = self.lock_backend()?;
-        let result = backend.rules.apply(owner_instance_id, grants, request);
+        let mut candidate = backend.rules.clone();
+        let result = candidate.apply(owner_instance_id, grants, request);
+        candidate.validate_seccomp().map_err(policy_runtime_error)?;
+        backend.rules = candidate;
         if result.status == NetworkPolicyApplyStatus::Accepted && result.applied_count > 0 {
             backend.clear_reusable_cache();
         }

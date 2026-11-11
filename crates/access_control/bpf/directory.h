@@ -1,3 +1,4 @@
+/* Resolve filesystem paths for access hooks without the d_path helper. */
 #ifndef ACTRAIL_ACCESS_CONTROL_DIRECTORY_H
 #define ACTRAIL_ACCESS_CONTROL_DIRECTORY_H
 
@@ -10,6 +11,11 @@ struct qstr {
 struct dentry {
     struct qstr d_name;
     struct dentry *d_parent;
+    const struct dentry_operations *d_op;
+    struct inode *d_inode;
+} __attribute__((preserve_access_index));
+struct dentry_operations {
+    void *d_dname;
 } __attribute__((preserve_access_index));
 struct vfsmount {
     struct dentry *mnt_root;
@@ -113,10 +119,12 @@ static __always_inline int ac_directory_resource(
     if (ACTRAIL_CORE_READ(&root, fs, root) || !root.mnt || !root.dentry ||
         bpf_probe_read_kernel(&current, sizeof(current), directory) || !current.mnt)
         return -14;
-    struct dentry *parent = 0;
-    if (ACTRAIL_CORE_READ(&parent, entry, d_parent) || parent != current.dentry)
-        return -11;
-    current.dentry = entry;
+    if (entry) {
+        struct dentry *parent = 0;
+        if (ACTRAIL_CORE_READ(&parent, entry, d_parent) || parent != current.dentry)
+            return -11;
+        current.dentry = entry;
+    }
     struct ac_directory_walk walk = {
         .work = work,
         .root = root,
@@ -145,6 +153,26 @@ static __always_inline int ac_directory_resource(
         work->key.resource[i] = work->name[source];
     }
     return AC_RESOURCE_BYTES - offset;
+}
+
+static __always_inline int ac_path_resource(struct ac_work *work, struct path *source) {
+    struct path path = {};
+    struct dentry *parent = 0, *mount_root = 0;
+    const struct dentry_operations *operations = 0;
+    void *dynamic_name = 0;
+    if (bpf_probe_read_kernel(&path, sizeof(path), source) || !path.dentry || !path.mnt ||
+        ACTRAIL_CORE_READ(&operations, path.dentry, d_op)) return -14;
+    /* Match d_path's synthetic-name branch. These descriptors (including
+     * sockets, pipes and memfd) have no ordinary filesystem policy path. */
+    if (operations) {
+        if (ACTRAIL_CORE_READ(&dynamic_name, operations, d_dname)) return -14;
+        if (dynamic_name) {
+            if (ACTRAIL_CORE_READ(&parent, path.dentry, d_parent) ||
+                ACTRAIL_CORE_READ(&mount_root, path.mnt, mnt_root)) return -14;
+            if (path.dentry != parent || path.dentry != mount_root) return 0;
+        }
+    }
+    return ac_directory_resource(work, source, 0);
 }
 
 #endif
