@@ -6,9 +6,12 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use config_core::daemon::{DEFAULT_CONTROL_PENDING_CONNECTION_MAX, SocketPermissions};
+use config_core::daemon::{
+    DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+    SocketPermissions,
+};
 use uds_control_server::UdsControlConnection;
 
 use crate::bootstrap::LocalDaemonServer;
@@ -42,6 +45,7 @@ impl LocalDaemonServer {
             socket_path,
             permissions,
             DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+            Duration::from_millis(DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS),
             || false,
             || Ok(()),
         )
@@ -52,6 +56,7 @@ impl LocalDaemonServer {
         socket_path: &Path,
         permissions: SocketPermissions,
         pending_connection_max: u32,
+        accept_retry_delay: Duration,
         mut should_stop: S,
         on_ready: R,
     ) -> Result<(), DaemonRunError>
@@ -68,13 +73,16 @@ impl LocalDaemonServer {
         })?;
         let mut control_connections = Vec::new();
         let mut drain_error_log = DrainErrorLog::default();
+        let mut accept_retry_at = None;
         on_ready()?;
         while !should_stop() {
             self.serve_ready_cycle(
                 &listener,
                 &mut control_connections,
                 pending_connection_max,
+                accept_retry_delay,
                 &mut drain_error_log,
+                &mut accept_retry_at,
             )?;
         }
         Ok(())
@@ -85,19 +93,34 @@ impl LocalDaemonServer {
         listener: &UnixListener,
         control_connections: &mut Vec<UdsControlConnection>,
         pending_connection_max: usize,
+        accept_retry_delay: Duration,
         drain_error_log: &mut DrainErrorLog,
+        accept_retry_at: &mut Option<Instant>,
     ) -> Result<(), DaemonRunError> {
         let control_fds = control_connections
             .iter()
+            .filter(|connection| connection.waiting_for().is_none())
             .map(UdsControlConnection::raw_fd)
             .collect::<Vec<_>>();
         let event_fds = self.event_poll_fds()?;
+        let retry_delay = accept_retry_at
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            .filter(|delay| !delay.is_zero());
+        let timeout = self
+            .background_poll_timeout()
+            .map_err(|error| DaemonRunError::new(error.code, error.message))?
+            .into_iter()
+            .chain(retry_delay)
+            .min();
         let readiness = wait_for_ready(
-            listener.as_raw_fd(),
+            if retry_delay.is_some() {
+                -1
+            } else {
+                listener.as_raw_fd()
+            },
             &control_fds,
             event_fds.clone(),
-            self.background_poll_timeout()
-                .map_err(|error| DaemonRunError::new(error.code, error.message))?,
+            timeout,
         )?;
         self.workload_diagnostics().record_ready_cycle(
             readiness.listener_ready,
@@ -111,6 +134,7 @@ impl LocalDaemonServer {
             loop {
                 match listener.accept() {
                     Ok((stream, _)) if control_connections.len() >= pending_connection_max => {
+                        *accept_retry_at = None;
                         drop(stream);
                         tracing::warn!(
                             pending_connection_max,
@@ -118,6 +142,7 @@ impl LocalDaemonServer {
                         );
                     }
                     Ok((stream, _)) => {
+                        *accept_retry_at = None;
                         stream.set_nonblocking(true).map_err(|error| {
                             DaemonRunError::from_io("control_nonblocking", error)
                         })?;
@@ -127,7 +152,19 @@ impl LocalDaemonServer {
                         ready_control_fds.push(connection.raw_fd());
                         control_connections.push(connection);
                     }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        *accept_retry_at = None;
+                        break;
+                    }
+                    Err(error)
+                        if matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE)) =>
+                    {
+                        if accept_retry_at.is_none() {
+                            tracing::warn!(error = %error, "pausing control accept while fd limit is reached");
+                        }
+                        *accept_retry_at = Some(Instant::now() + accept_retry_delay);
+                        break;
+                    }
                     Err(error) => return Err(DaemonRunError::from_io("accept", error)),
                 }
             }
@@ -143,7 +180,26 @@ impl LocalDaemonServer {
                 Err(error) => drain_error_log.record_error(error),
             }
         }
+        self.deliver_finished_replies(control_connections);
         Ok(())
+    }
+
+    /// Hands replies to deferred requests to their connections and starts writing them. A reply
+    /// whose client has gone is dropped.
+    fn deliver_finished_replies(&mut self, control_connections: &mut Vec<UdsControlConnection>) {
+        let mut delivered = Vec::new();
+        for (ticket, reply) in self.finished_control_replies() {
+            if let Some(connection) = control_connections
+                .iter_mut()
+                .find(|connection| connection.waiting_for() == Some(ticket))
+            {
+                connection.deliver(&reply);
+                delivered.push(connection.raw_fd());
+            }
+        }
+        if !delivered.is_empty() {
+            self.progress_control_connections(control_connections, &delivered);
+        }
     }
 
     fn progress_control_connections(
@@ -336,8 +392,15 @@ fn wait_for_ready(
     }
     let mut event_source_ready = false;
     for event_fd in fds.iter().skip(control_end) {
-        ensure_valid_revents("event_source", event_fd.revents)?;
-        event_source_ready |= is_readable(event_fd.revents);
+        // A peer that goes away with unread data reports POLLERR; its owner sees that on read.
+        if event_fd.revents & libc::POLLNVAL != 0 {
+            return Err(DaemonRunError::new(
+                "poll_event_source",
+                format!("poll returned error flags {}", event_fd.revents),
+            ));
+        }
+        event_source_ready |=
+            event_fd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0;
     }
 
     Ok(ReadySet {

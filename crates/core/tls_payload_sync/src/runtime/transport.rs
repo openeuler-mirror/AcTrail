@@ -3,23 +3,17 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-pub(crate) enum Endpoint {
-    Path(PathBuf),
-    Inherited(UnixStream),
-}
+use super::{EventQueue, FdRegistration};
+use crate::DEFAULT_EVENT_BATCH_BYTES;
+
+pub(crate) struct Endpoint(pub(crate) PathBuf);
 
 impl Endpoint {
     pub(crate) fn connect(&self, deadline: Instant) -> io::Result<UnixStream> {
-        let Self::Path(path) = self else {
-            let Self::Inherited(stream) = self else {
-                unreachable!()
-            };
-            let stream = stream.try_clone()?;
-            stream.set_nonblocking(true)?;
-            return Ok(stream);
-        };
+        let path = &self.0;
         let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
         let path = path.as_os_str().as_bytes();
         if path.is_empty() || path.contains(&0) || path.len() >= address.sun_path.len() {
@@ -45,11 +39,24 @@ impl Endpoint {
         let stream = unsafe { UnixStream::from_raw_fd(fd) };
         let length =
             (std::mem::offset_of!(libc::sockaddr_un, sun_path) + path.len() + 1) as libc::socklen_t;
-        let result =
-            unsafe { libc::connect(fd, &address as *const _ as *const libc::sockaddr, length) };
-        if result < 0 {
+        loop {
+            DeadlineStream::remaining(deadline)?;
+            let result =
+                unsafe { libc::connect(fd, &address as *const _ as *const libc::sockaddr, length) };
+            if result == 0 {
+                break;
+            }
             let error = io::Error::last_os_error();
             // AF_UNIX EAGAIN means the listener backlog is full, not an in-progress connection.
+            if error.raw_os_error() == Some(libc::EAGAIN) {
+                std::thread::sleep(
+                    DeadlineStream::remaining(deadline)?.min(Duration::from_millis(1)),
+                );
+                continue;
+            }
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
             if error.raw_os_error() != Some(libc::EINPROGRESS) {
                 return Err(error);
             }
@@ -58,6 +65,7 @@ impl Endpoint {
                 return Err(error);
             }
             stream.peer_addr()?;
+            break;
         }
         Ok(stream)
     }
@@ -114,17 +122,37 @@ impl Endpoint {
 }
 
 pub(crate) struct DeadlineStream {
+    _registration: Option<FdRegistration>,
     stream: UnixStream,
     deadline: Instant,
-    max_write_bytes: usize,
+    progress: Option<(Duration, Arc<EventQueue>)>,
+    write_max_bytes: usize,
 }
 
 impl DeadlineStream {
-    pub(crate) fn new(stream: UnixStream, max_write_bytes: usize) -> Self {
+    pub(crate) fn new(stream: UnixStream) -> Self {
         Self {
+            _registration: None,
             stream,
             deadline: Instant::now(),
-            max_write_bytes,
+            progress: None,
+            write_max_bytes: DEFAULT_EVENT_BATCH_BYTES as usize,
+        }
+    }
+
+    pub(super) fn for_events(
+        stream: UnixStream,
+        timeout: Duration,
+        queue: Arc<EventQueue>,
+        registration: FdRegistration,
+        write_max_bytes: usize,
+    ) -> Self {
+        Self {
+            _registration: Some(registration),
+            stream,
+            deadline: Instant::now(),
+            progress: Some((timeout, queue)),
+            write_max_bytes,
         }
     }
 
@@ -174,6 +202,15 @@ impl DeadlineStream {
     }
 }
 
+impl Drop for DeadlineStream {
+    fn drop(&mut self) {
+        if self.progress.is_some() {
+            // Wake the release reader and let the daemon see EOF when the writer stops.
+            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
 impl Read for DeadlineStream {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
@@ -198,11 +235,22 @@ impl Write for DeadlineStream {
             return Ok(0);
         }
         loop {
+            if let Some((_, queue)) = &self.progress {
+                self.deadline = queue.deadline(self.deadline)?;
+            }
             Self::remaining(self.deadline)?;
             match self
                 .stream
-                .write(&bytes[..bytes.len().min(self.max_write_bytes)])
+                .write(&bytes[..bytes.len().min(self.write_max_bytes)])
             {
+                Ok(written) => {
+                    if written != 0 {
+                        if let Some((timeout, queue)) = &self.progress {
+                            self.deadline = queue.deadline(Instant::now() + *timeout)?;
+                        }
+                    }
+                    return Ok(written);
+                }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     Self::wait_writable(&self.stream, self.deadline)?;
                 }

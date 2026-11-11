@@ -18,6 +18,8 @@ use storage_factory::{StorageConfig, open_storage_backend};
 
 #[path = "http/alerts.rs"]
 mod alerts;
+#[path = "http/checkpoints/mod.rs"]
+mod checkpoints;
 #[path = "http/cluster_routes.rs"]
 mod cluster_routes;
 #[path = "http/configuration/endpoint.rs"]
@@ -376,6 +378,11 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         context.operator_config.as_ref(),
     )
     .route(&request.method, path, query, &request.body)
+    {
+        return response;
+    }
+    if let Some(response) =
+        checkpoints::CheckpointHttp::new(context).route(&request.method, path, query)
     {
         return response;
     }

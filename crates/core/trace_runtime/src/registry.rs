@@ -6,7 +6,7 @@ use std::time::SystemTime;
 use collector_capability::CollectorDescriptor;
 use model_core::ids::{OtelTraceId, TraceId, TraceName};
 use model_core::process::{ExitStatus, MembershipState, ProcessIdentity, ProcessMembership};
-use model_core::trace::{TraceAlertToken, TraceLifecycleState, TraceRecord};
+use model_core::trace::{TlsEventToken, TraceAlertToken, TraceLifecycleState, TraceRecord};
 
 use crate::commands::{RootRemovalRequest, TrackTraceRequest};
 use crate::membership::MembershipIndex;
@@ -29,6 +29,7 @@ pub struct TraceEntry {
     pub sensor_plan: SensorPlan,
     pub memberships: MembershipIndex,
     pub owner: Option<TraceOwnerPrincipal>,
+    pub tls_event_token: TlsEventToken,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +59,11 @@ impl TraceRuntime {
         }
     }
 
+    /// Advances allocation past IDs retained by another persistent store.
+    pub fn advance_trace_id_seed(&mut self, minimum: u64) {
+        self.next_trace_id = self.next_trace_id.max(minimum);
+    }
+
     pub fn reserve_trace_id(&mut self) -> TraceId {
         let trace_id = TraceId::new(self.next_trace_id);
         self.next_trace_id += 1;
@@ -79,6 +85,9 @@ impl TraceRuntime {
     ) -> Result<(), RegistryError> {
         let mut alert_token = [0_u8; TraceAlertToken::BYTE_COUNT];
         getrandom::fill(&mut alert_token)
+            .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
+        let mut tls_event_token = [0_u8; TlsEventToken::BYTE_COUNT];
+        getrandom::fill(&mut tls_event_token)
             .map_err(|error| RegistryError::TraceIdentityGenerationFailed(error.to_string()))?;
         let mut otel_trace_id = [0_u8; OtelTraceId::BYTE_COUNT];
         getrandom::fill(&mut otel_trace_id)
@@ -119,6 +128,7 @@ impl TraceRuntime {
                 sensor_plan,
                 memberships,
                 owner: None,
+                tls_event_token: TlsEventToken::new(tls_event_token),
             },
         );
         Ok(())

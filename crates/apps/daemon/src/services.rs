@@ -6,6 +6,7 @@ pub(crate) mod alert_ingress;
 #[path = "services/application_protocol/service.rs"]
 pub(crate) mod application_protocol;
 pub(crate) mod attach;
+pub(crate) mod checkpoint;
 pub(crate) mod command_control;
 pub(crate) mod control_runtime;
 #[path = "services/logging/diagnostic.rs"]

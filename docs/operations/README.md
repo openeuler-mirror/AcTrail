@@ -14,6 +14,7 @@
 - [启动、停止和检查 daemon](daemon/start-stop.md)
 - [查看和导出 trace](daemon/inspect-traces.md)
 - [配置Agent 执行停滞告警与时间线](idle-detection.md)
+- [用 checkpoint 保存和恢复文件](checkpoint.md)
 - [管理插件](plugins/manage.md)
 
 ## 集成

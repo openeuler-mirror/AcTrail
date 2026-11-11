@@ -25,6 +25,7 @@
     │   │   └── [x] struct LocalDaemonServer # 持有控制服务器与服务宿主，提供请求处理、事件排空和关闭入口。
     │   │       ├── [x] build # 校验配置并构建宿主服务依赖。
     │   │       ├── [x] drain_live_events # 推进采集事件与后台服务。
+    │   │       ├── [x] enable_checkpoints # 打开 checkpoint 记录库、收尾上一个 daemon 留下的工作并加载 backend 动态库。
     │   │       └── [x] shutdown # 驱动服务关闭与最终数据排空。
     │   ├── [x] profiles.rs # 维护采集及 launch profiles，并提供配置实际启用的需求视图；注册候选与启用需求分别表达。
     │   │   └── [x] struct DaemonProfileRegistry # 按名称查询 profile，供启动提取配置需求与 launch 解析同一配置。
@@ -37,11 +38,13 @@
     │   ├── [x] trait AttachService # 约束进程接入、事件驱动、策略插件操作与关闭行为。
     │   ├── [x] trait AttachDebugService # 为控制诊断提供采集器状态快照。
     │   └── [x] struct DaemonServiceHost # 持有 TraceRuntime 与接入服务，实施控制请求授权并协调生命周期。
+    ├── [x] service_host/ # 服务宿主的 checkpoint 胶水。
+    │   └── [x] checkpoint.rs # 带 checkpoint 配置的 TrackAdd 完成 attach 后交给 CheckpointService，回复延迟到初始保存完成；不能开始或初始保存失败时移除已登记的 Trace 并回复错误；checkpoint 命令按记录库中的所有者鉴权。
     ├── [x] peer_identity.rs # 从连接对端提取身份并检查进程和 trace 操作权限。
     │   ├── [x] struct PeerPrincipal # 表达授权主体并与 trace owner 比对。
     │   └── [x] struct PeerIdentity # 解析对端凭证，验证 root、进程引用与 trace 所有权。
     ├── [x] control_loop.rs # 推进控制连接的读取、请求处理和响应写出。
-    ├── [x] socket_loop.rs # 轮询控制连接、采集 FD 和后台截止时间，驱动整体运行循环。
+    ├── [x] socket_loop.rs # 轮询控制连接、采集 FD 和后台截止时间；fd 耗尽时暂停监听接入并每 100 ms 重试，期间继续处理已有连接和采集事件。
     │   └── [x] struct DaemonRunError # 保存守护进程运行错误的阶段代码与说明。
     ├── [x] services.rs # 声明具体服务模块并导出运行依赖构建入口。
     └── [x] services/ # 将核心组件和系统适配器接入守护进程生命周期。

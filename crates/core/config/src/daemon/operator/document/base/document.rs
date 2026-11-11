@@ -11,6 +11,7 @@ pub(super) struct ControlDocument {
     pub socket_path: String,
     pub socket_mode_octal: String,
     pub pending_connection_max: u32,
+    pub accept_retry_delay_ms: u64,
     pub active_trace_max: u32,
     pub pid_file: String,
     pub log_path: String,
@@ -28,6 +29,7 @@ impl Default for ControlDocument {
             socket_path: "/run/actrail/control.sock".to_string(),
             socket_mode_octal: "660".to_string(),
             pending_connection_max: DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
+            accept_retry_delay_ms: DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS,
             active_trace_max: DEFAULT_ACTIVE_TRACE_MAX,
             pid_file: "/run/actrail/actraild.pid".to_string(),
             log_path: "/var/log/actrail/actraild.log".to_string(),
@@ -368,6 +370,7 @@ pub(super) struct WebDocument {
     pub listen_addr: String,
     pub request_read_timeout_ms: String,
     pub alerts: WebAlertsDocument,
+    pub checkpoints: WebCheckpointsConfig,
 }
 
 impl Default for WebDocument {
@@ -376,6 +379,7 @@ impl Default for WebDocument {
             listen_addr: "127.0.0.1:18080".to_string(),
             request_read_timeout_ms: "1000".to_string(),
             alerts: WebAlertsDocument::default(),
+            checkpoints: WebCheckpointsConfig::default(),
         }
     }
 }
@@ -412,6 +416,18 @@ impl WebAlertsDocument {
 
 impl WebDocument {
     pub(super) fn to_config(&self) -> Result<WebServerConfig, String> {
+        let checkpoints = self.checkpoints;
+        require_positive_u64(
+            "web.checkpoints.status_timeout_ms",
+            checkpoints.status_timeout_ms,
+        )?;
+        require_positive_u32(
+            "web.checkpoints.poll_interval_ms",
+            checkpoints.poll_interval_ms,
+        )?;
+        if checkpoints.poll_interval_ms > i32::MAX as u32 {
+            return Err("web.checkpoints.poll_interval_ms must not exceed 2147483647".to_string());
+        }
         Ok(WebServerConfig {
             listen_addr: self
                 .listen_addr
@@ -422,6 +438,7 @@ impl WebDocument {
                 &self.request_read_timeout_ms,
             )?,
             alerts: self.alerts.to_config()?,
+            checkpoints,
         })
     }
 }
@@ -581,7 +598,7 @@ impl Default for EbpfDocument {
             tracked_process_max_entries: 8192,
             pending_operation_max_entries: 8192,
             fd_per_process_max_entries: 64,
-            suppressed_fd_max_entries: 8192,
+            suppressed_fd_max_entries: 65536,
             suppressed_fd_index_slots_per_process: 64,
             event_ring_buffer_max_bytes: 33554432,
             diagnostics_summary_interval_ms: 10000,

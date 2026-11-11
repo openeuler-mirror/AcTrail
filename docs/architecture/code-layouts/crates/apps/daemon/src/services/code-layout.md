@@ -17,6 +17,9 @@
 │   ├── [x] debug.rs # 生成接入服务与采集器诊断快照。
 │   ├── [x] logging.rs # 记录接入和初始化诊断。
 │   ├── [x] helpers.rs # 处理接入流程共用的身份、路径和配置转换。
+│   ├── [x] watched.rs # 为其他 daemon 服务关注 Trace：复制其文件事件，保存等待放行的 LLM 请求，排空后一并取走。
+│   │   ├── [x] struct HeldLlmRequest # 被关注 Trace 的一个 LLM 请求：hold、Trace 和 llm.request 动作 ID，不含请求内容。
+│   │   └── [x] struct WatchedTraces # 被关注和已结束关注的 Trace、文件事件副本和被扣住的 LLM 请求。
 │   └── [x] launch/ # 在目标继续运行前准备 launch 身份与采集条件。
 │       └── [x] preparation.rs # 复用已准备能力并登记 launch 目标，必需能力缺失时拒绝当前请求。
 ├── [x] identity/ # 连接 procfs 身份、trace 注册表与控制请求身份。
@@ -77,18 +80,32 @@
 │   └── [x] service.rs # 处理 TLS 相关通知并协调目标进程恢复。
 │       └── [x] struct SeccompTlsService # 持有 TLS 通知处理所需运行状态。
 ├── [x] tls_sync/ # 在目标运行前解析 TLS 库路径并同步采集准备。
-│   ├── [x] service.rs # 组织 TLS 同步队列、运行依赖和完成诊断。
+│   ├── [x] service.rs # 协调每进程连接、Trace 配额、epoll 就绪读取和计划查询。
 │   │   └── [x] struct TlsSyncService # 协调计划解析、目标对象固定和同步请求排空。
+│   ├── [x] clients.rs # 接入时保留 socket 凭据，以登记帧中的 TLS 事件凭据授权事件，发送进程退出后仍接收缓冲事件；绑定 Trace 并执行配额和单轮读取预算，断开时交出已上报 stream 的 close；计划查询仍解析活进程身份。
+│   ├── [x] limits.rs # 计算连接与 fd 预算，并在启动时提高 RLIMIT_NOFILE。
+│   ├── [x] release.rs # 放行 checkpoint launch 的 runtime：按 TLS 连接放行到已处理的出站序号，LLM 请求的 hold 只在同一 Trace 中匹配连接，并停在它的末尾序号之前；放行消息入队后回收没有 hold 的进度条目；Trace 结束后让仍在上报的进程不再等待；未写出的放行超过 1 MiB 时关闭该连接。
+│   │   └── [x] struct ClientReleases # 一条上报连接上各 TLS 连接已处理、已放行的序号和 hold，以及待写出的放行帧。
 │   ├── [x] resolver.rs # 为 exec 解析所需 TLS 采集计划。
 │   │   └── [x] struct TlsSyncPlanResolver # 结合目标进程信息与运行配置生成同步计划。
+│   ├── [x] resolver_worker.rs # 从有界队列解析计划并回复，直接持有查询 socket；跳过已断开的请求。
 │   ├── [x] root_path.rs # 固定目标进程根目录及可访问对象路径。
 │   ├── [x] direct.rs # 发现目标对象并执行直接同步任务。
 │   ├── [x] launch.rs # 固定 launch 使用的同步计划和对象。
-│   └── [x] frame_buffer.rs # 缓冲同步协议帧并保留未完整读取的数据。
-├── [x] live.rs # 组织运行期事件排空和各服务推进顺序。
+│   └── [x] frame_buffer.rs # 缓冲未完整读取的帧，大帧消费完后释放超过 1 MiB 的容量。
+├── [x] checkpoint/ # 将 checkpoint 协调接入 launch、控制命令和 LLM 边界。
+│   ├── [x] service.rs # 装配协调器及其记录库写连接、只读连接和完成队列。
+│   │   └── [x] struct CheckpointService # 持有协调器和等待初始保存的 launch；每次排空时应用完成结果、把 LLM 请求交给协调器，交出可以放行的 hold，把已离开 TraceRuntime 或进入终态的 Trace 记为已结束，协调器随之 disconnect；仍在运行的 Trace disconnect 完成后不再关注它的 LLM 请求。
+│   ├── [x] completions.rs # 工作线程的完成结果经队列交给 daemon，并写 eventfd 唤醒主循环。
+│   ├── [x] launch.rs # 检查非 root 发起者只保护自己拥有的目录；从仍停在启动屏障的根进程读取启动时间、namespace 和工作目录，组成 launch 请求。
+│   ├── [x] commands.rs # 把 checkpoint 控制命令转给协调器的命令和查询，经协调器找出命令所属的 Trace 及其所有者，把记录转为视图，直接回答当前 daemon 的暂停与工作线程状态。
+│   ├── [x] procfs.rs # 读取 /proc 中的父进程、状态、线程数和启动时间，区分僵尸主线程与已退出的整个线程组。
+│   └── [x] process_control.rs # 从根和已知成员发现并暂停存活后代；仅有 namespace 坐标的成员在暂停时匹配 PID 与启动代，退出代不阻止恢复；根退出仍覆盖被重新收养的成员，只继续由 checkpoint 暂停的进程。
+├── [x] live.rs # 组织运行期事件排空和各服务推进顺序；TLS-sync 的已读明文处理完后再处理上报连接断开产生的 stream close。
 ├── [x] live/ # 处理直接采集、seccomp、身份收敛与关闭阶段。
 │   ├── [x] batch.rs # 按批推进采集事件与持久化。
 │   ├── [x] reconcile.rs # 对齐采集到的进程事实与 trace 注册状态。
+│   ├── [x] held_llm_requests.rs # payload 识别出被关注 Trace 的 LLM 请求时，立即按 stream_key 与末尾序号扣住，排空后交给 checkpoint；其余已处理的流量由 payload 事务在写入存储之前放行。
 │   ├── [x] direct.rs # 排空直接采集来源的事件。
 │   ├── [x] seccomp.rs # 排空 seccomp 相关事件与治理完成结果。
 │   ├── [x] launch_binding.rs # 将 launch 观测与预先建立的 trace 身份关联。

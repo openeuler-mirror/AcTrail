@@ -1,5 +1,7 @@
 //! Shared Unix-socket framing and socket-path support for control transport.
 
+mod checkpoint;
+mod optional;
 mod permission;
 mod plugin;
 mod reply;
@@ -164,6 +166,7 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
             fields.push(command.instance_id.clone());
             fields.push(command.config_json.clone());
         }
+        ControlCommand::Checkpoint(command) => checkpoint::encode_command(&mut fields, command),
     }
     encode_fields(&fields)
 }
@@ -179,8 +182,8 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
                 binary: PathBuf::from(field(&fields, 2)?),
             },
         )),
-        "track_add" | "track_add_v2" | "track_add_v3" | "track_add_v4" | "track_add_v5"
-        | "track_add_v6" | "track_add_v7" => track::TrackCodec::decode(&fields),
+        "track_add_v9" => track::TrackCodec::decode(&fields),
+        checkpoint::COMMAND_OPCODE => checkpoint::decode_command(&fields),
         "register_seccomp_listener" => Ok(ControlCommand::RegisterSeccompListener(
             RegisterSeccompListenerCommand {
                 request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
@@ -448,7 +451,8 @@ fn decode_fields(bytes: &[u8]) -> Result<Vec<String>, ControlCodecError> {
         let length = length
             .parse::<usize>()
             .map_err(|_| ControlCodecError::new("decode", "invalid field length"))?;
-        if cursor + length > bytes.len() {
+        // Written so that a huge declared length cannot overflow the sum.
+        if length > bytes.len() - cursor {
             return Err(ControlCodecError::new(
                 "decode",
                 "field exceeds frame length",

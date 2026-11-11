@@ -8,10 +8,12 @@ use abi_stable::{
     library::RootModule,
     sabi_trait,
     sabi_types::VersionStrings,
-    std_types::{RBox, RResult},
+    std_types::{RBox, RResult, RVec},
 };
 
-use crate::{BackendConfig, BackendError, SnapshotContext, SnapshotId};
+use crate::{
+    BackendConfig, BackendError, BackendKind, RestoreFailure, SnapshotContext, SnapshotId,
+};
 
 /// Restores one configured resource scope, such as context, files, or an API.
 ///
@@ -28,8 +30,8 @@ use crate::{BackendConfig, BackendError, SnapshotContext, SnapshotId};
 pub trait RestorableCheckpointBackend: Send {
     /// Establishes checkpoint integration and binds this instance to the context.
     /// Subsequent operations use that binding until disconnect. Concurrent traces
-    /// use separate backend instances. The integration binds its target session
-    /// separately from the trace identity. Snapshot operations require connection.
+    /// use separate backend instances. Snapshot operations require connection, and
+    /// snapshot IDs mean nothing outside it.
     fn connect(&mut self, context: &SnapshotContext) -> RResult<(), BackendError>;
 
     /// Requests a snapshot using the backend's capture policy and returns its ID.
@@ -38,16 +40,19 @@ pub trait RestorableCheckpointBackend: Send {
     /// no snapshot ID was returned.
     fn snapshot(&mut self) -> RResult<SnapshotId, BackendError>;
 
-    /// Requests restoration from a snapshot, retaining its ID for later use.
-    /// Failure may leave resources partly changed.
-    fn restore(&mut self, snapshot_id: &SnapshotId) -> RResult<(), BackendError>;
+    /// Requests restoration from a snapshot, retaining its ID for later use, and
+    /// returns the snapshots this restore invalidated. Failure may leave resources
+    /// partly changed and reports the snapshots invalidated so far.
+    fn restore(&mut self, snapshot_id: &SnapshotId) -> RResult<RVec<SnapshotId>, RestoreFailure>;
 
     /// Requests deletion of one snapshot. Once accepted, its ID must no longer
     /// be used for restoration. The backend connection remains active.
     fn delete(&mut self, snapshot_id: &SnapshotId) -> RResult<(), BackendError>;
 
-    /// Ends checkpoint integration and releases connection or session resources.
-    /// Pairs with connect; individual snapshot removal is handled by delete.
+    /// Ends checkpoint integration and releases connection or session resources,
+    /// including every snapshot still held. Pairs with connect; individual snapshot
+    /// removal is handled by delete. After a failure the connection is closed to
+    /// everything except another disconnect, which retries what is left.
     #[sabi(last_prefix_field)]
     fn disconnect(&mut self) -> RResult<(), BackendError>;
 }
@@ -66,8 +71,9 @@ pub type CheckpointBackend = RestorableCheckpointBackend_TO<'static, RBox<()>>;
 pub struct CheckpointModule {
     /// Creates a configured backend. The caller must then call connect before use.
     /// The integration owns configuration parsing and validation.
-    #[sabi(last_prefix_field)]
     pub create: extern "C" fn(BackendConfig) -> RResult<CheckpointBackend, BackendError>,
+    #[sabi(last_prefix_field)]
+    pub kind: BackendKind,
 }
 
 // Shared ABI metadata for library exports and load-time layout validation.

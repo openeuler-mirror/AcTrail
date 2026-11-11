@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use config_core::capture_profile::DeploymentPermissions;
 use config_core::daemon::{
@@ -176,6 +177,27 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         });
         format!("daemon build failed: {}: {}", error.code, error.message)
     })?;
+    if let Some(catalog_path) = &config.checkpoint_catalog_path
+        && let Err(error) = server.enable_checkpoints(
+            catalog_path,
+            &config.checkpoint_backends,
+            config.checkpoint_runtime,
+        )
+    {
+        let _ = server.shutdown();
+        cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
+            tracing::warn!(
+                error = %cleanup_error,
+                "daemon runtime cleanup failed after checkpoint startup error"
+            );
+        });
+        return Err(format!(
+            "start checkpoints with catalog {} failed: {}: {}",
+            catalog_path.display(),
+            error.code,
+            error.message
+        ));
+    }
     if let Err(error) = load_configured_startup_plugins(&mut server, config) {
         let _ = server.shutdown();
         cleanup_pid_file(config, pid_written).unwrap_or_else(|cleanup_error| {
@@ -219,6 +241,7 @@ fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), Str
         &config.socket_path,
         config.socket_permissions,
         config.control_pending_connection_max,
+        Duration::from_millis(config.control_accept_retry_delay_ms),
         signals::shutdown_requested,
         || {
             socket_bound = true;

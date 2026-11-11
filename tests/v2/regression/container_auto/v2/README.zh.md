@@ -73,7 +73,9 @@ sudo -E python3 tests/v2/regression/container_auto/v2/run_e2e.py \
 - **身份隔离**：其他容器无法列出或删除目标容器的活动 trace。host-PID 容器仍需
   通过容器身份校验。
 - **注入隔离**：跨容器注册 seccomp listener 或注入 TLS-sync payload 时，检查
-  拒绝响应及诊断证据。TLS 数据帧由 `fixtures/tls_injection.py` 构造。
+  拒绝响应及诊断证据。`fixtures/tls_injection.py` 先发送携带格式正确的伪造凭据的
+  TLS-sync 登记帧，再向目标 trace 注入 payload；要求出现对应 Trace 的鉴权拒绝审计，
+  并确认伪造 payload 入库数为 0。
 - **权限失败**：请求不可用的 `required` 权限时，启动返回非零退出状态和明确原因。
 - **恢复验证**：矩阵结束后重新启用 host eBPF，并检查 daemon 状态。
 - **清理**：结束时清理本轮容器、daemon 和随机运行目录，保留缓存镜像。

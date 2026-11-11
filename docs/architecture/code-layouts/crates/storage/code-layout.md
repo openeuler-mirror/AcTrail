@@ -7,6 +7,7 @@
 │       ├── [x] lib.rs # 导出主存储能力与查询类型
 │       ├── [x] backend.rs # 聚合 trace、事件、语义、payload 和控制状态的存取能力
 │       │   ├── [x] trait StorageBackend # 提供记录保存、历史读取、保留策略和事务入口；继承两个外部 cgroup 绑定存取接口
+│       │   │   └── [x] semantic_action_display_path_to_action # 不加载整张图，返回到指定动作的展示路径，供 checkpoint 跳到 LLM 调用
 │       │   └── [x] enum StorageOpenMode # 选择只读或读写打开方式
 │       ├── [x] error.rs # 定义存储失败与属性补充拒绝信息。
 │       │   └── [x] struct StorageError # 保存存储失败信息。

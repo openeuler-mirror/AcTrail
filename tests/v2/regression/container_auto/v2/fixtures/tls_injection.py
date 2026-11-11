@@ -25,7 +25,14 @@ class ForeignTracePayload:
     def _field(value: bytes) -> bytes:
         return struct.pack("<I", len(value)) + value
 
-    def frame(self) -> bytes:
+    @staticmethod
+    def _frame(kind: int, body: bytes) -> bytes:
+        return struct.pack(
+            CASE_CONSTANTS.tls_frame_header_format, CASE_CONSTANTS.tls_frame_magic,
+            CASE_CONSTANTS.tls_frame_version, kind, len(body),
+        ) + body
+
+    def frames(self) -> bytes:
         # Match tls_payload_sync::protocol::{FrameHeader, FrameCodec}.
         stat = Path("/proc/self/stat").read_text(encoding="utf-8")
         start_ticks = int(stat.rsplit(")", 1)[1].split()[19])
@@ -41,16 +48,17 @@ class ForeignTracePayload:
                 self._field(b"hi"),
             )
         )
-        return struct.pack(
-            CASE_CONSTANTS.tls_frame_header_format, CASE_CONSTANTS.tls_frame_magic,
-            CASE_CONSTANTS.tls_frame_version, CASE_CONSTANTS.tls_payload_frame_kind, len(body),
-        ) + body
+        # A valid registration frame with a forged credential must reach Trace authorization,
+        # rather than being rejected just because the registration is missing.
+        token = b"0" * (CASE_CONSTANTS.tls_event_token_bytes * 2)
+        registration = self._frame(CASE_CONSTANTS.tls_register_frame_kind, self._field(token))
+        return registration + self._frame(CASE_CONSTANTS.tls_payload_frame_kind, body)
 
     def send(self, socket_path: str) -> None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(CASE_CONSTANTS.injection_socket_timeout_seconds)
             client.connect(socket_path)
-            client.sendall(self.frame())
+            client.sendall(self.frames())
             client.shutdown(socket.SHUT_WR)
             try:
                 while client.recv(CASE_CONSTANTS.injection_receive_bytes):
@@ -59,7 +67,7 @@ class ForeignTracePayload:
                 pass
 
     def verify_rejected(self, daemon_log: Path, database: Path, offset: int) -> str:
-        rejection_reason = f"is not authorized for trace trace-{self.trace_id}"
+        rejection_reason = f"TLS-sync connection is not authorized for trace-{self.trace_id}"
         deadline = time.monotonic() + CASE_CONSTANTS.injection_audit_timeout_seconds
         while time.monotonic() < deadline:
             with daemon_log.open("rb") as log:

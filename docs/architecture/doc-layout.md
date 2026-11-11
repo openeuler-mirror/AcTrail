@@ -28,6 +28,7 @@
 │   │   └── [x] components/ # 组件设计
 │   │       ├── [x] alert-proxy.md # 告警代理设计
 │   │       ├── [x] assets/ # 组件图资源
+│   │       ├── [/] checkpoint.md # 文件保存与恢复设计
 │   │       ├── [x] core-runtime.md # 核心运行时设计
 │   │       ├── [x] ebpf-event-abi.md # 内核事件接口设计
 │   │       ├── [x] ebpf-event-transport.md # 内核事件传输设计
@@ -70,6 +71,7 @@
 │   │   └── [x] quickstart.md # 首次运行指南
 │   ├── [x] operations/ # 运维操作指南
 │   │   ├── [x] README.md # 操作导航
+│   │   ├── [/] checkpoint.md # 文件保存与恢复操作
 │   │   ├── [x] daemon/ # 守护进程操作
 │   │   │   ├── [x] configure.md # 配置操作
 │   │   │   ├── [x] inspect-traces.md # 观测记录查询与导出
@@ -106,6 +108,7 @@
 │   │   │   ├── [x] llm-request.md # 模型请求数据参考
 │   │   │   ├── [x] sandbox-alert.md # 沙箱告警数据参考
 │   │   │   └── [x] sandbox-observation.md # 沙箱观测数据参考
+│   │   ├── [/] checkpoint-backend.md # checkpoint backend 动态库接口参考
 │   │   ├── [x] platform-support.md # 平台支持范围
 │   │   ├── [x] plugin-api/ # 插件接口参考
 │   │   │   ├── [x] README.md # 接口导航
@@ -117,6 +120,8 @@
 │   │       └── [x] alert-proxy.md # 告警代理协议参考
 │   └── [x] specifications/ # 实现行为要求
 │       ├── [x] README.md # 规范导航
+│       ├── [/] checkpoint/ # 文件恢复要求
+│       │   └── [/] save-and-restore.md # 保存与恢复要求
 │       ├── [x] export/ # 动作与交付要求
 │       │   ├── [x] action-delivery.md # 语义动作交付要求
 │       │   └── [x] file-io-terminal-actions.md # 文件读写终态要求

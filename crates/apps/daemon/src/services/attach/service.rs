@@ -28,6 +28,7 @@ impl StorageAttachService {
             ControlError::new("trace_missing", "trace disappeared after activation")
         })?;
         let trace = entry.trace.clone();
+        let tls_event_token = entry.tls_event_token.clone();
         let memberships = entry.memberships.memberships().cloned().collect::<Vec<_>>();
         if let Err(error) = persist_admitted_trace(
             self.storage.as_mut(),
@@ -74,6 +75,7 @@ impl StorageAttachService {
         Ok(TrackAddReply {
             trace_id,
             lifecycle_state: trace.lifecycle_state,
+            tls_event_token,
         })
     }
 
@@ -125,15 +127,29 @@ impl StorageAttachService {
 }
 
 impl AttachService for StorageAttachService {
-    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
+    fn watch_trace(&mut self, trace_id: model_core::ids::TraceId, watch: bool) {
+        self.watched.watch(trace_id, watch);
+        if !watch {
+            self.tls_sync.end_trace(trace_id);
+        }
+    }
+
+    fn take_llm_requests(&mut self) -> Vec<crate::services::attach::HeldLlmRequest> {
+        self.watched.take_llm_requests()
+    }
+
+    fn release_response(&mut self, hold: u64) {
+        self.tls_sync.release(hold);
+    }
+
+    fn process_record(&self, process: ProcessIdentity) -> Result<ProcessRecord, ControlError> {
         self.process_registry
             .record(process)
-            .and_then(|record| record.host.as_ref())
-            .map(|host| host.pid)
+            .cloned()
             .ok_or_else(|| {
                 ControlError::new(
-                    "process_host_pid",
-                    format!("process {} has no host PID", process.get()),
+                    "process_record",
+                    format!("process {} has no identity record", process.get()),
                 )
             })
     }
@@ -317,6 +333,7 @@ impl AttachService for StorageAttachService {
         timeout = min_optional_timeout(timeout, self.network_boundary_alerts.poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.file_io_poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.event_transport_loss_poll_timeout());
+        timeout = min_optional_timeout(timeout, self.tls_sync.poll_timeout());
         Ok(timeout)
     }
 

@@ -179,6 +179,7 @@ fn build_runtime_wiring_with_attach_service(
     network_control_config: NetworkControlConfig,
     provider_classifier: Option<Box<dyn ProviderClassifier>>,
 ) -> Result<DaemonRuntimeWiring<StorageAttachService>, ControlError> {
+    super::tls_sync::configure_fd_limit(&payload_config.tls, active_trace_max)?;
     let storage_config = storage_config.clone().with_payload_retention_limits(
         storage_core::PayloadRetentionLimits {
             tls: payload_config.tls.retention_max_bytes_per_trace,
@@ -217,6 +218,7 @@ fn build_runtime_wiring_with_attach_service(
             storage,
             ebpf_config.clone(),
             payload_config.clone(),
+            active_trace_max,
             diagnostic_log_level,
             seccomp_notify.clone(),
             process_seccomp.clone(),
@@ -246,6 +248,7 @@ fn build_runtime_wiring_with_attach_service(
             storage,
             ebpf_config.clone(),
             payload_config.clone(),
+            active_trace_max,
             diagnostic_log_level,
             seccomp_notify.clone(),
             process_seccomp.clone(),

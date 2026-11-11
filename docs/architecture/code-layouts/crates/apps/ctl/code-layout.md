@@ -20,9 +20,10 @@
     │   ├── [x] profile.toml # 初始化时的采集 profile 模板
     │   └── [x] complete.toml # 初始化时的完整配置模板
     ├── [x] dispatch.rs # 将 CtlCommand 路由到控制请求或本地 launch 流程
+    ├── [x] checkpoint.rs # 读取 --checkpoint 文件并规范化 scope 根目录；解析 checkpoint 保存、恢复、强制执行、解除暂停、删除与查询命令，格式化结果
     ├── [x] transport.rs # 为命令分派隔离具体 UDS 传输
     │   └── [x] trait ControlClientPort # send 传递控制命令；send_launch_track_add 同时借用 pidfd 完成启动注册
-    ├── [x] launch.rs # 探测权限与 TLS 计划，注册停止中的子进程后继续执行
+    ├── [x] launch.rs # 探测权限与 TLS 计划，注册停止中的子进程，启用 TLS-sync 时将 TrackAdd 返回的 TLS 事件凭据写入 TLS_PAYLOAD_SYNC_EVENT_TOKEN，然后继续执行
     │   └── [x] struct LaunchRequest # 聚合工作负载 argv、profile、权限与采集注入配置
     ├── [x] launch/ # 受控 fork/exec、监听器交接、环境注入与退出监督
     │   ├── [x] controlled.rs # 持有受控子进程和继续执行通道
@@ -46,7 +47,6 @@
     │   │   └── [x] struct LaunchTargetResolver # resolve 输出实际启动目标与参数
     │   ├── [x] permission_policy.rs # 将本地权限设置与 daemon 裁决转换成启动行为
     │   ├── [x] java_agent.rs # 为 Java 工作负载准备 agent 启动选项
-    │   ├── [x] suppress.rs # 管理需要从工作负载观测中抑制的可继承描述符
     │   └── [x] timing.rs # 记录启动各阶段耗时用于诊断
     ├── [x] platform_probe.rs # 探测 seccomp、TLS-sync 动态库与 socket 可用性
     │   └── [x] struct LaunchPlatformReport # 汇总权限裁决所需平台能力与不可用原因

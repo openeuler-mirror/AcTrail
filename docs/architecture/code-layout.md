@@ -6,9 +6,9 @@
 ├── [x] crates/ # 应用、领域运行时、契约与平台适配
 ├── [/] integrations/ # 集成源码；按目标环境可用性编译为动态库
 │   └── [/] checkpoint/ # checkpoint 集成
-│       ├── [ ] filesystem/ # 文件系统快照集成
-│       │   ├── [ ] btrfs/ # 编译生成 libactrail_ckpt_fs_btrfs.so
-│       │   └── [ ] agentns/ # 编译生成 libactrail_ckpt_fs_agentns.so
+│       ├── [x] filesystem/ # 文件系统快照集成
+│       │   ├── [x] btrfs/ # 编译生成 libactrail_ckpt_fs_btrfs.so
+│       │   └── [x] agentns/ # 编译生成 libactrail_ckpt_fs_agentns.so
 │       └── [x] context/ # Agent 上下文快照集成
 │           └── [x] xiaoo/ # 编译生成 libactrail_ckpt_cxt_xiaoo.so
 ├── [x] scripts/ # 性能测量和开发辅助工具

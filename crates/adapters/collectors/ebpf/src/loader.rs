@@ -59,7 +59,6 @@ use config_core::daemon::{
 use libbpf_rs::{Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder};
 use model_core::capability::Capability;
 use model_core::ids::TraceId;
-use model_core::process::{InitialSuppressedFd, KernelProcessCoordinates, ProcessSuppressedFd};
 
 pub use attach_plan::AttachPlan;
 use attach_plan::{configure_program_autoload, effective_config_for_attach_plan};
@@ -174,7 +173,6 @@ pub struct EbpfRuntime {
     trace_pid_namespaces: MapHandle,
     suppressed_fds: MapHandle,
     suppressed_fd_index: MapHandle,
-    suppressed_fd_config: suppressed_fd::SuppressedFdConfig,
     file_io_summaries: Option<file_io::FileIoSummaryMap>,
     pending_tls_payload_ops: MapHandle,
     pending_tls_payload_ops_by_namespace: MapHandle,

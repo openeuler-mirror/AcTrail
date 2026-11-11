@@ -29,6 +29,7 @@
     ├── [x] hand_observation/ # daemon 隔离观测 TCP 入口及连接限制。
     ├── [x] sandbox_evidence/ # 无兴趣 observation 的 SQLite 路径、写队列及保留策略。
     ├── [x] sandbox_alerts/ # Sandbox 告警独立存储和读写预算。
+    ├── [x] checkpoint.rs # [checkpoint] 段：是否启用、记录库 SQLite 路径和按调用顺序排列的 [[checkpoint.backends]]；每项包含 name、动态库 library 和 backend 配置文件 config。
     ├── [x] process.rs # seccomp 通知、进程观测和 agent invocation 文档。
     ├── [x] file.rs # 文件事件采集需求、路径和 IO 摘要配置。
     ├── [x] idle_detection.rs # 将 idle detector 子配置交给领域模块校验。

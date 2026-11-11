@@ -37,7 +37,16 @@ pub(super) fn current_runtime_plan() -> Result<Option<RuntimePlan>, String> {
     if let Some(plan) = cached_plan(&current_exe)? {
         return Ok(plan);
     }
-    let plan = resolve_current_runtime_plan(&current_exe)?;
+    if let Some(value) = std::env::var_os(ENV_PLAN_BUNDLE) {
+        if let Some(plan) = select_bundle_plan(&value.to_string_lossy(), &current_exe)? {
+            store_cached_plan(current_exe, Some(plan.clone()))?;
+            return Ok(Some(plan));
+        }
+    }
+    let plan = match lookup_daemon_plan_for_current_process(&current_exe) {
+        Ok(plan) => plan,
+        Err(_) => return Ok(None),
+    };
     store_cached_plan(current_exe, plan.clone())?;
     Ok(plan)
 }
@@ -80,15 +89,6 @@ fn store_cached_plan(binary: PathBuf, plan: Option<RuntimePlan>) -> Result<(), S
     Ok(())
 }
 
-fn resolve_current_runtime_plan(current_exe: &Path) -> Result<Option<RuntimePlan>, String> {
-    if let Some(value) = std::env::var_os(ENV_PLAN_BUNDLE) {
-        if let Some(plan) = select_bundle_plan(&value.to_string_lossy(), current_exe)? {
-            return Ok(Some(plan));
-        }
-    }
-    lookup_daemon_plan_for_current_process(current_exe)
-}
-
 fn lookup_daemon_plan_for_current_process(
     current_exe: &Path,
 ) -> Result<Option<RuntimePlan>, String> {
@@ -111,8 +111,7 @@ fn lookup_daemon_plan_for_current_process(
             }
         }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
-        // An unavailable plan disables only these probe points; the application keeps running.
-        Err(_) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -136,7 +135,7 @@ fn lookup_daemon_plan(binary: &Path) -> Result<Option<RuntimePlan>, String> {
             }
         }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
-        Err(_) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -160,7 +159,7 @@ fn lookup_daemon_plan_without_mapping(binary: &Path) -> Result<Option<RuntimePla
             }
         }
         Ok(PlanLookupResponse::Unsupported { .. }) => Ok(None),
-        Err(_) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 

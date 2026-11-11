@@ -256,6 +256,25 @@ export function readActionTreeChildren(traceId, parentId, { offset, limit }) {
   );
 }
 
+function checkpointPath(traceId, suffix = '') {
+  return `/api/traces/${encodeURIComponent(traceId)}/checkpoints${suffix}`;
+}
+
+export function readTraceCheckpoints(traceId, { signal } = {}) {
+  return fetchJson(checkpointPath(traceId), { signal });
+}
+
+export function readCheckpointNavigation(traceId, operationId) {
+  return fetchJson(checkpointPath(traceId, `/navigation?operation=${encodeURIComponent(operationId)}`));
+}
+
+/** `command` is save, restore, delete, force or resume; `params` names its checkpoint or operation. */
+export function sendCheckpointCommand(traceId, command, params = {}) {
+  const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
+  const suffix = query.size ? `?${query}` : '';
+  return fetchJson(checkpointPath(traceId, `/${command}${suffix}`), { method: 'POST' });
+}
+
 export function readActionTreeLlmNav(traceId, { mode, afterId = null } = {}) {
   const after = afterId ? `&after=${encodeURIComponent(afterId)}` : '';
   return fetchJson(

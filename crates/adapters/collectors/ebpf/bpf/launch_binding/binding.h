@@ -27,20 +27,11 @@ struct actrail_launch_binding_failure_event {
     __u64 trace_id;
 } __attribute__((packed));
 
-struct actrail_pending_exec_suppressed_fd {
-    __s32 fd;
-    __u32 purpose;
-};
-
 struct actrail_pending_exec_binding {
     __u64 trace_id;
     __u64 generation;
     __u32 observer_namespace_tgid;
-    __u32 suppressed_fd_count;
     __u32 counted;
-    __u32 reserved;
-    struct actrail_pending_exec_suppressed_fd
-        suppressed_fds[ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX];
 };
 
 struct actrail_launch_binding_key {
@@ -127,87 +118,6 @@ static __always_inline int actrail_launch_binding_observe_current(
     *trace_id = lookup.binding->trace_id;
     *generation = lookup.binding->generation;
     return *trace_id != 0 && *generation != 0;
-}
-
-static __always_inline int actrail_launch_binding_install_suppressed_fd(
-    const struct actrail_pending_exec_binding *binding,
-    __u32 pid,
-    __u64 index
-) {
-    struct actrail_suppressed_fd_value value = {};
-    __s32 fd = binding->suppressed_fds[index].fd;
-
-    value.trace_id = binding->trace_id;
-    value.purpose = binding->suppressed_fds[index].purpose;
-    return fd >= 0 &&
-        value.purpose != ACTRAIL_SUPPRESSED_FD_PURPOSE_NONE &&
-        upsert_suppressed_fd_for_generation(
-            pid,
-            binding->generation,
-            (__u32)fd,
-            &value);
-}
-
-#ifdef ACTRAIL_BPF_LOOP
-struct actrail_launch_suppressed_fd_install {
-    const struct actrail_pending_exec_binding *binding;
-    __u32 pid;
-    int succeeded;
-};
-
-static long actrail_launch_suppressed_fd_install_step(__u32 index, void *data) {
-    struct actrail_launch_suppressed_fd_install *install = data;
-    __u64 slot = index;
-
-    if (slot >= ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX ||
-        slot >= install->binding->suppressed_fd_count) {
-        return 1;
-    }
-    actrail_barrier_var(slot);
-    install->succeeded = actrail_launch_binding_install_suppressed_fd(
-        install->binding,
-        install->pid,
-        slot);
-    return install->succeeded ? 0 : 1;
-}
-#endif
-
-static __always_inline int actrail_launch_binding_install_suppressed_fds(
-    const struct actrail_pending_exec_binding *binding,
-    __u32 pid
-) {
-    __u32 count = binding->suppressed_fd_count;
-
-    if (count > ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX) {
-        return 0;
-    }
-    if (!count) {
-        return 1;
-    }
-#ifdef ACTRAIL_BPF_LOOP
-    /* Keep the outer install loop out of the verifier's nested slot search. */
-    struct actrail_launch_suppressed_fd_install install = {
-        .binding = binding,
-        .pid = pid,
-        .succeeded = 1,
-    };
-    long result = bpf_loop(count, actrail_launch_suppressed_fd_install_step, &install, 0);
-
-    return result >= 0 && install.succeeded;
-#else
-    __u32 index;
-
-#pragma unroll
-    for (index = 0; index < ACTRAIL_SUPPRESSED_FD_INDEX_SLOT_MAX; index++) {
-        if (index >= binding->suppressed_fd_count) {
-            break;
-        }
-        if (!actrail_launch_binding_install_suppressed_fd(binding, pid, index)) {
-            return 0;
-        }
-    }
-    return 1;
-#endif
 }
 
 static __always_inline void actrail_launch_binding_delete_invalid(
@@ -313,21 +223,6 @@ static __always_inline __u64 actrail_launch_binding_promote_current(
         actrail_launch_binding_delete_invalid(ctx, &lookup, pending_count);
         return 0;
     }
-    if (!actrail_launch_binding_install_suppressed_fds(
-            binding,
-            current_kernel_tgid)) {
-        actrail_launch_binding_report_failure(
-            ctx,
-            trace_id,
-            ACTRAIL_LAUNCH_BINDING_PROMOTION_FAILURE
-        );
-        cleanup_suppressed_fds_for_process(current_kernel_tgid, generation);
-        if (bpf_map_delete_elem(&process_identities, &current_kernel_tgid) != 0) {
-            event_transport_diag_inc(ACTRAIL_PROCESS_IDENTITY_CLEANUP_FAIL);
-        }
-        actrail_launch_binding_delete_invalid(ctx, &lookup, pending_count);
-        return 0;
-    }
     if (bpf_map_update_elem(
             &tracked_traces,
             &current_kernel_tgid,
@@ -338,7 +233,6 @@ static __always_inline __u64 actrail_launch_binding_promote_current(
             trace_id,
             ACTRAIL_LAUNCH_BINDING_PROMOTION_FAILURE
         );
-        cleanup_suppressed_fds_for_process(current_kernel_tgid, generation);
         if (bpf_map_delete_elem(&process_identities, &current_kernel_tgid) != 0) {
             event_transport_diag_inc(ACTRAIL_PROCESS_IDENTITY_CLEANUP_FAIL);
         }
@@ -353,7 +247,6 @@ static __always_inline __u64 actrail_launch_binding_promote_current(
             ACTRAIL_LAUNCH_BINDING_CLEANUP_FAILURE
         );
         bpf_map_delete_elem(&tracked_traces, &current_kernel_tgid);
-        cleanup_suppressed_fds_for_process(current_kernel_tgid, generation);
         if (bpf_map_delete_elem(&process_identities, &current_kernel_tgid) != 0) {
             event_transport_diag_inc(ACTRAIL_PROCESS_IDENTITY_CLEANUP_FAIL);
         }

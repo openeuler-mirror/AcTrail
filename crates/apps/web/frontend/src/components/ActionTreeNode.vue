@@ -52,7 +52,16 @@
       >
         <span class="action-card-top">
           <span class="action-card-title">{{ node.title }}</span>
-          <span v-if="statusMarker || node.durationBadge || hasChildren" class="action-card-controls">
+          <span
+            v-if="statusMarker || node.durationBadge || hasChildren || nodeCheckpointMarkers.length"
+            class="action-card-controls"
+          >
+            <CheckpointMarker
+              v-for="marker in nodeCheckpointMarkers"
+              :key="marker.operationId"
+              :marker="marker"
+              @open="checkpointMarkers.open"
+            />
             <span
               v-if="statusMarker"
               class="action-status-marker"
@@ -121,10 +130,12 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, XCircle } from '@lucide/vue';
 
 import { LLM_NAVIGATION_KINDS, UI_LIMITS } from '../tabs/core/action-tree/config';
+import CheckpointMarker from '../tabs/core/checkpoints/CheckpointMarker.vue';
+import { CHECKPOINT_MARKERS } from '../tabs/core/checkpoints/markers';
 import { useModuleLocale } from '../locale';
 import DurationBadge from './DurationBadge.vue';
 import strings from './locale';
@@ -169,6 +180,8 @@ const showLlmCallJump = computed(
   () => LLM_NAVIGATION_KINDS.includes(props.node.kind) && (props.llmCallNav?.previous || props.llmCallNav?.next),
 );
 const statusMarker = computed(() => statusDescriptor(props.node.status));
+const checkpointMarkers = inject(CHECKPOINT_MARKERS, null);
+const nodeCheckpointMarkers = computed(() => checkpointMarkers?.forAction(props.node.id) ?? []);
 const cardMetaItems = computed(() => {
   if (Array.isArray(props.node.metaItems) && props.node.metaItems.length) {
     return props.node.metaItems.filter((item) => item?.label);

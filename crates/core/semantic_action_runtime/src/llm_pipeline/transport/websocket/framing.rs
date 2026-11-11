@@ -87,6 +87,7 @@ struct Message {
     evidence: Vec<SemanticEvidence>,
     seen: BTreeSet<u64>,
     last_at: SystemTime,
+    last_sequence: u64,
 }
 pub(super) struct DirectionAssembler {
     buffer: Vec<u8>,
@@ -242,6 +243,7 @@ impl DirectionAssembler {
                     seen: BTreeSet::new(),
                     evidence: Vec::new(),
                     last_at: first.observed_at,
+                    last_sequence: first.sequence,
                 });
             } else if frame.opcode == 0 && (self.message.is_none() || frame.compressed) {
                 return Err(WebSocketAbortReason::DecodeFailure);
@@ -319,6 +321,7 @@ impl DirectionAssembler {
                 bytes,
                 evidence: message.evidence,
                 observed_at: message.last_at,
+                sequence_end: message.last_sequence,
             });
         }
         Ok(Some(frame.opcode == 8))
@@ -329,6 +332,7 @@ impl DirectionAssembler {
         };
         for source in self.evidence.for_range(start, end) {
             message.last_at = source.observed_at;
+            message.last_sequence = source.sequence;
             if message.seen.contains(&source.segment_id.get()) {
                 continue;
             }

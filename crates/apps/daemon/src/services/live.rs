@@ -4,6 +4,8 @@
 mod batch;
 #[path = "live/direct.rs"]
 mod direct;
+#[path = "live/held_llm_requests.rs"]
+mod held_llm_requests;
 #[path = "live/launch_binding.rs"]
 mod launch_binding;
 #[path = "live/llm_diagnostics.rs"]
@@ -229,7 +231,25 @@ impl StorageAttachService {
         &mut self,
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
-        let drain = match self.tls_sync.drain(trace_runtime) {
+        let drained = self.drain_tls_sync_batch_impl(trace_runtime);
+        // Processing released what it recognized before writing to storage. What it did not
+        // reach, or failed on, is released here, so a waiting runtime does not depend on a later
+        // batch.
+        if !self.watched.is_empty() {
+            self.tls_sync.flush_releases();
+        }
+        drained
+    }
+
+    fn drain_tls_sync_batch_impl(
+        &mut self,
+        trace_runtime: &mut TraceRuntime,
+    ) -> Result<(), ControlError> {
+        let watched = &self.watched;
+        let drain = match self
+            .tls_sync
+            .drain(trace_runtime, &|trace_id| watched.contains(trace_id))
+        {
             Ok(d) => d,
             Err(error) => {
                 tracing::warn!(
@@ -259,7 +279,8 @@ impl StorageAttachService {
                 );
             }
         }
-        self.process_payload_segments_impl(trace_runtime, drain.payload_segments)
+        self.process_payload_segments_impl(trace_runtime, drain.payload_segments)?;
+        self.process_payload_stream_closes_impl(trace_runtime, drain.payload_stream_closes)
     }
 
     fn persist_tls_sync_diagnostics_impl(
@@ -270,7 +291,7 @@ impl StorageAttachService {
         let drafts = diagnostics
             .into_iter()
             .map(|diagnostic| RuntimeDropDiagnosticDraft {
-                trace_id: None,
+                trace_id: diagnostic.trace_id,
                 code: diagnostic.code,
                 message: diagnostic.message,
             })

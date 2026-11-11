@@ -3,46 +3,49 @@
 | `control.socket_path` | `string` | `"/run/actrail/control.sock"` | 否 | control | Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L11) |
 | `control.socket_mode_octal` | `string` | `"660"` | 否 | control | Unix socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L12) |
 | `control.pending_connection_max` | `uint32` | `256` | 否 | control | 待处理控制连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |
-| `control.active_trace_max` | `uint32` | `128` | 否 | control | 同时活动的 trace 数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L14) |
-| `control.pid_file` | `string` | `"/run/actrail/actraild.pid"` | 否 | control | daemon PID 文件路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L15) |
-| `control.log_path` | `string` | `"/var/log/actrail/actraild.log"` | 否 | control | daemon 日志路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L16) |
-| `control.diagnostic_log_level` | `string` | `"info"` | 否 | control | 诊断日志等级；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L17) |
-| `control.host_id` | `string` | `未设置` | 否 | control | 覆盖 OTel host.id；省略或为空时读取宿主 DMI product_uuid；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L20) |
-| `control.workload_diagnostics.enabled` | `bool` | `false` | 否 | control | 定期输出工作负载诊断；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L45) |
-| `control.workload_diagnostics.interval_ms` | `uint64` | `1000` | 否 | control | 执行间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L46) |
-| `control.finalization.traces_per_cycle` | `uint32` | `1` | 否 | control | 每轮处理的 trace 终结任务数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L73) |
-| `control.finalization.poll_interval_ms` | `uint64` | `100` | 否 | control | 轮询间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L74) |
-| `control.finalization.settle_delay_ms` | `uint64` | `250` | 否 | control | trace 终结前等待迟到事件的时间，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L75) |
-| `control.finalization.shutdown_drain_timeout_ms` | `uint64` | `30000` | 否 | control | 关闭时排空剩余任务的等待上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L76) |
-| `control.finalization.post_trace.max_in_flight_tasks` | `uint32` | `64` | 否 | control | 同时执行的 trace 后处理任务数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L95) |
-| `control.finalization.post_trace.broker_queue_capacity` | `uint32` | `256` | 否 | control | 后处理请求代理队列容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L96) |
-| `control.finalization.post_trace.requests_per_cycle` | `uint32` | `128` | 否 | control | 每轮处理的后处理请求数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L97) |
-| `control.finalization.post_trace.broker_reply_timeout_ms` | `uint64` | `5000` | 否 | control | 等待后处理请求代理回复的上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L98) |
-| `control.finalization.post_trace.admission_timeout_ms` | `uint64` | `30000` | 否 | control | 后处理任务等待准入的时间上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L99) |
-| `control.finalization.post_trace.execution_timeout_ms` | `uint64` | `60000` | 否 | control | 后处理任务执行时限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L100) |
-| `control.finalization.post_trace.shutdown_drain_timeout_ms` | `uint64` | `30000` | 否 | control | 关闭时排空剩余任务的等待上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L101) |
-| `storage.backend` | `string` | `"sqlite"` | 否 | storage | 主存储后端：sqlite 或 noop；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L202) |
-| `storage.sqlite.path` | `string` | `"/var/lib/actrail/actrail.sqlite"` | 否 | storage | 文件路径；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L278) |
-| `storage.sqlite.busy_timeout_ms` | `uint64` | `5000` | 否 | storage | SQLite 忙等待上限，毫秒；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L279) |
-| `storage.sqlite.cold_field_compression_min_bytes` | `integer` | `64` | 否 | storage | 触发冷字段压缩的最小字节数；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L280) |
-| `storage.sqlite.cold_field_zstd_level` | `int32` | `3` | 否 | storage | 冷字段 Zstandard 压缩等级；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L281) |
-| `storage.sqlite.event_payload_dictionary_cache_bytes` | `integer` | `33554432` | 否 | storage | 事件 payload 字典缓存字节上限；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L282) |
-| `storage.sqlite.event_path_dictionary_cache_bytes` | `integer` | `8388608` | 否 | storage | 事件路径字典缓存字节上限；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L283) |
-| `storage.sqlite.event_record_layout` | `string` | `"rows"` | 否 | storage | 事件记录布局：rows 或 blocks；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L284) |
-| `storage.sqlite.event_record_block_max_events` | `integer` | `256` | 否 | storage | 一个事件块最多容纳的事件数；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L285) |
-| `storage.sqlite.event_record_block_max_uncompressed_bytes` | `integer` | `1048576` | 否 | storage | 单个事件块未压缩字节上限；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L286) |
-| `storage.sqlite.event_record_block_zstd_level` | `int32` | `3` | 否 | storage | 事件块 Zstandard 压缩等级；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L287) |
-| `storage.retention.enabled` | `bool` | `true` | 否 | storage | 启用过期 trace 清理；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L311) |
-| `storage.retention.max_trace_age` | `string` | `"7d"` | 否 | storage | trace 保留时长；使用带 ms、s、m、h 或 d 单位的字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L312) |
-| `storage.retention.sweep_interval` | `string` | `"1m"` | 否 | storage | 过期 trace 清理间隔；使用带时间单位的字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L313) |
-| `storage.retention.min_terminal_age` | `string` | `"30s"` | 否 | storage | 终态 trace 可清理前的最小存留时长；使用带时间单位的字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L314) |
-| `storage.retention.max_traces_per_sweep` | `uint32` | `10` | 否 | storage | 每轮最多清理的 trace 数量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L315) |
-| `storage.retention.protected_tags` | `string[]` | `["retain", "pinned"]` | 否 | storage | 清理时保护的 trace 标签；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L316) |
-| `storage.retention.checkpoint_after_sweep` | `bool` | `true` | 否 | storage | 清理后执行 SQLite checkpoint；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L317) |
-| `web.listen_addr` | `string` | `"127.0.0.1:18080"` | 否 | web | 监听 IP 与端口；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L368) |
-| `web.request_read_timeout_ms` | `string` | `"1000"` | 否 | web | 读取 Web 请求的时限，毫秒字符串；disabled 表示不设置时限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L369) |
-| `web.alerts.default_limit` | `uint32` | `30` | 否 | web | 告警列表的默认返回条数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L386) |
-| `web.alerts.max_limit` | `uint32` | `300` | 否 | web | 告警列表允许的最大返回条数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L387) |
+| `control.accept_retry_delay_ms` | `uint64` | `100` | 否 | control | control socket 耗尽文件描述符后重新接入的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L14) |
+| `control.active_trace_max` | `uint32` | `128` | 否 | control | 同时活动的 trace 数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L15) |
+| `control.pid_file` | `string` | `"/run/actrail/actraild.pid"` | 否 | control | daemon PID 文件路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L16) |
+| `control.log_path` | `string` | `"/var/log/actrail/actraild.log"` | 否 | control | daemon 日志路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L17) |
+| `control.diagnostic_log_level` | `string` | `"info"` | 否 | control | 诊断日志等级；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L18) |
+| `control.host_id` | `string` | `未设置` | 否 | control | 覆盖 OTel host.id；省略或为空时读取宿主 DMI product_uuid；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L21) |
+| `control.workload_diagnostics.enabled` | `bool` | `false` | 否 | control | 定期输出工作负载诊断；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L47) |
+| `control.workload_diagnostics.interval_ms` | `uint64` | `1000` | 否 | control | 执行间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L48) |
+| `control.finalization.traces_per_cycle` | `uint32` | `1` | 否 | control | 每轮处理的 trace 终结任务数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L75) |
+| `control.finalization.poll_interval_ms` | `uint64` | `100` | 否 | control | 轮询间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L76) |
+| `control.finalization.settle_delay_ms` | `uint64` | `250` | 否 | control | trace 终结前等待迟到事件的时间，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L77) |
+| `control.finalization.shutdown_drain_timeout_ms` | `uint64` | `30000` | 否 | control | 关闭时排空剩余任务的等待上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L78) |
+| `control.finalization.post_trace.max_in_flight_tasks` | `uint32` | `64` | 否 | control | 同时执行的 trace 后处理任务数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L97) |
+| `control.finalization.post_trace.broker_queue_capacity` | `uint32` | `256` | 否 | control | 后处理请求代理队列容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L98) |
+| `control.finalization.post_trace.requests_per_cycle` | `uint32` | `128` | 否 | control | 每轮处理的后处理请求数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L99) |
+| `control.finalization.post_trace.broker_reply_timeout_ms` | `uint64` | `5000` | 否 | control | 等待后处理请求代理回复的上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L100) |
+| `control.finalization.post_trace.admission_timeout_ms` | `uint64` | `30000` | 否 | control | 后处理任务等待准入的时间上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L101) |
+| `control.finalization.post_trace.execution_timeout_ms` | `uint64` | `60000` | 否 | control | 后处理任务执行时限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L102) |
+| `control.finalization.post_trace.shutdown_drain_timeout_ms` | `uint64` | `30000` | 否 | control | 关闭时排空剩余任务的等待上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L103) |
+| `storage.backend` | `string` | `"sqlite"` | 否 | storage | 主存储后端：sqlite 或 noop；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L204) |
+| `storage.sqlite.path` | `string` | `"/var/lib/actrail/actrail.sqlite"` | 否 | storage | 文件路径；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L280) |
+| `storage.sqlite.busy_timeout_ms` | `uint64` | `5000` | 否 | storage | SQLite 忙等待上限，毫秒；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L281) |
+| `storage.sqlite.cold_field_compression_min_bytes` | `integer` | `64` | 否 | storage | 触发冷字段压缩的最小字节数；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L282) |
+| `storage.sqlite.cold_field_zstd_level` | `int32` | `3` | 否 | storage | 冷字段 Zstandard 压缩等级；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L283) |
+| `storage.sqlite.event_payload_dictionary_cache_bytes` | `integer` | `33554432` | 否 | storage | 事件 payload 字典缓存字节上限；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L284) |
+| `storage.sqlite.event_path_dictionary_cache_bytes` | `integer` | `8388608` | 否 | storage | 事件路径字典缓存字节上限；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L285) |
+| `storage.sqlite.event_record_layout` | `string` | `"rows"` | 否 | storage | 事件记录布局：rows 或 blocks；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L286) |
+| `storage.sqlite.event_record_block_max_events` | `integer` | `256` | 否 | storage | 一个事件块最多容纳的事件数；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L287) |
+| `storage.sqlite.event_record_block_max_uncompressed_bytes` | `integer` | `1048576` | 否 | storage | 单个事件块未压缩字节上限；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L288) |
+| `storage.sqlite.event_record_block_zstd_level` | `int32` | `3` | 否 | storage | 事件块 Zstandard 压缩等级；storage.backend=sqlite 时使用；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L289) |
+| `storage.retention.enabled` | `bool` | `true` | 否 | storage | 启用过期 trace 清理；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L313) |
+| `storage.retention.max_trace_age` | `string` | `"7d"` | 否 | storage | trace 保留时长；使用带 ms、s、m、h 或 d 单位的字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L314) |
+| `storage.retention.sweep_interval` | `string` | `"1m"` | 否 | storage | 过期 trace 清理间隔；使用带时间单位的字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L315) |
+| `storage.retention.min_terminal_age` | `string` | `"30s"` | 否 | storage | 终态 trace 可清理前的最小存留时长；使用带时间单位的字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L316) |
+| `storage.retention.max_traces_per_sweep` | `uint32` | `10` | 否 | storage | 每轮最多清理的 trace 数量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L317) |
+| `storage.retention.protected_tags` | `string[]` | `["retain", "pinned"]` | 否 | storage | 清理时保护的 trace 标签；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L318) |
+| `storage.retention.checkpoint_after_sweep` | `bool` | `true` | 否 | storage | 清理后执行 SQLite checkpoint；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L319) |
+| `web.listen_addr` | `string` | `"127.0.0.1:18080"` | 否 | web | 监听 IP 与端口；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L370) |
+| `web.request_read_timeout_ms` | `string` | `"1000"` | 否 | web | 读取 Web 请求的时限，毫秒字符串；disabled 表示不设置时限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L371) |
+| `web.alerts.default_limit` | `uint32` | `30` | 否 | web | 告警列表的默认返回条数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L390) |
+| `web.alerts.max_limit` | `uint32` | `300` | 否 | web | 告警列表允许的最大返回条数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L391) |
+| `web.checkpoints.status_timeout_ms` | `uint64` | `500` | 否 | web | Web 查询 daemon 中 checkpoint 暂停和执行状态的超时，毫秒，必须为正；[声明](../../crates/core/config/src/daemon.rs#L169) |
+| `web.checkpoints.poll_interval_ms` | `uint32` | `1500` | 否 | web | 有运行中 Trace 或未完成工作时 checkpoint 页面的自动刷新间隔，毫秒，必须为正且不超过 2147483647；[声明](../../crates/core/config/src/daemon.rs#L170) |
 | `cluster.enabled` | `bool` | `false` | 否 | cluster | 启用集群节点配置；[声明](../../crates/core/config/src/daemon/operator/document/cluster.rs#L6) |
 | `cluster.cluster_id` | `string` | `""` | cluster.enabled=true 时必填 | cluster | 集群标识；[声明](../../crates/core/config/src/daemon/operator/document/cluster.rs#L7) |
 | `cluster.node_id` | `string` | `""` | cluster.enabled=true 时必填 | cluster | 节点标识；[声明](../../crates/core/config/src/daemon/operator/document/cluster.rs#L8) |
@@ -67,11 +70,11 @@
 | `cluster.center.listen_port` | `uint16` | `0` | cluster.center.enabled=true 时必填 | cluster | 监听端口；[声明](../../crates/core/config/src/daemon/operator/document/cluster.rs#L191) |
 | `cluster.center.root_dir` | `string` | `"/var/lib/actrail-cluster"` | 否 | cluster | 集群中心存储根目录；[声明](../../crates/core/config/src/daemon/operator/document/cluster.rs#L192) |
 | `cluster.center.auth_token_file` | `string` | `""` | 否 | cluster | 认证令牌文件；空字符串表示未配置；[声明](../../crates/core/config/src/daemon/operator/document/cluster.rs#L193) |
-| `export.snapshot.graph_schema_version` | `string` | `"manual-v1"` | 否 | export | 导出图模式版本；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L446) |
-| `export.snapshot.allow_active_trace_snapshot` | `bool` | `true` | 否 | export | 允许对活动 trace 生成快照；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L447) |
-| `export.snapshot.directory` | `string` | `"/var/lib/actrail/export"` | 否 | export | 导出快照的输出目录；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L448) |
-| `export.snapshot.payload_bytes_enabled` | `bool` | `true` | 否 | export | 快照包含 payload 字节；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L449) |
-| `export.snapshot.payload_text_enabled` | `bool` | `true` | 否 | export | 快照包含 payload 文本；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L450) |
+| `export.snapshot.graph_schema_version` | `string` | `"manual-v1"` | 否 | export | 导出图模式版本；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L463) |
+| `export.snapshot.allow_active_trace_snapshot` | `bool` | `true` | 否 | export | 允许对活动 trace 生成快照；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L464) |
+| `export.snapshot.directory` | `string` | `"/var/lib/actrail/export"` | 否 | export | 导出快照的输出目录；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L465) |
+| `export.snapshot.payload_bytes_enabled` | `bool` | `true` | 否 | export | 快照包含 payload 字节；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L466) |
+| `export.snapshot.payload_text_enabled` | `bool` | `true` | 否 | export | 快照包含 payload 文本；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L467) |
 | `plugins.discovery.directory` | `string[]` | `["~/.actrail/plugins", "/usr/share/actrail/plugins"]` | 否 | plugins | 插件包发现目录列表；空列表关闭发现；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L103) |
 | `plugins.discovery.max_packages` | `uint32` | `128` | 否 | plugins | 所有发现目录合计的插件包数量上限；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L104) |
 | `plugins.discovery.manifest_max_bytes` | `uint64` | `262144` | 否 | plugins | 插件 manifest 文件字节上限；[声明](../../crates/core/config/src/daemon/operator/document/plugin/config.rs#L105) |
@@ -143,88 +146,101 @@
 | `sandbox_alerts.shutdown_drain_timeout_ms` | `uint64` | `10000` | 否 | sandbox_alerts | 关闭时排空剩余任务的等待上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/sandbox_alerts/mod.rs#L24) |
 | `sandbox_alerts.writer_thread_stack_bytes` | `integer` | `524288` | 否 | sandbox_alerts | 数据库写入线程栈字节数；[声明](../../crates/core/config/src/daemon/operator/document/sandbox_alerts/mod.rs#L25) |
 | `sandbox_alerts.read_limit_max` | `uint32` | `10000` | 否 | sandbox_alerts | 查询返回记录数量上限；[声明](../../crates/core/config/src/daemon/operator/document/sandbox_alerts/mod.rs#L26) |
-| `capture.profile_name` | `string` | `"default-full-monitor"` | 否 | capture | 采集 profile 名称；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L480) |
-| `capture.agent_descendant_observation_depth` | `int32` | `-1` | 否 | capture | Agent 后代观测深度；-1 表示不限制，其他值须非负；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L481) |
-| `capture.capabilities` | `string[]` | `["proc-lifecycle", "proc-exec-context", "fs-access-basic", "fs-mmap", "net-transport", "stdio-chunk", "tls-plaintext-payload", "socket-plaintext-payload", "net-application-plaintext-http", "net-application-http2-frames", "resource-metrics", "enforcement-file-permission-lsm"]` | 否 | capture | 必须具备的采集与治理能力列表；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L482) |
-| `capture.opportunistic_capabilities` | `string[]` | `[]` | 否 | capture | 可按可用性启用的能力列表；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L483) |
-| `capture.disabled_capabilities` | `string[]` | `[]` | 否 | capture | 显式禁用的能力列表；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L484) |
-| `ebpf.enabled` | `string / bool` | `"true"` | 否 | ebpf | eBPF 启用策略：true、false 或 "auto"；布尔值与对应字符串均可；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L561) |
-| `ebpf.memlock_rlimit` | `string` | `"inherit"` | 否 | ebpf | 锁定内存限制；inherit 表示继承当前限制；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L562) |
-| `ebpf.tracked_process_max_entries` | `uint32` | `8192` | 否 | ebpf | eBPF 跟踪进程表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L563) |
-| `ebpf.pending_operation_max_entries` | `uint32` | `8192` | 否 | ebpf | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L564) |
-| `ebpf.fd_per_process_max_entries` | `uint32` | `64` | 否 | ebpf | 每进程跟踪的文件描述符数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L565) |
-| `ebpf.suppressed_fd_max_entries` | `uint32` | `8192` | 否 | ebpf | 被抑制的文件描述符表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L566) |
-| `ebpf.suppressed_fd_index_slots_per_process` | `uint32` | `64` | 否 | ebpf | 每进程用于索引被抑制文件描述符的槽数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L567) |
-| `ebpf.event_ring_buffer_max_bytes` | `uint32` | `33554432` | 否 | ebpf | eBPF 事件 ring buffer 字节上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L568) |
-| `ebpf.diagnostics_summary_interval_ms` | `uint32` | `10000` | 否 | ebpf | 诊断摘要输出间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L569) |
-| `ebpf.file_path_capture_enabled` | `bool` | `true` | 否 | ebpf | 启用文件路径采集；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L570) |
-| `ebpf.file_path_max_bytes` | `uint32` | `255` | 否 | ebpf | 采集的文件路径字节上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L571) |
-| `ebpf.net_send_recv_aggregation` | `bool` | `true` | 否 | ebpf | 聚合网络发送与接收计数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L572) |
+| `capture.profile_name` | `string` | `"default-full-monitor"` | 否 | capture | 采集 profile 名称；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L497) |
+| `capture.agent_descendant_observation_depth` | `int32` | `-1` | 否 | capture | Agent 后代观测深度；-1 表示不限制，其他值须非负；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L498) |
+| `capture.capabilities` | `string[]` | `["proc-lifecycle", "proc-exec-context", "fs-access-basic", "fs-mmap", "net-transport", "stdio-chunk", "tls-plaintext-payload", "socket-plaintext-payload", "net-application-plaintext-http", "net-application-http2-frames", "resource-metrics", "enforcement-file-permission-lsm"]` | 否 | capture | 必须具备的采集与治理能力列表；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L499) |
+| `capture.opportunistic_capabilities` | `string[]` | `[]` | 否 | capture | 可按可用性启用的能力列表；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L500) |
+| `capture.disabled_capabilities` | `string[]` | `[]` | 否 | capture | 显式禁用的能力列表；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L501) |
+| `ebpf.enabled` | `string / bool` | `"true"` | 否 | ebpf | eBPF 启用策略：true、false 或 "auto"；布尔值与对应字符串均可；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L578) |
+| `ebpf.memlock_rlimit` | `string` | `"inherit"` | 否 | ebpf | 锁定内存限制；inherit 表示继承当前限制；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L579) |
+| `ebpf.tracked_process_max_entries` | `uint32` | `8192` | 否 | ebpf | eBPF 跟踪进程表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L580) |
+| `ebpf.pending_operation_max_entries` | `uint32` | `8192` | 否 | ebpf | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L581) |
+| `ebpf.fd_per_process_max_entries` | `uint32` | `64` | 否 | ebpf | 每进程跟踪的文件描述符数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L582) |
+| `ebpf.suppressed_fd_max_entries` | `uint32` | `65536` | 否 | ebpf | 被抑制的文件描述符表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L601) |
+| `ebpf.suppressed_fd_index_slots_per_process` | `uint32` | `64` | 否 | ebpf | 每进程用于索引被抑制文件描述符的槽数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L584) |
+| `ebpf.event_ring_buffer_max_bytes` | `uint32` | `33554432` | 否 | ebpf | eBPF 事件 ring buffer 字节上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L585) |
+| `ebpf.diagnostics_summary_interval_ms` | `uint32` | `10000` | 否 | ebpf | 诊断摘要输出间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L586) |
+| `ebpf.file_path_capture_enabled` | `bool` | `true` | 否 | ebpf | 启用文件路径采集；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L587) |
+| `ebpf.file_path_max_bytes` | `uint32` | `255` | 否 | ebpf | 采集的文件路径字节上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L588) |
+| `ebpf.net_send_recv_aggregation` | `bool` | `true` | 否 | ebpf | 聚合网络发送与接收计数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L589) |
 | `ebpf.ipc_lineage.enabled` | `bool` | `true` | 否 | ebpf | 采集和关联进程间通信连接来源；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L6) |
 | `ebpf.ipc_lineage.max_processes_per_trace` | `uint32` | `8192` | 否 | ebpf | 每个 trace 记录的 IPC 进程数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L7) |
 | `ebpf.ipc_lineage.max_candidate_fds_per_trace` | `uint32` | `65536` | 否 | ebpf | 每个 trace 记录的候选 IPC 文件描述符数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L8) |
 | `ebpf.ipc_lineage.max_stdio_bundles_per_trace` | `uint32` | `8192` | 否 | ebpf | 每个 trace 保留的完整 stdio 连接组合数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/ipc_lineage.rs#L9) |
-| `payload.tls.enabled` | `bool` | `true` | 否 | payload | 采集 TLS 明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L117) |
-| `payload.tls.capture_backend` | `string` | `"bpf-copy"` | 否 | payload | 明文采集后端；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L118) |
-| `payload.tls.source` | `string` | `"auto"` | 否 | payload | TLS 目标来源选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L119) |
-| `payload.tls.resolver` | `string` | `"auto"` | 否 | payload | TLS 符号和探针解析器选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L120) |
-| `payload.tls.library` | `string` | `"auto"` | 否 | payload | TLS 库类型选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L121) |
-| `payload.tls.library_path` | `string` | `"auto"` | 否 | payload | TLS 库路径；auto 表示自动发现；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L122) |
-| `payload.tls.binary_path` | `string` | `"disabled"` | 否 | payload | TLS 可执行文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L123) |
-| `payload.tls.pattern_path` | `string` | `"disabled"` | 否 | payload | TLS 机器码模式文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L124) |
-| `payload.tls.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L125) |
-| `payload.tls.max_operation_bytes` | `uint32` | `16777216` | 否 | payload | 单次操作采集的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L126) |
-| `payload.tls.ring_buffer_bytes` | `uint32` | `8388608` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L127) |
-| `payload.tls.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L128) |
-| `payload.tls.seccomp_syscalls` | `string[]` | `["write", "writev", "sendto", "sendmsg"]` | 否 | payload | 使用 seccomp 通知处理的系统调用列表；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L129) |
-| `payload.tls.diagnostics_enabled` | `bool` | `true` | 否 | payload | 输出明文采集诊断；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L130) |
-| `payload.tls.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L131) |
-| `payload.tls.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L132) |
-| `payload.tls.sync_runtime_library_path` | `string` | `"auto"` | 否 | payload | TLS sync 注入库路径；auto 表示自动选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L133) |
-| `payload.tls.sync_event_socket_path` | `string` | `"/run/actrail/tls-sync.sock"` | 否 | payload | TLS sync 事件 Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L134) |
-| `payload.tls.sync_max_frame_bytes` | `uint32` | `33554432` | 否 | payload | TLS sync 单帧字节上限，包含帧头；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L135) |
-| `payload.tls.sync_socket_mode_octal` | `string` | `"660"` | 否 | payload | TLS sync socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L136) |
-| `payload.tls.sync_match_limit` | `uint32` | `8` | 否 | payload | TLS sync 探针匹配数量上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L137) |
-| `payload.tls.binary_analysis_cache_capacity` | `uint32` | `256` | 否 | payload | 二进制分析结果缓存条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L138) |
-| `payload.tls.dynamic_discovery_capacity` | `uint32` | `128` | 否 | payload | 动态 TLS 探针发现任务与结果的总容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L139) |
-| `payload.tls.direct_startup_discovery_enabled` | `bool` | `true` | 否 | payload | 在启动时发现直接捕获所需的 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L140) |
-| `payload.tls.direct_dynamic_discovery_enabled` | `bool` | `true` | 否 | payload | 在运行时发现新出现的直接捕获 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L141) |
-| `payload.tls.dynamic_exec_plan_timeout_ms` | `uint64` | `30000` | 否 | payload | 动态执行探针计划查询时限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L142) |
-| `payload.tls.sync_flow_control_enabled` | `bool` | `true` | 否 | payload | 启用 TLS sync 流量预算控制；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L143) |
-| `payload.tls.sync_flow_sniff_bytes` | `uint32` | `65536` | 否 | payload | TLS sync 流识别阶段的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L144) |
-| `payload.tls.sync_flow_max_header_bytes` | `uint32` | `16384` | 否 | payload | TLS sync HTTP 头字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L145) |
-| `payload.tls.sync_flow_large_transfer_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 判断 HTTP/1 大数据传输的字节阈值；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L146) |
-| `payload.tls.sync_flow_unknown_stream_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 未识别流的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L147) |
-| `payload.tls.sync_flow_h2_data_probe_bytes` | `uint64` | `65536` | 否 | payload | TLS sync HTTP/2 DATA 探测字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L148) |
-| `payload.tls.java_agent_enabled` | `bool` | `false` | 否 | payload | 启用 Java Agent 明文采集；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L149) |
-| `payload.stdio.enabled` | `bool` | `true` | 否 | payload | 采集标准输入输出明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L339) |
-| `payload.stdio.capture_stdin` | `bool` | `true` | 否 | payload | 采集标准输入；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L340) |
-| `payload.stdio.capture_stdout` | `bool` | `true` | 否 | payload | 采集标准输出；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L341) |
-| `payload.stdio.capture_stderr` | `bool` | `true` | 否 | payload | 采集标准错误输出；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L342) |
-| `payload.stdio.stdin_storage_mode` | `string` | `"full"` | 否 | payload | 标准输入存储模式；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L343) |
-| `payload.stdio.stdout_storage_mode` | `string` | `"drop"` | 否 | payload | 标准输出存储模式；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L344) |
-| `payload.stdio.stderr_storage_mode` | `string` | `"metadata-only"` | 否 | payload | 标准错误输出存储模式；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L345) |
-| `payload.stdio.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L346) |
-| `payload.stdio.ring_buffer_bytes` | `uint32` | `4194304` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L347) |
-| `payload.stdio.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L348) |
-| `payload.stdio.stream_state_max_entries` | `uint32` | `8192` | 否 | payload | 活动流状态条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L349) |
-| `payload.stdio.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L350) |
-| `payload.stdio.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L351) |
-| `payload.socket.enabled` | `bool` | `true` | 否 | payload | 采集 socket 明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L445) |
-| `payload.socket.capture_backend` | `string` | `"bpf-copy"` | 否 | payload | 明文采集后端；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L446) |
-| `payload.socket.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L447) |
-| `payload.socket.max_operation_bytes` | `uint32` | `4194304` | 否 | payload | 单次操作采集的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L448) |
-| `payload.socket.ring_buffer_bytes` | `uint32` | `8388608` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L449) |
-| `payload.socket.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L450) |
-| `payload.socket.stream_state_max_entries` | `uint32` | `8192` | 否 | payload | 活动流状态条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L451) |
-| `payload.socket.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L452) |
-| `payload.socket.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L453) |
-| `payload.socket.http_sniff_max_bytes` | `uint64` | `65536` | 否 | payload | HTTP 协议识别字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L454) |
-| `payload.socket.seccomp_syscalls` | `string[]` | `["write", "writev", "sendto", "sendmsg"]` | 否 | payload | 使用 seccomp 通知处理的系统调用列表；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L455) |
-| `payload.mcp.enabled` | `bool` | `false` | 否 | payload | 识别和解析 MCP 消息；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L51) |
-| `payload.mcp.parse_buffer_max_bytes` | `uint64` | `4194304` | 否 | payload | MCP 解析缓冲区字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L52) |
-| `payload.mcp.stdio_candidate_max_bytes` | `uint64` | `65536` | 否 | payload | 单个 MCP stdio 候选数据的字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L53) |
-| `payload.mcp.pending_stdio_candidate_max_entries` | `uint32` | `1024` | 否 | payload | 待确认 MCP stdio 候选条目数上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L54) |
+| `payload.tls.enabled` | `bool` | `true` | 否 | payload | 采集 TLS 明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L119) |
+| `payload.tls.capture_backend` | `string` | `"bpf-copy"` | 否 | payload | 明文采集后端；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L120) |
+| `payload.tls.source` | `string` | `"auto"` | 否 | payload | TLS 目标来源选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L121) |
+| `payload.tls.resolver` | `string` | `"auto"` | 否 | payload | TLS 符号和探针解析器选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L122) |
+| `payload.tls.library` | `string` | `"auto"` | 否 | payload | TLS 库类型选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L123) |
+| `payload.tls.library_path` | `string` | `"auto"` | 否 | payload | TLS 库路径；auto 表示自动发现；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L124) |
+| `payload.tls.binary_path` | `string` | `"disabled"` | 否 | payload | TLS 可执行文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L125) |
+| `payload.tls.pattern_path` | `string` | `"disabled"` | 否 | payload | TLS 机器码模式文件路径；disabled 表示未指定；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L126) |
+| `payload.tls.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L127) |
+| `payload.tls.max_operation_bytes` | `uint32` | `16777216` | 否 | payload | 单次操作采集的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L128) |
+| `payload.tls.ring_buffer_bytes` | `uint32` | `8388608` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L129) |
+| `payload.tls.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L130) |
+| `payload.tls.seccomp_syscalls` | `string[]` | `["write", "writev", "sendto", "sendmsg"]` | 否 | payload | 使用 seccomp 通知处理的系统调用列表；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L131) |
+| `payload.tls.diagnostics_enabled` | `bool` | `true` | 否 | payload | 输出明文采集诊断；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L132) |
+| `payload.tls.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L133) |
+| `payload.tls.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L134) |
+| `payload.tls.sync_runtime_library_path` | `string` | `"auto"` | 否 | payload | TLS sync 注入库路径；auto 表示自动选择；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L135) |
+| `payload.tls.sync_event_socket_path` | `string` | `"/run/actrail/tls-sync.sock"` | 否 | payload | TLS sync 事件 Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L136) |
+| `payload.tls.sync_max_frame_bytes` | `uint32` | `33554432` | 否 | payload | TLS sync 单帧字节上限，包含帧头；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L137) |
+| `payload.tls.sync_trace_connection_max` | `uint32` | `128` | 否 | payload | 每 Trace 的 TLS-sync 长连接上限，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L138) |
+| `payload.tls.sync_pending_connection_max` | `uint32` | `1024` | 否 | payload | 未归属 Trace 的 TLS-sync 连接在全局连接预算中的额外额度，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L139) |
+| `payload.tls.sync_plan_queue_capacity` | `uint32` | `1024` | 否 | payload | 探针计划解析队列容量，bpf-copy 的计划解析也使用，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L140) |
+| `payload.tls.sync_fd_reserve` | `uint32` | `4096` | 否 | payload | 计算 fd 预算时为 daemon 其他用途预留的描述符数，可为 0；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L141) |
+| `payload.tls.sync_release_outbox_max_bytes` | `uint32` | `1048576` | 否 | payload | 单条进程连接写阻塞时尚未写出的回执上限，超限关闭该连接，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L142) |
+| `payload.tls.sync_accept_retry_delay_ms` | `uint64` | `100` | 否 | payload | TLS-sync socket 耗尽 fd 后的接入重试间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L143) |
+| `payload.tls.sync_event_timeout_ms` | `uint64` | `5000` | 否 | payload | runtime 发送线程的无进度超时，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L144) |
+| `payload.tls.sync_event_shutdown_timeout_ms` | `uint64` | `100` | 否 | payload | runtime 退出时排空事件的总预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L145) |
+| `payload.tls.sync_event_batch_bytes` | `uint32` | `32768` | 否 | payload | runtime 发送批次预算及单次写入上限，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L146) |
+| `payload.tls.sync_read_buffer_bytes` | `uint32` | `65536` | 否 | payload | daemon 共享的 TLS-sync socket 读取缓冲字节数，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L147) |
+| `payload.tls.sync_read_max_bytes_per_client` | `uint32` | `1048576` | 否 | payload | 每个连接每轮读取的字节预算，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L148) |
+| `payload.tls.sync_ready_client_batch_max` | `uint32` | `128` | 否 | payload | 每轮处理的就绪连接数上限，必须为正且不超过 2147483647；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L149) |
+| `payload.tls.sync_frame_buffer_retain_max_bytes` | `uint32` | `1048576` | 否 | payload | 连接组帧缓冲清空后可保留的容量，超过即释放，0 表示清空后释放；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L150) |
+| `payload.tls.sync_socket_mode_octal` | `string` | `"660"` | 否 | payload | TLS sync socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L151) |
+| `payload.tls.sync_match_limit` | `uint32` | `8` | 否 | payload | TLS sync 探针匹配数量上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L152) |
+| `payload.tls.binary_analysis_cache_capacity` | `uint32` | `256` | 否 | payload | 二进制分析结果缓存条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L153) |
+| `payload.tls.dynamic_discovery_capacity` | `uint32` | `128` | 否 | payload | 动态 TLS 探针发现任务与结果的总容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L154) |
+| `payload.tls.direct_startup_discovery_enabled` | `bool` | `true` | 否 | payload | 在启动时发现直接捕获所需的 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L155) |
+| `payload.tls.direct_dynamic_discovery_enabled` | `bool` | `true` | 否 | payload | 在运行时发现新出现的直接捕获 TLS 探针；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L156) |
+| `payload.tls.dynamic_exec_plan_timeout_ms` | `uint64` | `30000` | 否 | payload | 动态执行探针计划查询时限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L157) |
+| `payload.tls.sync_flow_control_enabled` | `bool` | `true` | 否 | payload | 启用 TLS sync 流量预算控制；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L158) |
+| `payload.tls.sync_flow_sniff_bytes` | `uint32` | `65536` | 否 | payload | TLS sync 流识别阶段的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L159) |
+| `payload.tls.sync_flow_max_header_bytes` | `uint32` | `16384` | 否 | payload | TLS sync HTTP 头字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L160) |
+| `payload.tls.sync_flow_large_transfer_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 判断 HTTP/1 大数据传输的字节阈值；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L161) |
+| `payload.tls.sync_flow_unknown_stream_bytes` | `uint64` | `1048576` | 否 | payload | TLS sync 未识别流的字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L162) |
+| `payload.tls.sync_flow_h2_data_probe_bytes` | `uint64` | `65536` | 否 | payload | TLS sync HTTP/2 DATA 探测字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L163) |
+| `payload.tls.java_agent_enabled` | `bool` | `false` | 否 | payload | 启用 Java Agent 明文采集；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L164) |
+| `payload.stdio.enabled` | `bool` | `true` | 否 | payload | 采集标准输入输出明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L431) |
+| `payload.stdio.capture_stdin` | `bool` | `true` | 否 | payload | 采集标准输入；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L432) |
+| `payload.stdio.capture_stdout` | `bool` | `true` | 否 | payload | 采集标准输出；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L433) |
+| `payload.stdio.capture_stderr` | `bool` | `true` | 否 | payload | 采集标准错误输出；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L434) |
+| `payload.stdio.stdin_storage_mode` | `string` | `"full"` | 否 | payload | 标准输入存储模式；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L435) |
+| `payload.stdio.stdout_storage_mode` | `string` | `"drop"` | 否 | payload | 标准输出存储模式；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L436) |
+| `payload.stdio.stderr_storage_mode` | `string` | `"metadata-only"` | 否 | payload | 标准错误输出存储模式；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L437) |
+| `payload.stdio.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L438) |
+| `payload.stdio.ring_buffer_bytes` | `uint32` | `4194304` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L439) |
+| `payload.stdio.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L440) |
+| `payload.stdio.stream_state_max_entries` | `uint32` | `8192` | 否 | payload | 活动流状态条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L441) |
+| `payload.stdio.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L442) |
+| `payload.stdio.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L443) |
+| `payload.socket.enabled` | `bool` | `true` | 否 | payload | 采集 socket 明文；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L537) |
+| `payload.socket.capture_backend` | `string` | `"bpf-copy"` | 否 | payload | 明文采集后端；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L538) |
+| `payload.socket.max_segment_bytes` | `uint32` | `4095` | 否 | payload | 单个采集片段的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L539) |
+| `payload.socket.max_operation_bytes` | `uint32` | `4194304` | 否 | payload | 单次操作采集的最大字节数；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L540) |
+| `payload.socket.ring_buffer_bytes` | `uint32` | `8388608` | 否 | payload | 明文事件 ring buffer 容量，字节；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L541) |
+| `payload.socket.pending_operation_max_entries` | `uint32` | `8192` | 否 | payload | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L542) |
+| `payload.socket.stream_state_max_entries` | `uint32` | `8192` | 否 | payload | 活动流状态条目上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L543) |
+| `payload.socket.retention_max_bytes_per_trace` | `uint64` | `104857600` | 否 | payload | 每个 trace 的明文保留字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L544) |
+| `payload.socket.redaction_policy` | `string` | `"disabled"` | 否 | payload | 明文脱敏策略；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L545) |
+| `payload.socket.http_sniff_max_bytes` | `uint64` | `65536` | 否 | payload | HTTP 协议识别字节预算；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L546) |
+| `payload.socket.seccomp_syscalls` | `string[]` | `["write", "writev", "sendto", "sendmsg"]` | 否 | payload | 使用 seccomp 通知处理的系统调用列表；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L547) |
+| `payload.mcp.enabled` | `bool` | `false` | 否 | payload | 识别和解析 MCP 消息；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L53) |
+| `payload.mcp.parse_buffer_max_bytes` | `uint64` | `4194304` | 否 | payload | MCP 解析缓冲区字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L54) |
+| `payload.mcp.stdio_candidate_max_bytes` | `uint64` | `65536` | 否 | payload | 单个 MCP stdio 候选数据的字节上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L55) |
+| `payload.mcp.pending_stdio_candidate_max_entries` | `uint32` | `1024` | 否 | payload | 待确认 MCP stdio 候选条目数上限；[声明](../../crates/core/config/src/daemon/operator/document/payload.rs#L56) |
 | `seccomp_notify.enabled` | `bool` | `false` | 否 | seccomp_notify | 启用 seccomp 用户态通知处理；[声明](../../crates/core/config/src/daemon/operator/document/process.rs#L6) |
 | `seccomp_notify.reserved_listener_fd` | `uint32` | `253` | 否 | seccomp_notify | seccomp listener 保留的文件描述符编号；[声明](../../crates/core/config/src/daemon/operator/document/process.rs#L7) |
 | `process_seccomp.enabled` | `bool` | `false` | 否 | process_seccomp | 通过 seccomp 采集进程执行参数；[声明](../../crates/core/config/src/daemon/operator/document/process.rs#L31) |
@@ -347,6 +363,14 @@
 | `provider.rules_enabled` | `bool` | `false` | 否 | provider | 启用模型服务方规则文件；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L114) |
 | `provider.rules_path` | `string` | `"/etc/actrail/provider-rules.conf"` | 否 | provider | 规则文件路径；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L115) |
 | `provider.unknown_provider_label` | `string` | `"unknown"` | 否 | provider | 未识别模型服务方的标签；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L116) |
+| `checkpoint.enabled` | `bool` | `false` | 否 | checkpoint | 启用 checkpoint；要求 `semantic_retention.projection_enabled` 与 `semantic_retention.l0_llm_call.enabled`；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L14) |
+| `checkpoint.catalog_path` | `string` | `"/var/lib/actrail/checkpoint.db"` | 否 | checkpoint | checkpoint 记录库的 SQLite 文件，绝对路径；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L15) |
+| `checkpoint.backends` | `array` | `[]` | 否 | checkpoint | 组成 Trace 的 backend，按调用顺序排列；每项有 `name`、动态库 `library` 和配置文件 `config`，后两者为绝对路径；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L16) |
+| `checkpoint.runtime.busy_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | daemon 和 Web 的 checkpoint 只读连接等待 SQLite 写锁的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L110) |
+| `checkpoint.runtime.stop_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | 恢复前等待一批进程线程组暂停的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L111) |
+| `checkpoint.runtime.stop_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 检查线程组暂停状态的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L112) |
+| `checkpoint.runtime.shutdown_drain_timeout_ms` | `uint64` | `10000` | 否 | checkpoint | daemon 停止时等待 checkpoint 工作完成的总预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L113) |
+| `checkpoint.runtime.idle_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 停机等待期间检查 checkpoint 工作是否完成的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L114) |
 | `access_control.file.open.enabled` | `bool` | `true` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
 | `access_control.file.open.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；fanotify / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
 | `access_control.file.mkdir.enabled` | `bool` | `false` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L61) |
@@ -404,7 +428,7 @@
 | `network_control.alert_window_ms` | `uint32` | `60000` | 否 | network_control | seccomp 网络拒绝告警聚合窗口，毫秒，须大于 0；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L15) |
 | `network_control.alert_max_groups` | `uint32` | `256` | 否 | network_control | 每窗口跨 trace 新准入的网络规则与决策来源分组上限，须大于 0；[声明](../../crates/core/config/src/daemon/operator/document/network.rs#L16) |
 | `supervision.startup_wait_ms` | `uint64` | `30000` | 否 | supervision | CLI 等待 daemon 启动的时间上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L235) |
-| `supervision.shutdown_wait_ms` | `uint64` | `150100` | 否 | supervision | CLI 等待 daemon 关闭的时间上限，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L236) |
+| `supervision.shutdown_wait_ms` | `uint64` | `160100` | 否 | supervision | CLI 等待 daemon 关闭的时间上限，毫秒；不得小于各项停机排空预算之和，启用 checkpoint 时包括 `checkpoint.runtime.shutdown_drain_timeout_ms`；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L236) |
 | `supervision.poll_interval_ms` | `uint64` | `100` | 否 | supervision | 轮询间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L237) |
 | `resource_profiling.enabled` | `bool` | `true` | 否 | resource_profiling | 总开关；关闭时不启动任何资源采集任务；[声明](../../crates/core/resource_profiling/src/config/resource_profiling_config.rs) |
 | `resource_profiling.collection.host.enabled` | `bool` | `true` | 否 | resource_profiling | 启用宿主采集，不依赖 workload；[声明](../../crates/core/resource_profiling/src/collection/host/config/host_profiling_config.rs) |

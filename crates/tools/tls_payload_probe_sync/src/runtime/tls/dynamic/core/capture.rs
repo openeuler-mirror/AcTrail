@@ -3,7 +3,7 @@ use std::ffi::c_void;
 use tls_payload_core::PayloadDirection;
 
 use crate::runtime::decision::{RuntimeAction, decide_payload};
-use crate::runtime::{config, output};
+use crate::runtime::{config, output, response_hold};
 
 use super::{
     OPENSSL_SSL_READ, OPENSSL_SSL_READ_EX, OPENSSL_SSL_WRITE, OPENSSL_SSL_WRITE_EX,
@@ -123,6 +123,7 @@ pub(in crate::runtime) unsafe fn ssl_read_with(
         abort_runtime(&format!("{OPENSSL_SSL_READ} returned invalid length"));
     };
     inbound_rewrite(OPENSSL_SSL_READ, ssl as usize, buffer.cast::<u8>(), length);
+    response_hold::before_response(ssl as usize);
     result
 }
 
@@ -147,6 +148,7 @@ pub(in crate::runtime) unsafe fn ssl_read_ex_with(
         buffer.cast::<u8>(),
         completed,
     );
+    response_hold::before_response(ssl as usize);
     result
 }
 

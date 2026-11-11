@@ -14,5 +14,6 @@ cargo build --release
 | V2 默认回归 | `sudo -E python3.11 tests/v2/regression/test_all.py` | 运行默认回归集合。 | 汇总各测例的 PASSED、FAILED 或 SKIPPED 结果。 |
 | V2 测例清单 | `python3.11 tests/v2/regression/test_all.py --list` | 查看可选测例。 | 输出测例清单。 |
 | xiaoO LLM 观测 | `sudo -E python3.11 tests/v2/regression/test_all.py --case probe_xiaoo_llm` | 运行真实 xiaoO 并验证 LLM 请求响应及关联证据。 | trace 正常结束，响应包含指定 marker，动作关联符合断言。 |
+| Checkpoint Btrfs | `python3.11 tests/v2/regression/test_all.py --case checkpoint_btrfs` | 在已配置 Rust 工具链的 root 终端运行，公共入口自动构建并定位 Btrfs backend。在回环 Btrfs 上验证 launch 初始保存、手动保存、删除、Trace 结束时释放快照、连接失败、每次 LLM 请求均在响应前保存（含文件未修改）、`force`、Web 的边界匹配和命令、运行中 Trace 在下一次 LLM 请求时恢复，以及 daemon 重启后历史仍可查询。 | 各步骤为 PASSED；缺少工具或 Btrfs 支持时为 SKIPPED，后端构建产物缺失时为 FAILED。 |
 | Fanotify enforcement direct | `python3 tests/enforcement/fanotify/run_e2e.py` | 直接生成临时 fanotify operator config，验证文件 permission enforcement。 | allowed path 读取成功，denied path 被拒绝；OTEL 中有 allow/deny spans。 |
 | LLM HTTP proxy support smoke | `python3 tests/v2/common/llm-http-proxy/provider_proxy.py --mode local-stream` | 启动本地 OpenAI-compatible SSE provider shim，供仍在使用它的测例调用。 | 监听本地端口并返回 deterministic SSE；它是 support server，不单独证明 AcTrail capture。 |

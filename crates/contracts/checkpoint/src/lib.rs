@@ -10,6 +10,9 @@ mod types;
 
 pub use backend::{
     CheckpointBackend, CheckpointModule, CheckpointModuleRef, RestorableCheckpointBackend,
+    RestorableCheckpointBackend_TO,
 };
-pub use error::{BackendError, BackendErrorKind};
-pub use types::{BackendConfig, SnapshotContext, SnapshotId};
+pub use error::{BackendError, BackendErrorKind, RestoreFailure};
+pub use types::{
+    BackendConfig, BackendKind, SnapshotContext, SnapshotId, SnapshotScope, TraceProcess,
+};

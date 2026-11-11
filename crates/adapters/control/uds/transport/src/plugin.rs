@@ -5,6 +5,7 @@ use plugin_system::{
     PluginPurpose, PluginRuntimeKind,
 };
 
+use super::optional::{optional_u32, optional_u64, parse_optional_u32, parse_optional_u64};
 use super::{ControlCodecError, field, parse_usize};
 
 const HOSTCALL_METRIC_FIELDS: usize = 10;
@@ -292,37 +293,5 @@ fn decode_plugin_status_fields(
 fn parse_u64(value: &str, field_name: &str) -> Result<u64, ControlCodecError> {
     value
         .parse::<u64>()
-        .map_err(|_| ControlCodecError::new("decode", format!("invalid {field_name}")))
-}
-
-fn optional_u64(value: Option<u64>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "none".to_string())
-}
-
-fn optional_u32(value: Option<u32>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "none".to_string())
-}
-
-fn parse_optional_u64(value: &str, field_name: &str) -> Result<Option<u64>, ControlCodecError> {
-    if value == "none" {
-        return Ok(None);
-    }
-    value
-        .parse::<u64>()
-        .map(Some)
-        .map_err(|_| ControlCodecError::new("decode", format!("invalid {field_name}")))
-}
-
-fn parse_optional_u32(value: &str, field_name: &str) -> Result<Option<u32>, ControlCodecError> {
-    if value == "none" {
-        return Ok(None);
-    }
-    value
-        .parse::<u32>()
-        .map(Some)
         .map_err(|_| ControlCodecError::new("decode", format!("invalid {field_name}")))
 }

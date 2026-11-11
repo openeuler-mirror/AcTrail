@@ -9,7 +9,9 @@ use crate::daemon::{
     DEFAULT_TLS_DYNAMIC_DISCOVERY_CAPACITY,
 };
 use payload_capability::{
-    DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES, DEFAULT_TLS_SYNC_MAX_FRAME_BYTES,
+    DEFAULT_TLS_SYNC_EVENT_BATCH_BYTES, DEFAULT_TLS_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS,
+    DEFAULT_TLS_SYNC_EVENT_TIMEOUT_MS, DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES,
+    DEFAULT_TLS_SYNC_MAX_FRAME_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -133,6 +135,19 @@ pub(super) struct PayloadTlsDocument {
     pub sync_runtime_library_path: String,
     pub sync_event_socket_path: String,
     pub sync_max_frame_bytes: u32,
+    pub sync_trace_connection_max: u32,
+    pub sync_pending_connection_max: u32,
+    pub sync_plan_queue_capacity: u32,
+    pub sync_fd_reserve: u32,
+    pub sync_release_outbox_max_bytes: u32,
+    pub sync_accept_retry_delay_ms: u64,
+    pub sync_event_timeout_ms: u64,
+    pub sync_event_shutdown_timeout_ms: u64,
+    pub sync_event_batch_bytes: u32,
+    pub sync_read_buffer_bytes: u32,
+    pub sync_read_max_bytes_per_client: u32,
+    pub sync_ready_client_batch_max: u32,
+    pub sync_frame_buffer_retain_max_bytes: u32,
     pub sync_socket_mode_octal: String,
     pub sync_match_limit: u32,
     pub binary_analysis_cache_capacity: u32,
@@ -174,6 +189,19 @@ impl Default for PayloadTlsDocument {
             sync_runtime_library_path: "auto".to_string(),
             sync_event_socket_path: "/run/actrail/tls-sync.sock".to_string(),
             sync_max_frame_bytes: DEFAULT_TLS_SYNC_MAX_FRAME_BYTES,
+            sync_trace_connection_max: 128,
+            sync_pending_connection_max: 1024,
+            sync_plan_queue_capacity: 1024,
+            sync_fd_reserve: 4096,
+            sync_release_outbox_max_bytes: 1_048_576,
+            sync_accept_retry_delay_ms: 100,
+            sync_event_timeout_ms: DEFAULT_TLS_SYNC_EVENT_TIMEOUT_MS,
+            sync_event_shutdown_timeout_ms: DEFAULT_TLS_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS,
+            sync_event_batch_bytes: DEFAULT_TLS_SYNC_EVENT_BATCH_BYTES,
+            sync_read_buffer_bytes: 65_536,
+            sync_read_max_bytes_per_client: 1_048_576,
+            sync_ready_client_batch_max: 128,
+            sync_frame_buffer_retain_max_bytes: 1_048_576,
             sync_socket_mode_octal: "660".to_string(),
             sync_match_limit: 8,
             binary_analysis_cache_capacity: DEFAULT_TLS_BINARY_ANALYSIS_CACHE_CAPACITY,
@@ -221,6 +249,19 @@ impl PayloadTlsDocument {
             ),
             sync_event_socket_path: config.sync_event_socket_path.display().to_string(),
             sync_max_frame_bytes: config.sync_max_frame_bytes,
+            sync_trace_connection_max: config.sync_trace_connection_max,
+            sync_pending_connection_max: config.sync_pending_connection_max,
+            sync_plan_queue_capacity: config.sync_plan_queue_capacity,
+            sync_fd_reserve: config.sync_fd_reserve,
+            sync_release_outbox_max_bytes: config.sync_release_outbox_max_bytes,
+            sync_accept_retry_delay_ms: config.sync_accept_retry_delay_ms,
+            sync_event_timeout_ms: config.sync_event_timeout_ms,
+            sync_event_shutdown_timeout_ms: config.sync_event_shutdown_timeout_ms,
+            sync_event_batch_bytes: config.sync_event_batch_bytes,
+            sync_read_buffer_bytes: config.sync_read_buffer_bytes,
+            sync_read_max_bytes_per_client: config.sync_read_max_bytes_per_client,
+            sync_ready_client_batch_max: config.sync_ready_client_batch_max,
+            sync_frame_buffer_retain_max_bytes: config.sync_frame_buffer_retain_max_bytes,
             sync_socket_mode_octal: format!("{:o}", config.sync_socket_mode),
             sync_match_limit: config.sync_match_limit,
             binary_analysis_cache_capacity: config.binary_analysis_cache_capacity,
@@ -239,6 +280,11 @@ impl PayloadTlsDocument {
     }
 
     pub(super) fn to_config(&self) -> Result<PayloadTlsConfig, String> {
+        if self.sync_ready_client_batch_max > i32::MAX as u32 {
+            return Err(
+                "payload.tls.sync_ready_client_batch_max must not exceed 2147483647".to_string(),
+            );
+        }
         if (self.sync_max_frame_bytes as usize) < payload_capability::TLS_SYNC_FRAME_HEADER_BYTES {
             return Err(
                 "payload.tls.sync_max_frame_bytes must include the TLS frame header".to_string(),
@@ -281,6 +327,52 @@ impl PayloadTlsDocument {
                 &self.sync_runtime_library_path,
             )?,
             sync_event_socket_path: PathBuf::from(&self.sync_event_socket_path),
+            sync_trace_connection_max: require_positive_u32(
+                "payload.tls.sync_trace_connection_max",
+                self.sync_trace_connection_max,
+            )?,
+            sync_pending_connection_max: require_positive_u32(
+                "payload.tls.sync_pending_connection_max",
+                self.sync_pending_connection_max,
+            )?,
+            sync_plan_queue_capacity: require_positive_u32(
+                "payload.tls.sync_plan_queue_capacity",
+                self.sync_plan_queue_capacity,
+            )?,
+            sync_fd_reserve: self.sync_fd_reserve,
+            sync_release_outbox_max_bytes: require_positive_u32(
+                "payload.tls.sync_release_outbox_max_bytes",
+                self.sync_release_outbox_max_bytes,
+            )?,
+            sync_accept_retry_delay_ms: require_positive_u64(
+                "payload.tls.sync_accept_retry_delay_ms",
+                self.sync_accept_retry_delay_ms,
+            )?,
+            sync_event_timeout_ms: require_positive_u64(
+                "payload.tls.sync_event_timeout_ms",
+                self.sync_event_timeout_ms,
+            )?,
+            sync_event_shutdown_timeout_ms: require_positive_u64(
+                "payload.tls.sync_event_shutdown_timeout_ms",
+                self.sync_event_shutdown_timeout_ms,
+            )?,
+            sync_event_batch_bytes: require_positive_u32(
+                "payload.tls.sync_event_batch_bytes",
+                self.sync_event_batch_bytes,
+            )?,
+            sync_read_buffer_bytes: require_positive_u32(
+                "payload.tls.sync_read_buffer_bytes",
+                self.sync_read_buffer_bytes,
+            )?,
+            sync_read_max_bytes_per_client: require_positive_u32(
+                "payload.tls.sync_read_max_bytes_per_client",
+                self.sync_read_max_bytes_per_client,
+            )?,
+            sync_ready_client_batch_max: require_positive_u32(
+                "payload.tls.sync_ready_client_batch_max",
+                self.sync_ready_client_batch_max,
+            )?,
+            sync_frame_buffer_retain_max_bytes: self.sync_frame_buffer_retain_max_bytes,
             sync_max_frame_bytes: require_positive_u32(
                 "payload.tls.sync_max_frame_bytes",
                 self.sync_max_frame_bytes,

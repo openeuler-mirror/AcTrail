@@ -35,5 +35,7 @@ class ContainerAutoConstants:
     tls_frame_magic: bytes = b"AT"
     tls_frame_version: int = 1
     tls_payload_frame_kind: int = 1
+    tls_register_frame_kind: int = 9
+    tls_event_token_bytes: int = 32
 
 CASE_CONSTANTS = ContainerAutoConstants()

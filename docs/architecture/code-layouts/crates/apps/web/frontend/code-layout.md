@@ -79,6 +79,18 @@
     │   │   ├── [x] action-tree/ # 根据动作关系构造树并展示上下游动作。
     │   │   │   ├── [x] ActionTreeTab.vue # 管理动作树展开、选择和详情联动。
     │   │   │   └── [x] model.js # 将动作与关系边整理为展示树。
+    │   │   ├── [x] checkpoints/ # 展示 checkpoint 历史与 operation，并与 ActionTree 中边界所在的 LLM 调用互相跳转。
+    │   │   │   ├── [x] CheckpointsTab.vue # 组织 checkpoint 页：按 daemon 当前状态提示暂停或状态未知，不从历史失败或 resume 已受理推断解除；提示等待中的恢复，响应顶栏刷新；已结束或 disconnect 时禁用创建，恢复和删除先确认，操作经服务端 actions 接口交给 daemon。
+    │   │   │   ├── [x] CheckpointHistory.vue # 展示回滚后的当前路径，在目标节点保留收起过记录的回滚标记及最新一次标记，后续保存从该节点向下接续。
+    │   │   │   ├── [x] CheckpointRollback.vue # 展开本次回滚收起的路径，点击旧记录查看详情，并提供恢复结果入口。
+    │   │   │   ├── [x] graph.js # 按实际执行时间重建当前路径和回滚前收起的尾段，旧分支不混入当前路径。
+    │   │   │   ├── [x] CheckpointDetail.vue # 在详情面板展示选中的 checkpoint 或 operation：状态、保护范围、操作结果和可用操作。
+    │   │   │   ├── [x] checkpoints.css # 历史时间线、提示条与按钮样式，只用主题变量。
+    │   │   │   ├── [x] useCheckpointHistory.js # 读取 checkpoint 历史与当前暂停状态；运行中 Trace、仍持有暂停或有工作、未结束的 operation 和待释放快照定时刷新，读取失败后继续定时重试，切换 Trace 时取消旧请求并清空旧记录。
+    │   │   │   ├── [x] model.js # 计算记录状态和 ActionTree 标记。
+    │   │   │   ├── [x] navigation.js # 读取 operation 匹配到的 LLM 调用的 ActionTree 路径。
+    │   │   │   ├── [x] markers.js # 把匹配结果按 LLM 调用提供给 ActionTreeNode。
+    │   │   │   └── [x] CheckpointMarker.vue # 在 ActionTreeNode 上显示保存或恢复标记，阶段和结果按语言翻译，点击打开对应的 checkpoint 或 operation。
     │   │   ├── [x] commands/ # 展示命令执行和关联输入输出。
     │   │   ├── [x] llm-trajectory/ # 展示模型请求、工具调用与返回轨迹及上下文压缩关系。
     │   │   ├── [x] timeline/ # 将进程与动作渲染为顺序时间线。
@@ -109,6 +121,7 @@
     │       ├── [x] diagnostics/ # 展示采集与处理诊断。
     │       └── [x] alerts/ # 展示关联 trace 的告警。
     ├── [x] components/ # 提供详情、表格、协议洞察和递进内容加载控件。
+    │   ├── [x] ActionTreeNode.vue # 渲染单个动作树节点及其展开状态。
     │   ├── [x] DetailPanel.vue # 展示所选记录的详情容器。
     │   ├── [x] DataTable.vue # 提供共享行表格与选择交互。
     │   ├── [x] JsonTree.vue # 展示 JSON 内容的树形结构。

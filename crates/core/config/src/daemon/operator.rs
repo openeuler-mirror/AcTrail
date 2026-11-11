@@ -27,6 +27,7 @@ use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
+pub const DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS: u64 = 100;
 pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
 pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES: [&str; 2] =
     ["~/.actrail/plugins", "/usr/share/actrail/plugins"];
@@ -48,6 +49,7 @@ pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
     pub control_pending_connection_max: u32,
+    pub control_accept_retry_delay_ms: u64,
     pub active_trace_max: u32,
     pub pid_file: PathBuf,
     /// OTel `host.id` override. `None` → daemon probes DMI product_uuid at start.
@@ -80,6 +82,11 @@ pub struct OperatorConfig {
     pub resource_profiling: toml::Table,
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
+    /// SQLite file of the checkpoint catalog; unset when checkpoints are disabled.
+    pub checkpoint_catalog_path: Option<PathBuf>,
+    /// The checkpoint integrations a Trace is composed of, in call order.
+    pub checkpoint_backends: Vec<CheckpointBackendConfig>,
+    pub checkpoint_runtime: CheckpointRuntimeConfig,
     pub access_control: AccessControlConfig,
     pub enforcement: EnforcementConfig,
     pub command_control: CommandControlConfig,
@@ -87,6 +94,37 @@ pub struct OperatorConfig {
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointBackendConfig {
+    pub name: String,
+    /// The integration's dynamic library.
+    pub library: PathBuf,
+    /// The integration's own configuration file.
+    pub config: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CheckpointRuntimeConfig {
+    pub busy_timeout_ms: u64,
+    pub stop_timeout_ms: u64,
+    pub stop_poll_interval_ms: u64,
+    pub shutdown_drain_timeout_ms: u64,
+    pub idle_poll_interval_ms: u64,
+}
+
+impl Default for CheckpointRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            busy_timeout_ms: 5_000,
+            stop_timeout_ms: 5_000,
+            stop_poll_interval_ms: 10,
+            shutdown_drain_timeout_ms: 10_000,
+            idle_poll_interval_ms: 10,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

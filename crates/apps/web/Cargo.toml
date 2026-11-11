@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 resource_profiling = { path = "../../core/resource_profiling" }
 alert_contract = { path = "../../contracts/alert" }
+checkpoint_core = { path = "../../core/checkpoint" }
+checkpoint_sqlite = { path = "../../adapters/storage/checkpoint" }
 config_core = { path = "../../core/config" }
 config_export_filter = { path = "../../core/config_export_filter" }
 control_contract = { path = "../../contracts/control_plane" }

@@ -1,6 +1,5 @@
 //! Collector contract implementation for the eBPF adapter.
 
-use super::collector_trace_binding::cleanup_suppressed_fds_for_trace;
 use super::*;
 
 impl CollectorInstance for EbpfCollector {
@@ -81,22 +80,6 @@ impl CollectorInstance for EbpfCollector {
             let _ = runtime.unregister_trace_pid_namespace(request.trace_id);
             return Err(loader_error(error));
         }
-        if let Err(error) = self.register_initial_suppressed_fds(
-            request.trace_id,
-            root_start_time,
-            root_kernel_tgid,
-            &request.initial_suppressed_fds,
-        ) {
-            let _ = self
-                .runtime_mut()
-                .and_then(|runtime| runtime.untrack_pid(root_kernel_tgid).map_err(loader_error));
-            let _ = self.runtime_mut().and_then(|runtime| {
-                runtime
-                    .unregister_trace_pid_namespace(request.trace_id)
-                    .map_err(loader_error)
-            });
-            return Err(error);
-        }
         self.bindings.set_trace_capabilities(
             request.trace_id,
             request
@@ -152,7 +135,9 @@ impl CollectorInstance for EbpfCollector {
         self.cancel_pending_launch(trace_id)?;
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.untrack_fork_trace(trace_id).map_err(loader_error)?;
-            cleanup_suppressed_fds_for_trace(runtime, &mut self.suppressed_fds, trace_id)?;
+            runtime
+                .sweep_suppressed_fds_for_trace(trace_id)
+                .map_err(loader_error)?;
             for tracked in self.bindings.processes_for_trace(trace_id) {
                 runtime
                     .untrack_pid(tracked.kernel_tgid)

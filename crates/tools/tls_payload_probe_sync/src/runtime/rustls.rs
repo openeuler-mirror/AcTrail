@@ -114,6 +114,10 @@ unsafe extern "C" fn hook_rustls_take_received_plaintext(
     let original = unsafe { original_take_received_plaintext() };
     if !payload.is_null() {
         rewrite_received_payload(state as usize, payload);
+        let received = unsafe { &*payload };
+        if !received.pointer.is_null() && received.length > 0 {
+            crate::runtime::response_hold::before_response(state as usize);
+        }
     }
     unsafe {
         original(state, payload);

@@ -16,6 +16,7 @@
 │   ├── [x] llm_call_display.rs # 构造模型调用的展示字段。
 │   └── [x] llm_tool_display.rs # 构造工具调用与返回的展示字段。
 ├── [x] action_content.rs # 按内容节点与分页请求读取动作正文。
+├── [x] action_path.rs # 返回指定动作的动作树路径，与 LLM 导航共用压缩实现调用的根偏移投影；查出 llm.request 在动作树中所在的 LLM 调用。
 ├── [x] action_tree_roles.rs # 将动作关系角色转换为动作树连接含义。
 ├── [x] payloads.rs # 查询负载段元数据和按需读取的正文。
 ├── [x] commands.rs # 将命令执行动作投影为命令详情和关联记录。

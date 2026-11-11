@@ -16,6 +16,9 @@ alert_contract = { path = "../../contracts/alert" }
 alert_delivery_contract = { package = "alert-delivery-contract", path = "../../contracts/alert_delivery" }
 alert_forwarding = { path = "../../plugins/alert_forwarding" }
 attach_runtime = { path = "../../core/attach_runtime" }
+checkpoint = { path = "../../contracts/checkpoint" }
+checkpoint_core = { path = "../../core/checkpoint" }
+checkpoint_sqlite = { path = "../../adapters/storage/checkpoint" }
 clap = { version = "4.6", features = ["derive"] }
 collector_binding = { path = "../../contracts/collector/binding" }
 collector_capability = { path = "../../contracts/collector/capability" }

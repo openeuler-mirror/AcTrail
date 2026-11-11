@@ -564,6 +564,16 @@ impl StorageBackend for NoOpStorage {
         Ok(None)
     }
 
+    fn semantic_action_display_path_to_action(
+        &self,
+        _trace_id: TraceId,
+        _parent_roles: &[&str],
+        _selected_parent_roles: &[&str],
+        _action_id: &str,
+    ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError> {
+        Ok(None)
+    }
+
     fn semantic_action_children_matching_kinds(
         &self,
         _trace_id: TraceId,

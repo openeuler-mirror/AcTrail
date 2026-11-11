@@ -56,7 +56,9 @@ Xiaoo 需要支持 `init.config.save_mode`。初始化请求中的 `current` 优
 
 每个后端实例绑定一个 trace 和一个 Xiaoo session。不同 Agent 使用各自的 socket 和后端实例。快照 ID 仅由该集成解释，调用方应原样保存并传回。上下文及快照存储由 Xiaoo 管理。
 
-成功结果沿用 Xiaoo 的受理语义。排队操作由 Xiaoo 在循环边界处理。每次请求建立一个 socket 连接。超时或连接中断通过 `BackendError` 返回，客户端不会自动重发。`disconnect` 成功后清除本地绑定，调用方可再次 `connect`。
+集成声明 `BackendKind::Context`，参与每个启用 checkpoint 的 Trace，不配置文件系统 scope。`connect` 接收完整的 `SnapshotContext`，以 `trace_id` 绑定 session。
+
+成功结果沿用 Xiaoo 的受理语义。排队操作由 Xiaoo 在循环边界处理。`restore` 成功返回空的失效快照列表，失败通过 `RestoreFailure.error` 返回错误。每次请求建立一个 socket 连接。其他操作的超时或连接中断通过 `BackendError` 返回，客户端不会自动重发。`disconnect` 成功后清除本地绑定，调用方可再次 `connect`。
 
 ## 真实 Agent 验证
 

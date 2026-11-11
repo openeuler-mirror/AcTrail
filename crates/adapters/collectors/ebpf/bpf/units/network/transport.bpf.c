@@ -34,6 +34,9 @@ int handle_sys_enter_bind(struct trace_event_raw_sys_enter *ctx) {
 
 SEC("tracepoint/syscalls/sys_enter_connect")
 int handle_sys_enter_connect(struct trace_event_raw_sys_enter *ctx) {
+    if (store_pending_internal_connect(ctx)) {
+        return 0;
+    }
     return store_pending_net_op_resolved(
         net_descriptor(ACTRAIL_NET_CONNECT, ACTRAIL_SYSCALL_FAMILY_SOCKET),
         (__u32)ctx->args[0],
@@ -132,6 +135,9 @@ int handle_sys_exit_bind(struct trace_event_raw_sys_exit *ctx) {
 
 SEC("tracepoint/syscalls/sys_exit_connect")
 int handle_sys_exit_connect(struct trace_event_raw_sys_exit *ctx) {
+    if (finish_internal_connect(ctx)) {
+        return 0;
+    }
     socket_payload_track_connect_exit(ctx);
     return emit_pending_net_op(ctx);
 }

@@ -66,6 +66,7 @@ pub fn run_from_env() -> Result<i32, String> {
             supervision_poll_interval_ms,
             ebpf_seccomp_policy,
             agent_integration,
+            checkpoint,
             argv,
         } => {
             let socket_path = required_socket_path(invocation.socket_path)?;
@@ -91,6 +92,7 @@ pub fn run_from_env() -> Result<i32, String> {
                     supervision_poll_interval_ms,
                     ebpf_seccomp_policy,
                     agent_integration,
+                    checkpoint,
                     argv,
                 },
             )

@@ -1,5 +1,7 @@
 //! Command-line input shapes for the control application.
 
+use crate::checkpoint::{CheckpointArgs, load_launch_config};
+use control_contract::checkpoint::{CheckpointAction, LaunchCheckpointConfig};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -59,6 +61,7 @@ pub enum CtlCommand {
         supervision_poll_interval_ms: u64,
         ebpf_seccomp_policy: DeploymentPermissionPolicy,
         agent_integration: AgentLaunchIntegration,
+        checkpoint: Option<LaunchCheckpointConfig>,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -92,6 +95,7 @@ pub enum CtlCommand {
     TlsPlanQuery {
         binary: PathBuf,
     },
+    Checkpoint(CheckpointAction),
 }
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CtlInvocation, String> {
@@ -205,6 +209,11 @@ enum CtlCommandArgs {
     Probe(ProbeArgs),
     #[command(about = "Inspect daemon-side TLS launch plan resolution")]
     TlsPlan(TlsPlanArgs),
+    #[command(about = "Save, restore and inspect file checkpoints of a trace")]
+    Checkpoint {
+        #[command(subcommand)]
+        action: CheckpointArgs,
+    },
 }
 
 impl CtlCommandArgs {
@@ -269,6 +278,11 @@ impl CtlCommandArgs {
                         },
                         &args.argv,
                     )?,
+                    checkpoint: args
+                        .checkpoint
+                        .as_deref()
+                        .map(load_launch_config)
+                        .transpose()?,
                     argv: args.argv,
                 })
             }
@@ -284,6 +298,7 @@ impl CtlCommandArgs {
                 ),
             }),
             Self::Doctor => Ok(CtlCommand::Doctor),
+            Self::Checkpoint { action } => Ok(CtlCommand::Checkpoint(action.into_action())),
             Self::WorkLifecycle {
                 trace_id,
                 session_id,
@@ -543,6 +558,13 @@ struct LaunchArgs {
         help = "Workload seccomp user-notify permission policy"
     )]
     seccomp_notify: Option<PermissionModeArg>,
+
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Protect files with checkpoints; the TOML file lists [[scopes]]"
+    )]
+    checkpoint: Option<PathBuf>,
 
     #[arg(
         value_name = "COMMAND",

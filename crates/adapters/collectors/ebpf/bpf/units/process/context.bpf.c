@@ -24,6 +24,16 @@ int handle_sched_process_exec(struct sched_process_exec_ctx *ctx) {
     if (!exec_trace_id) {
         return 0;
     }
+    /* Internal TLS-sync sockets are close-on-exec; the new image connects and
+     * registers its own. Use the same key as finish_internal_connect. */
+    {
+        __u32 kernel_tgid = current_kernel_tgid();
+
+        cleanup_suppressed_fds_for_process(
+            kernel_tgid,
+            current_process_start_time(kernel_tgid)
+        );
+    }
 
     return emit_exec_proc_event(ctx, pid, exec_trace_id);
 }
