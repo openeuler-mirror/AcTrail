@@ -161,7 +161,9 @@ impl X86_64BoringSslStaticPatternProbeDetector {
         )))
     }
 
-    fn has_identity(image: &ElfImage) -> bool {
+    pub(in crate::probe_detector::detector::tls::boringssl::x86_64) fn has_identity(
+        image: &ElfImage,
+    ) -> bool {
         let vendor = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[0]]);
         let openssl_error = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[1]]);
         let boring_error = StaticPatternSupport::contains_any(image, &[IDENTITY_MARKERS[2]]);

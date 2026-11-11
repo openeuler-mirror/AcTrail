@@ -6,15 +6,17 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use config_core::daemon::{
-    DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-    SocketPermissions,
-};
+use config_core::daemon::SocketPermissions;
 use uds_control_server::UdsControlConnection;
 
 use crate::bootstrap::LocalDaemonServer;
+
+#[path = "socket_loop/timing.rs"]
+mod timing;
+
+use timing::ControlLoopTiming;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DaemonRunError {
@@ -36,27 +38,12 @@ impl DaemonRunError {
 }
 
 impl LocalDaemonServer {
-    pub fn serve_forever(
-        &mut self,
-        socket_path: &Path,
-        permissions: SocketPermissions,
-    ) -> Result<(), DaemonRunError> {
-        self.serve_forever_until(
-            socket_path,
-            permissions,
-            DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-            Duration::from_millis(DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS),
-            || false,
-            || Ok(()),
-        )
-    }
-
     pub fn serve_forever_until<S, R>(
         &mut self,
         socket_path: &Path,
         permissions: SocketPermissions,
         pending_connection_max: u32,
-        accept_retry_delay: Duration,
+        accept_retry_delay_ms: u32,
         mut should_stop: S,
         on_ready: R,
     ) -> Result<(), DaemonRunError>
@@ -64,6 +51,7 @@ impl LocalDaemonServer {
         S: FnMut() -> bool,
         R: FnOnce() -> Result<(), DaemonRunError>,
     {
+        let mut timing = ControlLoopTiming::new(accept_retry_delay_ms);
         let listener = bind_listener(socket_path, permissions)?;
         let pending_connection_max = usize::try_from(pending_connection_max).map_err(|error| {
             DaemonRunError::new(
@@ -73,16 +61,14 @@ impl LocalDaemonServer {
         })?;
         let mut control_connections = Vec::new();
         let mut drain_error_log = DrainErrorLog::default();
-        let mut accept_retry_at = None;
         on_ready()?;
         while !should_stop() {
             self.serve_ready_cycle(
                 &listener,
                 &mut control_connections,
                 pending_connection_max,
-                accept_retry_delay,
                 &mut drain_error_log,
-                &mut accept_retry_at,
+                &mut timing,
             )?;
         }
         Ok(())
@@ -93,9 +79,8 @@ impl LocalDaemonServer {
         listener: &UnixListener,
         control_connections: &mut Vec<UdsControlConnection>,
         pending_connection_max: usize,
-        accept_retry_delay: Duration,
         drain_error_log: &mut DrainErrorLog,
-        accept_retry_at: &mut Option<Instant>,
+        timing: &mut ControlLoopTiming,
     ) -> Result<(), DaemonRunError> {
         let control_fds = control_connections
             .iter()
@@ -103,30 +88,17 @@ impl LocalDaemonServer {
             .map(UdsControlConnection::raw_fd)
             .collect::<Vec<_>>();
         let event_fds = self.event_poll_fds()?;
-        let retry_delay = accept_retry_at
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-            .filter(|delay| !delay.is_zero());
-        let timeout = self
+        let background_timeout = self
             .background_poll_timeout()
-            .map_err(|error| DaemonRunError::new(error.code, error.message))?
-            .into_iter()
-            .chain(retry_delay)
-            .min();
-        let readiness = wait_for_ready(
-            if retry_delay.is_some() {
-                -1
-            } else {
-                listener.as_raw_fd()
-            },
-            &control_fds,
-            event_fds.clone(),
-            timeout,
-        )?;
+            .map_err(|error| DaemonRunError::new(error.code, error.message))?;
+        let (listener_fd, timeout) =
+            timing.poll_options(listener.as_raw_fd(), background_timeout)?;
+        let readiness = wait_for_ready(listener_fd, &control_fds, event_fds.clone(), timeout)?;
         self.workload_diagnostics().record_ready_cycle(
             readiness.listener_ready,
             readiness.control_ready_fds.len(),
             readiness.event_source_ready,
-            readiness.background_ready,
+            timing.background_due(),
             event_fds.len(),
         );
         let mut ready_control_fds = readiness.control_ready_fds;
@@ -134,7 +106,7 @@ impl LocalDaemonServer {
             loop {
                 match listener.accept() {
                     Ok((stream, _)) if control_connections.len() >= pending_connection_max => {
-                        *accept_retry_at = None;
+                        timing.record_accept_success();
                         drop(stream);
                         tracing::warn!(
                             pending_connection_max,
@@ -142,37 +114,36 @@ impl LocalDaemonServer {
                         );
                     }
                     Ok((stream, _)) => {
-                        *accept_retry_at = None;
-                        stream.set_nonblocking(true).map_err(|error| {
-                            DaemonRunError::from_io("control_nonblocking", error)
-                        })?;
-                        let connection = UdsControlConnection::new(stream).map_err(|error| {
-                            DaemonRunError::from_io("control_peer_credentials", error)
-                        })?;
+                        timing.record_accept_success();
+                        if let Err(error) = stream.set_nonblocking(true) {
+                            tracing::warn!(%error, "closing control connection after nonblocking setup failed");
+                            continue;
+                        }
+                        let connection = match UdsControlConnection::new(stream) {
+                            Ok(connection) => connection,
+                            Err(error) => {
+                                tracing::warn!(%error, "closing control connection after peer credential lookup failed");
+                                continue;
+                            }
+                        };
                         ready_control_fds.push(connection.raw_fd());
                         control_connections.push(connection);
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        *accept_retry_at = None;
                         break;
                     }
-                    Err(error)
-                        if matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE)) =>
-                    {
-                        if accept_retry_at.is_none() {
-                            tracing::warn!(error = %error, "pausing control accept while fd limit is reached");
-                        }
-                        *accept_retry_at = Some(Instant::now() + accept_retry_delay);
+                    Err(error) => {
+                        timing.record_accept_error(error)?;
                         break;
                     }
-                    Err(error) => return Err(DaemonRunError::from_io("accept", error)),
                 }
             }
         }
         self.progress_control_connections(control_connections, &ready_control_fds);
-        if readiness.event_source_ready || readiness.background_ready {
+        if readiness.event_source_ready || timing.background_due() {
             let started = crate::services::workload_diagnostics::now();
             let result = self.drain_live_events();
+            timing.record_background_progress();
             self.workload_diagnostics()
                 .record_drain_result(started.elapsed(), result.is_ok());
             match &result {
@@ -330,7 +301,6 @@ struct ReadySet {
     listener_ready: bool,
     control_ready_fds: Vec<RawFd>,
     event_source_ready: bool,
-    background_ready: bool,
 }
 
 fn wait_for_ready(
@@ -367,7 +337,6 @@ fn wait_for_ready(
                 listener_ready: false,
                 control_ready_fds: Vec::new(),
                 event_source_ready: false,
-                background_ready: false,
             });
         }
         return Err(DaemonRunError::from_io("ppoll", error));
@@ -377,7 +346,6 @@ fn wait_for_ready(
             listener_ready: false,
             control_ready_fds: Vec::new(),
             event_source_ready: false,
-            background_ready: timeout.is_some(),
         });
     }
 
@@ -407,7 +375,6 @@ fn wait_for_ready(
         listener_ready: is_readable(listener_revents),
         control_ready_fds,
         event_source_ready,
-        background_ready: false,
     })
 }
 

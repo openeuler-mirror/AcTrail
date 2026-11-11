@@ -101,11 +101,17 @@ impl ProbeDetector for BoringSslProbeDetector {
                     .rejected("BoringSSL detector excluded by request"),
             ));
         }
+        let mut evidence =
+            DetectionEvidence::new(self.path.clone(), context.target.architecture.clone());
         if context.request.requested_source != Some(ProbeSource::SharedLibrary) {
             let outcome = self.arch_outcome(context)?;
-            if matches!(outcome, DetectionOutcome::Matched(_)) {
+            if matches!(
+                outcome,
+                DetectionOutcome::Matched(_) | DetectionOutcome::Ambiguous(_)
+            ) {
                 return Ok(outcome);
             }
+            evidence.children.push(outcome);
         }
         if context.request.requested_source != Some(ProbeSource::Executable) {
             for candidate in self.library_candidates(context) {
@@ -122,15 +128,18 @@ impl ProbeDetector for BoringSslProbeDetector {
                 let library_context = context.for_library(&image, &library);
                 self.register_executable_patterns(&library_context);
                 let outcome = self.arch_outcome(&library_context)?;
-                if matches!(outcome, DetectionOutcome::Matched(_)) {
+                if matches!(
+                    outcome,
+                    DetectionOutcome::Matched(_) | DetectionOutcome::Ambiguous(_)
+                ) {
                     return Ok(outcome);
                 }
+                evidence.children.push(outcome);
             }
         }
-        Ok(DetectionOutcome::NoMatch(
-            DetectionEvidence::new(self.path.clone(), context.target.architecture.clone())
-                .rejected("BoringSSL symbols and static patterns were not found"),
-        ))
+        Ok(DetectionOutcome::NoMatch(evidence.rejected(
+            "BoringSSL symbols and static patterns were not found",
+        )))
     }
 }
 

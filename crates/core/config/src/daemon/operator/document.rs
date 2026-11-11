@@ -612,7 +612,7 @@ impl OperatorDocument {
                 "control.pending_connection_max",
                 self.control.pending_connection_max,
             )?,
-            control_accept_retry_delay_ms: require_positive_u64(
+            control_accept_retry_delay_ms: require_positive_u32(
                 "control.accept_retry_delay_ms",
                 self.control.accept_retry_delay_ms,
             )?,

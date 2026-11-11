@@ -39,7 +39,10 @@ test -x "$XIAOO_BINARY"
 ```bash
 sudo ./target/release/actraild start
 sudo ./target/release/actrailctl doctor
+sudo ./target/release/actrailctl tls-plan query -- "$XIAOO_BINARY"
 ```
+
+`tls-plan query` 使用当前 daemon 的解析器和缓存，查询实际采集后端可用的计划。当前 x86_64 xiaoO 的结果应包含 `provider=rustls` 和 `point_count=2`；具体符号及地址由 finder 输出。`unsupported=no supported TLS payload probe points found` 表示该 daemon 无法识别目标 ELF。新增签名后，需要重新构建 finder 和 daemon，并在采集会话结束后重启 daemon，更新进程内解析器和缓存。重启后的已有进程需要重新建立采集绑定。
 
 ## 3. 运行 xiaoO
 
@@ -59,11 +62,11 @@ sudo ./target/release/actrailctl doctor
 
 ```bash
 sudo ./target/release/actrailctl list-traces
-sudo ./target/release/actrailviewer payloads --trace-id <TRACE_ID> --head 20
 sudo ./target/release/actrailviewer actions --trace-id <TRACE_ID>
 sudo ./target/release/actrailviewer diagnostics --trace-id <TRACE_ID>
 ```
 
-- **原始证据**：成功的原始证据应来自 `TlsUserSpace`、library `rustls` 和相应 hook symbol。
-- **语义结果**：完整 HTTP 请求可进一步投影为 `llm.request`。
+- **采集来源**：请求属性应包含 `payload.library=rustls` 和 `payload.symbol=rustls_buffer_plaintext`，响应来自 `rustls_take_received_plaintext`。
+- **语义结果**：`llm.call` 应关联同一 trace、同一进程的 `llm.request` 与 `llm.response`；成功响应应完整，内容与 xiaoO 的实际输出一致。
+- **载荷保留**：默认配置关闭 L4 载荷持久化，`payloads` 为空不能单独证明漏采。启用载荷保留后，可使用 `actrailviewer payloads --trace-id <TRACE_ID> --head 20` 查看 `TlsUserSpace` 原始载荷。
 - **故障排查**：缺失时按 [采集结果缺失](../troubleshooting/capture.md) 排查。

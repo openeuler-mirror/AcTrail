@@ -34,8 +34,14 @@ impl OperatorConfigInitializer {
         if let Some(mode) = mode {
             document.apply_mode(mode)?;
         }
-        document.patch_files(patch_paths)?;
-        document.write(path, force)?;
+        document.patch_files(patch_paths).map_err(|error| format!(
+            "initialize configuration {} with --patch {patch_paths:?} failed: {error}; check each --patch path and read permissions, then correct the patch files",
+            path.display()
+        ))?;
+        document.write(path, force).map_err(|error| format!(
+            "write configuration {} failed: {error}; check the configuration values and patch contents, destination path and write permissions",
+            path.display()
+        ))?;
         Ok(if existed {
             OperatorConfigInitStatus::Overwritten
         } else {

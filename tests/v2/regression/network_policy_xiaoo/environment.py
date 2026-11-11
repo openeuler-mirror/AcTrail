@@ -255,7 +255,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
                 payload = event["payload"]
                 if (
                     event.get("collector") == "network-control"
-                    and payload.get("endpoint") == self.provider_endpoint
+                    and payload.get("remote") == self.provider_endpoint
                 ):
                     governed.append(payload)
             if governed:
@@ -348,7 +348,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         try:
             denials = [event for event in self._network_events(denied_trace_id)
                        if event.get("collector") == "network-control"
-                       and event["payload"].get("endpoint") == self.provider_endpoint
+                       and event["payload"].get("remote") == self.provider_endpoint
                        and event["payload"].get("result") == -errno.EPERM]
             with closing(sqlite3.connect(f"file:{self.runtime.database_path}?mode=ro", uri=True)) as connection:
                 rows = connection.execute(

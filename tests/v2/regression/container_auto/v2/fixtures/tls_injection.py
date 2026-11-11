@@ -51,7 +51,10 @@ class ForeignTracePayload:
         # A valid registration frame with a forged credential must reach Trace authorization,
         # rather than being rejected just because the registration is missing.
         token = b"0" * (CASE_CONSTANTS.tls_event_token_bytes * 2)
-        registration = self._frame(CASE_CONSTANTS.tls_register_frame_kind, self._field(token))
+        registration = self._frame(
+            CASE_CONSTANTS.tls_register_frame_kind,
+            self._field(token) + b"\x00",  # holds_responses=False.
+        )
         return registration + self._frame(CASE_CONSTANTS.tls_payload_frame_kind, body)
 
     def send(self, socket_path: str) -> None:

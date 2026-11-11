@@ -7,8 +7,8 @@
 | `host.http.response_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 响应正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
 | `control.socket_path` | `string` | `"/run/actrail/control.sock"` | 否 | control | Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L11) |
 | `control.socket_mode_octal` | `string` | `"660"` | 否 | control | Unix socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L12) |
-| `control.pending_connection_max` | `uint32` | `256` | 否 | control | 待处理控制连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |
-| `control.accept_retry_delay_ms` | `uint64` | `100` | 否 | control | control socket 耗尽文件描述符后重新接入的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L14) |
+| `control.pending_connection_max` | `uint32` | `256` | 否 | control | 同时跟踪的 control 连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |
+| `control.accept_retry_delay_ms` | `uint32` | `10` | 否 | control | 接收连接失败后的重试间隔，毫秒，须大于零；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L14) |
 | `control.active_trace_max` | `uint32` | `128` | 否 | control | 同时活动的 trace 数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L15) |
 | `control.pid_file` | `string` | `"/run/actrail/actraild.pid"` | 否 | control | daemon PID 文件路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L16) |
 | `control.log_path` | `string` | `"/var/log/actrail/actraild.log"` | 否 | control | daemon 日志路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L17) |
@@ -161,7 +161,7 @@
 | `ebpf.tracked_process_max_entries` | `uint32` | `8192` | 否 | ebpf | eBPF 跟踪进程表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L580) |
 | `ebpf.pending_operation_max_entries` | `uint32` | `8192` | 否 | ebpf | 待完成操作表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L581) |
 | `ebpf.fd_per_process_max_entries` | `uint32` | `64` | 否 | ebpf | 每进程跟踪的文件描述符数量上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L582) |
-| `ebpf.suppressed_fd_max_entries` | `uint32` | `65536` | 否 | ebpf | 被抑制的文件描述符表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L601) |
+| `ebpf.suppressed_fd_max_entries` | `uint32` | `65536` | 否 | ebpf | 被抑制的文件描述符表容量；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L583) |
 | `ebpf.suppressed_fd_index_slots_per_process` | `uint32` | `64` | 否 | ebpf | 每进程用于索引被抑制文件描述符的槽数；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L584) |
 | `ebpf.event_ring_buffer_max_bytes` | `uint32` | `33554432` | 否 | ebpf | eBPF 事件 ring buffer 字节上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L585) |
 | `ebpf.diagnostics_summary_interval_ms` | `uint32` | `10000` | 否 | ebpf | 诊断摘要输出间隔，毫秒；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L586) |
@@ -305,9 +305,9 @@
 | `semantic_retention.l2_http.http2.max_active_streams_per_trace` | `uint32` | `4096` | 否 | semantic_retention | 每个 trace 中活动 HTTP/2 流的数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L36) |
 | `semantic_retention.l2_http.http2.max_evidence_ranges` | `uint32` | `4096` | 否 | semantic_retention | 协议消息保存的证据范围数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L37) |
 | `semantic_retention.l2_http.http2.max_connection_buffer_bytes` | `uint64` | `4194304` | 否 | semantic_retention | HTTP/2 framing 缓冲区上限，完整帧包含 9 字节头；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L38) |
-| `semantic_retention.l2_http.http2.max_header_block_bytes` | `uint32` | `65536` | 否 | semantic_retention | HPACK 编码头块拼接字节上限 |
-| `semantic_retention.l2_http.http2.max_header_list_bytes` | `uint32` | `65536` | 否 | semantic_retention | 解码头列表上限，按 name + value + 32 累计 |
-| `semantic_retention.l2_http.http2.max_hpack_table_bytes` | `uint32` | `65536` | 否 | semantic_retention | 每个连接方向的 HPACK 动态表硬上限 |
+| `semantic_retention.l2_http.http2.max_header_block_bytes` | `uint32` | `65536` | 否 | semantic_retention | HPACK 编码头块拼接字节上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L39) |
+| `semantic_retention.l2_http.http2.max_header_list_bytes` | `uint32` | `65536` | 否 | semantic_retention | 解码头列表上限，按 name + value + 32 累计；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L40) |
+| `semantic_retention.l2_http.http2.max_hpack_table_bytes` | `uint32` | `65536` | 否 | semantic_retention | 每个连接方向的 HPACK 动态表硬上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/http.rs#L41) |
 | `semantic_retention.l2_websocket.enabled` | `bool` | `true` | 否 | semantic_retention | 保留 WebSocket 层观测；[声明](../../crates/core/config/src/daemon/operator/document/semantic/websocket.rs#L6) |
 | `semantic_retention.l2_websocket.message_summary` | `bool` | `true` | 否 | semantic_retention | 保留协议消息摘要；[声明](../../crates/core/config/src/daemon/operator/document/semantic/websocket.rs#L7) |
 | `semantic_retention.l2_websocket.max_active_connections` | `uint32` | `4096` | 否 | semantic_retention | 活动 WebSocket 连接数量上限；[声明](../../crates/core/config/src/daemon/operator/document/semantic/websocket.rs#L8) |
@@ -371,11 +371,11 @@
 | `checkpoint.enabled` | `bool` | `false` | 否 | checkpoint | 启用 checkpoint；要求 `semantic_retention.projection_enabled` 与 `semantic_retention.l0_llm_call.enabled`；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L14) |
 | `checkpoint.catalog_path` | `string` | `"/var/lib/actrail/checkpoint.db"` | 否 | checkpoint | checkpoint 记录库的 SQLite 文件，绝对路径；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L15) |
 | `checkpoint.backends` | `array` | `[]` | 否 | checkpoint | 组成 Trace 的 backend，按调用顺序排列；每项有 `name`、动态库 `library` 和配置文件 `config`，后两者为绝对路径；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L16) |
-| `checkpoint.runtime.busy_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | daemon 和 Web 的 checkpoint 只读连接等待 SQLite 写锁的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L110) |
-| `checkpoint.runtime.stop_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | 恢复前等待一批进程线程组暂停的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L111) |
-| `checkpoint.runtime.stop_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 检查线程组暂停状态的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L112) |
-| `checkpoint.runtime.shutdown_drain_timeout_ms` | `uint64` | `10000` | 否 | checkpoint | daemon 停止时等待 checkpoint 工作完成的总预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L113) |
-| `checkpoint.runtime.idle_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 停机等待期间检查 checkpoint 工作是否完成的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L114) |
+| `checkpoint.runtime.busy_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | daemon 和 Web 的 checkpoint 只读连接等待 SQLite 写锁的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L111) |
+| `checkpoint.runtime.stop_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | 恢复前等待一批进程线程组暂停的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L112) |
+| `checkpoint.runtime.stop_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 检查线程组暂停状态的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L113) |
+| `checkpoint.runtime.shutdown_drain_timeout_ms` | `uint64` | `10000` | 否 | checkpoint | daemon 停止时等待 checkpoint 工作完成的总预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L114) |
+| `checkpoint.runtime.idle_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 停机等待期间检查 checkpoint 工作是否完成的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L115) |
 | `access_control.file.open.enabled` | `bool` | `true` | 否 | access_control | 文件打开控制开关。LSM 同时检查读写、映射、删除、属性、重命名和硬链接权限。[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
 | `access_control.file.open.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；fanotify / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
 | `access_control.file.mkdir.enabled` | `bool` | `false` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L61) |
@@ -386,18 +386,18 @@
 | `access_control.command.exec.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；seccomp / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L103) |
 | `access_control.network.connect.enabled` | `bool` | `true` | 否 | access_control | 网络控制开关。LSM 控制 connect、send、bind 和 listen。seccomp 控制 connect。[声明](../../crates/core/config/src/daemon/access_control/config.rs#L109) |
 | `access_control.network.connect.backend` | `string` | `"lsm"` | 否 | access_control | 网络控制后端，可选 seccomp 或 lsm。[声明](../../crates/core/config/src/daemon/access_control/config.rs#L109) |
-| `access_control.backends.lsm.policy_max_entries` | `uint32` | `4096` | 否 | access_control | 每份 LSM 完整策略的条目数上限，包含默认项；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L140) |
-| `access_control.backends.lsm.path_max_bytes` | `uint32` | `252` | 否 | access_control | 路径缓冲区字节上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L142) |
-| `access_control.backends.lsm.audit_buffer_bytes` | `uint32` | `1048576` | 否 | access_control | LSM 审计 ring buffer 字节数；须为不小于 65536 的二次幂；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L144) |
-| `access_control.backends.lsm.audit_batch_max` | `uint32` | `1024` | 否 | access_control | 每轮处理的 LSM 审计事件数量上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L146) |
-| `access_control.backends.lsm.audit_default_allow` | `bool` | `false` | 否 | access_control | 审计默认策略允许的操作；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L148) |
-| `access_control.backends.lsm.alert_window_ms` | `uint32` | `60000` | 否 | access_control | 边界告警聚合窗口，毫秒；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L150) |
-| `access_control.backends.lsm.alert_max_groups` | `uint32` | `256` | 否 | access_control | 每个窗口接纳的边界告警组数量上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L152) |
-| `access_control.backends.lsm.deny_on_error` | `bool` | `true` | 否 | access_control | 无法解析资源时拒绝访问；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L154) |
-| `access_control.backends.lsm.deny_signal` | `string` | `"none"` | 否 | access_control | 拒绝访问后发送的信号：none、stop 或 kill；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L156) |
-| `access_control.backends.lsm.grey.mode` | `string` | `"auto"` | 否 | access_control | `auto` 在 LSM 后端启用时尝试加载模块，不可用则使用普通 LSM 和规则 fallback。`required` 要求动态 grey 可用。`disabled` 跳过加载。其他后端不加载模块 |
-| `access_control.backends.lsm.grey.device_path` | `string` | `"/dev/actrail_lsm_grey"` | 否 | access_control | 内核裁决设备路径；启用时不能为空，启动时必须成功独占打开 |
-| `access_control.backends.lsm.grey.workers` | `uint32` | `4` | 否 | access_control | 并行读取请求并执行插件的线程数；启用时必须大于 0。等待请求和超时状态由内核模块管理，插件预算取内核截止时间的剩余时长 |
+| `access_control.backends.lsm.policy_max_entries` | `uint32` | `4096` | 否 | access_control | 每份 LSM 完整策略的条目数上限，包含默认项；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L142) |
+| `access_control.backends.lsm.path_max_bytes` | `uint32` | `252` | 否 | access_control | 路径缓冲区字节上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L144) |
+| `access_control.backends.lsm.audit_buffer_bytes` | `uint32` | `1048576` | 否 | access_control | LSM 审计 ring buffer 字节数；须为不小于 65536 的二次幂；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L146) |
+| `access_control.backends.lsm.audit_batch_max` | `uint32` | `1024` | 否 | access_control | 每轮处理的 LSM 审计事件数量上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L148) |
+| `access_control.backends.lsm.audit_default_allow` | `bool` | `false` | 否 | access_control | 审计默认策略允许的操作；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L150) |
+| `access_control.backends.lsm.alert_window_ms` | `uint32` | `60000` | 否 | access_control | 边界告警聚合窗口，毫秒；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L152) |
+| `access_control.backends.lsm.alert_max_groups` | `uint32` | `256` | 否 | access_control | 每个窗口接纳的边界告警组数量上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L154) |
+| `access_control.backends.lsm.deny_on_error` | `bool` | `true` | 否 | access_control | 无法解析资源时拒绝访问；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L156) |
+| `access_control.backends.lsm.deny_signal` | `string` | `"none"` | 否 | access_control | 拒绝访问后发送的信号：none、stop 或 kill；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L158) |
+| `access_control.backends.lsm.grey.mode` | `string` | `"auto"` | 否 | access_control | `auto` 在 LSM 后端启用时尝试加载模块，不可用则使用普通 LSM 和规则 fallback。`required` 要求动态 grey 可用。`disabled` 跳过加载。其他后端不加载模块；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L181) |
+| `access_control.backends.lsm.grey.device_path` | `string` | `"/dev/actrail_lsm_grey"` | 否 | access_control | 内核裁决设备路径；启用时不能为空，启动时必须成功独占打开；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L182) |
+| `access_control.backends.lsm.grey.workers` | `uint32` | `4` | 否 | access_control | 并行读取请求并执行插件的线程数；启用时必须大于 0。等待请求和超时状态由内核模块管理，插件预算取内核截止时间的剩余时长；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L183) |
 | `enforcement.enabled` | `bool` | `true` | 否 | enforcement | 启用文件访问治理；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L141) |
 | `enforcement.scope` | `string` | `"trace"` | 否 | enforcement | 文件治理作用域；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L142) |
 | `enforcement.rules_path` | `string` | `"/etc/actrail/enforcement-rules.conf"` | 否 | enforcement | 规则文件路径；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L143) |
