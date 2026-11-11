@@ -72,6 +72,12 @@ impl StorageBackend for NoOpStorage {
             ..Default::default()
         })
     }
+    fn recent_action_ids(
+        &self,
+        _query: &storage_core::RecentActionsQuery,
+    ) -> Result<Vec<String>, StorageError> {
+        Ok(Vec::new())
+    }
     fn timeline_page(
         &self,
         _query: &storage_core::TimelineQuery,

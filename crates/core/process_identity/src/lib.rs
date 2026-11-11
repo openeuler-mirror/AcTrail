@@ -8,4 +8,6 @@ pub use contract::{
     ProcessIdentity, ProcessIdentityReader, ProcessObservation, ProcessRecord,
     ProcessResolutionState,
 };
-pub use manager::{ProcessIdentityError, ProcessIdentityManager, ProcessResolution};
+pub use manager::{
+    HostProcessLookup, ProcessIdentityError, ProcessIdentityManager, ProcessResolution,
+};

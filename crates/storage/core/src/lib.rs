@@ -6,7 +6,9 @@ pub use action_content::{ActionContentSource, HttpContentPage, HttpContentQuery}
 mod error;
 mod idle;
 mod payload_retention;
+mod recent_actions;
 mod timeline;
+pub use recent_actions::RecentActionsQuery;
 mod trace_page;
 mod transaction;
 pub use idle::{IdleInterval, IdlePage, IdleQuery};

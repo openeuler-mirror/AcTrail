@@ -240,6 +240,11 @@ pub trait StorageBackend: crate::CgroupV1BindingStore + crate::CgroupV2BindingSt
         offset: usize,
         limit: usize,
     ) -> Result<SemanticActionPage, StorageError>;
+    /// Select IDs only, newest first, with bounded index scans per requested kind.
+    fn recent_action_ids(
+        &self,
+        query: &crate::RecentActionsQuery,
+    ) -> Result<Vec<String>, StorageError>;
     fn timeline_page(
         &self,
         query: &crate::TimelineQuery,

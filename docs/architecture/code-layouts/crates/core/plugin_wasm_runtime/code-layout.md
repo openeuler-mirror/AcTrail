@@ -17,10 +17,13 @@
     ├── [x] control.rs # 创建控制实例、限制并发并设置单次调用时限。
     │   ├── [x] struct WasmControlDecider # 对外实现 control-decider，封装不同 WASM ABI。
     │   └── [x] struct EpochDeadline # 关联调用 deadline 与 epoch 中断，限制超时执行。
+    ├── [x] grey_proxy.rs # WASM grey 运行时所属 proxy 子进程的生命周期。
+    │   └── [x] struct GreyProxyProcess # 随所属运行时启动、持有并回收子进程，保证异常退出时子进程随之退出；传入配置并向插件提供连接信息。
     ├── [x] codec.rs # 用 WASM codec 扩展 provider 请求和流式事件解析。
     │   └── [x] struct WasmLlmCodecPlugin # 拥有 codec 实例与调用状态，返回标准化解析结果。
     ├── [x] component_control.rs # component ABI 的决策调用、宿主连接和运行状态。
     │   └── [x] struct WitComponentControlDecider # 承载 WIT 控制接口并适配当前操作上下文。
+    │       └── [x] grey 请求透传 # 将 daemon 提供的逻辑进程 ID 传入插件，复用现有调用预算。
     ├── [x] component_control/ # component 的命令、网络及配置 hostcall 编解码。
     │   ├── [x] runtime_config.rs # 查找并调用 component 的运行配置接口。
     │   └── [x] network/ # 网络控制上下文和规则宿主适配。

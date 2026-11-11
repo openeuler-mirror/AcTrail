@@ -6,6 +6,9 @@
 ├── [x] README.zh-CN.md # 项目介绍（中文）
 ├── [x] docs/ # 产品与开发文档
 │   ├── [x] README.md # 文档导航
+│   ├── [x] comparison/ # 技术方案对比与项目价值
+│   │   ├── [x] agent-governance.md # Agent治理能力对比表
+│   │   └── [x] agent-observation.md # Agent观测能力对比表
 │   ├── [x] architecture/ # 架构文档
 │   │   ├── [x] README.md # 架构阅读入口
 │   │   ├── [/] c4-graphs.md # 架构图索引
@@ -52,8 +55,9 @@
 │   │       │   ├── [x] controls-and-layout.md # 控件与布局设计
 │   │       │   ├── [x] controls/ # 控件交互设计
 │   │       │   │   └── [x] navigation-workspace.md # 导航与工作区设计
-│   │       │   └── [x] runtime-and-delivery.md # 前端运行与交付设计
-│   │       └── [x] web-runtime.md # Web 服务设计
+│   │       │   ├── [x] runtime-and-delivery.md # 前端运行与交付设计
+│   │       │   └── [x] timeline.md # 时间线加载、窗口缓存、总览索引与调用编号
+│   │       └── [x] web-runtime.md # Web 服务组件职责、请求路径与详细参考索引
 │   ├── [x] concepts/ # 产品概念
 │   │   ├── [x] capabilities.md # 产品能力概览
 │   │   ├── [x] collection-observation-checklist.md # 采集与观测清单
@@ -117,7 +121,9 @@
 │   │   │   ├── [x] observation-consumer.md # 观测消费接口参考
 │   │   │   └── [x] wasm-core-module.md # WASM 模块接口参考
 │   │   └── [x] protocols/ # 通信协议参考
-│   │       └── [x] alert-proxy.md # 告警代理协议参考
+│   │       ├── [x] alert-proxy.md # 告警代理协议参考
+│   │       ├── [x] grey-decision-service.md # 外部安全裁决服务的 HTTP 请求、响应和历史字段约定
+│   │       └── [x] web-api.md # Web 查询、配置编辑与插件 catalog 接口约定
 │   └── [x] specifications/ # 实现行为要求
 │       ├── [x] README.md # 规范导航
 │       ├── [/] checkpoint/ # 文件恢复要求

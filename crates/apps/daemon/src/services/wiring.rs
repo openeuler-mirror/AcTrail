@@ -216,6 +216,7 @@ fn build_runtime_wiring_with_attach_service(
         Some(provider_classifier) => StorageAttachService::new_with_provider_classifier(
             profiles.clone(),
             storage,
+            storage_config.clone(),
             ebpf_config.clone(),
             payload_config.clone(),
             active_trace_max,
@@ -246,6 +247,7 @@ fn build_runtime_wiring_with_attach_service(
         None => StorageAttachService::new(
             profiles.clone(),
             storage,
+            storage_config.clone(),
             ebpf_config.clone(),
             payload_config.clone(),
             active_trace_max,

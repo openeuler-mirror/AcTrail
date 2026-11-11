@@ -129,6 +129,7 @@ impl GrayDecisionWorker {
             let response = self.plugins.decide(
                 target,
                 ControlDecisionRequest {
+                    logical_process_id: Some(context.process().get()),
                     decision_id: format!("{}:{}", rule.rule_id, deferred.notification_id()),
                     trace_id: context.trace_id().to_string(),
                     subject: ControlSubject::CommandExecution,

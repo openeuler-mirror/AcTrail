@@ -98,6 +98,12 @@ impl StorageBackend for SqliteStorage {
     ) -> Result<storage_core::TracePage, StorageError> {
         self.read_trace_page(query)
     }
+    fn recent_action_ids(
+        &self,
+        query: &storage_core::RecentActionsQuery,
+    ) -> Result<Vec<String>, StorageError> {
+        self.read_recent_action_ids(query)
+    }
     fn timeline_page(
         &self,
         query: &storage_core::TimelineQuery,

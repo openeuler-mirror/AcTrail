@@ -5,6 +5,7 @@ mod component_control;
 mod component_observation;
 mod control;
 mod engine;
+mod grey_proxy;
 mod host;
 mod memory;
 mod observation;

@@ -4,13 +4,16 @@ use plugin_system::{ControlDecisionBudget, ControlDecisionRequest, ControlVerdic
 
 use crate::services::control_runtime::WeakControlPluginRuntime;
 
-pub(in crate::services) struct LsmPluginDecider(pub(in crate::services) WeakControlPluginRuntime);
+pub(in crate::services) struct LsmPluginDecider(
+    pub(in crate::services) WeakControlPluginRuntime,
+    pub(in crate::services) process_identity::HostProcessLookup,
+);
 
 impl LsmGreyHandler for LsmPluginDecider {
     fn decide(
         &self,
         target: &str,
-        request: ControlDecisionRequest,
+        mut request: ControlDecisionRequest,
         budget: ControlDecisionBudget,
     ) -> Result<ControlVerdict, String> {
         let Some(plugins) = self.0.upgrade() else {
@@ -19,6 +22,12 @@ impl LsmGreyHandler for LsmPluginDecider {
         let Some((index, _)) = plugins.active_instance_registration(target) else {
             return Ok(ControlVerdict::Deny);
         };
+        // Resolve only the exact kernel process generation already known by the daemon.
+        let actor = &request.actor_process_identity;
+        request.logical_process_id = self
+            .1
+            .lookup(actor.pid, actor.generation)
+            .map(|id| id.get());
         let result = plugins.decide_by_index(index, request, budget);
         // An unloaded instance cannot authorize an in-flight request.
         if !plugins.is_instance_index_active(index) {

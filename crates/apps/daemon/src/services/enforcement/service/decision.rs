@@ -525,6 +525,7 @@ pub(super) fn control_decision_request(
 ) -> Result<ControlDecisionRequest, String> {
     let file_policy_context = current_file_access_match_context(rule);
     Ok(ControlDecisionRequest {
+        logical_process_id: Some(process.get()),
         decision_id: format!("{}:{trace_id}", rule.rule_id),
         trace_id: trace_id.to_string(),
         subject: ControlSubject::FileAccess,

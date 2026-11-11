@@ -2,6 +2,9 @@
 
 ```text
 [x] crates/core/plugin_system/ # 定义插件声明、能力授权和调用端口，管理 Sandbox 消费者的注册及路由快照。
+├── [x] wit/ # WASM component 接口定义。
+│   └── [x] actrail-plugin.wit # 插件与宿主的 WIT 数据契约。
+│       └── [x] grey 请求传输字段 # 携带 daemon 提供的可选逻辑进程 ID。
 └── [x] src/ # 运行契约、manifest 校验和隔离观测交付。
     ├── [x] lib.rs # 汇总宿主、消费者、控制、codec 及声明的公开类型。
     ├── [x] manifest/ # 解析插件用途、运行形式、订阅和资源声明。
@@ -20,6 +23,7 @@
     ├── [x] control.rs # 待裁决上下文、决策预算和文件策略宿主端口。
     │   ├── [x] trait ControlDecider # 根据操作上下文在预算内返回治理决定。
     │   ├── [x] struct ControlDecisionRequest # 携带当前决策身份、操作主体和上下文引用。
+    │   │   └── [x] grey 上下文关联字段 # 携带 daemon 提供的可选逻辑进程 ID，供 proxy 按 trace 与存储身份查询。
     │   └── [x] trait FilePolicyHost # 在授权作用域内读取或修改文件策略。
     ├── [x] command_policy/ # 命令执行上下文和命令规则管理契约。
     ├── [x] network_policy.rs # 连接上下文、远端选择器和网络规则管理契约。
