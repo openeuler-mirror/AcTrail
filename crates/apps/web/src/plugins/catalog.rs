@@ -77,7 +77,11 @@ struct CommandPolicyApplyGrantOption {
 #[serde(deny_unknown_fields)]
 struct NetworkPolicyApplyGrantOption {
     decision: String,
-    remote_scope: String,
+    endpoint_scope: String,
+    #[serde(default)]
+    operation: plugin_system::NetworkPolicyOperation,
+    #[serde(default)]
+    protocol: plugin_system::NetworkPolicyProtocol,
 }
 
 impl InstalledPluginCatalog {
@@ -427,7 +431,9 @@ impl PluginGrantOptions {
             values.push(
                 PluginHostGrant::NetworkPolicyRulesApply {
                     decision,
-                    remote: option.remote_scope,
+                    endpoint: option.endpoint_scope,
+                    operation: option.operation,
+                    protocol: option.protocol,
                 }
                 .to_wire(),
             );

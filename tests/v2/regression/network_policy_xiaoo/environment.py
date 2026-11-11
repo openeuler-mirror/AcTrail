@@ -90,7 +90,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
                 "network_policy_rules_apply": [
                     {
                         "decision": "deny",
-                        "remote_scope": self.provider_endpoint,
+                        "endpoint_scope": self.provider_endpoint,
                     }
                 ]
             },
@@ -114,7 +114,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
             "decision": "allow",
             "rule_id": "none",
             "owner": "none",
-            "remote": self.provider_endpoint,
+            "endpoint": self.provider_endpoint,
             "rule_revision": "none",
         }
         if any(fields.get(key) != value for key, value in expected.items()):
@@ -136,7 +136,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
                 {
                     "rule_id": RULE_ID,
                     "decision": "deny",
-                    "remote": self.provider_endpoint,
+                    "endpoint": self.provider_endpoint,
                 }
             ]
         }
@@ -149,7 +149,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
             "decision": "deny",
             "rule_id": RULE_ID,
             "owner": INSTANCE,
-            "remote": self.provider_endpoint,
+            "endpoint": self.provider_endpoint,
         }
         if any(fields.get(key) != value for key, value in expected.items()):
             raise AssertionError(f"published provider route is incomplete: {output}")
@@ -255,7 +255,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
                 payload = event["payload"]
                 if (
                     event.get("collector") == "network-control"
-                    and payload.get("remote") == self.provider_endpoint
+                    and payload.get("endpoint") == self.provider_endpoint
                 ):
                     governed.append(payload)
             if governed:
@@ -266,7 +266,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
                     "decision_source": "rule",
                     "rule_id": RULE_ID,
                     "policy_owner_instance_id": INSTANCE,
-                    "policy_remote_scope": self.provider_endpoint,
+                    "policy_endpoint_scope": self.provider_endpoint,
                     "rule_revision": str(rule_revision),
                 }
                 for payload in governed:
@@ -317,7 +317,8 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
                     payload = alert.get("payload", {})
                     expected_payload = {
                         "operation": "connect",
-                        "remote_endpoint": self.provider_endpoint,
+                        "endpoint": self.provider_endpoint,
+                        "endpoint_side": "remote",
                         "rule_id": RULE_ID,
                         "policy_owner_instance_id": INSTANCE,
                         "decision_source": "fast-path-deny",
@@ -347,7 +348,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         try:
             denials = [event for event in self._network_events(denied_trace_id)
                        if event.get("collector") == "network-control"
-                       and event["payload"].get("remote") == self.provider_endpoint
+                       and event["payload"].get("endpoint") == self.provider_endpoint
                        and event["payload"].get("result") == -errno.EPERM]
             with closing(sqlite3.connect(f"file:{self.runtime.database_path}?mode=ro", uri=True)) as connection:
                 rows = connection.execute(
@@ -436,7 +437,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         grants = self.loaded_plugin.get("host_grants")
         expected = (
             "network-policy.rules.apply:kind=deny,"
-            f"remote={self.provider_endpoint}"
+            f"operation=connect,protocol=any,endpoint={self.provider_endpoint}"
         )
         if not isinstance(grants, list) or expected not in grants:
             raise AssertionError(f"loaded plugin missed {expected}: {grants}")

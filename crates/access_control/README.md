@@ -59,9 +59,38 @@ launch provides the registration barrier before workload execution.
 
 | Domain | Hooks | Policy semantics |
 | --- | --- | --- |
-| File | `file_open`, `path_mkdir`, `path_rmdir` | Exact paths and recursive `/**` scopes; allow/deny |
+| File | `file_open`, `file_permission`, `mmap_file`, `file_mprotect`, `path_mkdir`, `path_rmdir`, `path_unlink`, `path_chmod`, `path_chown`, `path_truncate`, `file_truncate`, `path_rename`, `path_link` | Exact paths and recursive `/**` scopes, with operation-specific allow/deny |
 | Command | `bprm_check_security` | Exact executable paths; allow/deny; no argument predicates |
-| Network | `socket_connect` | Numeric IPv4/IPv6 endpoint or address with any port; allow/deny |
+| Network | `socket_connect`, `socket_sendmsg`, `socket_bind`, `socket_listen` | Operation, protocol and numeric IPv4/IPv6 endpoint |
+
+File operations include `open`, `read`, `write`, `delete`, `attr`, `rename`, `link`, `mkdir`, `rmdir` and `any`.
+`open` gates a new file open. Opening for reading or writing also checks the
+corresponding operation. Reads and writes through an existing descriptor check
+`read` and `write` independently. Truncation through a path, a retained descriptor
+or `O_TRUNC` requires `write`, enforced by `path_truncate` and `file_truncate`.
+File-backed mappings with access require `read`.
+Shared writable mappings also require `write`. Private copy-on-write mappings
+require `read` because they do not modify the file. `mprotect` checks permission
+increases and permits reductions. Policy changes govern subsequent checks and
+do not revoke memory access already granted to a mapping.
+
+Read/write, deletion, attributes, rename and hard-link enforcement use the LSM backend selected by `access_control.file.open`.
+Explicit read/write/delete/attr/rename/link rules are rejected when that backend is unavailable. `any`
+expands to the operations supported by the selected backend. The file domain's
+default decision applies separately to each operation. Builtin open allows only
+cover the open gate.
+
+`delete` checks unlink of a file directory entry. `attr` checks mode, owner and
+group changes through chmod/chown, including their descriptor variants. These
+operations use independent rules, so a writable file can remain protected from
+removal and attribute changes. Extended attributes are outside the attr hooks.
+
+`rename` checks both source and destination paths. Replacing an existing target
+also requires `delete` on that target. `RENAME_EXCHANGE` checks `rename` on both
+names because both objects remain present. Renaming between two names of the same
+inode requires rename permission and preserves both names. `link` checks both the existing source
+and the destination name. These checks govern path names, including directory-FD
+relative operations.
 
 File and executable rules keep the declared path for listing and authorization.
 Loading or upserting a rule resolves existing symlinks in the daemon's filesystem
@@ -98,17 +127,37 @@ according to `deny_on_error`. Rules apply to path names; existing descriptors,
 unlinked aliases and hard links require understanding those path semantics.
 Script execution follows the files presented by kernel exec hooks, including
 interpreters; command policy does not inspect shell commands or argv.
-Network coverage is connection establishment; connectionless sends and existing
-connections are outside this hook's coverage.
-Static and dynamic network rules accept the same selectors: IPv4 `IP:port` or
-`IP:*`, and IPv6 `[IP]:port` or `[IP]:*`. An any-port selector covers all ports
-on that address. Static allow/deny rules use `<rule-id> <allow|deny> connect <selector>`.
-One owner may publish both an any-port rule and exact endpoint exceptions;
-the exact endpoint takes precedence. Static rules share one owner. Duplicate
-selectors and overlapping selectors from different owners are rejected.
-LSM rejects IPv6 endpoints with a nonzero scope ID (for example
-`[fe80::1%2]:443`) before publication because its kernel key cannot represent
-interface scope. A rejected update preserves the published policy.
+Network rules select `operation=connect/send/bind/listen`, `protocol=any/tcp/udp`
+and one `endpoint`. Connect/send select the remote endpoint. Bind/listen select
+the local endpoint. Bind checks the requested port, including zero for automatic
+allocation. Listen checks the socket's current local port, including zero before
+an unbound socket receives an automatic port. TCP sends use the
+connected peer, except TCP Fast Open before connection establishment. UDP sends
+use the supplied destination or the connected peer.
+
+Selectors combine a numeric IP or CIDR with an inclusive port scope: `443`,
+`8000-8100`, or `*`. Examples are `192.0.2.0/24:443`, `192.0.2.1:8000-8100`
+and `[2001:db8::/48]:*`. CIDR host bits are normalized to the network address.
+The longest IP prefix wins, then the narrowest port range, then an explicit
+protocol over `any`. Equal specificity uses owner and rule ID order. Different
+operations match independently. The same owner can publish narrower exceptions.
+
+Overlapping rules from different owners are rejected when their protocols and
+operations intersect. Grants constrain decision, operation, protocol and the
+complete address/port scope. A TCP-only grant cannot authorize an any-protocol
+rule. A rule must fit entirely within one grant.
+
+Network indexes are rebuilt on publication. Userspace queries existing IP
+prefixes and disjoint port segments. LSM compiles a port interval into at most
+30 prefixes and queries only active prefix lengths, at most 17 per protocol.
+The snapshot capacity includes the expanded entries. A candidate exceeding
+`policy_max_entries` is rejected before activation.
+
+Static allow/deny rules use `<id> <allow|deny> <operation> <endpoint>` with an
+optional `protocol <any|tcp|udp>` suffix. Protocol defaults to any. Dynamic JSON
+rules default to connect/any. The seccomp backend accepts only connect/any and
+rejects other rules before publication. LSM rejects nonzero IPv6 scope IDs
+because its kernel key does not include an interface scope.
 
 Gray/plugin synchronous decisions and command argument predicates are rejected
 at compilation/publication. Kernel decisions use prepublished allow/deny rules.
@@ -176,8 +225,8 @@ LSM runtime parameters are validated when at least one enabled operation selects
 LSM. Inactive backend settings do not block other backends or observation-only
 profiles; configuration syntax and capability consistency are still validated.
 
-The policy capacity includes five domain defaults and compiled recursive entries.
-It must be at least five. The path limit includes the NUL terminator and is
+The policy capacity includes fourteen domain defaults and compiled recursive entries.
+The compiled snapshot must fit within the configured capacity. The path limit includes the NUL terminator and is
 configurable from 2 to 252 bytes (kernel LPM data limit minus domain selector).
 Long rules reject publication; unresolved/long runtime paths use `deny_on_error`.
 The audit ring size is a power of two, at least 65536 bytes; batch size is positive.

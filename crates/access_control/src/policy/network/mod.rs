@@ -1,3 +1,4 @@
+mod index;
 mod rule;
 mod store;
 mod validation;

@@ -46,11 +46,14 @@ impl FilePolicyHost for FilePolicyServiceHost {
         let result = backend
             .rules
             .validate_apply(owner_instance_id, grants, request);
+        let mut candidate = backend.rules.clone();
+        candidate
+            .apply(owner_instance_id, grants, request.clone())
+            .map_err(file_policy_error)?;
+        candidate
+            .validate_operations(&backend.operations)
+            .map_err(file_policy_error)?;
         if let Some(lsm) = &backend.lsm {
-            let mut candidate = backend.rules.clone();
-            candidate
-                .apply(owner_instance_id, grants, request.clone())
-                .map_err(file_policy_error)?;
             lsm.validate_file_rules(&candidate)
                 .map_err(file_policy_error)?;
         }

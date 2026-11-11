@@ -50,7 +50,7 @@ python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
 
 此用例注册为可选回归，要求 root、支持所需 BPF LSM hook/helper 的内核、已启用 BPF LSM、BTF、eBPF 和真实 Xiaoo。环境预先继承的 seccomp 必须为 0；不满足条件时报错。runner 构建并安装 release 工件，默认清理服务和测试工作目录。
 
-配置项：`LSM_ACCESS_CONTROL_XIAOO_E2E_BINARY` 指定 Xiaoo；`LSM_ACCESS_CONTROL_XIAOO_E2E_READY_TIMEOUT_SECONDS` 设置服务就绪、操作及审计超时（默认 15 秒）；`LSM_ACCESS_CONTROL_XIAOO_E2E_PEER_POLL_SECONDS` 设置 TCP 服务轮询间隔（默认 0.1 秒）；`LSM_ACCESS_CONTROL_XIAOO_E2E_POLICY_MAX_ENTRIES` 设置测试策略容量（默认 64，范围 32–128），同时决定超容量候选规模。命令与启动超时使用同前缀公共测试配置。工作目录不得含空白字符，以符合静态策略语法。
+配置项：`LSM_ACCESS_CONTROL_XIAOO_E2E_BINARY` 指定 Xiaoo；`LSM_ACCESS_CONTROL_XIAOO_E2E_READY_TIMEOUT_SECONDS` 设置服务就绪、操作及审计超时（默认 15 秒）；`LSM_ACCESS_CONTROL_XIAOO_E2E_PEER_POLL_SECONDS` 设置 TCP 服务轮询间隔（默认 0.1 秒）；`LSM_ACCESS_CONTROL_XIAOO_E2E_POLICY_MAX_ENTRIES` 设置测试策略容量（默认 128，范围 32–128），同时决定超容量候选规模。命令与启动超时使用同前缀公共测试配置。工作目录不得含空白字符，以符合静态策略语法。
 
 TODO：增加内核 map 发布故障注入和进程暂停恢复场景。
 
@@ -91,3 +91,87 @@ LSM_ACCESS_CONTROL_XIAOO_E2E_PATHS=1 LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm,f
 fanotify/seccomp 组还由工作负载 fork 子进程，chroot 到测试空目录后，分别通过保留在新根外的 cwd 和 dirfd 发起相对 mkdir/rmdir。pipe 返回实际 errno，父进程等待退出并检查 B/C 目录效果，确认裁决使用实际目标。
 
 同组另外预开 B/C 目录，在普通根目录环境通过 `/proc/self/fd/N/sub/<child>` 执行 mkdir/rmdir，检查 magic 目录链接后缀的解析和实际子目录效果。
+
+已有文件描述符的动态权限验证：
+
+```bash
+LSM_ACCESS_CONTROL_XIAOO_E2E_CONTINUED=1 \
+LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm \
+python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
+```
+
+真实 Xiaoo 的 Bash 工作负载先打开受保护文件和对照文件，并保留两个文件描述符。测试控制进程通过实际 WASM 插件发布路径规则，依次验证允许、拒绝和恢复允许。每阶段核对读写 errno、文件内容和真实 agent 祖先。拒绝阶段检查 LSM 规则审计，并验证 pipe、socketpair 和 memfd 正常使用。
+
+该场景使用现有 `open` 路径规则检查后续读写。测试通过 `actrailctl init -f` 刷新默认配置。`CONTINUED` 与 IPv6、告警、路径场景互斥，等待时间沿用公共启动超时和 peer 轮询配置。
+
+同一场景还保留文件映射，使用原 FD 请求新的读、写、执行映射，并对原映射调用 `mprotect` 提升权限。动态拒绝期间这些操作返回权限错误，恢复允许后成功。权限降低和匿名映射始终允许。已有映射的内存访问不属于该撤权范围。
+
+网络阶段保留 IPv4/IPv6 TCP 和 UDP socket，并建立独立的受保护端点与对照端点。发送操作覆盖 `send`、`write`、未连接 UDP 的 `sendto`/`sendmsg`、TCP 忽略显式地址时的真实 peer，以及 IPv4/IPv6 UDP 的 `AF_UNSPEC` 地址语义。全端口规则和精确端口例外共同参与判定。见证服务核对实际收到的每条消息，拒绝阶段只有对照端点收到数据，恢复允许后原连接继续发送。
+
+发送检查复用现有 `connect` endpoint 规则，按本次发送地址或已连接 socket 的 peer 匹配。UDP cork/`MSG_MORE` 缓存中的目标地址未参与匹配，因此该场景的撤权控制存在缺口。
+
+默认测试场景覆盖普通 socket 发送。TCP Fast Open 使用下述独立入口验证。
+
+文件删除阶段分别通过完整路径和预先打开的目录 FD 调用 unlink。受保护目录使用现有 `open` 路径拒绝规则，控制操作通过 `path_unlink` 检查实际目录项。每阶段重新准备文件，验证允许时文件删除、拒绝时文件保留，以及对照目录始终可删除。
+
+权限位修改阶段依次调用 chmod 和旧 FD 上的 fchmod，使用不同目标权限位验证两次修改。拒绝时权限位保持原值，恢复后达到目标值。父测试再次核对实际文件状态，memfd 的 fchmod 单独验证。
+
+所有权修改阶段通过 chown 和旧 FD 上的 fchown 分别设置不同 UID/GID，验证两次真实修改。拒绝时所有权保持原值，恢复后改回测试进程的 UID。父测试核对最终 UID/GID，并验证 memfd 的 fchown 正常执行。
+
+TCP Fast Open 使用独立网络命名空间运行同一真实 agent 场景：
+
+```bash
+python3 tests/v2/regression/lsm_access_control_xiaoo/continued/fastopen/run.py
+```
+
+启动器先创建并核验独立网络命名空间，再启用 loopback 和该命名空间的 TFO 客户端、服务端开关。服务端和客户端设置 socket 级 no-cookie 选项。客户端从全新、未连接的 socket 直接调用 `sendto(..., MSG_FASTOPEN, ...)`，并通过 `SO_SNDTIMEO` 限制阻塞时间。
+
+允许和恢复阶段要求 IPv4/IPv6 服务端收到精确消息，并且 `TCP_INFO` 包含 `TCPI_OPT_SYN_DATA`，确认 SYN 数据被确认。拒绝阶段要求权限错误、socket 保持未连接、目标服务端没有对应消息。常规 TCP 回退不会通过该验收。该场景同时复验已有文件、映射、删除、属性和网络控制。
+
+## 文件读写权限
+
+文件语义测试还验证 truncate、ftruncate 和 O_TRUNC。各次调用后核验实际内容和长度，拒绝截断时核验文件保持完整。
+
+运行真实 Xiaoo，在保留同一 FD 的同时分别发布 open、write、read、delete、attr 拒绝规则，再撤销规则。测试核验打开门禁、已有 FD 读写、共享映射、私有写时复制映射、实际文件内容、unlink 后目录项及 chmod/chown 后模式和属主。
+
+```bash
+LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm \
+LSM_ACCESS_CONTROL_XIAOO_E2E_SEMANTICS=1 \
+python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
+```
+
+## 文件重命名和硬链接
+
+真实 Xiaoo 分别执行普通重命名、覆盖重命名、RENAME_EXCHANGE 和硬链接。测试分别拒绝源路径、目标路径和覆盖目标的删除权限，并核验实际名字、内容和 inode。重命名和硬链接包含绝对路径及目录 FD 相对路径调用。
+
+```bash
+LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm \
+LSM_ACCESS_CONTROL_XIAOO_E2E_NAMES=1 \
+python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
+```
+
+## 网络操作和协议
+
+使用真实 Xiaoo 验证 TCP/UDP、IPv4/IPv6、已有连接发送、新连接、bind 和 listen。测试核对接收端实际数据及本地 socket 状态。
+
+```bash
+LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm \
+LSM_ACCESS_CONTROL_XIAOO_E2E_NETWORK_SEMANTICS=1 \
+python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
+```
+
+将后端改为 fanotify_seccomp 可验证新规则的能力拒绝和原有访问行为。
+
+## CIDR 和端口范围
+
+真实 Xiaoo 在端口区间下界、中间、上界及区间外发起 TCP/UDP 操作。测试覆盖 IPv4/IPv6 网段、`/0`、更具体的地址与端口例外、带 IPv6 scope ID 的连接和规则撤销恢复。
+
+发布验证覆盖授权包含关系、跨 owner 重叠拒绝、协议优先级和展开后的快照容量。容量拒绝后核对原配置与规则命中结果。
+
+```bash
+LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm \
+LSM_ACCESS_CONTROL_XIAOO_E2E_NETWORK_RANGES=1 \
+python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
+```
+
+将后端改为 `fanotify_seccomp` 可验证 connect 的 CIDR 与端口区间控制及拒绝审计。

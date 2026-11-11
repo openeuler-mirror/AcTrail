@@ -1,16 +1,18 @@
+//! Own network rules and the indexes used by userspace decisions.
+use super::index::NetworkRuleIndex;
 use super::rule::{STATIC_POLICY_OWNER, StoredNetworkRule};
 use super::validation::{NetworkRuleValidator, StaticRuleParser};
 use plugin_system::{
     NetworkPolicyApplyError, NetworkPolicyApplyRequest, NetworkPolicyApplyResult,
     NetworkPolicyApplyStatus, NetworkPolicyDecision, NetworkPolicyListFilter,
     NetworkPolicyListResult, NetworkPolicyMatchDryRunRequest, NetworkPolicyMatchDryRunResult,
-    NetworkPolicyPatchItem, NetworkPolicyPatchOp, NetworkPolicyRemoteSelector,
+    NetworkPolicyOperation, NetworkPolicyPatchItem, NetworkPolicyPatchOp, NetworkPolicyProtocol,
     NetworkPolicyRuleView, NetworkPolicyRulesApplyGrant,
 };
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 
 #[derive(Clone, Debug)]
@@ -19,8 +21,7 @@ pub struct NetworkPolicyStore {
     next_rule_id: u64,
     next_sequence: u64,
     by_owner: BTreeMap<String, BTreeMap<String, StoredNetworkRule>>,
-    effective_by_endpoint: BTreeMap<SocketAddr, StoredNetworkRule>,
-    effective_by_ip: BTreeMap<IpAddr, StoredNetworkRule>,
+    effective: NetworkRuleIndex,
 }
 
 impl NetworkPolicyStore {
@@ -80,8 +81,7 @@ impl NetworkPolicyStore {
             next_rule_id: 1,
             next_sequence: 0,
             by_owner: BTreeMap::new(),
-            effective_by_endpoint: BTreeMap::new(),
-            effective_by_ip: BTreeMap::new(),
+            effective: NetworkRuleIndex::default(),
         }
     }
 
@@ -89,19 +89,41 @@ impl NetworkPolicyStore {
         self.revision
     }
 
-    /// Returns exact endpoints before any-port rules, matching lookup precedence.
+    /// Precedence is longest IP prefix, narrowest port range, explicit protocol.
     pub fn effective_rule_views(&self) -> Vec<NetworkPolicyRuleView> {
-        self.effective_by_endpoint
-            .values()
-            .chain(self.effective_by_ip.values())
+        self.effective
+            .rules
+            .iter()
             .map(StoredNetworkRule::view)
             .collect()
     }
 
     pub fn find(&self, endpoint: &SocketAddr) -> Option<&StoredNetworkRule> {
-        self.effective_by_endpoint
-            .get(endpoint)
-            .or_else(|| self.effective_by_ip.get(&endpoint.ip()))
+        self.find_action(
+            NetworkPolicyOperation::Connect,
+            NetworkPolicyProtocol::Any,
+            endpoint,
+        )
+    }
+
+    pub fn find_action(
+        &self,
+        operation: NetworkPolicyOperation,
+        protocol: NetworkPolicyProtocol,
+        endpoint: &SocketAddr,
+    ) -> Option<&StoredNetworkRule> {
+        self.effective.find(operation, protocol, *endpoint)
+    }
+
+    pub fn validate_seccomp(&self) -> Result<(), String> {
+        for rule in self.by_owner.values().flat_map(|rules| rules.values()) {
+            if rule.operation != NetworkPolicyOperation::Connect
+                || rule.protocol != NetworkPolicyProtocol::Any
+            {
+                return Err("network seccomp supports only operation=connect protocol=any; this rule requires LSM".into());
+            }
+        }
+        Ok(())
     }
 
     pub fn is_rule_current(&self, rule: &StoredNetworkRule) -> bool {
@@ -129,8 +151,8 @@ impl NetworkPolicyStore {
             .unwrap_or(0);
         let limit = usize::try_from(limit)
             .map_err(|error| format!("network policy list limit overflow: {error}"))?;
-        let remote = filter
-            .remote
+        let endpoint = filter
+            .endpoint
             .as_deref()
             .map(NetworkRuleValidator::selector)
             .transpose()?;
@@ -138,7 +160,13 @@ impl NetworkPolicyStore {
             .by_owner
             .values()
             .flat_map(|rules| rules.values())
-            .filter(|rule| rule.matches_filter(filter.decision, remote))
+            .filter(|rule| {
+                rule.matches_filter(filter.decision, endpoint)
+                    && filter.operation.is_none_or(|op| op == rule.operation)
+                    && filter
+                        .protocol
+                        .is_none_or(|protocol| protocol == rule.protocol)
+            })
             .map(StoredNetworkRule::view)
             .collect::<Vec<_>>();
         views.sort_by(|left, right| {
@@ -165,8 +193,8 @@ impl NetworkPolicyStore {
         request: NetworkPolicyMatchDryRunRequest,
         default_decision: NetworkPolicyDecision,
     ) -> Result<NetworkPolicyMatchDryRunResult, String> {
-        let endpoint = NetworkRuleValidator::endpoint(&request.remote)?;
-        let matched = self.find(&endpoint);
+        let endpoint = NetworkRuleValidator::endpoint(&request.endpoint)?;
+        let matched = self.find_action(request.operation, request.protocol, &endpoint);
         Ok(NetworkPolicyMatchDryRunResult {
             matched: matched.is_some(),
             decision: matched
@@ -174,7 +202,7 @@ impl NetworkPolicyStore {
                 .unwrap_or(default_decision),
             rule_id: matched.map(|rule| rule.rule_id.clone()),
             owner_instance_id: matched.map(|rule| rule.owner_instance_id.clone()),
-            resolved_remote: endpoint.to_string(),
+            resolved_endpoint: endpoint.to_string(),
             rule_revision: matched.map(|rule| rule.rule_revision),
             source_revision: self.revision,
         })
@@ -332,8 +360,8 @@ impl NetworkPolicyStore {
                         "item rule_id {item_id} does not match draft rule_id {draft_id}"
                     ));
                 }
-                let remote = NetworkRuleValidator::shape(draft)?;
-                NetworkRuleValidator::draft_grant(grants, draft, remote)?;
+                let endpoint = NetworkRuleValidator::shape(draft)?;
+                NetworkRuleValidator::draft_grant(grants, draft, endpoint)?;
                 if draft.decision == NetworkPolicyDecision::Gray {
                     let target = draft
                         .gray_target
@@ -352,7 +380,7 @@ impl NetworkPolicyStore {
                     owner_instance_id,
                     item.rule_id.as_deref(),
                     draft,
-                    remote,
+                    endpoint,
                     next_revision,
                     self.next_sequence,
                     generated_rule_id,
@@ -378,40 +406,13 @@ impl NetworkPolicyStore {
     }
 
     fn rebuild_effective(&mut self) -> Result<(), String> {
-        let mut by_ip = BTreeMap::new();
-        for rule in self.by_owner.values().flat_map(|rules| rules.values()) {
-            let NetworkPolicyRemoteSelector::AnyPort(ip) = rule.remote else {
-                continue;
-            };
-            if let Some(existing) = by_ip.insert(ip, rule.clone()) {
-                return Err(format!(
-                    "network remote {} is owned by both {} and {}",
-                    rule.remote, existing.owner_instance_id, rule.owner_instance_id
-                ));
-            }
-        }
-        let mut by_endpoint = BTreeMap::new();
-        for rule in self.by_owner.values().flat_map(|rules| rules.values()) {
-            let NetworkPolicyRemoteSelector::Endpoint(endpoint) = rule.remote else {
-                continue;
-            };
-            if let Some(existing) = by_ip.get(&endpoint.ip())
-                && existing.owner_instance_id != rule.owner_instance_id
-            {
-                return Err(format!(
-                    "network remote {} overlaps {} owned by {}",
-                    rule.remote, existing.remote, existing.owner_instance_id
-                ));
-            }
-            if let Some(existing) = by_endpoint.insert(endpoint, rule.clone()) {
-                return Err(format!(
-                    "network remote {} is owned by both {} and {}",
-                    rule.remote, existing.owner_instance_id, rule.owner_instance_id
-                ));
-            }
-        }
-        self.effective_by_endpoint = by_endpoint;
-        self.effective_by_ip = by_ip;
+        self.effective = NetworkRuleIndex::build(
+            self.by_owner
+                .values()
+                .flat_map(|rules| rules.values())
+                .cloned()
+                .collect(),
+        );
         Ok(())
     }
 }

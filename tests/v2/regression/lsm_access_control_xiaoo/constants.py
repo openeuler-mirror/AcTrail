@@ -8,7 +8,7 @@ class LsmAccessControlXiaooConstants:
     require_workload_directories: bool = False
     ready_timeout_seconds: int = 15
     peer_poll_seconds: float = 0.1
-    policy_max_entries: int = 64
+    policy_max_entries: int = 128
     write_patch_path_max_bytes: int = 0
     write_patch_audit_buffer_bytes: int = 0
     write_patch_audit_batch_max: int = 0

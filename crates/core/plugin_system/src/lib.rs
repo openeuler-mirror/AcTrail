@@ -63,11 +63,12 @@ pub use manifest::{
 };
 pub use network_policy::{
     NetworkActionContext, NetworkPolicyApplyError, NetworkPolicyApplyRequest,
-    NetworkPolicyApplyResult, NetworkPolicyApplyStatus, NetworkPolicyDecision, NetworkPolicyHost,
+    NetworkPolicyApplyResult, NetworkPolicyApplyStatus, NetworkPolicyDecision,
+    NetworkPolicyEndpointGrantScope, NetworkPolicyEndpointSelector, NetworkPolicyHost,
     NetworkPolicyListFilter, NetworkPolicyListResult, NetworkPolicyMatchDryRunRequest,
-    NetworkPolicyMatchDryRunResult, NetworkPolicyPatchItem, NetworkPolicyPatchOp,
-    NetworkPolicyRemoteGrantScope, NetworkPolicyRemoteSelector, NetworkPolicyRuleDraft,
-    NetworkPolicyRuleView, NETWORK_ACTION_CONTEXT_QUERY, NETWORK_ACTION_CURRENT_CONTEXT_TOKEN,
+    NetworkPolicyMatchDryRunResult, NetworkPolicyOperation, NetworkPolicyPatchItem,
+    NetworkPolicyPatchOp, NetworkPolicyProtocol, NetworkPolicyRuleDraft, NetworkPolicyRuleView,
+    NETWORK_ACTION_CONTEXT_QUERY, NETWORK_ACTION_CURRENT_CONTEXT_TOKEN,
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,

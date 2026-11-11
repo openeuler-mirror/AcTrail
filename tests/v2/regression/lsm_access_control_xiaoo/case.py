@@ -36,8 +36,13 @@ class LsmAccessControlXiaooCase(TestCase):
         self._ipv6 = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_IPV6") == "1"
         self._alerts = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_ALERTS") == "1"
         self._paths = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_PATHS") == "1"
-        if sum((self._ipv6, self._alerts, self._paths)) > 1:
-            raise ValueError("IPv6, boundary alert and path scenarios are mutually exclusive")
+        self._continued = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_CONTINUED") == "1"
+        self._semantics = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_SEMANTICS") == "1"
+        self._names = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_NAMES") == "1"
+        self._network_ranges = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_NETWORK_RANGES") == "1"
+        self._network_semantics = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_NETWORK_SEMANTICS") == "1"
+        if sum((self._ipv6, self._alerts, self._paths, self._continued, self._semantics, self._names, self._network_semantics, self._network_ranges)) > 1:
+            raise ValueError("IPv6, boundary alert, path and continued access scenarios are mutually exclusive")
         self._audit_enabled = CASE_CONSTANTS.audit_enabled
         self._alert_window_ms = CASE_CONSTANTS.alert_window_ms
         self._alert_max_groups = CASE_CONSTANTS.alert_max_groups
@@ -94,6 +99,24 @@ class LsmAccessControlXiaooCase(TestCase):
                 if os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_STARTUP_REUSE") == "1":
                     from .startup.reuse import StartupReuseScenario
                     StartupReuseScenario(self).run(context, results, port)
+                    continue
+                if self._network_semantics or self._network_ranges:
+                    from .network_semantics.scenario import NetworkSemanticsScenario
+                    if self._network_ranges:
+                        from .network_semantics.ranges import NetworkRangesScenario as NetworkSemanticsScenario
+                    NetworkSemanticsScenario(self).run(context, results, port)
+                    continue
+                if self._names:
+                    from .names.scenario import FileNamesScenario
+                    FileNamesScenario(self).run(context, results, port)
+                    continue
+                if self._semantics:
+                    from .semantics.scenario import FileSemanticsScenario
+                    FileSemanticsScenario(self).run(context, results, port)
+                    continue
+                if self._continued:
+                    from .continued.scenario import ContinuedAccessScenario
+                    ContinuedAccessScenario(self).run(context, results, port)
                     continue
                 if self._paths:
                     if self._selection.name not in ("lsm", "fanotify_seccomp"):
@@ -160,6 +183,20 @@ class LsmAccessControlXiaooCase(TestCase):
                 print("LSM daemon diagnostics before cleanup:\n" + stream.read().decode(errors="replace"))
 
     def _workload_command(self, port: int) -> str:
+        if self._network_semantics or self._network_ranges:
+            from .network_semantics.scenario import NetworkSemanticsScenario
+            if self._network_ranges:
+                from .network_semantics.ranges import NetworkRangesScenario as NetworkSemanticsScenario
+            return NetworkSemanticsScenario.command(self)
+        if self._names:
+            from .names.scenario import FileNamesScenario
+            return FileNamesScenario.command(self)
+        if self._semantics:
+            from .semantics.scenario import FileSemanticsScenario
+            return FileSemanticsScenario.command(self)
+        if self._continued:
+            from .continued.scenario import ContinuedAccessScenario
+            return ContinuedAccessScenario.command(self)
         python = shutil.which("python3")
         if python is None:
             raise RuntimeError("Python 3 workload interpreter is unavailable")

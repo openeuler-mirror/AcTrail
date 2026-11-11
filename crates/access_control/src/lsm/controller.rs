@@ -84,7 +84,7 @@ impl LsmController {
     pub(super) fn file_domain_enabled(&self, domain: u32) -> bool {
         self.file_config.enabled
             && match domain {
-                1 => self.file_operations.open.is_lsm(),
+                1 | 6 | 7 | 8 | 9 | 10 | 11 => self.file_operations.open.is_lsm(),
                 2 => self.file_operations.mkdir.is_lsm(),
                 3 => self.file_operations.rmdir.is_lsm(),
                 _ => false,

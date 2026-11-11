@@ -190,7 +190,7 @@ impl NetworkComponentHost {
         };
         let request = match NetworkComponentCodec::parse_match_request(fields) {
             Ok(request)
-                if request.remote.len()
+                if request.endpoint.len()
                     <= store.data().host_limits().network_policy_io_max_bytes =>
             {
                 request

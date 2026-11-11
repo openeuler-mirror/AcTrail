@@ -14,16 +14,10 @@ static __always_inline void ac_count(__u32 index) {
     if (count) (*count)++;
 }
 
-static __always_inline int ac_begin(__u32 domain, struct ac_context *context) {
-    __u32 zero = 0;
-    int scoped = ac_current_trace(&context->trace);
-    if (scoped <= 0) return scoped;
-    context->work = bpf_map_lookup_elem(&ac_scratch, &zero);
-    context->policy = bpf_map_lookup_elem(&ac_policy_slots, &zero);
-    if (!context->work || !context->policy) return -13;
+/* Select another operation without resolving the same file path again. */
+static __always_inline int ac_select_domain(__u32 domain, struct ac_context *context) {
     context->work->key.prefixlen = 32;
     context->work->key.domain = domain;
-    __builtin_memset(context->work->key.resource, 0, AC_RESOURCE_BYTES);
     struct ac_policy_value *fallback = bpf_map_lookup_elem(
         context->policy, &context->work->key);
     if (!fallback) return -13;
@@ -32,6 +26,17 @@ static __always_inline int ac_begin(__u32 domain, struct ac_context *context) {
     if (!(fallback->flags & AC_ENABLED)) return 0;
     __builtin_memcpy(&context->work->selected, fallback, sizeof(*fallback));
     return 1;
+}
+
+static __always_inline int ac_begin(__u32 domain, struct ac_context *context) {
+    __u32 zero = 0;
+    int scoped = ac_current_trace(&context->trace);
+    if (scoped <= 0) return scoped;
+    context->work = bpf_map_lookup_elem(&ac_scratch, &zero);
+    context->policy = bpf_map_lookup_elem(&ac_policy_slots, &zero);
+    if (!context->work || !context->policy) return -13;
+    __builtin_memset(context->work->key.resource, 0, AC_RESOURCE_BYTES);
+    return ac_select_domain(domain, context);
 }
 
 static __always_inline void ac_candidate(struct ac_context *context, __u32 bytes) {
@@ -43,7 +48,7 @@ static __always_inline void ac_candidate(struct ac_context *context, __u32 bytes
         __builtin_memcpy(&context->work->selected, candidate, sizeof(*candidate));
 }
 
-static __always_inline int ac_path_candidates(struct ac_context *context, long length) {
+static __attribute__((noinline)) int ac_path_candidates(struct ac_context *context, long length) {
     if (length <= 0) return length ? length : -22;
     if (length > AC_RESOURCE_BYTES ||
         length > context->work->selected.path_max_bytes) return -36;
@@ -103,7 +108,7 @@ static __always_inline int ac_finish(struct ac_context *context, int error) {
         if (signal_result) ac_count(2);
     }
     int boundary_denial = decision && !error &&
-        context->work->key.domain <= 5 && context->work->selected.rule_id[0];
+        context->work->key.domain <= 14 && context->work->selected.rule_id[0];
     if (error || (context->work->selected.flags & AC_AUDIT) || boundary_denial)
         ac_emit(context, decision, error, signal_result);
     return decision ? -13 : 0;

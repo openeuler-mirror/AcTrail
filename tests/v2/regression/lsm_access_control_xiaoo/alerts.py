@@ -136,7 +136,7 @@ class BoundaryAlertsScenario:
                 if "matched_rule_path" in payload or payload["process_id"] <= 0:
                     raise AssertionError(f"invented rule path or missing process identity: {alert}")
                 if domain == "network" and (
-                    payload["remote_endpoint"] != f"{CASE_CONSTANTS.witness_host}:{port}"
+                    payload["endpoint"] != f"{CASE_CONSTANTS.witness_host}:{port}"
                     or payload["operation"] != "connect"
                     or payload["decision_source"] != "fast-path-deny"
                 ):

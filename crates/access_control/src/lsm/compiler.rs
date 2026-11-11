@@ -1,8 +1,9 @@
+//! Encode immutable file, command and network policy snapshots.
+mod network;
 use super::controller::{LsmController, PolicyStores};
 use config_core::daemon::{EnforcementDecision, LsmDenySignal};
-use plugin_system::{FilePolicyOperation, NetworkPolicyRemoteSelector};
+use plugin_system::FilePolicyOperation;
 use std::collections::BTreeMap;
-use std::net::{IpAddr, SocketAddr};
 
 /// Explicit byte encoding keeps the userspace/kernel ABI independent of Rust padding.
 #[derive(Clone)]
@@ -28,6 +29,27 @@ impl PolicySnapshot {
             ),
             (
                 5,
+                network.enabled,
+                network.default_decision,
+                network.audit_enabled,
+                stores.network.revision(),
+            ),
+            (
+                12,
+                network.enabled,
+                network.default_decision,
+                network.audit_enabled,
+                stores.network.revision(),
+            ),
+            (
+                13,
+                network.enabled,
+                network.default_decision,
+                network.audit_enabled,
+                stores.network.revision(),
+            ),
+            (
+                14,
                 network.enabled,
                 network.default_decision,
                 network.audit_enabled,
@@ -91,54 +113,7 @@ impl PolicySnapshot {
             }
         }
         if network.enabled {
-            for (rank, rule) in stores
-                .network
-                .effective_rule_views()
-                .into_iter()
-                .enumerate()
-            {
-                let selector = NetworkPolicyRemoteSelector::parse(&rule.remote)?;
-                let (ip, port) = match selector {
-                    NetworkPolicyRemoteSelector::Endpoint(SocketAddr::V6(endpoint))
-                        if endpoint.scope_id() != 0 =>
-                    {
-                        return Err(format!(
-                            "LSM network rule {} cannot preserve IPv6 scope ID in {}; scoped endpoints cannot be published",
-                            rule.rule_id, rule.remote
-                        ));
-                    }
-                    NetworkPolicyRemoteSelector::Endpoint(endpoint) => {
-                        (endpoint.ip(), Some(endpoint.port()))
-                    }
-                    NetworkPolicyRemoteSelector::AnyPort(ip) => (ip, None),
-                };
-                let mut resource = match ip {
-                    IpAddr::V4(ip) => {
-                        let mut key = vec![4];
-                        key.extend_from_slice(&ip.octets());
-                        key
-                    }
-                    IpAddr::V6(ip) => {
-                        let mut key = vec![6];
-                        key.extend_from_slice(&ip.octets());
-                        key
-                    }
-                };
-                if let Some(port) = port {
-                    resource.extend_from_slice(&port.to_be_bytes());
-                }
-                let value = Self::value(
-                    controller,
-                    rank as u32,
-                    rule.decision.as_str(),
-                    network.default_decision,
-                    network.audit_enabled,
-                    rule.rule_revision,
-                    &rule.rule_id,
-                    &rule.owner_instance_id,
-                )?;
-                snapshot.insert(5, &resource, value)?;
-            }
+            snapshot.compile_network(controller, stores)?;
         }
         if snapshot.entries.len() > controller.config.policy_max_entries as usize {
             return Err(format!(
@@ -158,29 +133,11 @@ impl PolicySnapshot {
             entries: BTreeMap::new(),
         };
         let file = &controller.file_config;
-        for (domain, enabled, default, audit, revision) in [
-            (
-                1,
-                controller.file_domain_enabled(1),
-                file.default_decision,
-                file.audit_enabled,
-                rules.revision(),
-            ),
-            (
-                2,
-                controller.file_domain_enabled(2),
-                file.default_decision,
-                file.audit_enabled,
-                rules.revision(),
-            ),
-            (
-                3,
-                controller.file_domain_enabled(3),
-                file.default_decision,
-                file.audit_enabled,
-                rules.revision(),
-            ),
-        ] {
+        for domain in [1, 2, 3, 6, 7, 8, 9, 10, 11] {
+            let enabled = controller.file_domain_enabled(domain);
+            let default = file.default_decision;
+            let audit = file.audit_enabled;
+            let revision = rules.revision();
             let decision = if enabled {
                 default
             } else {
@@ -207,8 +164,14 @@ impl PolicySnapshot {
         if file.enabled {
             for (rank, rule) in rules.effective_rule_views().into_iter().enumerate() {
                 let domains: &[u32] = match rule.operation {
-                    FilePolicyOperation::Any => &[1, 2, 3],
+                    FilePolicyOperation::Any => &[1, 2, 3, 6, 7, 8, 9, 10, 11],
                     FilePolicyOperation::Open => &[1],
+                    FilePolicyOperation::Read => &[6],
+                    FilePolicyOperation::Write => &[7],
+                    FilePolicyOperation::Delete => &[8],
+                    FilePolicyOperation::Attr => &[9],
+                    FilePolicyOperation::Rename => &[10],
+                    FilePolicyOperation::Link => &[11],
                     FilePolicyOperation::Mkdir => &[2],
                     FilePolicyOperation::Rmdir => &[3],
                 };

@@ -3,7 +3,9 @@
   "title": "Dynamic network policy",
   "type": "object",
   "additionalProperties": false,
-  "required": ["rules"],
+  "required": [
+    "rules"
+  ],
   "properties": {
     "rules": {
       "type": "array",
@@ -11,7 +13,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["decision", "remote"],
+        "required": [
+          "decision",
+          "endpoint"
+        ],
         "properties": {
           "rule_id": {
             "type": "string",
@@ -20,13 +25,21 @@
           },
           "decision": {
             "type": "string",
-            "enum": ["allow", "deny", "gray"]
+            "enum": [
+              "allow",
+              "deny",
+              "gray"
+            ]
           },
-          "remote": {
+          "endpoint": {
+            "description": "Numeric IP or CIDR with a port, inclusive port range, or *. Bracket IPv6 addresses.",
             "type": "string",
             "minLength": 3,
-            "description": "Numeric IPv4 or bracketed IPv6 selector with either an exact port or * for every port on that IP. Bare * is not a rule selector.",
-            "examples": ["203.0.113.10:443", "203.0.113.10:*", "[2001:db8::10]:*"]
+            "examples": [
+              "203.0.113.10:443",
+              "203.0.113.10:*",
+              "[2001:db8::10]:*"
+            ]
           },
           "gray_target": {
             "type": "string",
@@ -42,17 +55,51 @@
           },
           "fallback": {
             "type": "string",
-            "enum": ["allow", "deny"]
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "connect",
+              "send",
+              "bind",
+              "listen"
+            ],
+            "default": "connect",
+            "description": "Connect/send select the remote endpoint. Bind/listen select the local endpoint."
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "any",
+              "tcp",
+              "udp"
+            ],
+            "default": "any"
           }
         },
         "allOf": [
           {
             "if": {
-              "properties": { "decision": { "const": "gray" } },
-              "required": ["decision"]
+              "properties": {
+                "decision": {
+                  "const": "gray"
+                }
+              },
+              "required": [
+                "decision"
+              ]
             },
             "then": {
-              "required": ["gray_target", "timeout_ms", "concurrency_limit", "fallback"]
+              "required": [
+                "gray_target",
+                "timeout_ms",
+                "concurrency_limit",
+                "fallback"
+              ]
             },
             "else": {
               "properties": {

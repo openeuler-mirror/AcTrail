@@ -197,8 +197,8 @@ impl AccessControlConfig {
                     .into(),
             );
             }
-            if lsm.policy_max_entries < 5 || lsm.audit_batch_max == 0 {
-                return Err("access_control.backends.lsm requires policy_max_entries >= 5 and audit_batch_max > 0".into());
+            if lsm.policy_max_entries < 14 || lsm.audit_batch_max == 0 {
+                return Err("access_control.backends.lsm requires policy_max_entries >= 14 and audit_batch_max > 0".into());
             }
             if !(2..=252).contains(&lsm.path_max_bytes) {
                 return Err(

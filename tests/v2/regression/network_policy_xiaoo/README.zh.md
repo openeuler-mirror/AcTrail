@@ -21,7 +21,7 @@
    不存在；launch 明确选择 network-connect enforcement 和 seccomp user-notify。
 5. SQLite 中该 trace 的每一条 provider endpoint `network-control` 事件都必须是
    `inet`/`network-action`/`connect`、`result=-EPERM`，且
-   `payload.remote` 和已解析规则的 `policy_remote_scope` 都严格等于真实
+   `payload.remote` 和已解析规则的 `policy_endpoint_scope` 都严格等于真实
    `127.0.0.1:<port>`。
 6. Web 把配置清回空规则后，dry-run 回到 allow 且 source revision 再次递增；
    第三次真实 Xiaoo 恢复成功并重新创建 marker。
@@ -146,10 +146,10 @@ printf 'exact_endpoint=%s\n' "$PROVIDER_ENDPOINT"
 1. Refresh 后找到 `wasm.network-policy-dynamic`，点击
    **Configure & load**。
 2. Runtime instance name 保持 `wasm.network-policy-dynamic`，Rule types 只
-   保留 **Deny**；**Remote endpoint scope** 填终端 A 输出的精确
+   保留 **Deny**；**Endpoint scope** 填终端 A 输出的精确
    `127.0.0.1:<port>`，禁止填写 `127.0.0.1:*`。
 3. Load 后确认状态为 `Active`，Host grants 包含
-   `network-policy.rules.apply:kind=deny,remote=127.0.0.1:<port>`。
+   `network-policy.rules.apply:kind=deny,operation=connect,protocol=any,endpoint=127.0.0.1:<port>`。
 4. Configuration 应为 `{"rules":[]}`。在 **Plugin command** 依次输入
    `rule`、`dry-run`、精确 endpoint 并发送，确认返回
    `matched=false decision=allow rule_id=none owner=none`，记下
@@ -190,7 +190,7 @@ test "$(sed -n '1p' "$MARKER")" = ACTRAIL_XIAOO_NETWORK_OK
     {
       "rule_id": "xiaoo-provider-deny",
       "decision": "deny",
-      "remote": "127.0.0.1:实际端口"
+      "endpoint": "127.0.0.1:实际端口"
     }
   ]
 }
@@ -246,7 +246,7 @@ actrailviewer --output-format json events --trace-id "$DENIED_TRACE_ID" |
           source: .payload.metadata.decision_source,
           rule_id: .payload.metadata.rule_id,
           owner: .payload.metadata.policy_owner_instance_id,
-          scope: .payload.metadata.policy_remote_scope,
+          scope: .payload.metadata.policy_endpoint_scope,
           revision: .payload.metadata.rule_revision
         }]
   '
@@ -259,7 +259,7 @@ actrailviewer --output-format json events --trace-id "$DENIED_TRACE_ID" |
 
 该 trace 的 Web Alerts 应包含 `network.connection.boundary-violation`，producer
 为 `actraild.enforcement`，severity 为 `high`。payload 的 `operation` 为
-`connect`，`remote_endpoint` 为实际 provider endpoint，`rule_id` 为
+`connect`，`endpoint` 为实际 provider endpoint，`endpoint_side` 为 `remote`，`rule_id` 为
 `xiaoo-provider-deny`，`policy_owner_instance_id` 为 `wasm.network-policy-dynamic`，
 `decision_source` 为 `fast-path-deny`。自动回归核对 Web 与 SQLite 中的告警一致，
 并确认 `process_id` 对应已保存的进程；允许和恢复阶段均不产生边界告警。

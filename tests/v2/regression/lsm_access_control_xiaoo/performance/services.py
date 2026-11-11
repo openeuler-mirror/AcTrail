@@ -63,7 +63,7 @@ class WasmPublisher(PluginTestEnvironment):
             drain_interval_seconds=args.peer_poll_seconds,
         )
         self._candidate = {"rules": [
-            {"rule_id": f"bench-{decision}", "decision": decision, "remote": f"127.0.0.1:{port}"}
+            {"rule_id": f"bench-{decision}", "decision": decision, "endpoint": f"127.0.0.1:{port}"}
             for decision, port in zip(("allow", "deny"), ports)
         ]}
         super().__init__(
@@ -73,7 +73,7 @@ class WasmPublisher(PluginTestEnvironment):
                 package="network-policy-dynamic", instance_id="wasm.network-policy-dynamic",
                 plugin_id="wasm.network-policy-dynamic", runtime="wasm",
                 load_grants={"network_policy_rules_apply": [
-                    {"decision": rule["decision"], "remote_scope": rule["remote"]}
+                    {"decision": rule["decision"], "endpoint_scope": rule["endpoint"]}
                     for rule in self._candidate["rules"]
                 ]},
             ),
@@ -99,10 +99,10 @@ class WasmPublisher(PluginTestEnvironment):
         loaded = self.loaded_plugin
         grants = loaded.get("host_grants", [])
         for rule in self._candidate["rules"]:
-            expected = f"network-policy.rules.apply:kind={rule['decision']},remote={rule['remote']}"
+            expected = f"network-policy.rules.apply:kind={rule['decision']},operation=connect,protocol=any,endpoint={rule['endpoint']}"
             if expected not in grants:
                 raise AssertionError(f"WASM publisher lacks grant: {expected}")
-        before = [self._dry_run(rule["remote"]) for rule in self._candidate["rules"]]
+        before = [self._dry_run(rule["endpoint"]) for rule in self._candidate["rules"]]
         if any(fields.get("matched") != "false" or fields.get("decision") != "allow" for fields in before):
             raise AssertionError(f"empty static and WASM policies did not default allow: {before}")
         validation = self.api.validate_config(self.plugin.instance_id, self._candidate)
@@ -113,10 +113,10 @@ class WasmPublisher(PluginTestEnvironment):
         publish_ms = (time.perf_counter_ns() - started) / 1e6
         if updated.get("config") != self._candidate:
             raise AssertionError(f"WASM policy publication differs from requested rules: {updated}")
-        after = [self._dry_run(rule["remote"]) for rule in self._candidate["rules"]]
+        after = [self._dry_run(rule["endpoint"]) for rule in self._candidate["rules"]]
         for old, fields, rule in zip(before, after, self._candidate["rules"]):
             expected = {"matched": "true", "decision": rule["decision"], "rule_id": rule["rule_id"],
-                        "owner": self.plugin.instance_id, "remote": rule["remote"]}
+                        "owner": self.plugin.instance_id, "endpoint": rule["endpoint"]}
             if any(fields.get(key) != value for key, value in expected.items()) or int(
                 fields.get("source_revision", "0")
             ) <= int(old.get("source_revision", "0")):

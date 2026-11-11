@@ -45,7 +45,7 @@ class PathBindingScenario:
             (self.root / "retained-exec").rename(self.root / "retained-exec.saved")
             dynamic = self.case._dynamic
             dynamic._publish_network(dynamic.owner("network"), [{
-                "rule_id": "lsm-path-network", "decision": "deny", "remote": dynamic._remote,
+                "rule_id": "lsm-path-network", "decision": "deny", "endpoint": dynamic._remote,
             }])
             if self._configured_paths() != before:
                 raise AssertionError("network publication changed declared file or command policies")

@@ -371,7 +371,7 @@
 | `checkpoint.runtime.stop_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 检查线程组暂停状态的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L112) |
 | `checkpoint.runtime.shutdown_drain_timeout_ms` | `uint64` | `10000` | 否 | checkpoint | daemon 停止时等待 checkpoint 工作完成的总预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L113) |
 | `checkpoint.runtime.idle_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 停机等待期间检查 checkpoint 工作是否完成的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L114) |
-| `access_control.file.open.enabled` | `bool` | `true` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
+| `access_control.file.open.enabled` | `bool` | `true` | 否 | access_control | 文件打开控制开关。LSM 同时检查读写、映射、删除、属性、重命名和硬链接权限。[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
 | `access_control.file.open.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；fanotify / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L60) |
 | `access_control.file.mkdir.enabled` | `bool` | `false` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L61) |
 | `access_control.file.mkdir.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；seccomp / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L61) |
@@ -379,8 +379,8 @@
 | `access_control.file.rmdir.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；seccomp / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L62) |
 | `access_control.command.exec.enabled` | `bool` | `true` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L103) |
 | `access_control.command.exec.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；seccomp / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L103) |
-| `access_control.network.connect.enabled` | `bool` | `true` | 否 | access_control | 操作控制开关；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L109) |
-| `access_control.network.connect.backend` | `string` | `"lsm"` | 否 | access_control | 操作控制后端；seccomp / lsm；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L109) |
+| `access_control.network.connect.enabled` | `bool` | `true` | 否 | access_control | 网络控制开关。LSM 控制 connect、send、bind 和 listen。seccomp 控制 connect。[声明](../../crates/core/config/src/daemon/access_control/config.rs#L109) |
+| `access_control.network.connect.backend` | `string` | `"lsm"` | 否 | access_control | 网络控制后端，可选 seccomp 或 lsm。[声明](../../crates/core/config/src/daemon/access_control/config.rs#L109) |
 | `access_control.backends.lsm.policy_max_entries` | `uint32` | `4096` | 否 | access_control | 每份 LSM 完整策略的条目数上限，包含默认项；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L140) |
 | `access_control.backends.lsm.path_max_bytes` | `uint32` | `252` | 否 | access_control | 路径缓冲区字节上限；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L142) |
 | `access_control.backends.lsm.audit_buffer_bytes` | `uint32` | `1048576` | 否 | access_control | LSM 审计 ring buffer 字节数；须为不小于 65536 的二次幂；[声明](../../crates/core/config/src/daemon/access_control/config.rs#L144) |

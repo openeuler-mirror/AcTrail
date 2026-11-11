@@ -1,3 +1,6 @@
+//! Network policy configuration, publication and management commands.
+mod commands;
+
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -8,8 +11,8 @@ use spin::Mutex;
 
 use crate::actrail::plugin::types::{
     ControlVerdict, NetworkPolicyApplyRequest, NetworkPolicyApplyStatus, NetworkPolicyDecision,
-    NetworkPolicyMatchDryRunRequest, NetworkPolicyPatchItem, NetworkPolicyPatchOp,
-    NetworkPolicyRuleDraft,
+    NetworkPolicyMatchDryRunRequest, NetworkPolicyOperation, NetworkPolicyPatchItem,
+    NetworkPolicyPatchOp, NetworkPolicyProtocol, NetworkPolicyRuleDraft,
 };
 
 static POLICY_CONFIG: Mutex<Option<PolicyConfig>> = Mutex::new(None);
@@ -30,7 +33,11 @@ struct PolicyRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rule_id: Option<String>,
     decision: PolicyDecision,
-    remote: String,
+    #[serde(default, skip_serializing_if = "PolicyOperation::is_default")]
+    operation: PolicyOperation,
+    #[serde(default, skip_serializing_if = "PolicyProtocol::is_default")]
+    protocol: PolicyProtocol,
+    endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gray_target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,7 +114,7 @@ impl PolicyManager {
         }
         match argv[1].as_str() {
             "list" if argv.len() == 2 => Self::list_rules(),
-            "dry-run" if argv.len() == 3 => Self::dry_run(&argv[2]),
+            "dry-run" if argv.len() >= 3 => Self::dry_run(argv),
             "upsert" => Self::upsert(argv),
             "delete" if argv.len() == 3 => Self::delete(&argv[2]),
             _ => Err(Self::usage()),
@@ -177,16 +184,17 @@ impl PolicyManager {
             {
                 return Err(format!("duplicate rule_id {id}"));
             }
-            if rule.remote.trim().is_empty() || rule.remote.contains('\0') {
+            if rule.endpoint.trim().is_empty() || rule.endpoint.contains('\0') {
                 return Err(format!(
-                    "rules[{index}].remote must be a non-empty remote selector"
+                    "rules[{index}].endpoint must be a non-empty endpoint selector"
                 ));
             }
-            if config.rules[..index]
-                .iter()
-                .any(|existing| existing.remote == rule.remote)
-            {
-                return Err(format!("duplicate remote selector {}", rule.remote));
+            if config.rules[..index].iter().any(|existing| {
+                existing.endpoint == rule.endpoint
+                    && existing.operation == rule.operation
+                    && existing.protocol == rule.protocol
+            }) {
+                return Err(format!("duplicate endpoint selector {}", rule.endpoint));
             }
             Self::validate_rule_shape(rule, index)?;
         }
@@ -247,7 +255,9 @@ impl PolicyManager {
                 rule: Some(NetworkPolicyRuleDraft {
                     rule_id: rule.rule_id.clone(),
                     decision: rule.decision.host_value(),
-                    remote: rule.remote.clone(),
+                    operation: rule.operation.host_value(),
+                    protocol: rule.protocol.host_value(),
+                    endpoint: rule.endpoint.clone(),
                     gray_target: rule.gray_target.clone(),
                     timeout_ms: rule.timeout_ms,
                     concurrency_limit: rule.concurrency_limit,
@@ -306,147 +316,6 @@ impl PolicyManager {
             .map(|error| error.message.clone())
             .unwrap_or_else(|| fallback.to_string())
     }
-
-    fn upsert(argv: &[String]) -> Result<String, String> {
-        if argv.len() < 4 {
-            return Err(Self::usage());
-        }
-        let decision = PolicyDecision::parse(&argv[2])?;
-        let remote = argv[3].clone();
-        let mut replacement = PolicyRule {
-            rule_id: None,
-            decision,
-            remote: remote.clone(),
-            gray_target: None,
-            timeout_ms: None,
-            concurrency_limit: None,
-            fallback: None,
-        };
-        let mut index = 4;
-        while index < argv.len() {
-            let value = argv
-                .get(index + 1)
-                .ok_or_else(|| format!("{} requires a value", argv[index]))?;
-            match argv[index].as_str() {
-                "--rule-id" => replacement.rule_id = Some(value.clone()),
-                "--gray-target" => replacement.gray_target = Some(value.clone()),
-                "--timeout-ms" => {
-                    replacement.timeout_ms = Some(
-                        value
-                            .parse::<u64>()
-                            .map_err(|_| "invalid --timeout-ms value".to_string())?,
-                    )
-                }
-                "--concurrency" => {
-                    replacement.concurrency_limit = Some(
-                        value
-                            .parse::<u32>()
-                            .map_err(|_| "invalid --concurrency value".to_string())?,
-                    )
-                }
-                "--fallback" => replacement.fallback = Some(PolicyFallback::parse(value)?),
-                _ => return Err(Self::usage()),
-            }
-            index += 2;
-        }
-        let current = Self::current()?;
-        let mut candidate = current.clone();
-        if let Some(rule_id) = replacement.rule_id.as_deref()
-            && let Some(existing) = candidate
-                .rules
-                .iter_mut()
-                .find(|rule| rule.rule_id.as_deref() == Some(rule_id))
-        {
-            *existing = replacement;
-        } else {
-            candidate.rules.push(replacement);
-        }
-        Self::normalize_rule_ids(&mut candidate, &current)?;
-        Self::validate_config(&candidate)?;
-        let rule_id = candidate
-            .rules
-            .iter()
-            .find(|rule| rule.remote == remote)
-            .and_then(|rule| rule.rule_id.clone())
-            .ok_or_else(|| "normalized network rule has no id".to_string())?;
-        Self::publish_and_commit(current, candidate, "dynamic plugin command")?;
-        Ok(format!("accepted rule_id={rule_id} remote={remote}\n"))
-    }
-
-    fn delete(rule_id: &str) -> Result<String, String> {
-        let current = Self::current()?;
-        let mut candidate = current.clone();
-        let before = candidate.rules.len();
-        candidate
-            .rules
-            .retain(|rule| rule.rule_id.as_deref() != Some(rule_id));
-        if candidate.rules.len() == before {
-            return Err(format!("rule {rule_id} not found"));
-        }
-        Self::publish_and_commit(current, candidate, "dynamic plugin command")?;
-        Ok(format!("accepted deleted={rule_id}\n"))
-    }
-
-    fn list_rules() -> Result<String, String> {
-        let mut output = String::new();
-        for rule in Self::current()?.rules {
-            output.push_str(rule.rule_id.as_deref().unwrap_or("unassigned"));
-            output.push(' ');
-            output.push_str(rule.decision.as_str());
-            output.push(' ');
-            output.push_str(&rule.remote);
-            if let Some(target) = rule.gray_target {
-                output.push_str(" gray_target=");
-                output.push_str(&target);
-            }
-            output.push('\n');
-        }
-        if output.is_empty() {
-            output.push_str("no configured rules\n");
-        }
-        Ok(output)
-    }
-
-    fn dry_run(remote: &str) -> Result<String, String> {
-        let result =
-            crate::actrail::plugin::network_control_host::network_policy_rules_match_dry_run(
-                &NetworkPolicyMatchDryRunRequest {
-                    remote: remote.to_string(),
-                },
-            )?;
-        Ok(format!(
-            "matched={} decision={} rule_id={} owner={} remote={} rule_revision={} source_revision={}\n",
-            result.matched,
-            Self::host_decision_name(result.decision),
-            result.rule_id.unwrap_or_else(|| "none".to_string()),
-            result
-                .owner_instance_id
-                .unwrap_or_else(|| "none".to_string()),
-            result.resolved_remote,
-            result
-                .rule_revision
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "none".to_string()),
-            result.source_revision,
-        ))
-    }
-
-    fn host_decision_name(decision: NetworkPolicyDecision) -> &'static str {
-        match decision {
-            NetworkPolicyDecision::Default => "default",
-            NetworkPolicyDecision::Allow => "allow",
-            NetworkPolicyDecision::Deny => "deny",
-            NetworkPolicyDecision::Gray => "gray",
-        }
-    }
-
-    fn usage() -> String {
-        "usage: help | rule list | rule dry-run <ip:port> | rule upsert <allow|deny|gray> <ip:port|ip:*> [--rule-id ID] [--gray-target INSTANCE --timeout-ms N --concurrency N --fallback allow|deny] | rule delete <rule-id>".to_string()
-    }
-
-    fn help() -> String {
-        "supported commands:\n  help\n  rule list\n  rule dry-run <ip:port>\n  rule upsert <allow|deny|gray> <ip:port|ip:*> [--rule-id ID] [--gray-target INSTANCE --timeout-ms N --concurrency N --fallback allow|deny]\n  rule delete <rule-id>\n".to_string()
-    }
 }
 
 impl PolicyDecision {
@@ -489,6 +358,82 @@ impl PolicyFallback {
         match self {
             Self::Allow => ControlVerdict::Allow,
             Self::Deny => ControlVerdict::Deny,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PolicyOperation {
+    #[default]
+    Connect,
+    Send,
+    Bind,
+    Listen,
+}
+impl PolicyOperation {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "connect" => Ok(Self::Connect),
+            "send" => Ok(Self::Send),
+            "bind" => Ok(Self::Bind),
+            "listen" => Ok(Self::Listen),
+            _ => Err(format!("invalid network operation {value}")),
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Send => "send",
+            Self::Bind => "bind",
+            Self::Listen => "listen",
+        }
+    }
+    fn host_value(self) -> NetworkPolicyOperation {
+        match self {
+            Self::Connect => NetworkPolicyOperation::Connect,
+            Self::Send => NetworkPolicyOperation::Send,
+            Self::Bind => NetworkPolicyOperation::Bind,
+            Self::Listen => NetworkPolicyOperation::Listen,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PolicyProtocol {
+    #[default]
+    Any,
+    Tcp,
+    Udp,
+}
+impl PolicyProtocol {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "any" => Ok(Self::Any),
+            "tcp" => Ok(Self::Tcp),
+            "udp" => Ok(Self::Udp),
+            _ => Err(format!("invalid network protocol {value}")),
+        }
+    }
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        }
+    }
+    fn host_value(self) -> NetworkPolicyProtocol {
+        match self {
+            Self::Any => NetworkPolicyProtocol::Any,
+            Self::Tcp => NetworkPolicyProtocol::Tcp,
+            Self::Udp => NetworkPolicyProtocol::Udp,
         }
     }
 }

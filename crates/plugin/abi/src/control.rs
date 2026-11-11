@@ -83,6 +83,12 @@ pub mod file_policy {
         pub const OPEN: u8 = 1;
         pub const MKDIR: u8 = 2;
         pub const RMDIR: u8 = 3;
+        pub const READ: u8 = 4;
+        pub const WRITE: u8 = 5;
+        pub const DELETE: u8 = 6;
+        pub const ATTR: u8 = 7;
+        pub const RENAME: u8 = 8;
+        pub const LINK: u8 = 9;
     }
 
     pub mod patch_op_code {

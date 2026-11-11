@@ -97,8 +97,17 @@ impl<'a> LsmAuditProjection<'a> {
             1 => ("file-access", "open"),
             2 => ("file-access", "mkdir"),
             3 => ("file-access", "rmdir"),
+            6 => ("file-access", "read"),
+            7 => ("file-access", "write"),
+            8 => ("file-access", "delete"),
+            9 => ("file-access", "attr"),
+            10 => ("file-access", "rename"),
+            11 => ("file-access", "link"),
             4 => ("command-execution", "exec"),
             5 => ("network-action", "connect"),
+            12 => ("network-action", "send"),
+            13 => ("network-action", "bind"),
+            14 => ("network-action", "listen"),
             other => return Err(format!("unknown LSM audit domain {other}")),
         };
         let (decision, result) = match audit.decision {
@@ -129,14 +138,28 @@ impl<'a> LsmAuditProjection<'a> {
         if audit.error != 0 {
             metadata.insert("resource_error".into(), audit.error.to_string());
         }
-        if audit.domain == 5 {
-            metadata.insert("remote_endpoint".into(), audit.resource.clone());
+        if matches!(audit.domain, 5 | 12..=14) {
+            let endpoint_key = if matches!(audit.domain, 13 | 14) {
+                "local_endpoint"
+            } else {
+                "remote_endpoint"
+            };
+            metadata.insert(endpoint_key.into(), audit.resource.clone());
+            metadata.insert(
+                "protocol".into(),
+                match audit.protocol {
+                    6 => "tcp".into(),
+                    17 => "udp".into(),
+                    other => other.to_string(),
+                },
+            );
         }
         Ok(EnforcementPayload {
             backend: "bpf-lsm".into(),
             operation: operation.into(),
             decision: decision.into(),
-            path: (audit.domain != 5 && !audit.resource.is_empty()).then(|| audit.resource.clone()),
+            path: (!matches!(audit.domain, 5 | 12..=14) && !audit.resource.is_empty())
+                .then(|| audit.resource.clone()),
             rule_id: (!audit.rule_id.is_empty()).then(|| audit.rule_id.clone()),
             result: result.into(),
             metadata,

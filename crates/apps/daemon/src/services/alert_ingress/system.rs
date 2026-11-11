@@ -189,7 +189,10 @@ pub(in crate::services) enum NetworkConnectionDenySource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(in crate::services) struct NetworkConnectionBoundaryAlert {
     operation: &'static str,
-    remote_endpoint: String,
+    endpoint: String,
+    endpoint_side: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol: Option<String>,
     rule_id: String,
     policy_owner_instance_id: String,
     process_id: u64,
@@ -203,6 +206,25 @@ pub(in crate::services) struct NetworkConnectionBoundaryAlert {
 }
 
 impl NetworkConnectionBoundaryAlert {
+    pub(in crate::services) fn with_action(
+        mut self,
+        operation: &'static str,
+        protocol: u8,
+    ) -> Self {
+        self.operation = operation;
+        self.endpoint_side = if matches!(operation, "bind" | "listen") {
+            "local"
+        } else {
+            "remote"
+        };
+        self.protocol = Some(match protocol {
+            6 => "tcp".into(),
+            17 => "udp".into(),
+            other => other.to_string(),
+        });
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::services) fn new(
         remote_endpoint: String,
@@ -215,7 +237,9 @@ impl NetworkConnectionBoundaryAlert {
     ) -> Self {
         Self {
             operation: "connect",
-            remote_endpoint,
+            endpoint: remote_endpoint,
+            endpoint_side: "remote",
+            protocol: None,
             rule_id,
             policy_owner_instance_id,
             process_id,
@@ -278,7 +302,7 @@ pub(super) fn register(
         producer_plugin_id: DAEMON_ENFORCEMENT_INSTANCE_ID.to_string(),
         definition_key: NETWORK_DEFINITION_KEY.to_string(),
         kind: "network.connection.boundary-violation".to_string(),
-        title: "Out-of-bound network connection denied".to_string(),
+        title: "Out-of-bound network operation denied".to_string(),
         severity: AlertSeverity::High,
         payload_schema_id: NETWORK_PAYLOAD_SCHEMA_ID.to_string(),
     };
