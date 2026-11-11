@@ -38,7 +38,7 @@ class RangePublication:
             self.expect("127.1.1.1:170", "range-tcp", "tcp")
         self.dynamic._publish_network(self.owner, [])
         peer = "wasm.network-policy-peer"
-        self.dynamic.api.load("network-policy-peer", peer, {"network_policy_rules_apply": [
+        self.dynamic.api.load(self.dynamic.api.package_key(peer), peer, {"network_policy_rules_apply": [
             {"decision": "deny", "endpoint_scope": "*"}]})
         try:
             self.dynamic._publish_network(self.owner, [{"rule_id": "range-owner", "decision": "deny", "endpoint": "127.0.0.0/8:100-200"}])

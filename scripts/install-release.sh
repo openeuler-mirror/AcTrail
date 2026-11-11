@@ -27,6 +27,10 @@ Environment:
   CARGO_TARGET_DIR
                 Shared Cargo output directory for binaries, TLS runtimes, and
                 WASM plugins. Defaults to target.
+
+The installer also prepares the optional LSM grey module for the running kernel
+when matching headers, BTF and pahole are available. The daemon loads it only
+when its effective LSM backend and grey mode require it.
 EOF
 }
 
@@ -201,6 +205,30 @@ run cargo build --release --target wasm32-wasip2 \
 mapfile -t binary_install < <(install_prefix "$dest_dir")
 mapfile -t plugin_install < <(install_prefix "$plugin_root")
 mapfile -t config_install < <(install_prefix "$config_root")
+
+# Prepare the optional module without loading it into an unrelated workload.
+# All failures here are optional: auto mode can use ordinary LSM at startup.
+kernel_release="$(uname -r)"
+kernel_build="${ACTRAIL_KERNEL_BUILD:-/lib/modules/$kernel_release/build}"
+kernel_btf="${ACTRAIL_KERNEL_BTF:-/sys/kernel/btf/vmlinux}"
+module_dir="/lib/modules/$kernel_release/extra"
+if [[ -d "$kernel_build" && -r "$kernel_btf" ]] && command -v pahole >/dev/null 2>&1; then
+  if bash "$script_dir/../crates/access_control/kernel/build.sh"; then
+    mapfile -t module_install < <(install_prefix "$module_dir")
+    if "${module_install[@]}" install -d "$module_dir" &&
+       "${module_install[@]}" install -m 0644 \
+         "$script_dir/../crates/access_control/kernel/actrail_lsm_grey.ko" "$module_dir/actrail_lsm_grey.ko" &&
+       "${module_install[@]}" depmod -a "$kernel_release"; then
+      echo "LSM grey module installed for $kernel_release; loading follows daemon backend selection"
+    else
+      echo "LSM grey module installation unavailable; auto mode will probe and use rule fallback if needed" >&2
+    fi
+  else
+    echo "LSM grey module build unavailable; continuing installation" >&2
+  fi
+else
+  echo "LSM grey module skipped: matching headers, kernel BTF or pahole unavailable" >&2
+fi
 
 run "${binary_install[@]}" install -d "$dest_dir"
 run "${plugin_install[@]}" install -d "$otel_jsonl_install_dir"

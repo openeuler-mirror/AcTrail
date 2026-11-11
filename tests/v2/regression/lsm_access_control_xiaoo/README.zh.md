@@ -132,6 +132,8 @@ python3 tests/v2/regression/lsm_access_control_xiaoo/continued/fastopen/run.py
 
 文件语义测试还验证 truncate、ftruncate 和 O_TRUNC。各次调用后核验实际内容和长度，拒绝截断时核验文件保持完整。
 
+LSM 场景还交替打开 240 字节路径、短路径、超出资源容量的路径和短路径。测试核验实际允许/拒绝结果、长短路径审计，以及解析失败审计不携带旧路径。
+
 运行真实 Xiaoo，在保留同一 FD 的同时分别发布 open、write、read、delete、attr 拒绝规则，再撤销规则。测试核验打开门禁、已有 FD 读写、共享映射、私有写时复制映射、实际文件内容、unlink 后目录项及 chmod/chown 后模式和属主。
 
 ```bash

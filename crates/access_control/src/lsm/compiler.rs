@@ -1,6 +1,8 @@
 //! Encode immutable file, command and network policy snapshots.
+mod grey;
 mod network;
 use super::controller::{LsmController, PolicyStores};
+use crate::policy::file::RuleDecision;
 use config_core::daemon::{EnforcementDecision, LsmDenySignal};
 use plugin_system::FilePolicyOperation;
 use std::collections::BTreeMap;
@@ -8,10 +10,12 @@ use std::collections::BTreeMap;
 /// Explicit byte encoding keeps the userspace/kernel ABI independent of Rust padding.
 #[derive(Clone)]
 pub(super) struct PolicySnapshot {
-    pub(super) entries: BTreeMap<[u8; 260], [u8; 288]>,
+    pub(super) entries: BTreeMap<[u8; 260], [u8; 432]>,
 }
 
 impl PolicySnapshot {
+    const RESOURCE_REQUIRED: u32 = 16;
+
     pub(super) fn compile(
         controller: &LsmController,
         stores: &PolicyStores,
@@ -96,7 +100,7 @@ impl PolicySnapshot {
                         rule.rule_id
                     ));
                 }
-                let value = Self::value(
+                let mut value = Self::value(
                     controller,
                     rank as u32,
                     rule.decision.as_str(),
@@ -106,6 +110,17 @@ impl PolicySnapshot {
                     &rule.rule_id,
                     &rule.owner_instance_id,
                 )?;
+                if rule.decision.as_str() == "gray" {
+                    Self::encode_grey(
+                        &mut value,
+                        rule.gray_target
+                            .as_deref()
+                            .ok_or("LSM command grey rule requires a target")?,
+                        command.gray.timeout_ms,
+                        command.gray.concurrency_limit,
+                        command.gray.fallback == EnforcementDecision::Deny,
+                    )?;
+                }
                 let mut path = rule.executable.into_bytes();
                 path.push(0);
                 snapshot.check_path(controller, &path)?;
@@ -162,7 +177,7 @@ impl PolicySnapshot {
             snapshot.insert(domain, &[], value)?;
         }
         if file.enabled {
-            for (rank, rule) in rules.effective_rule_views().into_iter().enumerate() {
+            for (rank, (rule, decision)) in rules.effective_lsm_rule_views().enumerate() {
                 let domains: &[u32] = match rule.operation {
                     FilePolicyOperation::Any => &[1, 2, 3, 6, 7, 8, 9, 10, 11],
                     FilePolicyOperation::Open => &[1],
@@ -183,7 +198,7 @@ impl PolicySnapshot {
                 if domains.is_empty() {
                     continue;
                 }
-                let value = Self::value(
+                let mut value = Self::value(
                     controller,
                     rank as u32,
                     rule.decision.as_str(),
@@ -193,6 +208,21 @@ impl PolicySnapshot {
                     &rule.rule_id,
                     &rule.owner_instance_id,
                 )?;
+                if let RuleDecision::SyncPlugin {
+                    instance_id,
+                    timeout_ms,
+                    concurrency_limit,
+                    fallback,
+                } = decision
+                {
+                    Self::encode_grey(
+                        &mut value,
+                        instance_id,
+                        *timeout_ms,
+                        *concurrency_limit,
+                        *fallback == EnforcementDecision::Deny,
+                    )?;
+                }
                 let recursive = rule.path.strip_suffix("/**");
                 let base = recursive.unwrap_or(&rule.path);
                 let base = if base.is_empty() { "/" } else { base };
@@ -236,11 +266,26 @@ impl PolicySnapshot {
         Ok(key)
     }
 
-    fn insert(&mut self, domain: u32, resource: &[u8], value: [u8; 288]) -> Result<(), String> {
+    fn insert(&mut self, domain: u32, resource: &[u8], value: [u8; 432]) -> Result<(), String> {
+        if !resource.is_empty() {
+            self.require_resource(domain)?;
+        }
         // Effective views are ordered by policy precedence; the first identical key wins.
         self.entries
             .entry(Self::key(domain, resource)?)
             .or_insert(value);
+        Ok(())
+    }
+
+    // Publish resource requirements in the same snapshot as the matching rules.
+    fn require_resource(&mut self, domain: u32) -> Result<(), String> {
+        let default = self
+            .entries
+            .get_mut(&Self::key(domain, &[])?)
+            .expect("domain default");
+        let flags =
+            u32::from_ne_bytes(default[8..12].try_into().unwrap()) | Self::RESOURCE_REQUIRED;
+        default[8..12].copy_from_slice(&flags.to_ne_bytes());
         Ok(())
     }
 
@@ -254,15 +299,14 @@ impl PolicySnapshot {
         revision: u64,
         rule_id: &str,
         owner: &str,
-    ) -> Result<[u8; 288], String> {
-        let deny = match decision {
-            "allow" => false,
-            "deny" => true,
-            "default" => default == EnforcementDecision::Deny,
+    ) -> Result<[u8; 432], String> {
+        let decision = match decision {
+            "allow" => 0_u32,
+            "deny" => 1,
+            "default" => u32::from(default == EnforcementDecision::Deny),
+            "gray" => 2,
             _ => {
-                return Err(format!(
-                    "LSM rule {rule_id} requires a synchronous userspace decision; use allow or deny"
-                ));
+                return Err(format!("LSM rule {rule_id} has an invalid decision"));
             }
         };
         if rule_id.len() >= 128 || owner.len() >= 128 {
@@ -271,9 +315,14 @@ impl PolicySnapshot {
         if rule_id.contains('\0') || owner.contains('\0') {
             return Err("LSM rule and owner identifiers must not contain NUL".into());
         }
-        let mut value = [0; 288];
+        let mut value = [0; 432];
         let flags = 8
             | u32::from(audit)
+            | if audit || decision != 0 {
+                Self::RESOURCE_REQUIRED
+            } else {
+                0
+            }
             | if controller.config.deny_on_error {
                 4
             } else {
@@ -286,7 +335,7 @@ impl PolicySnapshot {
         };
         for (offset, field) in [
             (0, rank),
-            (4, u32::from(deny)),
+            (4, decision),
             (8, flags),
             (12, signal),
             (16, controller.config.path_max_bytes),

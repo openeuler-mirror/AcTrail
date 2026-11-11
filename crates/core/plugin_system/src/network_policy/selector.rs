@@ -125,21 +125,6 @@ impl NetworkPolicyEndpointSelector {
             && self.first_port <= other.last_port
             && other.first_port <= self.last_port
     }
-
-    /// Split an inclusive 16-bit interval into at most 30 aligned prefixes.
-    pub fn port_prefixes(self) -> Vec<(u8, u16)> {
-        let mut result = Vec::new();
-        let mut first = u32::from(self.first_port);
-        let last = u32::from(self.last_port);
-        while first <= last {
-            let aligned = first.trailing_zeros().min(16);
-            let remaining = 31 - (last - first + 1).leading_zeros();
-            let bits = aligned.min(remaining);
-            result.push(((16 - bits) as u8, first as u16));
-            first += 1 << bits;
-        }
-        result
-    }
 }
 
 impl Display for NetworkPolicyEndpointSelector {

@@ -1,7 +1,7 @@
 //! Compile network scopes into port-prefix buckets with IP longest-prefix lookup.
 use super::PolicySnapshot;
 use crate::lsm::controller::{LsmController, PolicyStores};
-use plugin_system::{NetworkPolicyEndpointSelector, NetworkPolicyOperation};
+use plugin_system::{ControlVerdict, NetworkPolicyEndpointSelector, NetworkPolicyOperation};
 use std::net::IpAddr;
 
 impl PolicySnapshot {
@@ -30,7 +30,8 @@ impl PolicySnapshot {
                 NetworkPolicyOperation::Bind => 13,
                 NetworkPolicyOperation::Listen => 14,
             };
-            let value = Self::value(
+            self.require_resource(domain)?;
+            let mut value = Self::value(
                 controller,
                 rank as u32,
                 rule.decision.as_str(),
@@ -40,8 +41,23 @@ impl PolicySnapshot {
                 &rule.rule_id,
                 &rule.owner_instance_id,
             )?;
+            if rule.decision.as_str() == "gray" {
+                Self::encode_grey(
+                    &mut value,
+                    rule.gray_target
+                        .as_deref()
+                        .ok_or("LSM network grey rule requires a target")?,
+                    rule.timeout_ms
+                        .ok_or("LSM network grey rule requires timeout_ms")?,
+                    rule.concurrency_limit
+                        .ok_or("LSM network grey rule requires concurrency_limit")?,
+                    rule.fallback
+                        .ok_or("LSM network grey rule requires fallback")?
+                        == ControlVerdict::Deny,
+                )?;
+            }
             let mut bitmap = 0_u32;
-            for (port_prefix, port) in scope.port_prefixes() {
+            for (port_prefix, port) in Self::port_prefixes(scope.ports()) {
                 bitmap |= 1 << port_prefix;
                 let mut resource = vec![rule.protocol.code(), port_prefix];
                 resource.extend_from_slice(&port.to_be_bytes());
@@ -73,5 +89,20 @@ impl PolicySnapshot {
             }
         }
         Ok(())
+    }
+
+    /// Encode an inclusive port interval as aligned LPM buckets.
+    fn port_prefixes((first, last): (u16, u16)) -> Vec<(u8, u16)> {
+        let mut result = Vec::new();
+        let mut first = u32::from(first);
+        let last = u32::from(last);
+        while first <= last {
+            let aligned = first.trailing_zeros().min(16);
+            let remaining = 31 - (last - first + 1).leading_zeros();
+            let bits = aligned.min(remaining);
+            result.push(((16 - bits) as u8, first as u16));
+            first += 1 << bits;
+        }
+        result
     }
 }

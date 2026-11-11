@@ -136,6 +136,8 @@ pub enum LsmDenySignal {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LsmConfig {
+    /// Optional synchronous userspace decisions for sleepable LSM hooks.
+    pub grey: LsmGreyConfig,
     /// Maximum entries in each complete published policy, including defaults (default: 4096).
     pub policy_max_entries: u32,
     /// Maximum path buffer bytes including the terminator; bounded by the ABI (default: 252).
@@ -159,6 +161,7 @@ pub struct LsmConfig {
 impl Default for LsmConfig {
     fn default() -> Self {
         Self {
+            grey: LsmGreyConfig::default(),
             policy_max_entries: 4096,
             path_max_bytes: 252,
             audit_buffer_bytes: 1_048_576,
@@ -170,6 +173,34 @@ impl Default for LsmConfig {
             deny_signal: LsmDenySignal::None,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LsmGreyConfig {
+    pub mode: LsmGreyMode,
+    pub device_path: String,
+    pub workers: u32,
+}
+
+impl Default for LsmGreyConfig {
+    fn default() -> Self {
+        Self {
+            mode: LsmGreyMode::Auto,
+            device_path: "/dev/actrail_lsm_grey".into(),
+            workers: 4,
+        }
+    }
+}
+
+/// Startup policy for optional kernel-assisted synchronous decisions.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LsmGreyMode {
+    #[default]
+    Auto,
+    Required,
+    Disabled,
 }
 
 impl AccessControlConfig {
@@ -189,6 +220,14 @@ impl AccessControlConfig {
     }
 
     pub fn validate(&self, requests: &[CapabilityRequest]) -> Result<(), String> {
+        let grey = &self.backends.lsm.grey;
+        if grey.mode != LsmGreyMode::Disabled
+            && (grey.workers == 0 || grey.device_path.trim().is_empty())
+        {
+            return Err(
+                "access_control.backends.lsm.grey requires workers > 0 and a device_path".into(),
+            );
+        }
         if self.uses_lsm() {
             let lsm = &self.backends.lsm;
             if lsm.alert_window_ms == 0 || lsm.alert_max_groups == 0 {

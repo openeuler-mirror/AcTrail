@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "continued"))
 from mapping import MappingOperations
 from mutations import FileMutations
 from truncation import TruncationOperations
+from resources import FileResources
 
 
 class FileSemanticsWorkload:
@@ -32,7 +33,7 @@ class FileSemanticsWorkload:
         if private == ctypes.c_void_p(-1).value:
             maps.raise_errno()
         try:
-            for phase in ("open", "write", "read", "delete", "attr", "restore"):
+            for phase in ("empty", "open", "write", "read", "delete", "attr", "restore"):
                 (self.root / f"ready-{phase}").touch()
                 self.wait(self.root / f"go-{phase}")
                 operations = {}
@@ -54,7 +55,10 @@ class FileSemanticsWorkload:
                 truncation.run(operations)
                 destination = self.root / f"result-{phase}.json"
                 temporary = destination.with_suffix(".tmp")
-                temporary.write_text(json.dumps({"processes": processes, "operations": operations}))
+                document = {"processes": processes, "operations": operations}
+                if self.arguments.resources:
+                    document["resources"] = FileResources(self.root).run()
+                temporary.write_text(json.dumps(document))
                 temporary.rename(destination)
             print("ACTRAIL_FILE_SEMANTICS_DONE")
         finally:
@@ -100,5 +104,6 @@ if __name__ == "__main__":
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--xiaoo", type=Path, required=True)
     parser.add_argument("--timeout", type=float, required=True)
+    parser.add_argument("--resources", action="store_true")
     parser.add_argument("--poll", type=float, required=True)
     FileSemanticsWorkload(parser.parse_args()).run()

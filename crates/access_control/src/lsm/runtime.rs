@@ -14,6 +14,8 @@ pub struct LsmRuntime {
     _links: Vec<Link>,
     _publisher: Arc<PolicyPublisher>,
     _object: Object,
+    // Links and object are released before the exclusive device session.
+    _grey: Option<super::grey::LsmGreyBroker>,
     pending: Arc<Mutex<Vec<LsmAuditEvent>>>,
     batch_max: usize,
     counters: MapHandle,
@@ -22,13 +24,107 @@ pub struct LsmRuntime {
 
 impl LsmRuntime {
     pub fn attach(controller: &Arc<LsmController>, scope: &Object) -> Result<Self, String> {
+        let mode = controller.config.grey.mode;
+        let (object, grey) = if mode == config_core::daemon::LsmGreyMode::Disabled {
+            (Self::load_object(controller, scope, false)?, None)
+        } else {
+            let prepare = || {
+                let broker = super::grey::LsmGreyBroker::start(
+                    &controller.config.grey,
+                    controller.grey_handler.clone(),
+                )?;
+                let object = Self::load_object(controller, scope, true)?;
+                Ok::<_, String>((object, Some(broker)))
+            };
+            match prepare() {
+                Ok(session) => {
+                    tracing::info!("LSM grey dynamic decisions enabled");
+                    session
+                }
+                Err(error) if mode == config_core::daemon::LsmGreyMode::Auto => {
+                    tracing::warn!(%error, "LSM grey unavailable; using ordinary LSM with rule fallback");
+                    (Self::load_object(controller, scope, false)?, None)
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let slots = object
+            .maps()
+            .find(|map| map.name() == "ac_policy_slots")
+            .ok_or("LSM policy map missing")?;
+        let publisher = Arc::new(PolicyPublisher::new(
+            MapHandle::try_from(&slots).map_err(|error| error.to_string())?,
+            controller.config.policy_max_entries,
+        ));
+        controller.bind(&publisher)?;
+        let pending = Arc::new(Mutex::new(Vec::new()));
+        let receiver = pending.clone();
+        let batch_max = controller.config.audit_batch_max as usize;
+        let mut ring_builder = RingBufferBuilder::new();
+        let events = object
+            .maps()
+            .find(|map| map.name() == "ac_events")
+            .ok_or("LSM audit map missing")?;
+        ring_builder
+            .add(&events, move |raw| {
+                match LsmAuditEvent::decode(raw) {
+                    Ok(event) => match receiver.lock() {
+                        Ok(mut pending) => pending.push(event),
+                        Err(_) => return -1,
+                    },
+                    Err(error) => tracing::error!(%error, "invalid LSM audit record"),
+                }
+                0
+            })
+            .map_err(|error| error.to_string())?;
+        let ring = ring_builder
+            .build()
+            .map_err(|error| format!("LSM audit consumer: {error}"))?;
+        let counters = object
+            .maps()
+            .find(|map| map.name() == "ac_counters")
+            .ok_or("LSM counters missing")?;
+        let counters = MapHandle::try_from(&counters).map_err(|error| error.to_string())?;
+        let mut links = Vec::new();
+        for program in object.progs_mut() {
+            if !program.autoload() {
+                continue;
+            }
+            links.push(program.attach_lsm().map_err(|error| {
+                format!(
+                    "attach BPF LSM {}: {error}",
+                    program.name().to_string_lossy()
+                )
+            })?);
+        }
+        Ok(Self {
+            ring,
+            _links: links,
+            _publisher: publisher,
+            _object: object,
+            _grey: grey,
+            pending,
+            batch_max,
+            counters,
+            last_audit_dropped: AtomicU64::new(0),
+        })
+    }
+
+    // Failed grey objects drop before retrying the ordinary variant.
+    // Policy publication stays outside this fallback, so policy errors remain fatal.
+    fn load_object(
+        controller: &Arc<LsmController>,
+        scope: &Object,
+        grey: bool,
+    ) -> Result<Object, String> {
         let observer_binding = scope
             .maps()
             .any(|map| map.name() == "pending_exec_observer_bindings");
-        let bytes: &[u8] = if observer_binding {
-            include_bytes!(env!("ACTRAIL_LSM_TASK_OBJECT"))
-        } else {
-            include_bytes!(env!("ACTRAIL_LSM_HASH_OBJECT"))
+        let bytes: &[u8] = match (grey, observer_binding) {
+            (false, true) => include_bytes!(env!("ACTRAIL_LSM_TASK_OBJECT")),
+            (false, false) => include_bytes!(env!("ACTRAIL_LSM_HASH_OBJECT")),
+            (true, true) => include_bytes!(env!("ACTRAIL_LSM_GREY_TASK_OBJECT")),
+            (true, false) => include_bytes!(env!("ACTRAIL_LSM_GREY_HASH_OBJECT")),
         };
         let mut builder = ObjectBuilder::default();
         let mut object = builder
@@ -81,65 +177,7 @@ impl LsmRuntime {
         let object = object
             .load()
             .map_err(|error| format!("load BPF LSM: {error}"))?;
-        let slots = object
-            .maps()
-            .find(|map| map.name() == "ac_policy_slots")
-            .ok_or("LSM policy map missing")?;
-        let publisher = Arc::new(PolicyPublisher::new(
-            MapHandle::try_from(&slots).map_err(|error| error.to_string())?,
-            controller.config.policy_max_entries,
-        ));
-        controller.bind(&publisher)?;
-        let pending = Arc::new(Mutex::new(Vec::new()));
-        let receiver = pending.clone();
-        let batch_max = controller.config.audit_batch_max as usize;
-        let mut ring_builder = RingBufferBuilder::new();
-        let events = object
-            .maps()
-            .find(|map| map.name() == "ac_events")
-            .ok_or("LSM audit map missing")?;
-        ring_builder
-            .add(&events, move |raw| {
-                match LsmAuditEvent::decode(raw) {
-                    Ok(event) => match receiver.lock() {
-                        Ok(mut pending) => pending.push(event),
-                        Err(_) => return -1,
-                    },
-                    Err(error) => tracing::error!(%error, "invalid LSM audit record"),
-                }
-                0
-            })
-            .map_err(|error| error.to_string())?;
-        let ring = ring_builder
-            .build()
-            .map_err(|error| format!("LSM audit consumer: {error}"))?;
-        let mut links = Vec::new();
-        let counters = object
-            .maps()
-            .find(|map| map.name() == "ac_counters")
-            .ok_or("LSM counters missing")?;
-        let counters = MapHandle::try_from(&counters).map_err(|error| error.to_string())?;
-        for program in object.progs_mut() {
-            if !program.autoload() {
-                continue;
-            }
-            links.push(program.attach_lsm().map_err(|error| {
-                format!(
-                    "attach BPF LSM {}: {error}",
-                    program.name().to_string_lossy()
-                )
-            })?);
-        }
-        Ok(Self {
-            ring,
-            _links: links,
-            _publisher: publisher,
-            _object: object,
-            pending,
-            batch_max,
-            counters,
-            last_audit_dropped: AtomicU64::new(0),
-        })
+        Ok(object)
     }
 
     pub fn poll_fd(&self) -> i32 {

@@ -194,6 +194,7 @@ impl StorageAttachService {
                 && payload_config.tls.enabled
                 && payload_config.tls.capture_backend.is_sync(),
         );
+        let control_plugins = ControlPluginRuntime::new();
         let lsm_access_control = if access_control_config.uses_lsm() {
             if !ebpf_config.enabled {
                 return Err(control_contract::reply::ControlError::new(
@@ -216,6 +217,9 @@ impl StorageAttachService {
                     } else {
                         NetworkControlConfig::disabled()
                     },
+                    std::sync::Arc::new(crate::services::access_control::LsmPluginDecider(
+                        control_plugins.downgrade(),
+                    )),
                 )
                 .map_err(|message| {
                     control_contract::reply::ControlError::new("lsm_policy", message)
@@ -331,7 +335,7 @@ impl StorageAttachService {
             resource_metrics,
             storage_retention: StorageRetentionService::new(storage_retention_config),
             enforcement,
-            control_plugins: ControlPluginRuntime::new(),
+            control_plugins,
             plugin_configs: Default::default(),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,

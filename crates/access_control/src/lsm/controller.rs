@@ -25,6 +25,7 @@ pub(super) struct ControllerState {
 /// Reusing those entries avoids recompiling file rules during command/network updates.
 pub struct LsmController {
     pub(super) config: LsmConfig,
+    pub(super) grey_handler: Arc<dyn super::LsmGreyHandler>,
     pub(super) file_config: EnforcementConfig,
     file_operations: FileControlConfig,
     pub(super) command_config: CommandControlConfig,
@@ -42,6 +43,7 @@ impl LsmController {
         file_operations: FileControlConfig,
         command_config: CommandControlConfig,
         network_config: NetworkControlConfig,
+        grey_handler: Arc<dyn super::LsmGreyHandler>,
     ) -> Result<Arc<Self>, String> {
         let command = if command_config.enabled {
             CommandPolicyStore::load(&command_config.rules_path)?
@@ -55,6 +57,7 @@ impl LsmController {
         };
         let controller = Arc::new(Self {
             config,
+            grey_handler,
             file_config,
             file_operations,
             command_config,

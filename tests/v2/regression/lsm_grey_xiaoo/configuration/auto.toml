@@ -1,0 +1,3 @@
+# Automatically use grey decisions when the kernel module is available.
+[access_control.backends.lsm.grey]
+mode = "auto"

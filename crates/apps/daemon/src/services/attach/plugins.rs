@@ -468,6 +468,10 @@ fn validate_plugin_capability_grants(
     let mut ungranted = Vec::new();
     for capability in manifest.capabilities() {
         match capability {
+            PluginCapability::HttpRequest if !host_grants.can_request_http() => {
+                ungranted.push(capability.as_str());
+            }
+            PluginCapability::HttpRequest => {}
             PluginCapability::PayloadRead if !host_grants.can_read_payload() => {
                 ungranted.push(capability.as_str());
             }

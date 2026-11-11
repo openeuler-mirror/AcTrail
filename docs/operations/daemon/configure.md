@@ -120,6 +120,36 @@ seccomp 网络规则拒绝在首次收到时生成告警，后续拒绝按
 `network_control.audit_enabled`。关闭审计仍会生成规则拒绝告警。默认裁决、故障回退和
 上下文捕获失败继续使用各自的审计或错误日志表达。
 
+## LSM 动态裁决
+
+自定义 LSM grey 模块允许受控线程等待用户态插件的裁决。安装脚本尝试编译并安装当前内核的模块。daemon 根据实际启用的后端和以下模式决定是否加载：
+
+```toml
+[access_control.backends.lsm.grey]
+mode = "auto"
+device_path = "/dev/actrail_lsm_grey"
+workers = 4
+```
+
+`auto` 是默认模式。只有启用了 LSM 后端才尝试加载模块。模块、设备或 grey BPF 加载不可用时，启动日志记录原因，并使用普通 LSM，grey 规则直接采用各自的 fallback。普通 LSM 自身不可用仍会启动失败。
+
+`required` 要求动态 grey 可用，否则启动失败。`disabled` 跳过模块加载和设备 worker。使用其他控制后端时，这三个模式都不会触发模块加载。配置和策略错误仍会启动失败。
+
+动态 grey 要求 daemon 以 root 运行，并在挂载 LSM 程序前独占打开设备。黑白名单由内核直接裁决。
+支持睡眠的 hook 命中 grey 后，由 worker 调用规则指定的控制插件。插件可以请求独立的
+本地安全服务。服务进程应在受控 agent 的 trace 范围外启动，服务规则库和模板目录按服务自身权限访问。
+
+请求等待、并发上限和截止时间由内核模块管理。插件执行时长限制为该请求的剩余时间。
+插件不存在或执行期间被卸载时拒绝访问。插件错误、超时及不支持睡眠的 hook 按规则的
+fallback 裁决。最终结果通过 LSM 审计通道记录。
+
+LSM 插件请求提供真实的访问目标、操作、trace 和进程身份。进程 PID 使用 daemon 所在
+命名空间可见的 observer_tgid，generation 为进程启动的 BOOTTIME 纳秒值。命令 grey 请求的
+command_execution_context 包含执行路径和当前 exec 采集的完整 argv。
+模块参数 argv_max_count 和 argv_arg_max_bytes 控制采集上限。插件通过
+command-execution.current-context-query 查询该上下文。file_policy_context 和
+network_action_context 仍为空，通用 decision summary 提供访问目标和操作。
+
 ## 仅在线处理
 
 默认观测存储为 SQLite。需要丢弃观测写入时，在 patch 中设置：

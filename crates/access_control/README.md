@@ -36,10 +36,65 @@ and attachment. The implementation has been exercised on Linux 6.6 aarch64.
 
 ## Kernel decision path
 
+Each operation's immutable policy default records whether resource inspection
+is required. Adding or removing rules updates this requirement in the same
+snapshot.
+
+| Policy for the current operation | Scratch and resource inspection | Behavior |
+| --- | --- | --- |
+| No rules, default allow, no audit | Skipped | Allow after scope and policy lookup |
+| No rules, default deny | Retained | Apply the default decision and configured audit |
+| No rules, default allow with audit | Retained | Allow and record the resource |
+| Resource rules exist | Retained | Match the resource and apply the selected decision |
+
+Combined file operations check all relevant permissions in the same snapshot.
+They resolve the path once when at least one permission requires it.
+
+Preparation is lazy within each hook invocation. Scope and policy lookup run
+once; rename and link reuse that context for both names. A default lookup uses
+a prebuilt read-only key, so scratch lookup or allocation occurs only when a
+domain requires a resource. The context expires when the hook returns. Rename
+still checks source, target and any overwritten object's delete permission;
+link still checks both names. Policy updates take effect on the next hook.
+
+The hook reads the selected rule directly from the frozen policy map. The
+context holds a rule reference for the current BPF invocation. Kernel RCU
+protects the map lifetime, including tasks-trace RCU during sleepable grey
+decisions. Rule identifiers and revision are copied only when creating an audit
+record or grey request. Grey timeout and concurrency values are read when
+entering the grey branch.
+
+Resource scratch is reused without clearing its 252-byte capacity on entry.
+The hook tracks the valid length of each resolved path or endpoint. Failed
+resolution leaves no valid resource. Audit and grey records initialize their
+fixed-size resource field at emission and copy only the valid bytes.
+
+Measure retained file reads, writes and socket sends with a real Xiaoo process
+and freshly generated configuration:
+
+```bash
+python3 tests/v2/regression/lsm_access_control_xiaoo/performance/retained/run.py run \
+  --order off empty lsm lsm empty off \
+  --count 1000 \
+  --rounds 5 \
+  --warmup 100 \
+  --timeout 120
+```
+
+| Mode | LSM control | Benchmark rule files |
+| --- | --- | --- |
+| `off` | Disabled | Rules are not enforced |
+| `empty` | Enabled | Empty |
+| `lsm` | Enabled | Explicit allow rules for file open and network connect |
+
+Both enabled modes use default allow with audit disabled. The timed read, write
+and send operations have no explicit rules in either mode.
+
 For a scoped process the hook obtains the current immutable policy map, resolves
 its resource, matches a rule and returns zero or `-EACCES`. Explicit policy
-precedence is preserved for overlapping recursive paths. Access does not wait
-for a userspace request/reply. Audit records carry the matched rule and owner
+precedence is preserved for overlapping recursive paths. Static allow and deny
+complete in the kernel. Grey can wait for a userspace decision. Audit records
+carry the matched rule and owner
 inline, so later policy updates cannot change their meaning.
 
 Control membership lives in kernel task storage. A root is enrolled from the

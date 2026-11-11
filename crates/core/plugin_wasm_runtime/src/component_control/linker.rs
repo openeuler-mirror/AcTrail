@@ -221,6 +221,7 @@ pub(super) fn component_linker(
     .map_err(component_command_host_import_error)?;
     drop(host);
     NetworkComponentHost::add_to(&mut linker)?;
+    crate::engine::HttpClient::add_to(&mut linker)?;
     Ok(linker)
 }
 
@@ -232,7 +233,8 @@ fn component_command_host_import_error(error: wasmtime::Error) -> PluginRuntimeE
 }
 
 pub(super) fn is_supported_component_control_grant(grant: &str) -> bool {
-    grant == component_abi::grant::CONTEXT_QUERY
+    grant == "http.request"
+        || grant == component_abi::grant::CONTEXT_QUERY
         || grant == component_abi::grant::FILE_ACCESS_CURRENT_MATCH_GET
         || grant == component_abi::grant::FILE_POLICY_RULES_READ
         || grant == component_abi::grant::FILE_POLICY_RULES_MATCH_DRY_RUN

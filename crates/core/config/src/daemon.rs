@@ -41,7 +41,7 @@ pub use crate::retention::{
 };
 pub use access_control::{
     AccessControlBackend, AccessControlConfig, FileControlConfig, FileOpenBackend, LsmConfig,
-    LsmDenySignal,
+    LsmDenySignal, LsmGreyConfig, LsmGreyMode,
 };
 pub use agent::{
     AgentInvocationConfig, DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,

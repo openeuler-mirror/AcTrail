@@ -9,8 +9,11 @@ use plugin_system::{
 };
 use wasmtime::{Config, Engine, Store};
 
+mod http;
 #[path = "engine/state.rs"]
 mod state;
+
+pub(crate) use http::HttpClient;
 
 pub(crate) use state::{
     ControlContextSnapshot, PostTraceCallLimits, WasmHostLimits, WasmStoreState,

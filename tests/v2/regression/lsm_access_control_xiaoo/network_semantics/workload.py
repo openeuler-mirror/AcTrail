@@ -15,7 +15,7 @@ from network import NetworkOperations
 
 
 class NetworkWorkload:
-    phases = ("tcp", "udp", "connect", "bind", "listen", "restore")
+    phases = ("empty", "tcp", "udp", "connect", "bind", "listen", "restore")
 
     def __init__(self, arguments):
         self.arguments = arguments

@@ -8,7 +8,7 @@
 
 测试依次验证：
 
-1. Web load 将 executable scope 转换为 `command-policy.rules.apply:kind=deny,path=/usr/bin/bash`。
+1. Web load 将 executable scope 转换为 `command-policy.rules.apply:kind=deny,path=/usr/bin/bash`。用户额外提供的 HTTP、环境变量、文件策略和网络策略授权被忽略，实际授权不包含这些未声明能力。缺少插件要求的命令 scope 时拒绝加载。
 2. 同时包含授权规则和越权规则的 Configuration Test 以 all-or-nothing 方式拒绝，插件内存配置和 daemon revision 均不变化。
 3. Web Update 生成稳定规则 ID `command-dynamic-1`，带 `-c` argv 的 dry-run 返回 owner、decision 和 revision。
 4. 同一个 `/usr/bin/bash` 以 `--version` 运行时不命中 `[-c,*]`，保持允许。
