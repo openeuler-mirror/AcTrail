@@ -78,7 +78,7 @@ impl DirectSharedObjectResolver {
         let context = root.for_library(&image, &library);
         let outcome = OpenSslProbeDetector::detect_shared_object(&context)?;
         let mut plans = Vec::new();
-        collect_plans(&outcome, ProbeConsumer::Direct, &mut plans);
+        collect_plans(outcome, ProbeConsumer::Direct, &mut plans)?;
         Ok(ProbeResolution { plans })
     }
 }
@@ -146,11 +146,9 @@ fn resolve_plans_with_optional_cache(
         source,
     )?;
     let plans = match outcome {
-        DetectionOutcome::Collected(evidence) => {
+        outcome @ (DetectionOutcome::Collected(_) | DetectionOutcome::Ambiguous(_)) => {
             let mut plans = Vec::new();
-            for child in &evidence.children {
-                collect_plans(child, consumer, &mut plans);
-            }
+            collect_plans(outcome, consumer, &mut plans)?;
             plans
         }
         DetectionOutcome::Matched(candidate)
@@ -160,31 +158,6 @@ fn resolve_plans_with_optional_cache(
             Vec::new()
         }
         DetectionOutcome::Matched(candidate) => vec![candidate.into_plan()],
-        DetectionOutcome::Ambiguous(mut ambiguous) => {
-            if consumer == ProbeConsumer::Direct {
-                ambiguous
-                    .candidates
-                    .retain(|candidate| candidate.capability.executable_by_consumer());
-                if ambiguous.candidates.len() <= 1 {
-                    return Ok(ProbeResolution {
-                        plans: ambiguous
-                            .candidates
-                            .into_iter()
-                            .map(|candidate| candidate.into_plan())
-                            .collect(),
-                    });
-                }
-            }
-            return Err(ToolError::new(format!(
-                "ambiguous TLS probe detection: {}",
-                ambiguous
-                    .candidates
-                    .iter()
-                    .map(|candidate| candidate.detector_path.display())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
         DetectionOutcome::Inapplicable(_) | DetectionOutcome::NoMatch(_)
             if consumer == ProbeConsumer::Direct =>
         {
@@ -262,30 +235,47 @@ fn detect_outcome_with_cache(
 }
 
 fn collect_plans(
-    outcome: &DetectionOutcome,
+    outcome: DetectionOutcome,
     consumer: ProbeConsumer,
     plans: &mut Vec<ProbePointPlan>,
-) {
+) -> ToolResult<()> {
     match outcome {
         DetectionOutcome::Matched(candidate) => {
             if consumer != ProbeConsumer::Direct || candidate.capability.executable_by_consumer() {
-                plans.push(candidate.clone().into_plan());
+                plans.push(candidate.into_plan());
             }
         }
         DetectionOutcome::Collected(evidence) => {
-            for child in &evidence.children {
-                collect_plans(child, consumer, plans);
+            for child in evidence.children {
+                collect_plans(child, consumer, plans)?;
             }
         }
-        DetectionOutcome::Ambiguous(ambiguous) => {
-            for candidate in &ambiguous.candidates {
-                if consumer != ProbeConsumer::Direct
-                    || candidate.capability.executable_by_consumer()
-                {
-                    plans.push(candidate.clone().into_plan());
+        DetectionOutcome::Ambiguous(mut ambiguous) => {
+            if consumer == ProbeConsumer::Direct {
+                ambiguous
+                    .candidates
+                    .retain(|candidate| candidate.capability.executable_by_consumer());
+                if ambiguous.candidates.len() <= 1 {
+                    plans.extend(
+                        ambiguous
+                            .candidates
+                            .into_iter()
+                            .map(|candidate| candidate.into_plan()),
+                    );
+                    return Ok(());
                 }
             }
+            return Err(ToolError::new(format!(
+                "ambiguous TLS probe detection: {}",
+                ambiguous
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.detector_path.display())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
         }
         DetectionOutcome::Inapplicable(_) | DetectionOutcome::NoMatch(_) => {}
     }
+    Ok(())
 }

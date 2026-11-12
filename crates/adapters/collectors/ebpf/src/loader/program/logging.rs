@@ -32,7 +32,7 @@ impl LibbpfLogging {
     }
 
     pub(super) fn runtime_load_started() {
-        Self::print_full(PrintLevel::Info, "ebpf_runtime_load started\n".to_owned());
+        tracing::info!("ebpf_runtime_load started");
     }
 
     fn debug_enabled() -> Result<bool, LoaderError> {

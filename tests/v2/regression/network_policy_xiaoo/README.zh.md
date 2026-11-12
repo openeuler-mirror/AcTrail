@@ -14,7 +14,7 @@
    的官方 WASM 包才通过 Web 以该精确 endpoint 的 deny grant 加载。
 2. 空规则配置的 dry-run 返回 `matched=false decision=allow`，真实 Xiaoo 完成
    provider、Bash tool 和最终响应闭环，marker 内容正确。
-3. Web Configuration Test/Update 发布 `xiaoo-provider-deny`，规则的 `remote`
+3. Web Configuration Test/Update 发布 `xiaoo-provider-deny`，规则的 `endpoint`
    严格等于 provider endpoint；dry-run 返回稳定 owner、rule revision 和递增的
    source revision。
 4. 第二次真实 Xiaoo 以非零状态退出并报告 provider connection failure，marker

@@ -11,7 +11,7 @@ pub(super) struct ControlDocument {
     pub socket_path: String,
     pub socket_mode_octal: String,
     pub pending_connection_max: u32,
-    pub accept_retry_delay_ms: u64,
+    pub accept_retry_delay_ms: u32,
     pub active_trace_max: u32,
     pub pid_file: String,
     pub log_path: String,

@@ -65,14 +65,42 @@ TTY 同样使用此刷新间隔。`tty.operations` 默认且仅允许 `read/read
 | --- | --- | --- |
 | `socket_path` | `/run/actrail/control.sock` | ctl 与 daemon 的本地 Unix socket |
 | `socket_mode_octal` | `660` | socket 文件 mode |
-| `pending_connection_max` | `256` | 同时等待处理的 control client 上限 |
-| `accept_retry_delay_ms` | `100` | control socket 耗尽文件描述符后，重试接入的间隔 |
+| `pending_connection_max` | `256` | 同时跟踪的 control 连接数上限 |
+| `accept_retry_delay_ms` | `10` | 接收连接失败后重试的间隔，正整数毫秒 |
 | `active_trace_max` | `128` | 同时非终态 trace 的 admission 上限 |
 | `pid_file` | `/run/actrail/actraild.pid` | `start/stop/status/restart` 使用的 PID 文件 |
 | `log_path` | `/var/log/actrail/actraild.log` | 后台 daemon stdout/stderr 日志 |
 | `diagnostic_log_level` | `info` | `off`、`info` 或 `debug` |
 
+daemon 的 tracing 日志使用 `YYYY-MM-DDTHH:MM:SS+08:00 [info] ...` 格式，固定为北京时间 UTC+8，独立于进程 `TZ` 或系统时区。控制 socket 就绪后记录 `daemon started`，正常关闭并完成清理后记录 `daemon stopped`。已有 `daemon listening ...` stdout 就绪信息保留；后台 stdout/stderr 写入 `log_path`，前台 tracing 写入 stderr。
+
+启动时校验时间能否转换；运行期间转换失败时以 `time_unavailable` 标记保留事件内容。后台启动失败会给出配置的日志位置，并尝试附上本次启动的最后一行输出。读取范围由 `ACTRAIL_DAEMON_STARTUP_LOG_MAX_BYTES` 控制，默认 `16384`，必须为正整数；只在启动失败时读取此范围，日志轮换或读取失败会明确报告，已有错误原因仍保留。
+
+日志预算在 start/restart 入口验证，restart 验证成功后再停止当前进程。非法值直接报告变量、输入值及修正或恢复默认值的方法。前台失败先记录操作指引，再记录原始原因；后台管理命令回传原因并附一次自身指引。
+
+接收连接遇到 `EMFILE`、`ENFILE` 等暂时性错误时，daemon 暂停监听新连接，按
+`accept_retry_delay_ms` 重试；已有控制连接、采集事件和后台任务继续处理。连续失败仅在
+首次记录告警，恢复接入时记录恢复日志。单个连接初始化失败只关闭该连接。
+
+`pending_connection_max` 与 `active_trace_max` 都须大于零；活动 trace 达到上限时，
+新增请求返回 `active_trace_limit`。这两个容量限制分别作用于已接受连接和 trace 准入。
+控制连接在请求或回复尚未完成时持续占用名额，回复完成、连接关闭或失败后释放；达到
+上限时关闭刚接受的新连接。
+进程文件描述符预算还需覆盖采集器、数据库、日志及各 trace 的实际开销；部署时通过
+systemd `LimitNOFILE` 或启动环境的 `ulimit -n` 设置。资源不足期间新请求可能超时，
+资源释放后恢复接入。
+文件描述符不足也可能使资源采样等依赖文件访问的功能局部降级；相关诊断和 trace
+健康状态会保留实际采集缺口。
+
+插件的 `candidate_max_count`、`trace_state_max_count` 分别限制每 trace 候选路径和
+每插件实例保存的 trace 状态，随附配置值为 `4096`、`256`，见
+[file-leakage 插件配置](../../../examples/plugins/wit-component/file-leakage/README.zh.md)。
+
 `[control.workload_diagnostics]` 默认关闭，`interval_ms = 1000`。`[control.finalization]` 控制 trace settle 与 shutdown drain；当前 `shutdown_drain_timeout_ms = 30000`。`[control.finalization.post_trace]` 为 post-trace broker、执行与 drain 提供彼此显式的容量和时间预算。
+
+工作负载诊断日志中的 `background_ready` 统计轮询返回后后台截止时间已到的轮次，
+可与 `event_source_ready` 在同轮增加；单独的接收重试唤醒不会增加该计数。跨实现比较
+趋势时需注意，早期实现仅在 `ppoll` 的有限超时到期时增加 `background_ready`。
 
 ## `[checkpoint.runtime]`
 

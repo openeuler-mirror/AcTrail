@@ -7,7 +7,7 @@ use init::OperatorConfigInitializer;
 use config_core::daemon::{OperatorConfig, OperatorConfigInitStatus};
 use control_contract::command::{ControlCommand, ResolveLaunchPermissionsCommand};
 use control_contract::reply::{ControlReply, DoctorReply};
-use uds_control_client::{UdsControlClient, UdsSocketTransport};
+use uds_control_client::UdsControlClient;
 
 use crate::args::{CtlCommand, parse_args};
 use crate::clean::run_clean;
@@ -21,6 +21,7 @@ use crate::platform_probe::{
     LaunchPlatformReport, attach_daemon_status, print_platform_probe, print_platform_probe_json,
     run_platform_probe, suggest_config_text,
 };
+use crate::transport::OperatorTransport;
 
 pub fn run_from_env() -> Result<i32, String> {
     let invocation = parse_args(std::env::args().skip(1))?;
@@ -70,7 +71,7 @@ pub fn run_from_env() -> Result<i32, String> {
             argv,
         } => {
             let socket_path = required_socket_path(invocation.socket_path)?;
-            let transport = UdsSocketTransport::new(socket_path.clone());
+            let transport = OperatorTransport::new(socket_path.clone());
             let mut client = UdsControlClient::new(transport);
             run_launch(
                 &mut client,
@@ -131,7 +132,7 @@ pub fn run_from_env() -> Result<i32, String> {
                 }
             };
             let daemon_decision = if let Some(socket_path) = daemon_socket {
-                let transport = UdsSocketTransport::new(socket_path);
+                let transport = OperatorTransport::new(socket_path);
                 let mut client = UdsControlClient::new(transport);
                 attach_daemon_status(&mut report, &mut client, invocation.request_id);
                 if suggest_config {
@@ -198,7 +199,7 @@ pub fn run_from_env() -> Result<i32, String> {
             Ok(i32::default())
         }
         command => {
-            let transport = UdsSocketTransport::new(required_socket_path(invocation.socket_path)?);
+            let transport = OperatorTransport::new(required_socket_path(invocation.socket_path)?);
             let mut client = UdsControlClient::new(transport);
             let reply = dispatch(&mut client, invocation.request_id, command).map_err(|error| {
                 format!("control command failed: {}: {}", error.code, error.message)

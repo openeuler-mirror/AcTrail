@@ -205,8 +205,13 @@ impl DirectResolution {
         let DirectFacts::Found(facts) = self.facts.as_ref() else {
             if let DirectFacts::Unavailable(reason) = self.facts.as_ref() {
                 tracing::debug!(
+                    stage = "probe-discovery",
                     reason_code = reason.code(),
                     source = ?self.object.source,
+                    device_major = self.object.identity.device_major,
+                    device_minor = self.object.identity.device_minor,
+                    inode = self.object.identity.inode,
+                    size = self.object.identity.size,
                     "TLS object has no direct plan"
                 );
             }

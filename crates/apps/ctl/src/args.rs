@@ -1,5 +1,7 @@
 //! Command-line input shapes for the control application.
 
+mod diagnostics;
+
 use crate::checkpoint::{CheckpointArgs, load_launch_config};
 use control_contract::checkpoint::{CheckpointAction, LaunchCheckpointConfig};
 use std::collections::BTreeSet;
@@ -7,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_host::{AgentHostConfig, AgentLaunchIntegration};
-use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use config_core::capture_profile::CaptureProfile;
 use config_core::daemon::{
     DEFAULT_OPERATOR_CONFIG_PATH, EnforcementSeccompSyscall, NetworkControlSeccompSyscall,
@@ -16,6 +18,7 @@ use config_core::daemon::{
 };
 use control_contract::command::ProcessRef;
 use control_contract::selector::TraceSelector;
+use diagnostics::ArgumentDiagnostics;
 use model_core::ids::{ProfileName, RequestId, TraceId, TraceName};
 use tls_payload_sync::resolve_program_path;
 
@@ -100,7 +103,7 @@ pub enum CtlCommand {
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CtlInvocation, String> {
     let cli = CtlCli::try_parse_from(std::iter::once("actrailctl".to_string()).chain(args))
-        .unwrap_or_else(|error| error.exit());
+        .unwrap_or_else(|error| ArgumentDiagnostics::exit(error, CtlCli::command()));
     cli.into_invocation()
 }
 
@@ -113,7 +116,8 @@ struct CtlCli {
     #[arg(long = "socket-path", global = true, value_name = "PATH")]
     socket_path: Option<PathBuf>,
 
-    #[arg(long = "request-id", global = true, value_name = "ID")]
+    #[arg(long = "request-id", global = true, value_name = "ID",
+          allow_negative_numbers = true, value_parser = ArgumentDiagnostics::request_id)]
     request_id: Option<u64>,
 
     #[command(subcommand)]
@@ -606,7 +610,10 @@ struct SelectorArgs {
 }
 
 fn load_operator_config(config_path: &PathBuf) -> Result<OperatorConfig, String> {
-    OperatorConfig::load(config_path)
+    OperatorConfig::load(config_path).map_err(|error| format!(
+        "load control configuration {} failed: {error}; check --config and file permissions, or initialize a configuration with actrailctl --config <path> init",
+        config_path.display()
+    ))
 }
 
 fn init_config_path(

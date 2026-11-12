@@ -1041,6 +1041,7 @@ dependencies = [
  "process_identity",
  "process_tree_snapshot_contract",
  "tls_probe_point_finder",
+ "tracing",
 ]
 
 [[package]]
