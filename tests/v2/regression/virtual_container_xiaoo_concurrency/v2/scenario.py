@@ -56,7 +56,9 @@ class DualKataXiaooScenario:
         self._provider_source = (
             config.repo / "tests/v2/common/llm-http-proxy/provider_proxy.py"
         )
-        self._connect_proxy = self._case_dir / "connect_proxy.py"
+        self._connect_proxy = (
+            config.repo / "deploy/virtual-container/host/connect_proxy.py"
+        )
         self._guest_bridge = (
             config.repo / "deploy/virtual-container/vsock-egress/guest-bridge.sh"
         )
@@ -464,6 +466,10 @@ class DualKataXiaooScenario:
                 str(self._connect_proxy),
                 "--bind-port",
                 str(proxy_port),
+                "--allow-host",
+                "opencode.ai",
+                "--allow-host",
+                "models.opencode.ai",
                 "--log-path",
                 str(self._config.work_dir / "opencode-connect-proxy.log"),
             )

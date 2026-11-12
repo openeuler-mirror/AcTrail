@@ -460,6 +460,8 @@ fn metadata_only_action(
                 agent::IDENTITY_STATUS
                     | agent::IDENTITY_SOURCE
                     | agent::IDENTITY_EVIDENCE_ACTION_ID
+                    | agent::TYPE
+                    | agent::TYPE_SOURCE
                     | process::EXECUTABLE
             )
     });
@@ -1694,6 +1696,8 @@ mod request_body_export_tests {
                     process::EXECUTABLE.to_string(),
                     "/root/.cargo/bin/xiaoo".to_string(),
                 ),
+                (agent::TYPE.to_string(), "xiaoo".to_string()),
+                (agent::TYPE_SOURCE.to_string(), "known_product".to_string()),
                 ("secret.content".to_string(), "do not export".to_string()),
             ]),
             evidence: Vec::new(),
@@ -1729,6 +1733,17 @@ mod request_body_export_tests {
                 .get(agent::IDENTITY_EVIDENCE_ACTION_ID)
                 .map(String::as_str),
             Some("llm-request-7")
+        );
+        assert_eq!(
+            sanitized.attributes.get(agent::TYPE).map(String::as_str),
+            Some("xiaoo")
+        );
+        assert_eq!(
+            sanitized
+                .attributes
+                .get(agent::TYPE_SOURCE)
+                .map(String::as_str),
+            Some("known_product")
         );
         assert!(!sanitized.attributes.contains_key("secret.content"));
     }

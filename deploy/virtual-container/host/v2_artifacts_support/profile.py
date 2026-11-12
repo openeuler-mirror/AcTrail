@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
@@ -50,6 +51,7 @@ class V2TestProfile:
         *,
         workload_image: str | None = None,
         workload_image_archive: Path | None = None,
+        extra_environment: Mapping[str, str] | None = None,
     ) -> None:
         profile = {
             "format": 2,
@@ -58,12 +60,15 @@ class V2TestProfile:
                 + cls._BACKEND_NAMES[inputs.backend]
             ),
             "path_prepend": cls._path_prepend(inputs),
-            "environment": cls._environment(
-                inputs,
-                manifest,
-                workload_image=workload_image,
-                workload_image_archive=workload_image_archive,
-            ),
+            "environment": {
+                **cls._environment(
+                    inputs,
+                    manifest,
+                    workload_image=workload_image,
+                    workload_image_archive=workload_image_archive,
+                ),
+                **(extra_environment or {}),
+            },
         }
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json(profile_path, profile)

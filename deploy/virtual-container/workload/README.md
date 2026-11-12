@@ -1,5 +1,7 @@
 # Kata workload 接入契约
 
+> 完整部署步骤以 [虚机容器部署](../../../docs/operations/deployment/virtual-container.md) 为准；本页说明该组件的原理、参数和边界。
+
 本目录说明 **guest 根中的 `actraild` 如何被非 root workload 使用**。workload
 通过只读挂载获得客户端、TLS probe 和 control socket。启用 TLS sync 时还提供 TLS event socket。
 
@@ -35,7 +37,7 @@ workload mount namespace (UID 1000，GID 39000)
 启动后任意 workload 都能自动看到 socket。依据：
 [Kata Containers Limitations - device handling](https://github.com/kata-containers/kata-containers/blob/main/docs/Limitations.md)。
 
-ARM64 主线固定使用 Kata 3.32.0。openEuler 24.09 RPM 中的 Kata 3.2.0 对该挂载的
+主线固定使用 Kata 3.32.0。发行版 RPM 中较旧的 Kata 3.2.0 对该挂载的
 路径分类逻辑过旧，会在宿主解析 guest-only 的 `/dev/actrail` 并报
 `Could not resolve symlink for source /dev/actrail`。本项目不再为 3.2 创建宿主
 `/dev` 标记目录；host runtime、guest agent 和配置必须一起对齐到 3.32.0。安装器
@@ -58,7 +60,7 @@ eBPF 采集路由限制。
 
 ## 构建
 
-ARM64 openEuler 主线先构建带 `setpriv` 的 openEuler 24.09 基础 workload 镜像。
+workload 镜像基于 openEuler 24.03 构建，并安装提供 `setpriv` 的 `util-linux`。
 镜像还固定安装 OpenCode CLI `1.18.18`，并创建 UID `1000`、GID `39000` 的
 `actrail` passwd/group 条目；后者保证 OpenCode/Bun 在非 root Kata workload 中能
 解析可写 HOME，而不是回退到 `/`。xiaoO 不烘进 OCI 层，由内容寻址 artifact 在测试
@@ -67,13 +69,12 @@ ARM64 openEuler 主线先构建带 `setpriv` 的 openEuler 24.09 基础 workload
 这既保证容器内部 `/etc/os-release` 是 openEuler，也兼容没有 `ctr run --user`
 的 openEuler containerd 1.6：
 
+构建和导入命令见[虚机容器部署](../../../docs/operations/deployment/virtual-container.md) 3.7：
+
 ```bash
-docker build \
-  --build-arg BASE_IMAGE=openeuler-24.09:latest \
-  --build-arg OPENCODE_VERSION=1.18.18 \
+podman build --network=host --format oci --build-arg BASE_IMAGE=docker.io/openeuler/openeuler:24.03-lts \
   -f deploy/virtual-container/workload/Containerfile.openEuler \
-  -t actrail-openeuler-workload:24.09 \
-  deploy/virtual-container/workload
+  -t docker.io/library/actrail-openeuler-workload:24.03 deploy/virtual-container/workload
 ```
 
 OpenCode 免费模型 smoke 使用独立的临时 HOME/XDG 目录，不读取宿主或构建机的
@@ -88,7 +89,7 @@ OpenCode 模型目录；每次验收将这些只读 bootstrap 缓存复制到隔
 然后生成并验证 guest bundle，再生成不含 daemon/viewer 的 workload bundle：
 
 ```bash
-./tests/v2/regression/virtual_container/prepare-guest-bundle.sh
+./deploy/virtual-container/guest/prepare-guest-bundle.sh
 ./deploy/virtual-container/workload/prepare-bundle.sh
 ./tests/v2/regression/virtual_container/test-prepare-workload-bundle.sh
 ```
@@ -108,7 +109,7 @@ Agent 保留调用前的动态库环境，不会优先加载 AcTrail bundle 中�
 
 ## Kata 验证
 
-先按[虚拟容器部署说明](../README.md#测试资产的一键准备与运行)生成内容寻址
+先按[虚机容器部署](../../../docs/operations/deployment/virtual-container.md)第 4、5 节生成内容寻址
 artifact 和本机 profile，再通过唯一的公共 V2 入口运行接口矩阵：
 
 ```bash
@@ -117,7 +118,7 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --color never
 ```
 
-V2 runner 默认使用 `docker.io/library/actrail-openeuler-workload:24.09`，并断言
+V2 runner 默认使用 `docker.io/library/actrail-openeuler-workload:24.03`，并断言
 `/etc/os-release` 中 `ID=openEuler`。其他发行版属于独立 Profile，必须重新生成
 artifact manifest，不能通过关闭 OS 门禁复用 openEuler 验收结论。
 

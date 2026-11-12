@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
-# Build a systemd openEuler Kata rootfs and partitioned ext4 image without loop mounts.
+# Build a clean systemd openEuler 24.03 Kata guest image without loop mounts.
+# AcTrail is not installed here: prepare-artifacts.py injects it into a copy.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=otel-endpoint.sh
-source "$SCRIPT_DIR/otel-endpoint.sh"
 ROOTFS=""
 OUTPUT_IMAGE=""
 KATA_INITRD=""
-BUNDLE=""
-OTEL_ENDPOINT=""
-OTEL_ENDPOINT_CONFIGURED="false"
-EGRESS_MODE="network"
-KATA_SYSTEMD_DIR=""
 EXPECTED_AGENT_VERSION=""
 REQUIRE_AGENT_POLICY=0
-STARTUP_DEPENDENCY="optional"
-SOCKET_GID=39000
 SIZE_MIB=1024
-WITH_VIEWER=0
 TEMP_DIR=""
 
 usage() {
@@ -27,24 +17,21 @@ Usage:
   build-openeuler-image.sh \
     --rootfs DIR \
     --output-image FILE \
-    --kata-initrd FILE \
-    --bundle DIR [options]
+    --kata-initrd FILE [options]
 
 Options:
-  --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
-  --egress-mode MODE           Export path: network or vsock-bridge (default: network)
-  --kata-systemd-dir DIR       Override matching kata-agent.service and target;
-                               default: extract both from the reference initrd
   --expected-agent-version V  Require `kata-agent --version` to contain V
   --require-agent-policy      Require and install default-policy.rego from initrd
-  --startup-dependency POLICY optional or required (default: optional)
-  --socket-gid GID            Workload interface GID (default: 39000)
   --size-mib N                First-partition ext4 size in MiB (default: 1024);
                               the partition table adds 1 MiB to the disk image
-  --with-viewer               Include actrailviewer for data-plane acceptance
   -h, --help                  Show this help
 
-Run as root inside an openEuler 24.03 build container. Both output paths must
+Builds a clean openEuler 24.03 Kata guest image: a systemd rootfs from the
+openEuler repositories plus the Kata agent, its systemd units and policy taken
+from the given Kata release initrd. AcTrail is not installed;
+prepare-artifacts.py injects it into a copy of this image.
+
+Run as root on an openEuler 24.03 host or container. Both output paths must
 not exist (an existing empty rootfs directory is accepted). The script uses
 dnf --installroot, `mkfs.ext4 -d`, sfdisk, and dd; it never mounts a filesystem
 and does not require a privileged container. The ext4 filesystem is placed in
@@ -74,21 +61,6 @@ while [[ "$#" -gt 0 ]]; do
       KATA_INITRD="$2"
       shift 2
       ;;
-    --bundle)
-      [[ "$#" -ge 2 ]] || fail "--bundle requires a value"
-      BUNDLE="$2"
-      shift 2
-      ;;
-    --otel-endpoint)
-      [[ "$#" -ge 2 ]] || fail "--otel-endpoint requires a value"
-      OTEL_ENDPOINT="$2"
-      shift 2
-      ;;
-    --kata-systemd-dir)
-      [[ "$#" -ge 2 ]] || fail "--kata-systemd-dir requires a value"
-      KATA_SYSTEMD_DIR="$2"
-      shift 2
-      ;;
     --expected-agent-version)
       [[ "$#" -ge 2 ]] || fail "--expected-agent-version requires a value"
       EXPECTED_AGENT_VERSION="$2"
@@ -98,31 +70,11 @@ while [[ "$#" -gt 0 ]]; do
       REQUIRE_AGENT_POLICY=1
       shift
       ;;
-    --egress-mode)
-      [[ "$#" -ge 2 ]] || fail "--egress-mode requires a value"
-      EGRESS_MODE="$2"
-      shift 2
-      ;;
-    --startup-dependency)
-      [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
-      STARTUP_DEPENDENCY="$2"
-      shift 2
-      ;;
-    --socket-gid)
-      [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
-      [[ "$2" =~ ^[0-9]+$ ]] || fail "--socket-gid must be an integer"
-      SOCKET_GID="$((10#$2))"
-      shift 2
-      ;;
     --size-mib)
       [[ "$#" -ge 2 ]] || fail "--size-mib requires a value"
       [[ "$2" =~ ^[0-9]+$ ]] || fail "--size-mib must be an integer"
       SIZE_MIB="$((10#$2))"
       shift 2
-      ;;
-    --with-viewer)
-      WITH_VIEWER=1
-      shift
       ;;
     -h|--help)
       usage
@@ -134,55 +86,32 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-[[ "$(id -u)" -eq 0 ]] || fail "run this script as root inside the build container"
-[[ -r /etc/os-release ]] || fail "cannot identify the build-container OS"
+[[ "$(id -u)" -eq 0 ]] || fail "run this script as root"
+[[ -r /etc/os-release ]] || fail "cannot identify the build OS"
 # shellcheck disable=SC1091
 . /etc/os-release
 [[ "${ID:-}" == "openEuler" ]] \
-  || fail "build container must be openEuler, found ID=${ID:-unknown}"
+  || fail "build environment must be openEuler, found ID=${ID:-unknown}"
 case "${VERSION_ID:-}" in
   24.03*) ;;
-  *) fail "build container must be openEuler 24.03, found VERSION_ID=${VERSION_ID:-unknown}" ;;
+  *) fail "build environment must be openEuler 24.03, found VERSION_ID=${VERSION_ID:-unknown}" ;;
 esac
 
 [[ -n "$ROOTFS" ]] || fail "--rootfs is required"
 [[ -n "$OUTPUT_IMAGE" ]] || fail "--output-image is required"
 [[ -n "$KATA_INITRD" ]] || fail "--kata-initrd is required"
-[[ -n "$BUNDLE" ]] || fail "--bundle is required"
-actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
-  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
-if [[ -n "$OTEL_ENDPOINT" ]]; then
-  OTEL_ENDPOINT_CONFIGURED="true"
-fi
 [[ -f "$KATA_INITRD" ]] || fail "Kata initrd not found: $KATA_INITRD"
-[[ -d "$BUNDLE" ]] || fail "AcTrail guest bundle not found: $BUNDLE"
-if [[ -n "$KATA_SYSTEMD_DIR" ]]; then
-  [[ -f "$KATA_SYSTEMD_DIR/kata-agent.service" ]] \
-    || fail "kata-agent.service not found in $KATA_SYSTEMD_DIR"
-  [[ -f "$KATA_SYSTEMD_DIR/kata-containers.target" ]] \
-    || fail "kata-containers.target not found in $KATA_SYSTEMD_DIR"
-fi
-case "$STARTUP_DEPENDENCY" in
-  optional|required) ;;
-  *) fail "--startup-dependency must be optional or required" ;;
-esac
-(( SOCKET_GID > 0 && SOCKET_GID <= 2147483647 )) \
-  || fail "--socket-gid must be between 1 and 2147483647"
 (( SIZE_MIB >= 512 )) || fail "--size-mib must be at least 512"
 
 for command_name in \
   cpio dd dnf file gzip install mkfs.ext4 mktemp readlink rm sfdisk truncate; do
   command -v "$command_name" >/dev/null 2>&1 \
-    || fail "missing build-container command: $command_name"
+    || fail "missing build command: $command_name"
 done
 
 ROOTFS="$(readlink -m "$ROOTFS")"
 OUTPUT_IMAGE="$(readlink -m "$OUTPUT_IMAGE")"
 KATA_INITRD="$(readlink -f "$KATA_INITRD")"
-BUNDLE="$(readlink -f "$BUNDLE")"
-if [[ -n "$KATA_SYSTEMD_DIR" ]]; then
-  KATA_SYSTEMD_DIR="$(readlink -f "$KATA_SYSTEMD_DIR")"
-fi
 [[ "$ROOTFS" != "/" ]] || fail "refusing to use / as the rootfs"
 [[ ! -e "$OUTPUT_IMAGE" ]] || fail "output image already exists: $OUTPUT_IMAGE"
 [[ -d "$(dirname "$OUTPUT_IMAGE")" ]] \
@@ -204,6 +133,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "== create openEuler 24.03 guest installroot =="
+# socat carries the VSOCK egress bridge; it is always installed so that one
+# image serves both egress modes.
 dnf -y \
   --installroot="$ROOTFS" \
   --releasever=24.03-LTS-SP3 \
@@ -245,7 +176,7 @@ TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/actrail-kata-agent.XXXXXX")"
 
 # Older minimal initrds use /init as kata-agent. Current systemd initrds use
 # /init -> /sbin/init and store kata-agent itself at /sbin/init. Never follow
-# an absolute /init symlink into the build container's own root filesystem.
+# an absolute /init symlink into the build environment's own root filesystem.
 agent_source=""
 if [[ -f "$TEMP_DIR/sbin/init" && -x "$TEMP_DIR/sbin/init" ]]; then
   agent_source="$TEMP_DIR/sbin/init"
@@ -263,17 +194,12 @@ if [[ -n "$EXPECTED_AGENT_VERSION" ]]; then
 fi
 echo "$agent_version"
 
-if [[ -n "$KATA_SYSTEMD_DIR" ]]; then
-  agent_unit_source="$KATA_SYSTEMD_DIR/kata-agent.service"
-  agent_target_source="$KATA_SYSTEMD_DIR/kata-containers.target"
-else
-  agent_unit_source="$TEMP_DIR/usr/lib/systemd/system/kata-agent.service"
-  agent_target_source="$TEMP_DIR/usr/lib/systemd/system/kata-containers.target"
-  [[ -f "$agent_unit_source" ]] \
-    || fail "reference initrd does not contain kata-agent.service"
-  [[ -f "$agent_target_source" ]] \
-    || fail "reference initrd does not contain kata-containers.target"
-fi
+agent_unit_source="$TEMP_DIR/usr/lib/systemd/system/kata-agent.service"
+agent_target_source="$TEMP_DIR/usr/lib/systemd/system/kata-containers.target"
+[[ -f "$agent_unit_source" ]] \
+  || fail "reference initrd does not contain kata-agent.service"
+[[ -f "$agent_target_source" ]] \
+  || fail "reference initrd does not contain kata-containers.target"
 
 agent_policy_source="$TEMP_DIR/etc/kata-opa/default-policy.rego"
 if [[ "$REQUIRE_AGENT_POLICY" == "1" && ! -e "$agent_policy_source" ]]; then
@@ -302,32 +228,6 @@ ln -sfn /usr/lib/systemd/system/kata-containers.target \
   "$ROOTFS/etc/systemd/system/default.target"
 rm -f -- "$ROOTFS/etc/machine-id"
 install -m 0644 /dev/null "$ROOTFS/etc/machine-id"
-
-echo "== inject AcTrail guest service =="
-install_args=(
-  --rootfs "$ROOTFS"
-  --bundle "$BUNDLE"
-  --egress-mode "$EGRESS_MODE"
-  --startup-dependency "$STARTUP_DEPENDENCY"
-  --socket-gid "$SOCKET_GID"
-)
-if [[ -n "$OTEL_ENDPOINT" ]]; then
-  install_args+=(--otel-endpoint "$OTEL_ENDPOINT")
-fi
-if [[ "$WITH_VIEWER" == "1" ]]; then
-  install_args+=(--with-viewer)
-fi
-"$SCRIPT_DIR/install-rootfs.sh" "${install_args[@]}"
-verify_args=(
-  --rootfs "$ROOTFS"
-  --egress-mode "$EGRESS_MODE"
-  --startup-dependency "$STARTUP_DEPENDENCY"
-  --socket-gid "$SOCKET_GID"
-)
-if [[ -n "$OTEL_ENDPOINT" ]]; then
-  verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
-fi
-"$SCRIPT_DIR/verify-rootfs.sh" "${verify_args[@]}"
 
 echo "== create partitioned sparse ext4 guest image without mounting =="
 rootfs_image="$TEMP_DIR/kata-rootfs.ext4"
@@ -365,7 +265,3 @@ echo "disk_image_size_mib=$((SIZE_MIB + 1))"
 echo "root_device=/dev/vda1"
 echo "agent=$agent_version"
 echo "agent_policy=$agent_policy"
-echo "guest_startup_dependency=$STARTUP_DEPENDENCY"
-echo "guest_egress_mode=$EGRESS_MODE"
-echo "workload_socket_gid=$SOCKET_GID"
-echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"

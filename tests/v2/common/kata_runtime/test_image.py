@@ -110,7 +110,7 @@ class ContainerdImageTest(unittest.TestCase):
                     firecracker_workload_reference(invalid)
 
     def test_missing_image_imports_offline_archive_and_returns_digest(self) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(reference, present=False)
         with tempfile.TemporaryDirectory(prefix="actrail-image-test.") as raw_dir:
             archive = Path(raw_dir) / "workload.tar"
@@ -137,7 +137,7 @@ class ContainerdImageTest(unittest.TestCase):
     def test_digest_bound_archive_import_uses_verified_private_snapshot(
         self,
     ) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(reference, present=False)
         with tempfile.TemporaryDirectory(prefix="actrail-image-test.") as raw_dir:
             archive = Path(raw_dir) / "workload.tar"
@@ -165,7 +165,7 @@ class ContainerdImageTest(unittest.TestCase):
     def test_digest_bound_archive_rejects_changed_bytes_before_import(
         self,
     ) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(reference, present=False)
         with tempfile.TemporaryDirectory(prefix="actrail-image-test.") as raw_dir:
             archive = Path(raw_dir) / "workload.tar"
@@ -189,7 +189,7 @@ class ContainerdImageTest(unittest.TestCase):
         )
 
     def test_snapshotter_check_and_import_do_not_flag_images_list(self) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(reference, present=False)
         with tempfile.TemporaryDirectory(prefix="actrail-image-test.") as raw_dir:
             archive = Path(raw_dir) / "workload.tar"
@@ -232,7 +232,7 @@ class ContainerdImageTest(unittest.TestCase):
     def test_containerd_16_quiet_complete_ref_does_not_mask_unpacked_false(
         self,
     ) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(
             reference,
             present=True,
@@ -256,7 +256,7 @@ class ContainerdImageTest(unittest.TestCase):
         self.assertFalse(containerd_image_check_ready(f"{reference}\n", reference))
 
     def test_snapshotter_cache_hit_requires_complete_unpacked_row(self) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         incomplete = (
             "REF TYPE DIGEST STATUS SIZE UNPACKED\n"
             f"{reference} application/vnd.oci.image.manifest.v1+json "
@@ -268,7 +268,7 @@ class ContainerdImageTest(unittest.TestCase):
         self.assertTrue(containerd_image_check_ready(complete, reference))
 
     def test_snapshotter_is_used_to_pull_image(self) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(reference, present=False)
         image = ContainerdImage(
             reference=reference,
@@ -291,7 +291,7 @@ class ContainerdImageTest(unittest.TestCase):
         )
 
     def test_builder_selects_firecracker_default_snapshotter(self) -> None:
-        reference = "docker.io/library/actrail-openeuler-workload:24.09"
+        reference = "docker.io/library/actrail-openeuler-workload:24.03"
         runner = ContainerdImageRunner(reference, present=True)
         requirements = KataRequirementsBuilder(
             backend="firecracker",

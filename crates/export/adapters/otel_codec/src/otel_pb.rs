@@ -20,7 +20,9 @@ use opentelemetry_proto::tonic::trace::v1::{
 use prost::Message;
 use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionStatus};
 
-use crate::service::{otel_span_id_u64, otel_trace_id_u128, parent_link, support_links};
+use crate::service::{
+    SERVICE_NAME, otel_span_id_u64, otel_trace_id_u128, parent_link, support_links,
+};
 use crate::span_kind::SpanKindPolicy;
 
 /// Content type for the produced bytes: `application/x-protobuf`.
@@ -74,7 +76,7 @@ pub(crate) fn build_export_request(
         .collect();
 
     let mut resource_attrs = vec![
-        str_kv("service.name", trace.profile_name.as_str()),
+        str_kv("service.name", SERVICE_NAME),
         str_kv("actrail.trace.display_name", trace.display_name.as_str()),
         str_kv("actrail.trace.profile_name", trace.profile_name.as_str()),
         int_kv("actrail.trace.id", trace.trace_id.get() as i64),

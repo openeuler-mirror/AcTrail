@@ -5,7 +5,7 @@
 ## 部署
 
 1. [选择部署模式](deployment/choose-a-mode.md)。
-2. 按运行边界选择 [Linux 主机](deployment/host.md)、[Docker workload](deployment/container.md) 或 [执行隔离](deployment/execution-isolation.md)。
+2. 按运行边界选择 [Linux 主机](deployment/host.md)、[Docker workload](deployment/container.md)、[虚机容器](deployment/virtual-container.md)或 [执行隔离](deployment/execution-isolation.md)。
 3. 启动前执行 [主机准备检查](troubleshooting/preflight.md)。
 
 ## 日常运行

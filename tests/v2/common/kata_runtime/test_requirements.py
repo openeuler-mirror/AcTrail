@@ -17,11 +17,11 @@ from tests.v2.common.kata_runtime.requirements import (
 class StaticImage:
     def ensure(self, policy: PreparePolicy) -> ResolvedImage:
         del policy
-        return ResolvedImage("example.test/workload:24.09", "sha256:abcd")
+        return ResolvedImage("example.test/workload:24.03", "sha256:abcd")
 
     def refresh(self, reason: str) -> ResolvedImage:
         del reason
-        return ResolvedImage("example.test/workload:24.09", "sha256:ef01")
+        return ResolvedImage("example.test/workload:24.03", "sha256:ef01")
 
 
 class RunningContainer:
@@ -43,7 +43,7 @@ class KataContainerRequirementsTest(unittest.TestCase):
                     namespace="default",
                     runtime="io.containerd.kata332.v2",
                     runtime_config=runtime_config,
-                    image="example.test/workload:24.09",
+                    image="example.test/workload:24.03",
                 ),
                 image=StaticImage(),
                 name_prefix="interface",
@@ -58,7 +58,7 @@ class KataContainerRequirementsTest(unittest.TestCase):
 
             requirements.validate_static()
             spec = requirements.create_spec(
-                ResolvedImage("example.test/workload:24.09", "sha256:abcd")
+                ResolvedImage("example.test/workload:24.03", "sha256:abcd")
             )
             check = requirements.validate_running(RunningContainer())
 

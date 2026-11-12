@@ -11,6 +11,10 @@ use serde_json::Value;
 use crate::serialize::{int_attr, quoted, string_attr};
 use crate::span_kind::SpanKindPolicy;
 
+/// OTLP `service.name` for every exported trace. The capture profile, including
+/// the selected permissions, is exported as `actrail.trace.profile_name`.
+pub(crate) const SERVICE_NAME: &str = "actrail";
+
 const ATTR_PROCESS_PARENT_IDENTITY_STATE: &str = "process.parent.identity_state";
 const PROCESS_PARENT_IDENTITY_STATE_CONFLICT: &str = "conflict";
 
@@ -54,7 +58,7 @@ fn render_otlp_json_compact(
     actions: &[SemanticAction],
     links: &[SemanticActionLink],
 ) -> String {
-    let service_name = trace.profile_name.as_str();
+    let service_name = SERVICE_NAME;
     let trace_id = otel_trace_id(trace);
     let mut spans = Vec::new();
     for action in actions {

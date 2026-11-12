@@ -84,7 +84,8 @@
 │   │   │   ├── [x] choose-a-mode.md # 部署模式选择
 │   │   │   ├── [x] container.md # 容器观测部署
 │   │   │   ├── [x] execution-isolation.md # 执行隔离部署
-│   │   │   └── [x] host.md # 主机部署
+│   │   │   ├── [x] host.md # 主机部署
+│   │   │   └── [x] virtual-container.md # 虚机容器部署
 │   │   ├── [x] idle-detection.md # 执行停滞检测操作
 │   │   ├── [x] integrations/ # Agent 接入指南
 │   │   │   └── [x] xiaoo-rustls.md # xiaoO 观测接入
@@ -156,10 +157,10 @@
 │   │       └── [x] README.md # 策略使用说明
 │   ├── [x] execution-isolation/ # 执行隔离部署文档
 │   │   └── [x] README.md # 部署指南
-│   └── [x] virtual-container/ # 虚拟容器部署文档
+│   └── [x] virtual-container/ # 虚机容器部署文档
 │       ├── [x] README.md # 部署指南
 │       ├── [x] guest/ # Guest 环境文档
-│       │   └── [x] OPENEULER.md # openEuler 部署指南
+│       │   └── [x] OPENEULER.md # openEuler Guest 镜像
 │       ├── [x] host-collector/ # Collector 部署文档
 │       │   └── [x] README.md # 部署指南
 │       ├── [x] vsock-egress/ # VSOCK 出境文档
@@ -347,11 +348,11 @@
 │           │   └── [x] README.zh.md # 测试指南
 │           ├── [x] tool_frequent_failure_alert/ # 工具频繁失败告警
 │           │   └── [x] README.zh.md # 测试指南
-│           ├── [x] virtual_container/ # 虚拟容器观测
+│           ├── [x] virtual_container/ # 虚机容器观测
 │           │   ├── [x] README.zh.md # 测试指南
 │           │   └── [x] v2/ # v2 测例说明
 │           │       └── [x] README.zh.md # 测试指南
-│           ├── [x] virtual_container_xiaoo_concurrency/ # 虚拟容器并发观测
+│           ├── [x] virtual_container_xiaoo_concurrency/ # 虚机容器并发观测
 │           │   ├── [x] README.zh.md # 测试指南
 │           │   └── [x] v2/ # v2 测例说明
 │           │       └── [x] README.zh.md # 测试指南

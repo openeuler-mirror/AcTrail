@@ -119,7 +119,7 @@ grep -Fq 'missing machine-local V2 profile' <<<"$missing_output" \
   || fail "missing profile diagnostic is absent"
 grep -Fq 'local/kata/v2-test-profile.json' <<<"$missing_output" \
   || fail "missing profile diagnostic omits the expected path"
-grep -Fq 'prepare-v2-test-artifacts.py' <<<"$missing_output" \
+grep -Fq 'prepare-artifacts.py' <<<"$missing_output" \
   || fail "missing profile diagnostic omits the preparation command"
 grep -Fq 'same checkout' <<<"$missing_output" \
   || fail "missing profile diagnostic omits the checkout-local requirement"

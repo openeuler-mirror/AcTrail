@@ -37,7 +37,7 @@ if [[ "$list_only" == "0" \
     cat >&2 <<EOF
 error: missing machine-local V2 profile: $default_profile
 Prepare the Kata artifacts from this same checkout before running V2 tests:
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py --help
+  python3 deploy/virtual-container/host/prepare-artifacts.py --help
 See deploy/virtual-container/README.md for the first-deployment command.
 EOF
     exit 2

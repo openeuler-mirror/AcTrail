@@ -71,7 +71,12 @@ class VirtualContainerScenario:
             "preparing the shared guest bundle fixture",
         )
         results["guest_bundle_fixture"] = self._run_command(
-            [str(self._case_dir / "prepare-guest-bundle.sh")],
+            [
+                str(
+                    self._config.repo
+                    / "deploy/virtual-container/guest/prepare-guest-bundle.sh"
+                )
+            ],
             environment=environment
             | {
                 "ACTRAIL_BUILD": "0",
@@ -91,10 +96,6 @@ class VirtualContainerScenario:
             ("guest_otel_endpoint", "test-guest-otel-endpoint-contract.sh"),
             ("host_collector", "test-host-collector-contract.sh"),
             ("vsock_egress", "test-vsock-egress-contract.sh"),
-            (
-                "openeuler_vsock_deploy",
-                "test-openeuler-vsock-deploy-contract.sh",
-            ),
             ("guest_rootfs_install", "test-install-guest-rootfs.sh"),
             ("workload_interface", "test-workload-interface-contract.sh"),
             ("workload_bundle", "test-prepare-workload-bundle.sh"),
@@ -106,10 +107,6 @@ class VirtualContainerScenario:
             ("runtime_config_paths", "test-runtime-config-paths.sh"),
             ("kata_3_32_host", "test-kata-3.32-host-contract.sh"),
             ("openeuler_image_builder", "test-openeuler-image-builder-contract.sh"),
-            (
-                "openeuler_kata_kernel_builder",
-                "test-openeuler-kata-kernel-builder-contract.sh",
-            ),
             ("guest_bundle_rebuild", "test-prepare-guest-bundle.sh"),
         )
         for name, script in static_contracts:

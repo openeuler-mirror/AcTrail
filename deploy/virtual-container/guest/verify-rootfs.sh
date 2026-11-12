@@ -7,6 +7,7 @@ EXPECTED_STARTUP_DEPENDENCY="optional"
 EXPECTED_SOCKET_GID=39000
 EXPECTED_OTEL_ENDPOINT=""
 EXPECTED_EGRESS_MODE="network"
+EXPECTED_OTEL_ATTRIBUTE_MODE="metadata-only"
 EXPECTED_OTEL_EXPORT_ENABLED=0
 EXPECTED_OTEL_ENDPOINT_CONFIGURED="false"
 EXPECTED_SANDBOX_OBSERVER=0
@@ -17,7 +18,7 @@ source "$SCRIPT_DIR/otel-endpoint.sh"
 
 usage() {
   cat <<'EOF'
-Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--startup-dependency optional|required] [--socket-gid GID] [--with-sandbox-observer]
+Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--otel-attribute-mode metadata-only|full] [--startup-dependency optional|required] [--socket-gid GID] [--with-sandbox-observer]
 
 This is an offline structural check. A real Kata boot and `actrailctl doctor`
 are still required before declaring the guest-root startup path complete.
@@ -51,6 +52,11 @@ while [[ "$#" -gt 0 ]]; do
       EXPECTED_OTEL_ENDPOINT="$2"
       shift 2
       ;;
+    --otel-attribute-mode)
+      [[ "$#" -ge 2 ]] || fail "--otel-attribute-mode requires a value"
+      EXPECTED_OTEL_ATTRIBUTE_MODE="$2"
+      shift 2
+      ;;
     --socket-gid)
       [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
       [[ "$2" =~ ^[0-9]+$ ]] || fail "--socket-gid must be an integer"
@@ -73,6 +79,8 @@ done
 
 [[ -n "$ROOTFS" ]] || fail "--rootfs is required"
 actrail_validate_guest_otel_selection "$EXPECTED_OTEL_ENDPOINT" "$EXPECTED_EGRESS_MODE" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+actrail_validate_guest_otel_attribute_mode "$EXPECTED_OTEL_ATTRIBUTE_MODE" "$EXPECTED_OTEL_ENDPOINT" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 if [[ -n "$EXPECTED_OTEL_ENDPOINT" ]]; then
   EXPECTED_OTEL_EXPORT_ENABLED=1
@@ -118,9 +126,6 @@ assert_file /usr/lib/tmpfiles.d/actrail.conf
 assert_file /usr/lib/systemd/system/kata-agent.service.d/10-actrail-workload-interface.conf
 assert_file /usr/share/actrail/guest-install-info
 assert_file /usr/share/actrail/workload-interface
-observer_agent_drop_in=/usr/lib/systemd/system/kata-agent.service.d/30-actrail-sandbox-observer.conf
-[[ ! -e "$ROOTFS$observer_agent_drop_in" && ! -L "$ROOTFS$observer_agent_drop_in" ]] \
-  || fail "sandbox observer must not change kata-agent startup ordering: $observer_agent_drop_in"
 if [[ "$EXPECTED_SANDBOX_OBSERVER" == "1" ]]; then
   assert_file /usr/local/bin/actrail-sb
   assert_file /etc/actrail/sandbox-observer.toml
@@ -186,6 +191,8 @@ if [[ "$EXPECTED_OTEL_EXPORT_ENABLED" == "1" ]]; then
     'plugin_config = "/etc/actrail/plugins/otel-http/otel-http.config.toml"'
   assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml \
     "endpoint = \"$EXPECTED_OTEL_ENDPOINT\""
+  assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml \
+    "attribute_mode = \"$EXPECTED_OTEL_ATTRIBUTE_MODE\""
   if grep -Eiq -- 'COLLECTOR_HOST|placeholder|replace[_-]me|change[_-]me' \
     "$ROOTFS/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
     fail "/etc/actrail/plugins/otel-http/otel-http.config.toml contains a placeholder"

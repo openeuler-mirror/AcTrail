@@ -13,7 +13,7 @@ class VirtualContainerConstants:
     workload_gid: int = 39000
     backends: str = 'stratovirt,cloud-hypervisor'
     pull_image: bool = False
-    image: str = 'docker.io/library/actrail-openeuler-workload:24.09'
+    image: str = 'docker.io/library/actrail-openeuler-workload:24.03'
     ctr_runtime: str = 'io.containerd.kata.v2'
     kata_config_dirs: str = '/opt/kata/share/defaults/kata-containers:/usr/share/defaults/kata-containers:/etc/kata-containers'
     server_start_settle_seconds: int = 2

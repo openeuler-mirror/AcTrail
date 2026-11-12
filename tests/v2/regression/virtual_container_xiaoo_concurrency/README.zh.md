@@ -1,4 +1,4 @@
-# 虚拟容器 xiaoO 并发回归测试
+# 虚机容器 xiaoO 并发回归测试
 
 本功能在两台彼此独立的 Kata VM 中同时运行两个 xiaoO workload，验证真实并发、
 观测数据隔离和 VM 生命周期隔离。公共 case 名称为
@@ -40,7 +40,7 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --color never
 ```
 
-两个虚拟容器 case 一键运行：
+两个虚机容器 case 一键运行：
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh --color never
@@ -68,7 +68,7 @@ deploy/virtual-container/host/run-v2-tests.sh --color never
 ## 详细说明
 
 - [V2 拓扑、准备、证据与排障](v2/README.zh.md)
-- [基础虚拟容器矩阵](../virtual_container/README.zh.md)
+- [基础虚机容器矩阵](../virtual_container/README.zh.md)
 - [Kata 部署与支持边界](../../../../deploy/virtual-container/README.md)
 
 普通 Docker 的 `multi-container-xiaoo` 测试验证的是宿主容器并发；它不会启动 Kata

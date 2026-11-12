@@ -1,6 +1,5 @@
 [Unit]
 Description=Watch Kata sandbox runtime directories for Cloud Hypervisor VSOCK sockets
-Documentation=file:///usr/share/doc/actrail/vsock-egress/README.md
 
 [Path]
 # Kata creates and removes /run/vc/vm/<sandbox> as sandboxes come and go. The

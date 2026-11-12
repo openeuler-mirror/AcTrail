@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
-from tests.v2.common.kata_runtime.image import firecracker_workload_reference
+from .checksums import sha256_file
+from .containerd_image import firecracker_workload_reference
 
 
 XIAOO_CONTAINER_PATH = "/opt/actrail-execution/xiaoo-real"
@@ -78,7 +79,7 @@ def prepare_firecracker_workload_image(
     )
     temporary_output: Path | None = None
     try:
-        layer_sha256 = _sha256_file(layer_path)
+        layer_sha256 = sha256_file(layer_path)
         layer_size = layer_path.stat().st_size
         with tempfile.TemporaryFile(
             mode="w+b",
@@ -234,7 +235,7 @@ def prepare_firecracker_workload_image(
     return PreparedWorkloadImage(
         reference=reference,
         archive=output_archive,
-        archive_sha256=_sha256_file(output_archive),
+        archive_sha256=sha256_file(output_archive),
         xiaoo_path=XIAOO_CONTAINER_PATH,
         xiaoo_sha256=xiaoo_sha256,
     )
@@ -894,10 +895,3 @@ def _require_sha256(value: str, label: str) -> None:
             f"{label} digest must be 64 lowercase hexadecimal digits"
         )
 
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while block := source.read(1024 * 1024):
-            digest.update(block)
-    return digest.hexdigest()

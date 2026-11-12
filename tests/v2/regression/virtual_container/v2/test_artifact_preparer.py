@@ -37,7 +37,7 @@ from tests.v2.common.kata_runtime import DeploymentArtifacts  # noqa: E402
 class ArtifactPreparerTest(unittest.TestCase):
     def test_firecracker_reference_recipe_is_content_addressed(self) -> None:
         self.assertIn(
-            REPO / "tests/v2/common/kata_runtime/image.py",
+            REPO / "deploy/virtual-container/host/v2_artifacts_support/containerd_image.py",
             default_tool_inputs(REPO),
         )
 
@@ -240,7 +240,7 @@ class ArtifactPreparerTest(unittest.TestCase):
                 inputs.validate()
 
     def test_prepare_cli_exposes_the_guest_egress_mode(self) -> None:
-        command = HOST_TOOLS / "prepare-v2-test-artifacts.py"
+        command = HOST_TOOLS / "prepare-artifacts.py"
         completed = subprocess.run(
             [sys.executable, str(command), "--help"],
             check=False,
@@ -277,7 +277,7 @@ class ArtifactPreparerTest(unittest.TestCase):
             completed = subprocess.run(
                 [
                     sys.executable,
-                    str(HOST_TOOLS / "prepare-v2-test-artifacts.py"),
+                    str(HOST_TOOLS / "prepare-artifacts.py"),
                     "--backend",
                     "firecracker",
                     "--kata-prefix",
@@ -286,6 +286,10 @@ class ArtifactPreparerTest(unittest.TestCase):
                     str(inputs.bin_dir),
                     "--output-root",
                     str(temporary / "artifacts"),
+                    "--base-image-source",
+                    str(inputs.base_image_source),
+                    "--data-image-source",
+                    str(inputs.base_image_source),
                     "--no-write-profile",
                     "--with-sandbox-observer",
                     "--skip-workload-image",
@@ -396,7 +400,7 @@ class ArtifactPreparerTest(unittest.TestCase):
         config_calls = [
             call
             for call in executor.calls
-            if any(Path(value).name == "prepare-stratovirt-config.py" for value in call)
+            if any(Path(value).name == "prepare-kata-config.py" for value in call)
         ]
         self.assertEqual(len(config_calls), 2)
         for call in config_calls:
@@ -478,7 +482,7 @@ class ArtifactPreparerTest(unittest.TestCase):
                 call
                 for call in executor.calls
                 if any(
-                    Path(value).name == "prepare-stratovirt-config.py"
+                    Path(value).name == "prepare-kata-config.py"
                     for value in call
                 )
             ]
@@ -1358,7 +1362,7 @@ def _inputs(root: Path, *, backend: str = "stratovirt") -> PreparationInputs:
         data_kernel=paths["data-kernel"],
         virtiofsd=paths.get("virtiofsd"),
         xiaoo=None,
-        workload_image="example.test/workload:24.09",
+        workload_image="example.test/workload:24.03",
         workload_image_archive=None,
         image_pull_policy="never",
         otel_endpoint=None,
@@ -1406,7 +1410,7 @@ class _FakeExecutor:
             output = Path(argv[argv.index("--output-image") + 1])
             shutil.copy2(source, output)
         elif any(
-            Path(value).name == "prepare-stratovirt-config.py"
+            Path(value).name == "prepare-kata-config.py"
             for value in argv
         ):
             backend = (

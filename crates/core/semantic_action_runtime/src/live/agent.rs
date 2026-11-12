@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::SystemTime;
 
+use model_core::agent_type::{AgentType, AgentTypeSource};
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::payload::{PayloadDirection, PayloadSegment, PayloadSourceBoundary};
@@ -206,12 +207,37 @@ impl AgentProjector {
         if let Some(intent) = self.take_matching_exec_intent(&key, &action) {
             intent.apply_to(&mut action);
         }
-        if let Some(executable) = action.attributes.get(attrs::process::EXECUTABLE) {
-            self.process_executables.insert(key, executable.to_string());
-        } else {
-            self.process_executables.remove(&key);
+        match action.attributes.get(attrs::process::EXECUTABLE) {
+            Some(executable) => self.remember_executable(key, executable),
+            // The process became an image we cannot name, so the executable
+            // remembered for it no longer describes what it runs.
+            None => {
+                self.process_executables.remove(&key);
+            }
         }
         vec![action]
+    }
+
+    /// Remember the executable a process runs, keeping the more telling of
+    /// two names when a process execs more than once.
+    ///
+    /// A shebang script execs twice in the same process: the kernel reports
+    /// the script, then its interpreter, because `#!/usr/bin/env node` runs
+    /// `env`, which execs `node`. There the later event carries the weaker
+    /// name, so a path that resolves to a known agent product is never
+    /// replaced by one that does not. A wrapper that starts the real program,
+    /// `sh -c "codex ..."`, still resolves, because there the later exec is
+    /// the stronger name and replaces the wrapper as before.
+    fn remember_executable(&mut self, key: ProcessActionKey, executable: &str) {
+        if self
+            .process_executables
+            .get(&key)
+            .is_some_and(|previous| names_a_known_product(previous))
+            && !names_a_known_product(executable)
+        {
+            return;
+        }
+        self.process_executables.insert(key, executable.to_string());
     }
 
     pub(super) fn observe_process_exit(&mut self, event: &DomainEvent) -> Vec<SemanticAction> {
@@ -515,6 +541,11 @@ fn action_key(trace_id: TraceId, process: &ProcessIdentity) -> ProcessActionKey 
     (trace_id, process.clone())
 }
 
+fn names_a_known_product(executable: &str) -> bool {
+    AgentType::from_executable(executable)
+        .is_some_and(|agent| agent.source == AgentTypeSource::KnownProduct)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -548,6 +579,20 @@ mod tests {
                 .map(String::as_str),
             Some("/root/.cargo/bin/xiaoo")
         );
+        assert_eq!(
+            identities[0]
+                .attributes
+                .get(attrs::agent::TYPE)
+                .map(String::as_str),
+            Some("xiaoo")
+        );
+        assert_eq!(
+            identities[0]
+                .attributes
+                .get(attrs::agent::TYPE_SOURCE)
+                .map(String::as_str),
+            Some("known_product")
+        );
     }
 
     #[test]
@@ -565,6 +610,12 @@ mod tests {
             !identities[0]
                 .attributes
                 .contains_key(attrs::process::EXECUTABLE)
+        );
+        assert!(!identities[0].attributes.contains_key(attrs::agent::TYPE));
+        assert!(
+            !identities[0]
+                .attributes
+                .contains_key(attrs::agent::TYPE_SOURCE)
         );
     }
 

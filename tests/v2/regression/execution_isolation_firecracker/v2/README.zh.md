@@ -13,14 +13,18 @@ ACTRAIL_HOST_PATH="$ACTRAIL_HOST_PATH:/usr/local/sbin:/usr/sbin:/sbin:/bin"
 sudo -E /usr/bin/env \
   "PATH=$ACTRAIL_HOST_PATH" \
   /usr/bin/python3.11 \
-  deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  deploy/virtual-container/host/prepare-artifacts.py \
   --backend firecracker \
   --data-kernel /absolute/path/to/bootable-debug-kernel \
+  --base-image-source /opt/kata/share/kata-containers/kata-containers.img \
+  --data-image-source /opt/kata/share/kata-containers/kata-containers.img \
   --with-sandbox-observer \
   --xiaoo /absolute/path/to/xiaoo \
   --workload-image-archive /absolute/path/to/workload.docker.tar \
   --write-profile "$PWD/local/kata/v2-test-profile-firecracker.json"
 ```
+
+这里显式使用 Kata 自带的 Guest 镜像 `kata-containers.img`，与之前不传镜像参数时相同；openEuler Guest 镜像尚未在本用例上验证。
 
 只有准备器打印 `ACTRAIL_V2_ARTIFACTS_READY` 后才能运行 case。准备失败时 profile
 不会更新；继续使用旧 profile 只会产生 release checksum mismatch。
@@ -66,7 +70,7 @@ artifact 注入的 Guest systemd 服务运行。
 Firecracker 使用的 Guest kernel/image，以及 containerd devmapper snapshotter。先从
 同一 checkout 构建 release，再制备 Firecracker 内容寻址 artifact；真实 xiaoO 路径
 必须显式提供，alert 场景还必须注入 Guest observer。快速运行第一步的
-`prepare-v2-test-artifacts.py` 命令会生成内容寻址 artifact 和本机 profile。
+`prepare-artifacts.py` 命令会生成内容寻址 artifact 和本机 profile。
 
 artifact 输出位于 `local/kata/artifacts/<digest>/`，输入未变化时会命中缓存，不需要在
 每次 `test_all` 前重复生成。输入必须是 containerd `ctr images export` 生成的单平台
@@ -78,7 +82,7 @@ combined Docker/OCI archive，保留 `manifest.json` 和 content-addressed `Laye
 sudo ctr -n default images export \
   --platform "linux/$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')" \
   /absolute/path/to/workload.docker.tar \
-  docker.io/library/actrail-openeuler-workload:24.09
+  docker.io/library/actrail-openeuler-workload:24.03
 ```
 
 archive 的 Docker/OCI 镜像身份与 platform 必须一致。devmapper 是当前 Kata 3.32

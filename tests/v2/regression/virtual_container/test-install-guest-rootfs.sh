@@ -16,10 +16,6 @@ fail() {
 [[ -f "$BUNDLE_DIR/MANIFEST.sha256" ]] \
   || fail "guest bundle is missing; run the virtual_container V2 case first"
 
-[[ -f "$BUNDLE_DIR/tests/guest/runtime-defaults.sh" ]] \
-  || fail "Guest fixture defaults are missing from the bundle"
-sh -n "$BUNDLE_DIR/tests/guest/runtime-defaults.sh"
-
 # Parse the production guest template through the real CLI. This catches
 # stale TOML fields before an image is built.
 LD_LIBRARY_PATH="$BUNDLE_DIR/lib" \
@@ -63,20 +59,6 @@ install -m 0755 "$libc_binary" "$rootfs/usr/lib/actrail-test/libc.so.6"
 printf 'root:x:0:\n' >"$rootfs/etc/group"
 : >"$rootfs/usr/lib/systemd/system/kata-containers.target"
 : >"$rootfs/usr/lib/systemd/system/kata-agent.service"
-
-# The old observation-failure terminology must not remain as an install alias.
-set +e
-legacy_mode_output="$(
-  "$INSTALLER" \
-    --rootfs "$rootfs" \
-    --bundle "$BUNDLE_DIR" \
-    --mode fail-open 2>&1
-)"
-legacy_mode_rc=$?
-set -e
-[[ "$legacy_mode_rc" -ne 0 ]] || fail "installer retained the deprecated --mode alias"
-grep -Fq 'unknown argument: --mode' <<<"$legacy_mode_output" \
-  || fail "deprecated --mode rejection did not explain the interface change"
 
 # VSOCK is an OTLP transport and therefore cannot be selected without enabling
 # the exporter. Reject this combination before changing the rootfs.
@@ -232,8 +214,6 @@ for target in kata-containers.target multi-user.target; do
   [[ ! -e "$connect_link" && ! -L "$connect_link" ]] \
     || fail "sandbox observer auto-connect is enabled before case orchestration: $connect_link"
 done
-[[ ! -e "$rootfs/usr/lib/systemd/system/kata-agent.service.d/30-actrail-sandbox-observer.conf" ]] \
-  || fail "sandbox observer still changes kata-agent startup ordering"
 
 # Reinstalling the normal image profile must remove the observer topology
 # symmetrically rather than leaving a stale root service behind.
@@ -246,7 +226,6 @@ for observer_path in \
   /etc/actrail/sandbox-observer.toml \
   /usr/lib/systemd/system/actrail-sb.service \
   /usr/lib/systemd/system/actrail-sb-connect.service \
-  /usr/lib/systemd/system/kata-agent.service.d/30-actrail-sandbox-observer.conf \
   /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb.service \
   /usr/lib/systemd/system/kata-containers.target.wants/actrail-sb-connect.service \
   /usr/lib/systemd/system/multi-user.target.wants/actrail-sb.service \

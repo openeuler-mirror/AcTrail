@@ -10,7 +10,7 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --color never
 ```
 
-`run-v2-tests.sh` 是虚拟容器 V2 的宿主验收入口。它读取
+`run-v2-tests.sh` 是虚机容器 V2 的宿主验收入口。它读取
 `local/kata/v2-test-profile.json`，保留调用用户的 Cargo、Rustup 和 PATH，在需要时
 申请一次 sudo，然后调用公共 `test_all.py`。选中本 case 后，runner 先执行
 `release_install`，懒加载并校验 manifest 中的 data Profile、workload bundle 和
@@ -76,6 +76,7 @@ PROFILE="$REPO_ROOT/local/kata/v2-test-profile.json"
 BACKEND="${BACKEND:-stratovirt}"
 BASE_CONFIG_SOURCE="/path/to/configuration-base-source.toml"
 DATA_CONFIG_SOURCE="/path/to/configuration-data-source.toml"
+GUEST_IMAGE_SOURCE="/path/to/openeuler-24.03-guest.image"  # guest/build-openeuler-image.sh 的输出
 XIAOO_BIN="/path/to/xiaoo"
 ```
 
@@ -138,14 +139,17 @@ KVM/VMM 属于外部前提时标记为 `SKIPPED`，manifest 损坏则标记为 `
 ```bash
 test -f "$BASE_CONFIG_SOURCE"
 test -f "$DATA_CONFIG_SOURCE"
+test -f "$GUEST_IMAGE_SOURCE"
 test -x "$XIAOO_BIN"
 
 sudo -E env \
   "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --backend "$BACKEND" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
     --data-config-source "$DATA_CONFIG_SOURCE" \
+    --base-image-source "$GUEST_IMAGE_SOURCE" \
+    --data-image-source "$GUEST_IMAGE_SOURCE" \
     --xiaoo "$XIAOO_BIN"
 ```
 

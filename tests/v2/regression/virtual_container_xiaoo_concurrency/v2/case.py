@@ -149,7 +149,8 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
         )
         if self._config.opencode_free_model is not None:
             project_files += (
-                Path(__file__).resolve().parent / "connect_proxy.py",
+                self._config.repo
+                / "deploy/virtual-container/host/connect_proxy.py",
                 self._config.repo
                 / "deploy/virtual-container/vsock-egress/guest-bridge.sh",
                 self._config.repo
@@ -205,5 +206,5 @@ def _deployment_failure(reason: str) -> TestResult:
         TestStatus.FAILED,
         reason
         + "; rerun deploy/virtual-container/host/"
-        "prepare-v2-test-artifacts.py",
+        "prepare-artifacts.py",
     )
