@@ -1,4 +1,4 @@
-//! Launch: connect the Trace's backend, record the Trace and take the initial checkpoint.
+//! Launch: connect filesystems and record the Trace; context capture starts after Agent startup.
 
 use checkpoint::{SnapshotContext as BackendContext, SnapshotScope};
 
@@ -8,7 +8,7 @@ use crate::coordinator::{CoordinatorError, LaunchRequest, Shared};
 use crate::model::{NewOperation, OperationKind, Phase, RootProcess, TraceRecord, Trigger};
 use crate::scope::plan_scopes;
 
-/// Succeeds only when the initial checkpoint exists, since the launch fails otherwise.
+/// Filesystem-only launches also require an initial checkpoint before the Agent starts.
 pub(crate) fn run(shared: &Shared, request: LaunchRequest) -> Result<(), CoordinatorError> {
     let context = request.context.clone();
     let groups = plan_scopes(&request.scopes)?;
@@ -16,7 +16,7 @@ pub(crate) fn run(shared: &Shared, request: LaunchRequest) -> Result<(), Coordin
         .iter()
         .flat_map(|group| group.scopes.iter().cloned())
         .collect();
-    let mut backend = shared.factory.create(&groups)?;
+    let mut backend = shared.factory.create(&request.backends, &groups)?;
     backend
         .connect(&BackendContext {
             trace_id: context.trace_id.to_string().into(),
@@ -36,9 +36,10 @@ pub(crate) fn run(shared: &Shared, request: LaunchRequest) -> Result<(), Coordin
         })
         .into_result()
         .map_err(|error| CoordinatorError::new("connect_failed", error.message.into_string()))?;
+    let has_context = backend.has_context();
     shared.set_backend(&context, backend);
 
-    let result = initial_checkpoint(shared, request);
+    let result = initial_checkpoint(shared, request, has_context);
     if result.is_err() {
         // The Agent never starts, so the backend has no further use. The launch reports the
         // first error; the catalog that caused it may not take this record either.
@@ -47,7 +48,11 @@ pub(crate) fn run(shared: &Shared, request: LaunchRequest) -> Result<(), Coordin
     result
 }
 
-fn initial_checkpoint(shared: &Shared, request: LaunchRequest) -> Result<(), CoordinatorError> {
+fn initial_checkpoint(
+    shared: &Shared,
+    request: LaunchRequest,
+    has_context: bool,
+) -> Result<(), CoordinatorError> {
     let context = &request.context;
     let trace = TraceRecord {
         trace_id: context.trace_id,
@@ -64,6 +69,11 @@ fn initial_checkpoint(shared: &Shared, request: LaunchRequest) -> Result<(), Coo
     let operation = {
         let mut catalog = shared.catalog();
         catalog.create_trace(&trace)?;
+        // An Agent stopped before exec has no context to save. Its running boundaries will
+        // connect the context backend and then create complete combined checkpoints.
+        if has_context {
+            return Ok(());
+        }
         catalog.create_operation(&NewOperation {
             trace_id: context.trace_id,
             kind: OperationKind::Save,

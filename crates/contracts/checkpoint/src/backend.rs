@@ -70,7 +70,8 @@ pub type CheckpointBackend = RestorableCheckpointBackend_TO<'static, RBox<()>>;
 #[sabi(kind(Prefix(prefix_ref = CheckpointModuleRef)))]
 pub struct CheckpointModule {
     /// Creates a configured backend. The caller must then call connect before use.
-    /// The integration owns configuration parsing and validation.
+    /// The integration parses runtime settings and loads its optional Trace configuration.
+    /// Runtime settings originate from the daemon; Trace configuration comes from launch.
     pub create: extern "C" fn(BackendConfig) -> RResult<CheckpointBackend, BackendError>,
     #[sabi(last_prefix_field)]
     pub kind: BackendKind,

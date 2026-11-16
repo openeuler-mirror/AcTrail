@@ -1,15 +1,14 @@
 //! An integration loaded from its dynamic library, which creates backend instances.
 
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use abi_stable::library::lib_header_from_path;
 use checkpoint::{BackendConfig, BackendKind, CheckpointBackend, CheckpointModuleRef};
 
 pub(crate) struct DynamicIntegration {
     module: CheckpointModuleRef,
-    /// The integration's own configuration, passed to it unparsed.
-    config: String,
+    /// Daemon-owned runtime settings. Only the integration interprets these bytes.
+    runtime_json: String,
 }
 
 impl DynamicIntegration {
@@ -19,9 +18,12 @@ impl DynamicIntegration {
         let module = lib_header_from_path(library)
             .and_then(|header| header.init_root_module::<CheckpointModuleRef>())
             .map_err(|error| format!("{}: {error}", library.display()))?;
-        let config =
+        let runtime_json =
             fs::read_to_string(config).map_err(|error| format!("{}: {error}", config.display()))?;
-        Ok(Self { module, config })
+        Ok(Self {
+            module,
+            runtime_json,
+        })
     }
 
     pub(crate) fn kind(&self) -> BackendKind {
@@ -29,10 +31,14 @@ impl DynamicIntegration {
     }
 
     /// A new instance, which still has to connect.
-    pub(crate) fn create(&self) -> Result<CheckpointBackend, String> {
+    pub(crate) fn create(
+        &self,
+        trace_config_path: Option<&str>,
+    ) -> Result<CheckpointBackend, String> {
         let create = self.module.create();
         create(BackendConfig {
-            json: self.config.as_str().into(),
+            runtime_json: self.runtime_json.as_str().into(),
+            trace_config_path: trace_config_path.map(Into::into).into(),
         })
         .into_result()
         .map_err(|error| error.message.into_string())

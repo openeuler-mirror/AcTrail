@@ -3,8 +3,8 @@
 //! Commands keep one field per value. History replies carry their records as one JSON field.
 
 use control_contract::checkpoint::{
-    CheckpointAction, CheckpointCommand, CheckpointFilterMode, CheckpointReply,
-    LaunchCheckpointConfig, LaunchCheckpointScope,
+    BackendInstanceConfig, CheckpointAction, CheckpointCommand, CheckpointFilterMode,
+    CheckpointReply, LaunchCheckpointConfig, LaunchCheckpointScope,
 };
 use control_contract::command::ControlCommand;
 use model_core::ids::{RequestId, TraceId};
@@ -208,6 +208,14 @@ pub(super) fn encode_launch_config(
         return;
     };
     fields.push("true".to_string());
+    fields.push(config.backends.len().to_string());
+    for backend in &config.backends {
+        fields.push(backend.name.clone());
+        fields.push(backend.config.is_some().to_string());
+        if let Some(config) = &backend.config {
+            fields.push(config.clone());
+        }
+    }
     fields.push(config.scopes.len().to_string());
     for scope in &config.scopes {
         fields.push(scope.id.clone());
@@ -226,8 +234,27 @@ pub(super) fn decode_launch_config(
     if !super::parse_bool(field(fields, cursor)?, "checkpoint_present")? {
         return Ok((None, cursor + 1));
     }
-    let scope_count = parse_usize(field(fields, cursor + 1)?, "checkpoint_scope_count")?;
+    let backend_count = parse_usize(field(fields, cursor + 1)?, "checkpoint_backend_count")?;
     cursor += 2;
+    let mut backends = Vec::new();
+    for _ in 0..backend_count {
+        let name = field(fields, cursor)?.clone();
+        let present = parse_bool(
+            field(fields, cursor + 1)?,
+            "checkpoint_trace_config_present",
+        )?;
+        cursor += 2;
+        let config = if present {
+            let config = field(fields, cursor)?.clone();
+            cursor += 1;
+            Some(config)
+        } else {
+            None
+        };
+        backends.push(BackendInstanceConfig { name, config });
+    }
+    let scope_count = parse_usize(field(fields, cursor)?, "checkpoint_scope_count")?;
+    cursor += 1;
     let mut scopes = Vec::new();
     for _ in 0..scope_count {
         let exclude_count = parse_usize(field(fields, cursor + 3)?, "checkpoint_exclude_count")?;
@@ -243,7 +270,7 @@ pub(super) fn decode_launch_config(
         });
         cursor += 4 + exclude_count;
     }
-    Ok((Some(LaunchCheckpointConfig { scopes }), cursor))
+    Ok((Some(LaunchCheckpointConfig { backends, scopes }), cursor))
 }
 
 fn to_json(value: &impl Serialize) -> String {

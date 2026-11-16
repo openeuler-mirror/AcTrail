@@ -16,7 +16,7 @@ struct Factory;
 impl Factory {
     #[sabi_extern_fn]
     extern "C" fn create(config: BackendConfig) -> RResult<CheckpointBackend, BackendError> {
-        Config::from_json(config.json.as_str())
+        Config::load(config)
             .map(|config| CheckpointBackend::from_value(XiaooBackend::new(config), TD_Opaque))
             .map_err(BackendError::from)
             .into()

@@ -36,7 +36,14 @@ fn module() -> CheckpointModuleRef {
 
 #[sabi_extern_fn]
 fn create(config: BackendConfig) -> RResult<CheckpointBackend, BackendError> {
-    BtrfsBackend::new(&config.json)
+    // Per-Trace targets arrive through SnapshotContext.scopes; runtime settings stay fixed.
+    if config.trace_config_path.is_some() {
+        return RResult::RErr(backend_error(
+            "invalid_config",
+            "Btrfs Trace configuration uses scopes",
+        ));
+    }
+    BtrfsBackend::new(&config.runtime_json)
         .map(|backend| RestorableCheckpointBackend_TO::from_value(backend, TD_Opaque))
         .into()
 }

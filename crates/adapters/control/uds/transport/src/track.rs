@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub(super) struct TrackCodec;
 impl TrackCodec {
     pub(super) fn encode(fields: &mut Vec<String>, command: &TrackAddCommand) {
-        fields.push("track_add_v9".to_string());
+        fields.push("track_add_v10".to_string());
         fields.push(command.request_id.get().to_string());
         encode_process_ref(fields, &command.root);
         fields.push(command.display_name.to_string());

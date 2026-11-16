@@ -18,8 +18,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
+use crate::backends::composite::CompositeBackend;
 use abi_stable::std_types::RResult;
-use checkpoint::CheckpointBackend;
 use model_core::ids::TraceId;
 
 pub use self::commands::LaunchRequest;
@@ -60,7 +60,7 @@ impl From<CatalogError> for CoordinatorError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompletedJob {
-    /// Bind and the initial save; the daemon answers `TrackAdd` with this result.
+    /// Filesystem binding and any launch save; the daemon answers `TrackAdd` with this result.
     Launch,
     Operation(OperationId),
     /// An automatic save decision, including one that skipped an unchanged Trace.
@@ -141,7 +141,7 @@ impl Shared {
     pub(crate) fn call<R, E>(
         &self,
         context: &SnapshotContext,
-        call: impl FnOnce(&mut CheckpointBackend) -> RResult<R, E>,
+        call: impl FnOnce(&mut CompositeBackend) -> RResult<R, E>,
     ) -> Result<R, E> {
         let mut backend = self.take_backend(context);
         let result = call(&mut backend).into_result();

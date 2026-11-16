@@ -4,7 +4,7 @@
 
 use std::time::SystemTime;
 
-use checkpoint::TraceProcess;
+use checkpoint::{BackendInstanceConfig, TraceProcess};
 
 use super::scheduler::{Job, TraceState};
 use super::{CheckpointCoordinator, CoordinatorError, unknown_checkpoint, unknown_trace};
@@ -13,7 +13,6 @@ use crate::model::{
     SnapshotContext, TraceOwner, TraceRecord, Trigger,
 };
 use crate::ports::CheckpointCatalog;
-use crate::scope::plan_scopes;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchRequest {
@@ -21,25 +20,15 @@ pub struct LaunchRequest {
     pub owner: TraceOwner,
     /// The Trace root, still stopped at the launch barrier.
     pub trace_process: TraceProcess,
+    pub backends: Vec<BackendInstanceConfig>,
     pub scopes: Vec<ScopeConfig>,
     pub requested_at: SystemTime,
 }
 
 impl CheckpointCoordinator {
-    /// Connects the Trace's backend and takes the initial checkpoint; the result arrives as a
-    /// `CompletedJob::Launch` completion.
+    /// Connects filesystems and records the Trace. Filesystem-only Traces also take an initial
+    /// checkpoint. The result arrives as a `CompletedJob::Launch` completion.
     pub fn launch(&self, request: LaunchRequest) -> Result<(), CoordinatorError> {
-        for group in plan_scopes(&request.scopes)? {
-            if !self.shared.factory.takes_scopes(&group.backend_instance) {
-                return Err(CoordinatorError::new(
-                    "unknown_backend",
-                    format!(
-                        "backend instance {} is not loaded or takes no scopes",
-                        group.backend_instance
-                    ),
-                ));
-            }
-        }
         let context = request.context.clone();
         self.shared.enqueue(&context, Job::Launch(request));
         Ok(())
@@ -272,7 +261,7 @@ fn require_connected(trace: &TraceRecord, state: &TraceState) -> Result<(), Coor
         return Err(CoordinatorError::new(
             "launch_incomplete",
             format!(
-                "{} has not completed its initial checkpoint",
+                "{} has not completed checkpoint initialization",
                 trace.trace_id
             ),
         ));

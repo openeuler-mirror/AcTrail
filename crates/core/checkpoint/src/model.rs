@@ -7,8 +7,8 @@ use checkpoint::{BackendError, BackendErrorKind};
 use model_core::ids::TraceId;
 use serde::{Deserialize, Serialize};
 
-/// Numbered from 0 within its Trace, where 0 is the initial checkpoint taken at launch; a
-/// checkpoint is named by its Trace and this id.
+/// Numbered from 0 for the first successful save within its Trace.
+/// A checkpoint is named by its Trace and this id.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CheckpointId(u64);
 

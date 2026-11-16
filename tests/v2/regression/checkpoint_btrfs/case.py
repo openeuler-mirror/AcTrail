@@ -157,9 +157,9 @@ class CheckpointBtrfsCase(TestCase):
             raise AssertionError(f"the restore of {trace} did not wait for an LLM request: {view}")
         return operation
 
-    @staticmethod
-    def _scope(scope_id: str, root: Path) -> str:
-        return (f"[[scopes]]\nid = {json.dumps(scope_id)}\nroot = {json.dumps(str(root))}\n"
+    def _scope(self, scope_id: str, root: Path) -> str:
+        return (f"[[backends]]\nname = {json.dumps(C.backend_instance)}\n"
+                f"[[scopes]]\nid = {json.dumps(scope_id)}\nroot = {json.dumps(str(root))}\n"
                 f"backend_instance = {json.dumps(C.backend_instance)}\n")
 
     def _missing(self) -> str | None:

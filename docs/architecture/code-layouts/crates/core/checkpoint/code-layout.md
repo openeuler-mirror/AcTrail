@@ -5,14 +5,14 @@
 ├── [x] Cargo.toml # 依赖 contracts/checkpoint 与动态库加载能力。
 └── [x] src/ # 记录模型、协调流程、backend 组装与外部能力端口。
     ├── [x] lib.rs # 导出协调器、factory、配置项、记录模型与端口；backends 模块保持私有。
-    ├── [x] config.rs # 模块配置：描述组合结构、动态库路径及对应集成配置。
-    │   └── [x] struct BackendEntry # 一个 backend 的名字、动态库路径和配置文件路径。
-    ├── [x] factory.rs # 按配置加载动态库；为每个 Trace 创建参与的 backend 的新实例，组装后返回统一 CheckpointBackend；文件系统类在 scope 点名时参与，上下文类始终参与。
-    │   └── [x] struct CheckpointFactory # 按配置顺序持有已加载的集成。
+    ├── [x] config.rs # 模块配置：描述可用 backend 的注册信息。
+    │   └── [x] struct BackendEntry # 一个 backend 的注册名、动态库路径和运行配置路径。
+    ├── [x] factory.rs # 加载动态库和运行配置，按 launch 的后端列表及 Trace 配置调用创建入口，组装该 Trace 的 CompositeBackend。
+    │   └── [x] struct CheckpointFactory # 持有已加载的集成及注册名称。
     ├── [x] backends/ # 仅供 factory 组装的内部实现。
     │   ├── [x] mod.rs # 声明内部后端。
     │   ├── [x] composite.rs # 实现 RestorableCheckpointBackend：把 scope 分给各子实例，依次调用，把子快照合成一个快照；保存失败时删除已得到的子快照，恢复时把子实例报告的失效换算成组合快照。
-    │   └── [x] dynamic.rs # 按配置加载 .so、校验 ABI 并取得统一后端对象。
+    │   └── [x] dynamic.rs # 加载 .so、校验 ABI 并保存运行配置原文，将原文及每次 launch 的可选 Trace 配置路径交给集成的创建入口。
     ├── [x] model.rs # Trace、checkpoint 与 operation 的记录模型。
     │   ├── [x] struct TraceRecord # 保存 Trace 的所有者、根进程、scope 配置、结束时间和 disconnect 结果。
     │   ├── [x] struct ContextStatus # 当前 daemon 持有的暂停和工作线程状态，与持久化历史分开查询。
@@ -29,7 +29,7 @@
     │   │   ├── [x] struct CheckpointCoordinator # 持有记录库的写连接与只读连接、factory 和每个 Trace 的状态；只有查询使用只读连接。
     │   │   └── [x] trait CompletionSink # 每个任务结束后通知 daemon，并带出可以越过边界的 hold；launch 的结果用于回复 TrackAdd。
     │   ├── [x] commands.rs # 命令：launch、save、restore、force、delete、disconnect、resume。在记录库锁内检查 Trace 状态并记录请求后返回，耗时工作排入 Trace 队列；恢复等到下一个边界，上次恢复未成功仍保持 Trace 时不等；Trace 结束或 disconnect 之后不能 save 或 restore。
-    │   │   └── [x] struct LaunchRequest # Trace 所有者、停在启动屏障内的根进程和 scope 配置。
+    │   │   └── [x] struct LaunchRequest # Trace 所有者、停在启动屏障内的根进程、本次后端列表和 scope 配置。
     │   ├── [x] queries.rs # 查询：checkpoint 列表、operation 和 Trace 所有者经只读连接读取；当前暂停和工作线程状态读内存。均在调用线程执行，不排队，也不等记录库锁。
     │   ├── [x] events.rs # 事件：LLM 请求边界和 Trace 结束。边界处有等待的恢复就执行恢复，Trace 被保持时继续等待，正在 disconnect 时直接放行，否则执行 save；Trace 结束时执行等待中的恢复，然后 disconnect，或重试失败的 disconnect；daemon 停止时 disconnect 运行中的 Trace 并等待工作结束。
     │   │   └── [x] enum BoundaryAction # 边界处的 Agent 立即继续，或等其 hold 随完成通知返回。

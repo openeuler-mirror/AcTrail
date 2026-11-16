@@ -24,9 +24,6 @@ pub struct BackendGroup {
 /// Every path belongs to the innermost scope that covers it, so each child scope's root is added
 /// to its parent's excludes. Relative excludes are resolved against the scope root.
 pub fn plan_scopes(configs: &[ScopeConfig]) -> Result<Vec<BackendGroup>, CoordinatorError> {
-    if configs.is_empty() {
-        return Err(invalid("the checkpoint configuration has no scopes"));
-    }
     let mut ids = BTreeSet::new();
     let mut roots = Vec::with_capacity(configs.len());
     for config in configs {

@@ -14,5 +14,6 @@ pub use backend::{
 };
 pub use error::{BackendError, BackendErrorKind, RestoreFailure};
 pub use types::{
-    BackendConfig, BackendKind, SnapshotContext, SnapshotId, SnapshotScope, TraceProcess,
+    BackendConfig, BackendInstanceConfig, BackendKind, SnapshotContext, SnapshotId, SnapshotScope,
+    TraceProcess,
 };

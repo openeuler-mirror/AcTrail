@@ -14,7 +14,7 @@
 - [启动、停止和检查 daemon](daemon/start-stop.md)
 - [查看和导出 trace](daemon/inspect-traces.md)
 - [配置Agent 执行停滞告警与时间线](idle-detection.md)
-- [用 checkpoint 保存和恢复文件](checkpoint.md)
+- [快照与回滚接入](checkpoint.md)：配置、启动与回滚操作，支持 Btrfs、AgentNS 和 Xiaoo 后端
 - [管理插件](plugins/manage.md)
 
 ## 集成

@@ -2,25 +2,38 @@
 
 use abi_stable::{
     StableAbi,
-    std_types::{RString, RVec},
+    std_types::{ROption, RString, RVec},
 };
 
-/// What a backend snapshots, which decides how it joins a Trace.
+/// What a selected backend snapshots and when it connects.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StableAbi)]
 pub enum BackendKind {
-    /// Protects the directories of launch scopes, and joins a Trace when a scope names it.
+    /// Protects the directories of launch scopes.
     Filesystem,
-    /// Has no scopes and joins every Trace.
+    /// Protects context without filesystem scopes.
     Context,
 }
 
-/// Complete integration-owned configuration, forwarded without field parsing.
-/// Each integration defines and validates its own JSON schema at creation.
+/// Selects one loaded integration for a Trace. Only that integration reads `config`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendInstanceConfig {
+    pub name: String,
+    /// Optional Trace configuration path in the daemon's filesystem view.
+    /// Runtime configuration is supplied separately by the daemon registration.
+    #[serde(default)]
+    pub config: Option<String>,
+}
+
+/// Separate runtime and Trace configuration sources, interpreted only by the backend.
+/// The daemon fixes runtime JSON at startup. The backend loads Trace configuration
+/// when creating an instance; it does not merge it into runtime settings.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub struct BackendConfig {
-    pub json: RString,
+    pub runtime_json: RString,
+    pub trace_config_path: ROption<RString>,
 }
 
 /// Context bound to a backend instance for one checkpoint connection: whose work

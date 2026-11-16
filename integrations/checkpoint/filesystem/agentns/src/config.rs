@@ -1,3 +1,5 @@
+//! Parses daemon-owned AgentNS runtime settings and global exclusions.
+
 use std::path::PathBuf;
 
 use checkpoint::BackendError;

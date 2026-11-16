@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, MutexGuard};
 use std::time::SystemTime;
 
-use checkpoint::CheckpointBackend;
+use crate::backends::composite::CompositeBackend;
 
 use super::jobs::records::PendingRecord;
 use super::jobs::{disconnect, launch, release, restore, save};
@@ -18,7 +18,7 @@ use crate::ports::PausedProcess;
 pub(crate) struct TraceState {
     jobs: VecDeque<Job>,
     running: bool,
-    /// The backend connected and its initial checkpoint was recorded.
+    /// Filesystem backends connected; context backends connect at a running boundary.
     pub(crate) initialized: bool,
     /// A completed backend result that must still be written to the catalog.
     pub(crate) pending_record: Option<PendingRecord>,
@@ -31,7 +31,7 @@ pub(crate) struct TraceState {
     /// A restore of a running Trace waiting for its next LLM request boundary.
     pub(crate) waiting_restore: Option<OperationId>,
     /// Connected at launch and disconnected by the disconnect job. A running job holds it.
-    backend: Option<CheckpointBackend>,
+    backend: Option<CompositeBackend>,
     /// The last disconnect failed and the backend is kept: another `disconnect` or the end of the
     /// Trace retries it.
     pub(crate) disconnect_failed: bool,
@@ -97,7 +97,7 @@ impl Shared {
             .expect("spawn a checkpoint worker thread");
     }
 
-    pub(crate) fn set_backend(&self, context: &SnapshotContext, backend: CheckpointBackend) {
+    pub(crate) fn set_backend(&self, context: &SnapshotContext, backend: CompositeBackend) {
         self.traces()
             .get_mut(context)
             .expect("queued contexts have state")
@@ -105,7 +105,7 @@ impl Shared {
     }
 
     /// Keeps a backend whose disconnect failed, for a retry to free what is left.
-    pub(crate) fn keep_for_retry(&self, context: &SnapshotContext, backend: CheckpointBackend) {
+    pub(crate) fn keep_for_retry(&self, context: &SnapshotContext, backend: CompositeBackend) {
         let mut traces = self.traces();
         let state = traces.get_mut(context).expect("queued contexts have state");
         state.backend = Some(backend);
@@ -119,7 +119,7 @@ impl Shared {
     }
 
     /// Jobs run only while the context is connected, and one at a time.
-    pub(crate) fn take_backend(&self, context: &SnapshotContext) -> CheckpointBackend {
+    pub(crate) fn take_backend(&self, context: &SnapshotContext) -> CompositeBackend {
         self.traces()
             .get_mut(context)
             .and_then(|state| state.backend.take())
