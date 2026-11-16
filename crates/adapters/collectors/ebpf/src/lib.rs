@@ -15,6 +15,8 @@ mod collector_file_io;
 mod collector_instance_impl;
 #[path = "collector/net_aggregation.rs"]
 mod collector_net_aggregation;
+#[path = "collector/runtime/preparation.rs"]
+mod collector_preparation;
 #[path = "collector/process_exec.rs"]
 mod collector_process_exec;
 #[path = "collector/process_fork.rs"]
@@ -49,10 +51,7 @@ use config_core::daemon::{
 };
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::{CollectorName, TraceId};
-use model_core::process::{
-    InitialSuppressedFd, KernelProcessCoordinates, ProcessIdentity, ProcessObservation,
-    ProcessRecord, ProcessSuppressedFd,
-};
+use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
 
 use crate::capability_probe::{EbpfProbeResult, probe};
 use crate::decode::FileTracker;
@@ -72,6 +71,7 @@ use crate::maps::BindingStateMap;
 use collector_dynamic_go_tls::DynamicGoTlsAttacher;
 use collector_dynamic_tls::DynamicTlsAttacher;
 use collector_net_aggregation::NetAggregator;
+use collector_preparation::RuntimePreparation;
 use collector_process_exec::ProcessExecAssembler;
 use collector_process_fork::ProcessForkAssembler;
 use collector_stdio_payload::StdioPayloadAssembler;
@@ -80,7 +80,7 @@ pub struct EbpfCollector {
     probe_result: EbpfProbeResult,
     loader: EbpfProgramLoader,
     bindings: BindingStateMap,
-    runtime: Option<EbpfRuntime>,
+    runtime: RuntimePreparation,
     file_tracker: FileTracker,
     semantic_projection_enabled: bool,
     dynamic_go_tls: DynamicGoTlsAttacher,
@@ -99,7 +99,6 @@ pub struct EbpfCollector {
     net_aggregator: NetAggregator,
     net_aggregation_enabled: Arc<AtomicBool>,
     net_aggregation_backlog: Vec<RawCollectorEvent>,
-    suppressed_fds: Vec<TraceSuppressedFd>,
     pending_launches: BTreeMap<TraceId, PendingLaunchBinding>,
     binding_gap_drops: u64,
     binding_gap_lifecycle_skips: u64,
@@ -109,20 +108,10 @@ pub struct EbpfCollector {
     clock_ticks_per_second: Option<u64>,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct EbpfPreflightKey(Vec<(Capability, RequestMode)>);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct TraceSuppressedFd {
-    trace_id: TraceId,
-    fd: ProcessSuppressedFd,
-}
-
 struct PendingLaunchBinding {
     root_identity: ProcessIdentity,
     root_observation: ProcessObservation,
     generation: u64,
-    initial_suppressed_fds: Vec<InitialSuppressedFd>,
     root_working_directory: Option<String>,
     armed_binding: ArmedLaunchBinding,
 }
@@ -240,7 +229,7 @@ impl EbpfCollector {
                 file_tty_observation,
             ),
             bindings: BindingStateMap::default(),
-            runtime: None,
+            runtime: RuntimePreparation::default(),
             file_tracker,
             semantic_projection_enabled,
             dynamic_go_tls: DynamicGoTlsAttacher::new(&payload_config.tls),
@@ -261,7 +250,6 @@ impl EbpfCollector {
             net_aggregator: NetAggregator::new(net_aggregation_enabled.clone()),
             net_aggregation_enabled,
             net_aggregation_backlog: Vec::new(),
-            suppressed_fds: Vec::new(),
             pending_launches: BTreeMap::new(),
             binding_gap_drops: 0,
             binding_gap_lifecycle_skips: 0,

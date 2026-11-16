@@ -13,6 +13,12 @@ pub mod agent {
     pub const IDENTITY_STATUS: &str = "agent.identity.status";
     pub const IDENTITY_STATUS_OBSERVED_MARKER: &str = "agent.identity.status=observed";
     pub const PERFORMED_ACTION_SEQUENCE: &str = "agent.performed_action.sequence";
+    /// Agent product resolved from the observed executable. An inference, not
+    /// an observation: always read together with [`TYPE_SOURCE`].
+    pub const TYPE: &str = "actrail.agent.type";
+    /// How [`TYPE`] was resolved: `known_product` for a match against the
+    /// known agent products, `executable` for the program-name fallback.
+    pub const TYPE_SOURCE: &str = "actrail.agent.type.source";
 }
 
 pub mod agent_exit {
@@ -33,6 +39,30 @@ pub mod agent_invocation {
     pub const TOOL_CALL_ID: &str = "agent.invocation.tool_call_id";
     pub const TOOL_NAME: &str = "agent.invocation.tool_name";
     pub const TRIGGER: &str = "agent.invocation.trigger";
+}
+
+pub mod agent_context_compact {
+    pub const CONTEXT_ITEM_UNIT: &str = "agent.context_compaction.context_item_unit";
+    pub const DETECTOR_ID: &str = "agent.context_compaction.detector_id";
+    pub const EVIDENCE_MODE: &str = "agent.context_compaction.evidence_mode";
+    pub const EVIDENCE_MODE_PROTOCOL_EXPLICIT_COMPACTION: &str = "protocol_explicit_compaction";
+    pub const EVIDENCE_MODE_ARTIFACT_FLOW: &str = "artifact_flow";
+    pub const EVIDENCE_MODE_ARTIFACT_FLOW_PARTIAL_SUMMARY: &str = "artifact_flow_partial_summary";
+    pub const IMPLEMENTATION_LLM_CALL_ACTION_ID: &str =
+        "agent.context_compaction.implementation_llm_call_action_id";
+    pub const OPAQUE_ARTIFACT_BYTES: &str = "agent.context_compaction.opaque_artifact_bytes";
+    pub const POST_CONTEXT_ARTIFACT_PATH: &str =
+        "agent.context_compaction.post_context_artifact_path";
+    pub const POST_CONTEXT_ITEM_COUNT: &str = "agent.context_compaction.post_context_item_count";
+    pub const POST_CONTEXT_REQUEST_ACTION_ID: &str =
+        "agent.context_compaction.post_context_request_action_id";
+    pub const PRE_CONTEXT_ITEM_COUNT: &str = "agent.context_compaction.pre_context_item_count";
+    pub const PRE_CONTEXT_REQUEST_ACTION_ID: &str =
+        "agent.context_compaction.pre_context_request_action_id";
+    pub const SOURCE: &str = "agent.context_compaction.source";
+    pub const SUMMARY_BYTES: &str = "agent.context_compaction.summary_bytes";
+    pub const SUMMARY_CHARS: &str = "agent.context_compaction.summary_chars";
+    pub const SUMMARY_CONTENT_STATE: &str = "agent.context_compaction.summary_content_state";
 }
 
 pub mod command {

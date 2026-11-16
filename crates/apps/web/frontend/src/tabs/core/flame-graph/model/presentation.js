@@ -2,9 +2,33 @@ import { semanticActionLabel, semanticActionTarget } from '../../../actionLabels
 import { ToolCallDisplay } from '../../../shared/toolCallDisplay.js';
 import { actionDetail, formatOffset } from '../../waterfall/model.js';
 import { deriveAgentScopes, orderAgentScopes } from '../agent-scopes.js';
-import { BACKGROUND_LABEL_KEYS, AGENT_GROUP_ORDER, HARNESS_GROUP_ORDER, GROUP_LABEL_KEYS, GROUP_DESCRIPTION_KEYS, flameSummaryMarkerKind, packActivityDepths, coveredDuration, activityEnvelope, compareActivities, parseNanos, nanosDiffMs, humanize, basename } from './utils.js';
+import { CommandHierarchy } from './command-hierarchy.js';
+import { BACKGROUND_LABEL_KEYS, AGENT_GROUP_ORDER, HARNESS_GROUP_ORDER, GROUP_LABEL_KEYS, GROUP_DESCRIPTION_KEYS, commandEndUnknown, flameSummaryMarkerKind, packActivityDepths, coveredDuration, activityEnvelope, compareActivities, parseNanos, nanosDiffMs, humanize, basename } from './utils.js';
 
 export function flameActivityDetail(activity, t) {
+  const endUnknown = commandEndUnknown(activity.action);
+  const unfinishedLabel = t(endUnknown ? 'canvasTitle.endUnknown' : 'canvasTitle.running');
+  if (activity.lightweight && !activity.density) {
+    return {
+      selectionId: activity.id,
+      title: activity.label,
+      kind: activity.kind,
+      rows: {
+        layer: activity.layer === 'agent' ? t('layer.agentShort') : t('layer.harnessShort'),
+        lane: t(GROUP_LABEL_KEYS[activity.group]),
+        action_id: activity.id,
+        status: activity.status,
+        start_time_unix_nanos: activity.action.start_time_unix_nanos,
+        end_time_unix_nanos: activity.action.end_time_unix_nanos ?? unfinishedLabel,
+        start_offset: `+${formatOffset(activity.startOffsetMs)}`,
+        duration: activity.action.end_time_unix_nanos == null ? unfinishedLabel : formatOffset(activity.observedDurMs),
+        detail: t('detailRows.retainedHint'),
+      },
+      attributes: {},
+      evidence: [],
+      raw: null,
+    };
+  }
   if (activity.density) {
     return {
       selectionId: activity.id,
@@ -37,6 +61,16 @@ export function flameActivityDetail(activity, t) {
     start_offset: `+${formatOffset(activity.startOffsetMs)}`,
     ...detail.rows,
   };
+  if (activity.kind === 'command.invocation') {
+    const action = activity.action;
+    detail.rows.start_time_unix_nanos = action.start_time_unix_nanos;
+    detail.rows.end_time_unix_nanos = action.end_time_unix_nanos ?? unfinishedLabel;
+    detail.rows.ended = action.end_time_unix_nanos == null ? unfinishedLabel
+      : action.end_time ?? Number(parseNanos(action.end_time_unix_nanos) / 1_000_000n);
+    detail.rows.duration = action.end_time_unix_nanos == null ? unfinishedLabel : formatOffset(
+      nanosDiffMs(parseNanos(action.end_time_unix_nanos), parseNanos(action.start_time_unix_nanos)),
+    );
+  }
   if (activity.agentScope) {
     detail.rows.agent_role = activity.agentScope.role === 'main'
       ? t('partialOwnership')
@@ -103,6 +137,7 @@ export function buildAgentLayer(
   const invocations = activities
     .filter((activity) => (
       activity.kind === 'agent.invocation'
+      && !activity.lightweight
       && linkedInvocationIds.has(activity.id)
     ))
     .sort(compareActivities);
@@ -218,7 +253,7 @@ function buildAgentScope(definition, activities, window, index, spawnActivity, t
   const { actionIds: _actionIds, ...scopeDefinition } = definition;
   const scopeId = definition.id;
   const trackActivities = activities.filter(
-    (activity) => activity.kind !== 'agent.invocation',
+    (activity) => activity.kind !== 'agent.invocation' || activity.lightweight,
   );
   const envelopeActivities = spawnActivity
     ? [spawnActivity]
@@ -260,13 +295,13 @@ function buildAgentScope(definition, activities, window, index, spawnActivity, t
     tracks,
     activityCount: activities.length,
     durationMs: coveredDuration(envelopeActivities),
-    llmCallCount: activities.filter((activity) => activity.kind === 'llm.call').length,
+    llmCallCount: activities.filter((activity) => activity.group === 'model').length,
     toolCallCount: activities.filter((activity) => activity.kind === 'llm.tool_call').length,
     childCount: definition.childCount ?? 0,
   };
 }
 
-export function buildLayer(id, label, description, activities, window, t) {
+export function buildLayer(id, label, description, activities, window, t, links = []) {
   const groups = id === 'agent' ? AGENT_GROUP_ORDER : HARNESS_GROUP_ORDER;
   const tracks = [];
   if (activities.length) {
@@ -285,7 +320,9 @@ export function buildLayer(id, label, description, activities, window, t) {
         description: t(GROUP_DESCRIPTION_KEYS[group]),
         group,
         synthetic: false,
-        ...packActivityDepths(grouped),
+        ...(group === 'commands'
+          ? new CommandHierarchy(grouped, links).pack()
+          : packActivityDepths(grouped)),
       });
     }
   }
@@ -351,6 +388,7 @@ export function activityFromAction(
     ?? (action.end_time_unix_nanos ? parseNanos(action.end_time_unix_nanos) : null);
   const startOffsetMs = nanosDiffMs(startNanos, window.startNanos);
   const observedDurMs = endNanos === null ? null : Math.max(nanosDiffMs(endNanos, startNanos), 0);
+  const endUnknown = commandEndUnknown(action);
   const summaryMarker = flameSummaryMarkerKind(action.kind);
   const durMs = summaryMarker ? 0 : observedDurMs;
   const target = toolDisplay.target(action);
@@ -373,9 +411,11 @@ export function activityFromAction(
     statusLabel: ToolCallDisplay.statusLabel(action),
     startOffsetMs,
     durMs,
-    live: endNanos === null,
+    live: endNanos === null && !endUnknown,
+    endUnknown,
     action,
     backgroundKind,
+    callOrdinal,
     timingSource: summaryMarker
       ? 'observation_summary_marker'
       : (displayInterval?.source ?? 'observed'),

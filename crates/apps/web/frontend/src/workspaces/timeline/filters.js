@@ -1,6 +1,6 @@
 // Build bounded timeline queries from the visible action and time filters.
 export class TimelineFilters {
-  static defaultKinds = ['command.invocation', 'agent.invocation', 'llm.call', 'llm.request', 'llm.response', 'http.message'];
+  static defaultKinds = ['command.invocation', 'agent.invocation', 'agent.context_compaction', 'llm.call', 'llm.request', 'llm.response', 'http.message'];
   static kinds = [...TimelineFilters.defaultKinds, 'llm.tool_call', 'llm.tool_result',
     'process.exec', 'process.fork_attempt', 'process.exit', 'file.read', 'file.write',
     'file.modify', 'file.tty_io', 'file.bulk_read', 'fs.enumerate',

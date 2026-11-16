@@ -3,19 +3,101 @@
 version = 4
 
 [[package]]
+name = "abi_stable"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69d6512d3eb05ffe5004c59c206de7f99c34951504056ce23fc953842f12c445"
+dependencies = [
+ "abi_stable_derive",
+ "abi_stable_shared",
+ "const_panic",
+ "core_extensions",
+ "generational-arena",
+ "libloading",
+ "lock_api",
+ "parking_lot",
+ "paste",
+ "repr_offset",
+ "rustc_version",
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
+name = "abi_stable_derive"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7178468b407a4ee10e881bc7a328a65e739f0863615cca4429d43916b05e898"
+dependencies = [
+ "abi_stable_shared",
+ "as_derive_utils",
+ "core_extensions",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn 1.0.109",
+ "typed-arena",
+]
+
+[[package]]
+name = "abi_stable_shared"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2b5df7688c123e63f4d4d649cba63f2967ba7f7861b1664fca3f77d3dad2b63"
+dependencies = [
+ "core_extensions",
+]
+
+[[package]]
 name = "access_control"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "config_core",
  "libbpf-rs",
+ "libc",
  "plugin_system",
  "serde_json",
  "tracing",
 ]
 
 [[package]]
+name = "actrail_ckpt_cxt_xiaoo"
+version = "0.9.1"
+dependencies = [
+ "abi_stable",
+ "checkpoint",
+ "serde",
+ "serde_json",
+ "socket2",
+]
+
+[[package]]
+name = "actrail_ckpt_fs_agentns"
+version = "0.9.1"
+dependencies = [
+ "abi_stable",
+ "checkpoint",
+ "libc",
+ "libloading",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "actrail_ckpt_fs_btrfs"
+version = "0.9.1"
+dependencies = [
+ "abi_stable",
+ "checkpoint",
+ "libc",
+ "serde",
+ "serde_json",
+ "xattr",
+]
+
+[[package]]
 name = "actrail_plugin_abi"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "addr2line"
@@ -34,7 +116,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent_host"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "agent_lifecycle_contract",
  "model_core",
@@ -46,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "agent_lifecycle_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
@@ -76,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "alert-delivery-contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -84,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "alert-proxy"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert-delivery-contract",
  "clap",
@@ -99,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "alert_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
  "serde",
@@ -107,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "alert_forwarding"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert-delivery-contract",
  "arc-swap",
@@ -217,6 +299,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "as_derive_utils"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff3c96645900a44cf11941c111bd08a6573b0e2f9f69bc9264b179d8fae753c4"
+dependencies = [
+ "core_extensions",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "ascii"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -224,7 +324,7 @@ checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -235,7 +335,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "attach_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "collector_binding",
  "collector_event",
@@ -381,7 +481,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -409,6 +509,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "checkpoint"
+version = "0.9.1"
+dependencies = [
+ "abi_stable",
+ "serde",
+]
+
+[[package]]
+name = "checkpoint_core"
+version = "0.9.1"
+dependencies = [
+ "abi_stable",
+ "checkpoint",
+ "model_core",
+ "serde",
+]
+
+[[package]]
+name = "checkpoint_sqlite"
+version = "0.9.1"
+dependencies = [
+ "checkpoint_core",
+ "model_core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -418,6 +547,12 @@ dependencies = [
  "num-traits",
  "windows-link",
 ]
+
+[[package]]
+name = "chunked_transfer"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
 name = "clap"
@@ -450,7 +585,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -461,7 +596,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cluster"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "clap",
  "config_core",
@@ -481,12 +616,12 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "collector_binding"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -495,21 +630,21 @@ dependencies = [
 
 [[package]]
 name = "collector_capability"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_event"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "collector_instance"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "collector_binding",
  "collector_capability",
@@ -521,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "collector_stats"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
@@ -534,7 +669,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "config_core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "idle_detector",
  "model_core",
@@ -546,12 +681,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "config_export_filter"
+version = "0.9.1"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "const_panic"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9603f79528ece8163c496f8932121cb36cfe46259e9c907bb3d8205139d7caa3"
+dependencies = [
+ "typewit",
+]
+
+[[package]]
 name = "control_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "agent_lifecycle_contract",
+ "checkpoint",
  "model_core",
  "plugin_system",
+ "serde",
 ]
 
 [[package]]
@@ -569,6 +723,21 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "core_extensions"
+version = "1.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42bb5e5d0269fd4f739ea6cedaf29c16d81c27a7ce7582008e90eb50dcd57003"
+dependencies = [
+ "core_extensions_proc_macros",
+]
+
+[[package]]
+name = "core_extensions_proc_macros"
+version = "1.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "533d38ecd2709b7608fb8e18e4504deb99e9a72879e6aa66373a76d8dc4259ea"
 
 [[package]]
 name = "cpufeatures"
@@ -738,25 +907,29 @@ dependencies = [
 
 [[package]]
 name = "ctl"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "agent_host",
  "agent_lifecycle_contract",
  "clap",
  "config_core",
+ "config_export_filter",
  "control_contract",
  "libc",
  "linux_platform",
  "model_core",
  "payload_capability",
+ "serde",
+ "tempfile",
  "tls_payload_sync",
  "tls_probe_point_finder",
+ "toml",
  "uds_control_client",
 ]
 
 [[package]]
 name = "daemon"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "access_control",
  "agent_host",
@@ -765,6 +938,9 @@ dependencies = [
  "alert_contract",
  "alert_forwarding",
  "attach_runtime",
+ "checkpoint",
+ "checkpoint_core",
+ "checkpoint_sqlite",
  "clap",
  "collector_binding",
  "collector_capability",
@@ -844,12 +1020,12 @@ checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
 name = "ebpf_collector"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "access_control",
  "collector_binding",
@@ -867,6 +1043,7 @@ dependencies = [
  "process_identity",
  "process_tree_snapshot_contract",
  "tls_probe_point_finder",
+ "tracing",
 ]
 
 [[package]]
@@ -923,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "export_core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
  "plugin_system",
@@ -933,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "export_factory"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "export_core",
  "export_otel_http",
@@ -945,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_codec"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
  "opentelemetry-proto",
@@ -956,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_http"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -971,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "export_otel_jsonl"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "export_core",
  "export_otel_codec",
@@ -1124,7 +1301,7 @@ checksum = "e835b70203e41293343137df5c0664546da5745f82ec9b84d40be8336958447b"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -1157,9 +1334,18 @@ dependencies = [
 
 [[package]]
 name = "gateway_ingest_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_observation",
+]
+
+[[package]]
+name = "generational-arena"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877e94aff08e743b651baaea359664321055749b398adff8740a7399af7796e7"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -1221,14 +1407,29 @@ dependencies = [
 
 [[package]]
 name = "graph_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "graph_inspect"
-version = "0.9.0"
+version = "0.9.1"
+
+[[package]]
+name = "grey-proxy"
+version = "0.9.1"
+dependencies = [
+ "model_core",
+ "plugin_system",
+ "semantic_action",
+ "serde",
+ "serde_json",
+ "storage_core",
+ "storage_factory",
+ "tiny_http",
+ "ureq",
+]
 
 [[package]]
 name = "hashbrown"
@@ -1322,6 +1523,12 @@ name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hyper"
@@ -1496,7 +1703,7 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "idle_detector"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "agent_host",
  "alert_contract",
@@ -1539,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "ingest_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "collector_event",
  "model_core",
@@ -1600,7 +1807,7 @@ dependencies = [
 
 [[package]]
 name = "json_graph_export"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "graph_contract",
  "model_core",
@@ -1690,7 +1897,7 @@ dependencies = [
 
 [[package]]
 name = "libbpf_tracepoint_attach"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libbpf-rs",
  "libc",
@@ -1701,6 +1908,16 @@ name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+
+[[package]]
+name = "libloading"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
+dependencies = [
+ "cfg-if",
+ "winapi",
+]
 
 [[package]]
 name = "libm"
@@ -1727,7 +1944,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "linux_cgroup"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libc",
  "tempfile",
@@ -1735,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "linux_platform"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "config_core",
  "libc",
@@ -1764,6 +1981,16 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "loona-hpack"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ce904bae9ecfd9b658b0be156ad278d4b2432f171472f1f0289aed75eed02a3"
+dependencies = [
+ "thiserror 1.0.69",
+ "tracing",
+]
 
 [[package]]
 name = "mach2"
@@ -1827,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "model_core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "process_identity",
  "serde",
@@ -1996,7 +2223,7 @@ checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2027,7 +2254,7 @@ dependencies = [
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2054,12 +2281,12 @@ dependencies = [
  "percent-encoding",
  "portable-atomic",
  "rand",
- "thiserror",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "otel_export"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "export_otel_codec",
 ]
@@ -2094,19 +2321,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "payload_binding"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "payload_capability"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "payload_event"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
@@ -2131,7 +2364,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plugin_system"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "actrail_plugin_abi",
  "alert_contract",
@@ -2145,19 +2378,21 @@ dependencies = [
 
 [[package]]
 name = "plugin_wasm_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert_contract",
+ "libc",
  "model_core",
  "plugin_system",
  "semantic_action",
  "serde_json",
+ "ureq",
  "wasmtime",
 ]
 
 [[package]]
 name = "policy_evaluate_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
@@ -2209,14 +2444,14 @@ dependencies = [
 
 [[package]]
 name = "process_identity"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "process_tree_snapshot_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
@@ -2251,7 +2486,7 @@ dependencies = [
  "itertools",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2264,16 +2499,16 @@ dependencies = [
  "itertools",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
 name = "provider_evidence"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "provider_label"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "provider_evidence",
 ]
@@ -2298,7 +2533,7 @@ checksum = "56000349b6896e3d44286eb9c330891237f40b27fd43c1ccc84547d0b463cb40"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2353,7 +2588,7 @@ dependencies = [
 
 [[package]]
 name = "recording_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "export_core",
  "model_core",
@@ -2387,7 +2622,7 @@ checksum = "b7186006dcb21920990093f30e3dea63b7d6e977bf1256be20c3563a5db070da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2451,6 +2686,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "repr_offset"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb1070755bd29dffc19d0971cab794e607839ba2ef4b69a9e6fbc8733c1b72ea"
+dependencies = [
+ "tstr",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2490,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "resource_profiling"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
@@ -2523,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "rule_set_provider"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "config_core",
  "provider_evidence",
@@ -2557,10 +2801,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
 
 [[package]]
-name = "rustix"
-version = "1.1.4"
+name = "rustc_version"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
+dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "rustix"
+version = "1.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -2618,7 +2871,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sandbox_agent_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_control",
  "sandbox_observation",
@@ -2627,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox_alert_sqlite"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "rusqlite",
  "sandbox_alert_store",
@@ -2636,18 +2889,18 @@ dependencies = [
 
 [[package]]
 name = "sandbox_alert_store"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_control"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "sandbox_control_uds"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libc",
  "sandbox_control",
@@ -2655,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox_evidence_sqlite"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "rusqlite",
  "sandbox_evidence_store",
@@ -2666,14 +2919,14 @@ dependencies = [
 
 [[package]]
 name = "sandbox_evidence_store"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_linux_collector"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
@@ -2686,21 +2939,21 @@ dependencies = [
 
 [[package]]
 name = "sandbox_observation"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "sandbox_plugin_delivery"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_resource_alert"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arc-swap",
  "plugin_system",
@@ -2713,11 +2966,11 @@ dependencies = [
 
 [[package]]
 name = "sandbox_upstream_contract"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "sandbox_upstream_transport"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "gateway_ingest_runtime",
  "sandbox_upstream_contract",
@@ -2726,14 +2979,14 @@ dependencies = [
 
 [[package]]
 name = "sandbox_vsock_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_observation",
 ]
 
 [[package]]
 name = "sandbox_vsock_transport"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libc",
  "sandbox_agent_runtime",
@@ -2742,7 +2995,7 @@ dependencies = [
 
 [[package]]
 name = "sb"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "clap",
  "libc",
@@ -2796,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "semantic_action"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
  "serde_json",
@@ -2804,13 +3057,14 @@ dependencies = [
 
 [[package]]
 name = "semantic_action_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "base64 0.22.1",
  "brotli",
  "config_core",
  "flate2",
  "libc",
+ "loona-hpack",
  "model_core",
  "plugin_system",
  "semantic_action",
@@ -2859,7 +3113,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -2972,11 +3226,11 @@ dependencies = [
 
 [[package]]
 name = "sqlite_inspect"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "sqlite_storage"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert_contract",
  "bincode",
@@ -3005,7 +3259,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage_core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert_contract",
  "model_core",
@@ -3020,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "storage_factory"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sqlite_storage",
  "storage_core",
@@ -3029,7 +3283,7 @@ dependencies = [
 
 [[package]]
 name = "storage_noop"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert_contract",
  "model_core",
@@ -3040,32 +3294,32 @@ dependencies = [
 
 [[package]]
 name = "store_read_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_retention_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_snapshot_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
 
 [[package]]
 name = "store_tx_contract"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "store_write_contract"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "model_core",
 ]
@@ -3081,6 +3335,17 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "syn"
+version = "1.0.109"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
 
 [[package]]
 name = "syn"
@@ -3110,7 +3375,7 @@ checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3143,11 +3408,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.18",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3158,7 +3443,7 @@ checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3168,6 +3453,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "tiny_http"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "389915df6413a2e74fb181895f933386023c71110878cd0825588928e64cdc82"
+dependencies = [
+ "ascii",
+ "chunked_transfer",
+ "httpdate",
+ "log",
 ]
 
 [[package]]
@@ -3182,11 +3479,11 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_core"
-version = "0.9.0"
+version = "0.9.1"
 
 [[package]]
 name = "tls_payload_probe"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "brotli",
  "clap",
@@ -3201,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_probe_sync"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "clap",
  "libc",
@@ -3214,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "tls_payload_sync"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "libc",
  "payload_capability",
@@ -3224,7 +3521,7 @@ dependencies = [
 
 [[package]]
 name = "tls_probe_point_finder"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anstyle",
  "clap",
@@ -3266,6 +3563,7 @@ version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362"
 dependencies = [
+ "indexmap",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -3348,7 +3646,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "trace_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "collector_capability",
  "config_core",
@@ -3375,7 +3673,7 @@ checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3407,23 +3705,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tstr"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8e0294f14baae476d0dd0a2d780b2e24d66e349a9de876f5126777a37bdba7"
+dependencies = [
+ "tstr_proc_macros",
+]
+
+[[package]]
+name = "tstr_proc_macros"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e78122066b0cb818b8afd08f7ed22f7fdbc3e90815035726f0840d0d26c0747a"
+
+[[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
+name = "typewit"
+version = "1.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "214ca0b2191785cbc06209b9ca1861e048e39b5ba33574b3cedd58363d5bb5f6"
+
+[[package]]
 name = "uds_control_client"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "control_contract",
  "libc",
+ "socket2",
  "uds_control_transport",
 ]
 
 [[package]]
 name = "uds_control_server"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "control_contract",
  "libc",
@@ -3433,12 +3759,14 @@ dependencies = [
 
 [[package]]
 name = "uds_control_transport"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "agent_lifecycle_contract",
  "control_contract",
  "model_core",
  "plugin_system",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3564,7 +3892,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "view"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "clap",
  "config_core",
@@ -3587,7 +3915,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vsock_gateway"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "clap",
  "libc",
@@ -3599,7 +3927,7 @@ dependencies = [
 
 [[package]]
 name = "vsock_gateway_runtime"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "sandbox_upstream_contract",
  "sandbox_vsock_contract",
@@ -3682,7 +4010,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
  "wasm-bindgen-shared",
 ]
 
@@ -3842,7 +4170,7 @@ dependencies = [
  "anyhow",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
  "wasmtime-internal-component-util",
  "wasmtime-internal-wit-bindgen",
  "wit-parser 0.243.0",
@@ -3873,7 +4201,7 @@ dependencies = [
  "pulley-interpreter",
  "smallvec",
  "target-lexicon",
- "thiserror",
+ "thiserror 2.0.18",
  "wasmparser 0.243.0",
  "wasmtime-environ",
  "wasmtime-internal-math",
@@ -3954,7 +4282,7 @@ checksum = "70f8b9796a3f0451a7b702508b303d654de640271ac80287176de222f187a237"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4011,10 +4339,13 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "alert_contract",
+ "checkpoint_core",
+ "checkpoint_sqlite",
  "config_core",
+ "config_export_filter",
  "control_contract",
  "flate2",
  "model_core",
@@ -4027,7 +4358,9 @@ dependencies = [
  "sqlite_storage",
  "storage_core",
  "storage_factory",
+ "tempfile",
  "toml",
+ "toml_edit",
  "uds_control_client",
 ]
 
@@ -4051,6 +4384,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4058,6 +4407,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "winch-codegen"
@@ -4072,7 +4427,7 @@ dependencies = [
  "regalloc2",
  "smallvec",
  "target-lexicon",
- "thiserror",
+ "thiserror 2.0.18",
  "wasmparser 0.243.0",
  "wasmtime-environ",
  "wasmtime-internal-cranelift",
@@ -4100,7 +4455,7 @@ checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4111,7 +4466,7 @@ checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4279,6 +4634,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
+name = "xattr"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "963d6fab92d5504b971dc8bd90ca743c2575e590bc8071ea5bc571598667ae08"
+dependencies = [
+ "libc",
+ "rustix",
+]
+
+[[package]]
 name = "yoke"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4297,7 +4662,7 @@ checksum = "de844c262c8848816172cef550288e7dc6c7b7814b4ee56b3e1553f275f1858e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
  "synstructure",
 ]
 
@@ -4318,7 +4683,7 @@ checksum = "1ae7f38b72ec2a254e2b87ef277cf2cd4fb97cbebf944faa6f33354da0867930"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4338,7 +4703,7 @@ checksum = "11532158c46691caf0f2593ea8358fed6bbf68a0315e80aae9bd41fbade684a1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
  "synstructure",
 ]
 
@@ -4378,7 +4743,7 @@ checksum = "625dc425cab0dca6dc3c3319506e6593dcb08a9f387ea3b284dbd52a92c40555"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]

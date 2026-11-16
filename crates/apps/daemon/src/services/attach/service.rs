@@ -28,19 +28,21 @@ impl StorageAttachService {
             ControlError::new("trace_missing", "trace disappeared after activation")
         })?;
         let trace = entry.trace.clone();
+        let tls_event_token = entry.tls_event_token.clone();
         let memberships = entry.memberships.memberships().cloned().collect::<Vec<_>>();
         if let Err(error) = persist_admitted_trace(
             self.storage.as_mut(),
             trace.clone(),
             memberships,
             process_records,
-            self.resource_metrics.external_binding(trace_id),
+            self.resource_metrics.v2_binding(trace_id),
             self.resource_metrics.v1_binding(trace_id),
         ) {
-            self.resource_metrics.finish_external_finalization(trace_id);
+            self.resource_metrics
+                .finish_v2_binding_finalization(trace_id);
             return Err(ControlError::new(error.stage, error.message));
         }
-        self.resource_metrics.activate_v1(trace_id);
+        self.resource_metrics.activate_v1_binding(trace_id);
         if emit_bootstrap_diagnostic {
             let diagnostic = DiagnosticRecord::new(
                 self.next_diagnostic_id()?,
@@ -73,6 +75,7 @@ impl StorageAttachService {
         Ok(TrackAddReply {
             trace_id,
             lifecycle_state: trace.lifecycle_state,
+            tls_event_token,
         })
     }
 
@@ -124,15 +127,29 @@ impl StorageAttachService {
 }
 
 impl AttachService for StorageAttachService {
-    fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
+    fn watch_trace(&mut self, trace_id: model_core::ids::TraceId, watch: bool) {
+        self.watched.watch(trace_id, watch);
+        if !watch {
+            self.tls_sync.end_trace(trace_id);
+        }
+    }
+
+    fn take_llm_requests(&mut self) -> Vec<crate::services::attach::HeldLlmRequest> {
+        self.watched.take_llm_requests()
+    }
+
+    fn release_response(&mut self, hold: u64) {
+        self.tls_sync.release(hold);
+    }
+
+    fn process_record(&self, process: ProcessIdentity) -> Result<ProcessRecord, ControlError> {
         self.process_registry
             .record(process)
-            .and_then(|record| record.host.as_ref())
-            .map(|host| host.pid)
+            .cloned()
             .ok_or_else(|| {
                 ControlError::new(
-                    "process_host_pid",
-                    format!("process {} has no host PID", process.get()),
+                    "process_record",
+                    format!("process {} has no identity record", process.get()),
                 )
             })
     }
@@ -188,6 +205,9 @@ impl AttachService for StorageAttachService {
             profile,
             launch_seccomp_requirements,
             &DeploymentPermissionAvailability {
+                host_ebpf_configured: self
+                    .collector
+                    .has_capability_requests(&profile.capabilities),
                 host_ebpf: Some(host_ebpf_available),
                 seccomp_notify: Some(command.seccomp_notify_available),
                 seccomp_notify_detail: command.seccomp_notify_detail.clone(),
@@ -310,8 +330,10 @@ impl AttachService for StorageAttachService {
         );
         timeout = min_optional_timeout(timeout, self.storage_retention.poll_timeout());
         timeout = min_optional_timeout(timeout, self.lsm_boundary_alerts.poll_timeout());
+        timeout = min_optional_timeout(timeout, self.network_boundary_alerts.poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.file_io_poll_timeout());
         timeout = min_optional_timeout(timeout, self.collector.event_transport_loss_poll_timeout());
+        timeout = min_optional_timeout(timeout, self.tls_sync.poll_timeout());
         Ok(timeout)
     }
 
@@ -512,7 +534,7 @@ fn persist_admitted_trace(
     trace: model_core::trace::TraceRecord,
     memberships: Vec<model_core::process::ProcessMembership>,
     processes: Vec<ProcessRecord>,
-    binding: Option<resource_profiling::model::external_cgroup::ExternalCgroupBinding>,
+    binding: Option<resource_profiling::model::cgroup_v2_binding::CgroupV2Binding>,
     v1_binding: Option<resource_profiling::model::cgroup_v1_binding::CgroupV1Binding>,
 ) -> Result<(), storage_core::StorageError> {
     let transaction = storage.begin()?;
@@ -528,7 +550,7 @@ fn persist_admitted_trace(
             storage.create_cgroup_v1_binding(&binding)?;
         }
         if let Some(binding) = binding {
-            storage.create_external_cgroup_binding(binding)?;
+            storage.create_cgroup_v2_binding(binding)?;
         }
         Ok(())
     })();
@@ -542,76 +564,5 @@ fn persist_admitted_trace(
 }
 
 #[cfg(test)]
-mod admission_tests {
-    use super::*;
-    use model_core::container::{ContainerRuntime, NormalizedContainerId};
-    use model_core::ids::{OtelTraceId, ProfileName, TraceId, TraceName};
-    use model_core::process::{HostProcessCoordinates, ProcessMembership};
-    use model_core::trace::{TraceAlertToken, TraceRecord};
-    use resource_profiling::model::external_cgroup::{ExternalCgroupBinding, HostBootId};
-
-    #[test]
-    fn binding_failure_rolls_back_trace_processes_and_memberships_then_retry_commits() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut storage = storage_factory::open_storage_backend(
-            &storage_factory::StorageConfig::sqlite_path(temp.path().join("admission.sqlite")),
-            storage_core::StorageOpenMode::ReadWrite,
-        )
-        .unwrap();
-        let id = TraceId::new(1);
-        let process = ProcessIdentity::new(1);
-        let trace = TraceRecord::new(
-            id,
-            OtelTraceId::from_bytes([1; 16]).unwrap(),
-            TraceAlertToken::new([0; 32]),
-            process,
-            TraceName::new("atomic"),
-            ProfileName::new("test"),
-            SystemTime::now(),
-        );
-        let record = ProcessRecord::new(
-            process,
-            ProcessObservation::host(HostProcessCoordinates::new(42, 900)),
-        );
-        let member = ProcessMembership::root(id, process, SystemTime::now());
-        let mut binding = ExternalCgroupBinding::active(
-            id,
-            ContainerRuntime::Unknown,
-            NormalizedContainerId::from_lower_hex(&"ab".repeat(32)).unwrap(),
-            format!("docker/{}", "ab".repeat(32)),
-            1,
-            2,
-            HostBootId::from_bytes([1; 16]),
-            SystemTime::now(),
-        );
-        assert!(
-            persist_admitted_trace(
-                storage.as_mut(),
-                trace.clone(),
-                vec![member.clone()],
-                vec![record.clone()],
-                Some(binding.clone()),
-                None
-            )
-            .is_err()
-        );
-        assert!(storage.get_trace(id).unwrap().is_none());
-        assert!(storage.get_process_record(process).unwrap().is_none());
-        assert!(storage.trace_memberships(id).unwrap().is_empty());
-        assert!(storage.get_external_cgroup_binding(id).unwrap().is_none());
-        binding.runtime = ContainerRuntime::Docker;
-        persist_admitted_trace(
-            storage.as_mut(),
-            trace,
-            vec![member],
-            vec![record],
-            Some(binding),
-            None,
-        )
-        .unwrap();
-        assert!(storage.get_trace(id).unwrap().is_some());
-        assert!(storage.get_external_cgroup_binding(id).unwrap().is_some());
-        storage.discard_orphan_external_binding(id).unwrap();
-        assert!(storage.get_external_cgroup_binding(id).unwrap().is_some());
-    }
-}
+#[path = "../../../../../../tests/unit/crates/apps/daemon/services/attach/service/admission_tests.rs"]
+mod admission_tests;

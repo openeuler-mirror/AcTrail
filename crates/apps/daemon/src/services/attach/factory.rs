@@ -42,8 +42,10 @@ impl StorageAttachService {
     pub(in crate::services) fn new(
         profiles: DaemonProfileRegistry,
         storage: Box<dyn StorageBackend>,
+        storage_config: storage_factory::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
+        active_trace_max: u32,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify: SeccompNotifyConfig,
         process_seccomp: ProcessSeccompConfig,
@@ -69,8 +71,10 @@ impl StorageAttachService {
         Self::new_with_provider_classifier(
             profiles,
             storage,
+            storage_config,
             ebpf_config,
             payload_config,
+            active_trace_max,
             diagnostic_log_level,
             seccomp_notify,
             process_seccomp,
@@ -100,8 +104,10 @@ impl StorageAttachService {
     pub(in crate::services) fn new_with_provider_classifier(
         mut profiles: DaemonProfileRegistry,
         mut storage: Box<dyn StorageBackend>,
+        storage_config: storage_factory::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         mut payload_config: PayloadConfig,
+        active_trace_max: u32,
         diagnostic_log_level: DiagnosticLogLevel,
         seccomp_notify_config: SeccompNotifyConfig,
         process_seccomp_config: ProcessSeccompConfig,
@@ -183,7 +189,7 @@ impl StorageAttachService {
             })?;
         let seccomp_notify = SeccompNotifyService::new(&seccomp_notify_config);
         let seccomp_tls = SeccompTlsService::new(&payload_config.tls, diagnostic_log_level);
-        let tls_sync = TlsSyncService::new(&payload_config.tls)?;
+        let tls_sync = TlsSyncService::new(&payload_config.tls, active_trace_max)?;
         let seccomp_socket = SeccompSocketService::new(&payload_config.socket);
         let process_seccomp = ProcessSeccompService::new(
             &process_seccomp_config,
@@ -191,6 +197,7 @@ impl StorageAttachService {
                 && payload_config.tls.enabled
                 && payload_config.tls.capture_backend.is_sync(),
         );
+        let control_plugins = ControlPluginRuntime::new();
         let lsm_access_control = if access_control_config.uses_lsm() {
             if !ebpf_config.enabled {
                 return Err(control_contract::reply::ControlError::new(
@@ -213,6 +220,10 @@ impl StorageAttachService {
                     } else {
                         NetworkControlConfig::disabled()
                     },
+                    std::sync::Arc::new(crate::services::access_control::LsmPluginDecider(
+                        control_plugins.downgrade(),
+                        process_registry.host_lookup(),
+                    )),
                 )
                 .map_err(|message| {
                     control_contract::reply::ControlError::new("lsm_policy", message)
@@ -232,6 +243,8 @@ impl StorageAttachService {
             } else {
                 command_control_config
             })?;
+        let network_boundary_alerts =
+            crate::services::network_control::NetworkBoundaryAlerts::new(&network_control_config);
         let network_control =
             NetworkControlService::new(&if !access_control_config.network.connect.is_seccomp() {
                 NetworkControlConfig::disabled()
@@ -281,6 +294,7 @@ impl StorageAttachService {
             host_id: crate::host_id::get(),
             launch_seccomp_requirements,
             storage,
+            storage_config,
             process_registry,
             process_id_block_size: block_size,
             collector,
@@ -315,6 +329,7 @@ impl StorageAttachService {
             process_seccomp,
             command_control,
             network_control,
+            network_boundary_alerts,
             pending_process_seccomp_observations: Vec::new(),
             semantic_retention: semantic_retention.clone(),
             file_observation: file_observation.clone(),
@@ -325,7 +340,7 @@ impl StorageAttachService {
             resource_metrics,
             storage_retention: StorageRetentionService::new(storage_retention_config),
             enforcement,
-            control_plugins: ControlPluginRuntime::new(),
+            control_plugins,
             plugin_configs: Default::default(),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,
@@ -361,6 +376,7 @@ impl StorageAttachService {
             provider_classifier,
             provider_classification_enabled,
             pending_tool_names: BTreeMap::new(),
+            watched: Default::default(),
         })
     }
 }

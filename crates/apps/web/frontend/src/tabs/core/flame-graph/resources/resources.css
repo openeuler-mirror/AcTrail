@@ -1,0 +1,83 @@
+.layer-res .flame-layer-header {
+  background: var(--trace-flame-res-layer-bg);
+}
+
+.layer-res .flame-layer-dot {
+  background: var(--trace-flame-res-accent);
+}
+
+.res-group-row {
+  min-height: 30px;
+  background: color-mix(in srgb, var(--trace-flame-res-layer-bg) 55%, transparent);
+}
+
+.res-group-gutter > span {
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.res-group-info {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  padding: 4px 14px;
+  overflow: hidden;
+  color: var(--ui-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.res-source {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--trace-flame-res-shared) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--trace-flame-res-shared) 12%, transparent);
+  color: var(--ui-text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.res-source.source-trace {
+  border-color: color-mix(in srgb, var(--ui-success) 45%, transparent);
+  background: color-mix(in srgb, var(--ui-success) 12%, transparent);
+}
+
+.res-reason {
+  color: var(--trace-flame-res-shared);
+}
+
+.res-track-row {
+  --track-height: 44px;
+}
+
+.res-gutter .res-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.res-scale {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  color: var(--ui-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.res-not-collected {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  color: var(--ui-muted);
+  font-size: 11px;
+}
+
+.res-error {
+  color: var(--ui-danger);
+}

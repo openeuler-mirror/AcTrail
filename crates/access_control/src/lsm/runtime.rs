@@ -1,3 +1,5 @@
+//! Load governance hooks with shared scope enrollment and configured decisions.
+
 use super::{audit::LsmAuditEvent, controller::LsmController, publisher::PolicyPublisher};
 use libbpf_rs::{
     Link, MapCore, MapFlags, MapHandle, Object, ObjectBuilder, RingBuffer, RingBufferBuilder,
@@ -12,6 +14,8 @@ pub struct LsmRuntime {
     _links: Vec<Link>,
     _publisher: Arc<PolicyPublisher>,
     _object: Object,
+    // Links and object are released before the exclusive device session.
+    _grey: Option<super::grey::LsmGreyBroker>,
     pending: Arc<Mutex<Vec<LsmAuditEvent>>>,
     batch_max: usize,
     counters: MapHandle,
@@ -20,57 +24,30 @@ pub struct LsmRuntime {
 
 impl LsmRuntime {
     pub fn attach(controller: &Arc<LsmController>, scope: &Object) -> Result<Self, String> {
-        let observer_binding = scope
-            .maps()
-            .any(|map| map.name() == "pending_exec_observer_bindings");
-        let bytes: &[u8] = if observer_binding {
-            include_bytes!(env!("ACTRAIL_LSM_TASK_OBJECT"))
+        let mode = controller.config.grey.mode;
+        let (object, grey) = if mode == config_core::daemon::LsmGreyMode::Disabled {
+            (Self::load_object(controller, scope, false)?, None)
         } else {
-            include_bytes!(env!("ACTRAIL_LSM_HASH_OBJECT"))
-        };
-        let mut builder = ObjectBuilder::default();
-        let mut object = builder
-            .open_memory(bytes)
-            .map_err(|error| format!("open BPF LSM: {error}"))?;
-        for mut map in object.maps_mut() {
-            let name = map.name().to_string_lossy().into_owned();
-            match name.as_str() {
-                "ac_policy_template" => map
-                    .set_max_entries(controller.config.policy_max_entries)
-                    .map_err(|error| error.to_string())?,
-                "ac_events" => map
-                    .set_max_entries(controller.config.audit_buffer_bytes)
-                    .map_err(|error| error.to_string())?,
-                "pending_exec_count"
-                | "pending_exec_generation_tick_ns"
-                | "observer_pid_namespace"
-                | "pending_exec_observer_bindings"
-                | "pending_exec_bindings"
-                | "pending_exec_pid_index" => {
-                    let source = scope
-                        .maps()
-                        .find(|source| source.name() == name.as_str())
-                        .ok_or_else(|| format!("LSM scope map {name} is missing"))?;
-                    map.reuse_fd(source.as_fd())
-                        .map_err(|error| format!("reuse LSM scope map {name}: {error}"))?;
-                }
-                _ => (),
-            }
-        }
-        for mut program in object.progs_mut() {
-            let enabled = match program.name().to_str() {
-                Some("ac_task_alloc" | "ac_bprm_check") => true,
-                Some("ac_socket_connect") => controller.network_config.enabled,
-                Some("ac_file_open") => controller.file_domain_enabled(1),
-                Some("ac_path_mkdir") => controller.file_domain_enabled(2),
-                Some("ac_path_rmdir") => controller.file_domain_enabled(3),
-                _ => false,
+            let prepare = || {
+                let broker = super::grey::LsmGreyBroker::start(
+                    &controller.config.grey,
+                    controller.grey_handler.clone(),
+                )?;
+                let object = Self::load_object(controller, scope, true)?;
+                Ok::<_, String>((object, Some(broker)))
             };
-            program.set_autoload(enabled);
-        }
-        let object = object
-            .load()
-            .map_err(|error| format!("load BPF LSM: {error}"))?;
+            match prepare() {
+                Ok(session) => {
+                    tracing::info!("LSM grey dynamic decisions enabled");
+                    session
+                }
+                Err(error) if mode == config_core::daemon::LsmGreyMode::Auto => {
+                    tracing::warn!(%error, "LSM grey unavailable; using ordinary LSM with rule fallback");
+                    (Self::load_object(controller, scope, false)?, None)
+                }
+                Err(error) => return Err(error),
+            }
+        };
         let slots = object
             .maps()
             .find(|map| map.name() == "ac_policy_slots")
@@ -103,12 +80,12 @@ impl LsmRuntime {
         let ring = ring_builder
             .build()
             .map_err(|error| format!("LSM audit consumer: {error}"))?;
-        let mut links = Vec::new();
         let counters = object
             .maps()
             .find(|map| map.name() == "ac_counters")
             .ok_or("LSM counters missing")?;
         let counters = MapHandle::try_from(&counters).map_err(|error| error.to_string())?;
+        let mut links = Vec::new();
         for program in object.progs_mut() {
             if !program.autoload() {
                 continue;
@@ -125,11 +102,82 @@ impl LsmRuntime {
             _links: links,
             _publisher: publisher,
             _object: object,
+            _grey: grey,
             pending,
             batch_max,
             counters,
             last_audit_dropped: AtomicU64::new(0),
         })
+    }
+
+    // Failed grey objects drop before retrying the ordinary variant.
+    // Policy publication stays outside this fallback, so policy errors remain fatal.
+    fn load_object(
+        controller: &Arc<LsmController>,
+        scope: &Object,
+        grey: bool,
+    ) -> Result<Object, String> {
+        let observer_binding = scope
+            .maps()
+            .any(|map| map.name() == "pending_exec_observer_bindings");
+        let bytes: &[u8] = match (grey, observer_binding) {
+            (false, true) => include_bytes!(env!("ACTRAIL_LSM_TASK_OBJECT")),
+            (false, false) => include_bytes!(env!("ACTRAIL_LSM_HASH_OBJECT")),
+            (true, true) => include_bytes!(env!("ACTRAIL_LSM_GREY_TASK_OBJECT")),
+            (true, false) => include_bytes!(env!("ACTRAIL_LSM_GREY_HASH_OBJECT")),
+        };
+        let mut builder = ObjectBuilder::default();
+        let mut object = builder
+            .open_memory(bytes)
+            .map_err(|error| format!("open BPF LSM: {error}"))?;
+        for mut map in object.maps_mut() {
+            let name = map.name().to_string_lossy().into_owned();
+            match name.as_str() {
+                "ac_policy_template" => map
+                    .set_max_entries(controller.config.policy_max_entries)
+                    .map_err(|error| error.to_string())?,
+                "ac_events" => map
+                    .set_max_entries(controller.config.audit_buffer_bytes)
+                    .map_err(|error| error.to_string())?,
+                "pending_exec_count"
+                | "pending_exec_generation_tick_ns"
+                | "observer_pid_namespace"
+                | "pending_exec_observer_bindings"
+                | "pending_exec_bindings"
+                | "pending_exec_pid_index" => {
+                    let source = scope
+                        .maps()
+                        .find(|source| source.name() == name.as_str())
+                        .ok_or_else(|| format!("LSM scope map {name} is missing"))?;
+                    map.reuse_fd(source.as_fd())
+                        .map_err(|error| format!("reuse LSM scope map {name}: {error}"))?;
+                }
+                _ => (),
+            }
+        }
+        for mut program in object.progs_mut() {
+            let enabled = match program.name().to_str() {
+                Some("ac_task_alloc" | "ac_bprm_scope") => true,
+                Some("ac_bprm_check") => controller.command_enabled(),
+                Some(
+                    "ac_socket_connect" | "ac_socket_sendmsg" | "ac_socket_bind"
+                    | "ac_socket_listen",
+                ) => controller.network_config.enabled,
+                Some(
+                    "ac_file_open" | "ac_file_permission" | "ac_mmap_file" | "ac_file_mprotect"
+                    | "ac_path_unlink" | "ac_path_chmod" | "ac_path_chown" | "ac_path_truncate"
+                    | "ac_file_truncate" | "ac_path_rename" | "ac_path_link",
+                ) => controller.file_domain_enabled(1),
+                Some("ac_path_mkdir") => controller.file_domain_enabled(2),
+                Some("ac_path_rmdir") => controller.file_domain_enabled(3),
+                _ => false,
+            };
+            program.set_autoload(enabled);
+        }
+        let object = object
+            .load()
+            .map_err(|error| format!("load BPF LSM: {error}"))?;
+        Ok(object)
     }
 
     pub fn poll_fd(&self) -> i32 {

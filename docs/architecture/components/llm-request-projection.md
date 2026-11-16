@@ -50,7 +50,7 @@ Request projector 使用识别结果生成 `llm.request` action，并按 semanti
 
 字符串按解码后的 UTF-8 字节分页。`offset` 为本页起点，`next_offset` 为下一页起点，末页返回 `null`；起点必须位于字符边界。`value_bytes` 是完整字符串字节数，`returned_bytes` 是本页字节数，`truncated` 表示本页只包含字符串的一部分。浏览器翻页替换当前内容，并保存页起点供返回上一页使用。其他 scalar 的字节数按 canonical JSON token 计算。
 
-节点目录通过 canonical block 的首字节识别类型，块内的子项数量在展开后提供。读取前检查请求内累计字节预算，同一 block 的相同字节在请求内只计一次。超预算返回明确的局部请求错误；未找到正文才返回 `content: null`。Skeleton 和引用元数据仍按请求读取，正文 block 不跨请求缓存。进入正文 block 后的对象均为用户数据，不再解释为存储占位符。Local 与 cluster 采用相同预算，配置入口见 [Web Runtime](web-runtime.md#正文查询预算)。
+节点目录通过 canonical block 的首字节识别类型，块内的子项数量在展开后提供。读取前检查请求内累计字节预算，同一 block 的相同字节在请求内只计一次。超预算返回明确的局部请求错误；未找到正文才返回 `content: null`。Skeleton 和引用元数据仍按请求读取，正文 block 不跨请求缓存。进入正文 block 后的对象均为用户数据，不再解释为存储占位符。Local 与 cluster 采用相同预算，配置入口见 [Web 配置](../../reference/configuration/daemon.md#web-与-exportsnapshot)。
 
 ## 源码位置
 

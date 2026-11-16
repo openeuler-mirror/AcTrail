@@ -2,7 +2,7 @@ use model_core::event::DomainEvent;
 use model_core::ids::TraceId;
 use semantic_action::{SemanticAction, SemanticActionLink};
 
-use super::agent::AgentPerformedActionLinkProjector;
+use super::agent::{AgentPerformedActionLinkProjector, ContextCompactLinkProjector};
 use super::command::CommandChildActionLinkProjector;
 use super::http::HttpMessageLinkProjector;
 use super::llm::LlmExchangeLinkProjector;
@@ -12,6 +12,7 @@ use crate::llm_pipeline::{LlmHttpRequestLink, LlmHttpResponseLink};
 pub(in crate::live) struct ActionLinkProjector {
     agent: AgentPerformedActionLinkProjector,
     command: CommandChildActionLinkProjector,
+    context_compact: ContextCompactLinkProjector,
     http: HttpMessageLinkProjector,
     llm_exchange: LlmExchangeLinkProjector,
     sse: SseLinkProjector,
@@ -34,10 +35,19 @@ impl ActionLinkProjector {
             .observe_exact_response_link(&proposal.llm_response, &proposal.http_response)
     }
 
+    pub(in crate::live) fn observe_exact_context_compact_link(
+        &mut self,
+        compact: &SemanticAction,
+        implementation: &SemanticAction,
+    ) -> Option<SemanticActionLink> {
+        self.context_compact.observe_exact(compact, implementation)
+    }
+
     pub(in crate::live) fn new() -> Self {
         Self {
             agent: AgentPerformedActionLinkProjector::default(),
             command: CommandChildActionLinkProjector::default(),
+            context_compact: ContextCompactLinkProjector::default(),
             http: HttpMessageLinkProjector::default(),
             llm_exchange: LlmExchangeLinkProjector::default(),
             sse: SseLinkProjector::default(),
@@ -90,6 +100,7 @@ impl ActionLinkProjector {
     pub(in crate::live) fn forget_trace(&mut self, trace_id: TraceId) {
         self.agent.forget_trace(trace_id);
         self.command.forget_trace(trace_id);
+        self.context_compact.forget_trace(trace_id);
         self.sse.forget_trace(trace_id);
     }
 }

@@ -11,6 +11,7 @@ BUNDLE=""
 OTEL_ENDPOINT=""
 OTEL_ENDPOINT_CONFIGURED="false"
 EGRESS_MODE="network"
+OTEL_ATTRIBUTE_MODE="metadata-only"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
 WITH_SANDBOX_OBSERVER=0
@@ -27,6 +28,7 @@ Usage: inject-image.sh --source-image FILE --output-image FILE --bundle DIR [opt
 Options:
   --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
+  --otel-attribute-mode MODE   otel-http attribute_mode: metadata-only or full (default: metadata-only)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer into the guest image
   --with-sandbox-observer      Install actrail-sb as a Guest system service
@@ -95,6 +97,11 @@ while [[ "$#" -gt 0 ]]; do
       EGRESS_MODE="$2"
       shift 2
       ;;
+    --otel-attribute-mode)
+      [[ "$#" -ge 2 ]] || fail "--otel-attribute-mode requires a value"
+      OTEL_ATTRIBUTE_MODE="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -134,6 +141,8 @@ done
 [[ -n "$OUTPUT_IMAGE" ]] || fail "--output-image is required"
 [[ -n "$BUNDLE" ]] || fail "--bundle is required"
 actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+actrail_validate_guest_otel_attribute_mode "$OTEL_ATTRIBUTE_MODE" "$OTEL_ENDPOINT" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   OTEL_ENDPOINT_CONFIGURED="true"
@@ -242,6 +251,7 @@ install_args=(
 )
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   install_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+  install_args+=(--otel-attribute-mode "$OTEL_ATTRIBUTE_MODE")
 fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   install_args+=(--with-viewer)
@@ -259,6 +269,7 @@ verify_args=(
 )
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
+  verify_args+=(--otel-attribute-mode "$OTEL_ATTRIBUTE_MODE")
 fi
 if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
   verify_args+=(--with-sandbox-observer)
@@ -286,3 +297,4 @@ echo "workload_socket_gid=$SOCKET_GID"
 echo "image_grow_mib=$GROW_MIB"
 echo "sandbox_observer_installed=$WITH_SANDBOX_OBSERVER"
 echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"
+echo "otel_attribute_mode=$OTEL_ATTRIBUTE_MODE"

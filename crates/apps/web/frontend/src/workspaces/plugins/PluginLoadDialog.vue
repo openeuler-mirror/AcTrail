@@ -62,6 +62,7 @@
 
           <PolicyScopeEditor
             v-if="needsNetworkPolicy"
+            network
             v-model="networkPolicyScopes"
             :title="t('load.networkTitle')"
             :description="t('load.networkDescription')"
@@ -132,7 +133,7 @@ const networkPolicyScopes = ref([]);
 const envReadText = ref('');
 const showValidation = ref(false);
 
-const titleId = computed(() => `plugin-load-title-${props.plugin.package_key}`);
+const titleId = computed(() => `plugin-load-title-${encodeURIComponent(props.plugin.package_key)}`);
 const needsFilePolicy = computed(() => props.plugin.parameterized_host_grants
   ?.includes('file-policy.rules.apply'));
 const needsCommandPolicy = computed(() => props.plugin.parameterized_host_grants
@@ -208,6 +209,7 @@ function reset() {
 function newScope(kind) {
   return {
     key: `${kind}-policy-scope-initial`,
+    ...(kind === 'network' ? { operation: 'connect', protocol: 'any' } : {}),
     path_scope: '',
     decisions: ['allow', 'deny', 'gray'],
   };
@@ -227,7 +229,7 @@ function validateScopes(scopes, label) {
 
 function validateNetworkScopes(scopes) {
   for (const scope of scopes) {
-    if (!scope.path_scope || (scope.path_scope !== '*' && !looksLikeNumericRemoteScope(scope.path_scope))) {
+    if (!scope.path_scope?.trim()) {
       return t('load.endpointInvalid');
     }
     if (scope.decisions.length === 0) {
@@ -235,20 +237,6 @@ function validateNetworkScopes(scopes) {
     }
   }
   return '';
-}
-
-function looksLikeNumericRemoteScope(value) {
-  const ipv4 = value.match(/^([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\*|[0-9]{1,5})$/);
-  if (ipv4) {
-    return ipv4[1].split('.').every((part) => Number(part) <= 255)
-      && (ipv4[2] === '*' || Number(ipv4[2]) <= 65535);
-  }
-  const ipv6 = value.match(/^\[([0-9A-Fa-f:.]+)\]:(\*|[0-9]{1,5})$/);
-  return Boolean(
-    ipv6
-    && ipv6[1].includes(':')
-    && (ipv6[2] === '*' || Number(ipv6[2]) <= 65535),
-  );
 }
 
 function close() {
@@ -276,7 +264,9 @@ function submit() {
       network_policy_rules_apply: needsNetworkPolicy.value
         ? networkPolicyScopes.value.flatMap((scope) => scope.decisions.map((decision) => ({
           decision,
-          remote_scope: scope.path_scope,
+          endpoint_scope: scope.path_scope,
+          operation: scope.operation,
+          protocol: scope.protocol,
         })))
         : [],
       env_read: needsEnvRead.value ? envRead.value : [],
@@ -525,6 +515,21 @@ function submit() {
   border-color: var(--ui-accent-soft);
   background: var(--ui-accent-muted);
   color: var(--ui-accent);
+  transition:
+    background-color var(--ui-duration-fast) var(--ui-ease-out),
+    border-color var(--ui-duration-fast) var(--ui-ease-out),
+    color var(--ui-duration-fast) var(--ui-ease-out);
+}
+
+.plugin-load-actions button.primary:not(:disabled) {
+  border-color: var(--ui-text);
+  background: var(--ui-text);
+  color: var(--ui-surface-strong);
+  font-weight: var(--ui-weight-medium);
+}
+
+.plugin-load-actions button.primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--ui-text) 90%, var(--ui-surface-strong));
 }
 
 button:disabled {

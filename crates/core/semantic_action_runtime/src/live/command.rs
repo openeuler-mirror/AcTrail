@@ -1,18 +1,21 @@
 //! Command context projection from successful process exec actions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
+use std::time::SystemTime;
 
-use model_core::event::DomainEvent;
+use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
-    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
-    attr_keys as attrs, evidence_roles,
+    SemanticAction, SemanticActionChange, SemanticActionCompleteness,
+    SemanticActionFinalizationReason, SemanticActionKind, SemanticActionLink,
+    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionStatus, SemanticActionUpdate,
+    SemanticCommandKind, SemanticEvidence, attr_keys as attrs, evidence_roles,
 };
 
 use super::actions::{
-    ATTR_PROCESS_PARENT_IDENTITY_STATE, append_missing_evidence, event_action_id,
+    ATTR_PROCESS_PARENT_IDENTITY_STATE, append_missing_evidence, event_action_id, event_evidence,
+    process_exit_status,
 };
 use super::process_parent::{
     ForkProcessEdge, apply_fork_parent, fork_edge_from_event, is_parent_identity_attr,
@@ -23,14 +26,102 @@ use super::runtime::LiveSemanticActionOutput;
 type CommandKey = (TraceId, ProcessIdentity);
 
 pub(super) struct CommandProjector {
-    commands: BTreeMap<CommandKey, SemanticAction>,
+    commands: BTreeMap<CommandKey, PendingCommand>,
     fork_edges: BTreeMap<CommandKey, ForkProcessEdge>,
     mcp_invocations: BTreeMap<CommandKey, McpInvocationEvidence>,
 }
 
-#[derive(Clone)]
 struct McpInvocationEvidence {
     evidence: Vec<SemanticEvidence>,
+}
+
+struct PendingCommand {
+    action_id: String,
+    start_time: SystemTime,
+    end_time: Option<SystemTime>,
+    status: SemanticActionStatus,
+    completeness: SemanticActionCompleteness,
+    classification: SemanticCommandKind,
+    evidence: Vec<SemanticEvidence>,
+}
+
+impl PendingCommand {
+    fn from_action(action: &SemanticAction) -> Self {
+        let classification = match action
+            .attributes
+            .get(attrs::invocation::KIND)
+            .map(String::as_str)
+        {
+            Some("agent") => SemanticCommandKind::Agent,
+            Some("mcp") => SemanticCommandKind::Mcp,
+            _ => SemanticCommandKind::Command,
+        };
+        Self {
+            action_id: action.action_id.clone(),
+            start_time: action.start_time,
+            end_time: action.end_time,
+            status: action.status,
+            completeness: action.completeness,
+            classification,
+            evidence: action.evidence.clone(),
+        }
+    }
+
+    fn lifecycle(
+        &self,
+        key: CommandKey,
+        command_exit_code: Option<i32>,
+        finalization_reason: Option<SemanticActionFinalizationReason>,
+        evidence: Vec<SemanticEvidence>,
+    ) -> SemanticActionUpdate {
+        self.update(
+            key,
+            SemanticActionChange::Lifecycle {
+                end_time: self.end_time,
+                status: self.status,
+                completeness: self.completeness,
+                finalization_reason,
+                command_exit_code,
+            },
+            evidence,
+        )
+    }
+
+    fn update(
+        &self,
+        key: CommandKey,
+        change: SemanticActionChange,
+        evidence: Vec<SemanticEvidence>,
+    ) -> SemanticActionUpdate {
+        SemanticActionUpdate {
+            action_id: self.action_id.clone(),
+            trace_id: key.0,
+            kind: SemanticActionKind::CommandInvocation,
+            process: key.1,
+            change,
+            evidence,
+        }
+    }
+
+    fn mark_end_unknown(&mut self) {
+        self.end_time = None;
+        self.status = SemanticActionStatus::Unknown;
+        self.completeness = SemanticActionCompleteness::CaptureLimited;
+    }
+
+    fn is_running(&self) -> bool {
+        self.end_time.is_none() && self.completeness == SemanticActionCompleteness::Partial
+    }
+
+    fn apply_mcp_invocation(&mut self, invocation: &McpInvocationEvidence) -> bool {
+        let previous_kind = self.classification;
+        let previous_evidence_count = self.evidence.len();
+        if self.classification != SemanticCommandKind::Agent {
+            self.classification = SemanticCommandKind::Mcp;
+        }
+        append_missing_evidence(&mut self.evidence, &invocation.evidence);
+        self.classification != previous_kind || self.evidence.len() != previous_evidence_count
+    }
 }
 
 impl CommandProjector {
@@ -46,7 +137,6 @@ impl CommandProjector {
         &mut self,
         event: &DomainEvent,
         process_action: &SemanticAction,
-        retain_for_mcp: bool,
     ) -> LiveSemanticActionOutput {
         if process_action.status != SemanticActionStatus::Success {
             return LiveSemanticActionOutput::default();
@@ -62,15 +152,101 @@ impl CommandProjector {
         if let Some(evidence) = self.mcp_invocations.get(&key) {
             Self::apply_mcp_invocation(&mut action, evidence);
         }
-        if retain_for_mcp {
-            self.commands.insert(key, action.clone());
+        let mut output = LiveSemanticActionOutput::default();
+        if let Some(previous) = self.commands.get_mut(&key) {
+            if previous.is_running() {
+                if event.envelope.observed_at >= previous.start_time {
+                    previous.end_time = Some(event.envelope.observed_at);
+                    previous.status = SemanticActionStatus::Unknown;
+                    previous.completeness = SemanticActionCompleteness::Complete;
+                } else {
+                    previous.mark_end_unknown();
+                }
+                append_missing_evidence(
+                    &mut previous.evidence,
+                    &[event_evidence(
+                        event,
+                        evidence_roles::process::EXEC_COMPLETED,
+                    )],
+                );
+                output
+                    .updates
+                    .push(previous.lifecycle(key, None, None, previous.evidence.clone()));
+            }
         }
+        self.commands
+            .insert(key, PendingCommand::from_action(&action));
         let link = command_exec_link(&action, process_action);
-        LiveSemanticActionOutput {
-            actions: vec![action],
-            links: vec![link],
-            ..LiveSemanticActionOutput::default()
+        output.actions.push(action);
+        output.links.push(link);
+        output
+    }
+
+    pub(super) fn observe_process_exit(
+        &mut self,
+        event: &DomainEvent,
+        retain_for_mcp: bool,
+    ) -> LiveSemanticActionOutput {
+        let EventPayload::Process(payload) = &event.payload else {
+            return LiveSemanticActionOutput::default();
+        };
+        if payload.operation != "exit" {
+            return LiveSemanticActionOutput::default();
         }
+        let key = command_key(event.envelope.trace_id, &event.envelope.process);
+        let Entry::Occupied(mut entry) = self.commands.entry(key) else {
+            return LiveSemanticActionOutput::default();
+        };
+        let action = entry.get_mut();
+        if action.end_time.is_some() {
+            return LiveSemanticActionOutput::default();
+        }
+        let observed_exit = event.envelope.collector.as_str() == "ebpf"
+            && payload.metadata.get("exit_source").map(String::as_str) != Some("reconciled")
+            && event.envelope.observed_at >= action.start_time;
+        let exit_code = observed_exit
+            .then(|| {
+                payload
+                    .metadata
+                    .get("exit_code")
+                    .and_then(|raw| raw.parse::<i32>().ok())
+            })
+            .flatten();
+        if observed_exit {
+            action.end_time = Some(event.envelope.observed_at);
+            action.status = process_exit_status(exit_code);
+            action.completeness = SemanticActionCompleteness::Complete;
+        } else {
+            action.mark_end_unknown();
+        }
+        let exit_evidence = event_evidence(event, evidence_roles::process::EXIT);
+        append_missing_evidence(&mut action.evidence, std::slice::from_ref(&exit_evidence));
+        let mut output = LiveSemanticActionOutput::default();
+        output
+            .updates
+            .push(action.lifecycle(key, exit_code, None, vec![exit_evidence]));
+        if !retain_for_mcp {
+            entry.remove();
+        }
+        output
+    }
+
+    pub(super) fn finalize_trace(&mut self, trace_id: TraceId) -> LiveSemanticActionOutput {
+        let mut output = LiveSemanticActionOutput::default();
+        for (key, action) in &mut self.commands {
+            if key.0 != trace_id || !action.is_running() {
+                continue;
+            }
+            action.mark_end_unknown();
+            output.updates.push(action.lifecycle(
+                *key,
+                None,
+                Some(SemanticActionFinalizationReason::TraceClosed),
+                action.evidence.clone(),
+            ));
+        }
+        self.forget_trace(trace_id);
+        output
     }
 
     pub(super) fn observe_mcp_tool_call(
@@ -87,39 +263,28 @@ impl CommandProjector {
             return LiveSemanticActionOutput::default();
         }
         let key = command_key(action.trace_id, &action.process);
-        let invocation =
-            self.mcp_invocations
-                .entry(key.clone())
-                .or_insert_with(|| McpInvocationEvidence {
-                    evidence: Vec::new(),
-                });
+        let invocation = self
+            .mcp_invocations
+            .entry(key)
+            .or_insert_with(|| McpInvocationEvidence {
+                evidence: Vec::new(),
+            });
         append_missing_evidence(&mut invocation.evidence, &action.evidence);
-        let invocation = invocation.clone();
-        let Some(mut command) = self.commands.get(&key).cloned() else {
+        let Some(command) = self.commands.get_mut(&key) else {
             return LiveSemanticActionOutput::default();
         };
-        let previous = command.clone();
-        Self::apply_mcp_invocation(&mut command, &invocation);
-        if command == previous {
+        if !command.apply_mcp_invocation(invocation) {
             return LiveSemanticActionOutput::default();
         }
-        self.commands.insert(key, command.clone());
-        let kind = if command
-            .attributes
-            .get(attrs::invocation::KIND)
-            .map(String::as_str)
-            == Some("agent")
-        {
-            semantic_action::SemanticCommandKind::Agent
-        } else {
-            semantic_action::SemanticCommandKind::Mcp
-        };
+        let update = command.update(
+            key,
+            SemanticActionChange::CommandClassification {
+                kind: command.classification,
+            },
+            command.evidence.clone(),
+        );
         LiveSemanticActionOutput {
-            updates: vec![super::ActionUpdateFactory::update(
-                &command,
-                semantic_action::SemanticActionChange::CommandClassification { kind },
-            )],
-            updated_actions: vec![command],
+            updates: vec![update],
             ..LiveSemanticActionOutput::default()
         }
     }
@@ -202,10 +367,11 @@ fn command_action(event: &DomainEvent, process_action: &SemanticAction) -> Seman
             .cloned()
             .unwrap_or_else(|| process_action.title.clone()),
         start_time: process_action.start_time,
-        end_time: process_action.end_time,
+        end_time: None,
         process: event.envelope.process.clone(),
+        // A successful exec has been observed; its execution end is still pending.
         status: process_action.status,
-        completeness: SemanticActionCompleteness::Complete,
+        completeness: SemanticActionCompleteness::Partial,
         attributes,
         evidence,
     }

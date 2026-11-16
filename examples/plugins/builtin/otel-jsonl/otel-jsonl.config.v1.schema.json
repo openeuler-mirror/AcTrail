@@ -158,6 +158,9 @@
         "llm.call": {
           "type": "boolean"
         },
+        "agent.context_compaction": {
+          "type": "boolean"
+        },
         "llm.request": {
           "type": "boolean"
         },

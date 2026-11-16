@@ -27,8 +27,8 @@ pub fn lookup_runtime_plan(
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| SyncError::new("TLS plan lookup timeout exceeds the supported duration"))?;
-    let stream = Endpoint::Path(socket_path.to_path_buf()).connect(deadline)?;
-    let mut stream = DeadlineStream::new(stream, max_frame_bytes);
+    let stream = Endpoint(socket_path.to_path_buf()).connect(deadline)?;
+    let mut stream = DeadlineStream::new(stream);
     stream.set_deadline(deadline);
     FrameCodec::write_lookup_request(
         &mut stream,

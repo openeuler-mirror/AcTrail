@@ -10,7 +10,11 @@ use model_core::ids::{CollectorName, TraceId};
 use model_core::process::ProcessIdentity;
 use plugin_system::DecisionScope;
 use process_identity::ProcessIdentityManager;
+use trace_runtime::registry::TraceRuntime;
 
+use crate::services::alert_ingress::{AlertIngress, NetworkConnectionDenySource};
+
+use super::alerts::NetworkBoundaryAlerts;
 use super::request::{NetworkConnectContext, NetworkRemote};
 use access_control::policy::network::StoredNetworkRule;
 
@@ -60,6 +64,42 @@ impl<'a> NetworkAuditBuilder<'a> {
         }
     }
 
+    pub(super) fn submit_boundary_alert(
+        &self,
+        ingress: &AlertIngress,
+        traces: &TraceRuntime,
+        alerts: &mut NetworkBoundaryAlerts,
+    ) {
+        if self.decision != EnforcementDecision::Deny {
+            return;
+        }
+        let Some(rule) = self.rule else {
+            return;
+        };
+        let (source, decider, reason) = match &self.source {
+            NetworkDecisionSource::Rule => (NetworkConnectionDenySource::FastPathDeny, None, None),
+            NetworkDecisionSource::GrayPlugin {
+                instance_id,
+                reason,
+                ..
+            } => (
+                NetworkConnectionDenySource::GrayPluginDeny,
+                Some(instance_id.as_str()),
+                reason.as_deref(),
+            ),
+            NetworkDecisionSource::GrayPluginCache {
+                instance_id,
+                reason,
+            } => (
+                NetworkConnectionDenySource::GrayPluginCacheDeny,
+                Some(instance_id.as_str()),
+                reason.as_deref(),
+            ),
+            NetworkDecisionSource::Default | NetworkDecisionSource::GrayFallback { .. } => return,
+        };
+        alerts.record(self.context, rule, source, decider, reason, ingress, traces);
+    }
+
     pub(super) fn build(
         self,
         process_registry: &ProcessIdentityManager,
@@ -90,7 +130,10 @@ impl<'a> NetworkAuditBuilder<'a> {
         );
         if let Some(rule) = self.rule {
             metadata.insert("rule_id".to_string(), rule.rule_id.clone());
-            metadata.insert("policy_remote_scope".to_string(), rule.remote.to_string());
+            metadata.insert(
+                "policy_endpoint_scope".to_string(),
+                rule.endpoint.to_string(),
+            );
             metadata.insert(
                 "policy_owner_instance_id".to_string(),
                 rule.owner_instance_id.clone(),

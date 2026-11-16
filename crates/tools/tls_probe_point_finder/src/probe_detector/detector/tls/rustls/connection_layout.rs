@@ -1,5 +1,5 @@
 //! Certificate ownership layout is checked independently of handshake discovery.
-//! The destructor shapes were verified on rustls 0.23.36, 0.23.45 and 0.23.46 client builds.
+//! The destructor shapes cover rustls 0.23.36, 0.23.37, 0.23.45 and 0.23.46 client builds.
 use super::handshake_locator::RustlsHandshakeLocator;
 use crate::elf::ElfImage;
 use crate::plan::{AttachPoint, CaptureStrategy, PayloadDirection, ProbePoint};
@@ -41,6 +41,22 @@ const RECORD_LAYER_DROP: &[u32] = &[
 const RECORD_LAYER_SECOND_BOX: &[u32] = &[
     0xa9425673, 0xf94002a8, 0xb4000068, 0xaa1303e0, 0xd63f0100, 0xf94006a1,
 ];
+const CALLED_BOX_DROP: &[u32] = &[
+    0xa9415674, 0xf94002a8, 0xb4000068, 0xaa1403e0, 0xd63f0100, 0xf94006a1, 0xb4000081, 0xf9400aa2,
+    0xaa1403e0,
+];
+const CALLED_OPTION: &[u32] = &[0xf9416e68, 0xd2f00014, 0xeb14011f, 0x540000a0, 0x910b6260];
+const CALLED_CERTIFICATES: &[u32] = &[0xf9417a68, 0xeb14011f, 0x540000a0, 0x910bc260];
+const BYTE_VEC_FREE: &[u32] = &[0xf9400001, 0xb4000081, 0xf9400400, 0x52800022];
+const CERTIFICATE_VEC_FREE: &[u32] = &[
+    0xf9400008, 0xb40000c8, 0x8b080508, 0xf9400400, 0x52800102, 0xd37df101,
+];
+const CERTIFICATE_ELEMENTS_DROP: &[u32] = &[
+    0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0xf9400814, 0xb40001b4, 0xf9400413, 0xd2f00015,
+    0x14000004, 0xf1000694, 0x91006273, 0x540000e0, 0xf9400268, 0xeb15011f, 0x54ffff60, 0xaa1303e0,
+];
+const CERTIFICATE_ELEMENTS_RETURN: &[u32] =
+    &[0x17fffff8, 0xa9424ff4, 0xf9400bf5, 0xa8c37bfd, 0xd65f03c0];
 
 pub(in crate::probe_detector::detector::tls) struct RustlsConnectionLayout;
 
@@ -86,6 +102,20 @@ impl RustlsConnectionLayout {
         0xe1, 0x03, 0x13, 0xaa,
     ];
 
+    pub(in crate::probe_detector::detector::tls::rustls) const BUFFER_STACK160_PATTERN: &[u8] = &[
+        0xff, 0x83, 0x02, 0xd1, 0xfd, 0x7b, 0x06, 0xa9, 0xf8, 0x5f, 0x07, 0xa9, 0xf6, 0x57, 0x08,
+        0xa9, 0xf4, 0x4f, 0x09, 0xa9, 0xfd, 0x83, 0x01, 0x91, 0x14, 0x84, 0x41, 0xf9, 0x08, 0x00,
+        0xf0, 0xd2, 0x15, 0x88, 0x41, 0xf9, 0x16, 0x8c, 0x41, 0xf9, 0xf3, 0x03, 0x02, 0xaa, 0x08,
+        0x84, 0x01, 0xf9, 0x9f, 0x02, 0x08, 0xeb,
+    ];
+    pub(in crate::probe_detector::detector::tls::rustls) const TAKE_STACK160_PATTERN: &[u8] = &[
+        0xfd, 0x7b, 0xbc, 0xa9, 0xf7, 0x0b, 0x00, 0xf9, 0xf6, 0x57, 0x02, 0xa9, 0xf4, 0x4f, 0x03,
+        0xa9, 0xfd, 0x03, 0x00, 0x91, 0x36, 0x54, 0x40, 0xa9, 0x09, 0x00, 0xf0, 0xd2, 0x33, 0x08,
+        0x40, 0xf9, 0xf4, 0x03, 0x00, 0xaa, 0x08, 0x04, 0x80, 0x52, 0x08, 0xb8, 0x0c, 0x39, 0xdf,
+        0x02, 0x09, 0xeb, 0xc1, 0x02, 0x00, 0x54, 0xb3, 0x00, 0xf8, 0xb6, 0xf7, 0x03, 0x1f, 0xaa,
+        0xe0, 0x03, 0x17, 0xaa,
+    ];
+
     pub(super) fn register(image: &ElfImage) {
         if image.arch().as_str() == "aarch64" {
             image.register_pattern_scan(CERTIFICATE_HEAD);
@@ -106,6 +136,7 @@ impl RustlsConnectionLayout {
             (Self::BUFFER_PATTERN, Self::TAKE_PATTERN),
             (Self::BUFFER_48_PATTERN, Self::TAKE_56_PATTERN),
             (Self::BUFFER_X22_PATTERN, Self::TAKE_X22_PATTERN),
+            (Self::BUFFER_STACK160_PATTERN, Self::TAKE_STACK160_PATTERN),
         ]
         .into_iter()
         .any(|(buffer, take)| {
@@ -179,6 +210,7 @@ impl RustlsConnectionLayout {
     fn certificate_offset(image: &ElfImage, offset: usize) -> Option<u64> {
         if Self::inline_layout(image, offset).is_none()
             && Self::outlined_layout(image, offset).is_none()
+            && Self::called_layout(image, offset).is_none()
         {
             return None;
         }
@@ -234,6 +266,91 @@ impl RustlsConnectionLayout {
             && Self::word(bytes, 76)? & 0xfc000000 == 0x94000000
             && Self::matches_words(&bytes[80..104], RECORD_LAYER_SECOND_BOX))
         .then_some(())
+    }
+
+    fn called_layout(image: &ElfImage, certificates: usize) -> Option<()> {
+        let start = certificates.checked_sub(112)?;
+        let result = Self::called_drop(image, start);
+        image.release_scan_range(start, 140);
+        result
+    }
+
+    fn called_drop(image: &ElfImage, start: usize) -> Option<()> {
+        let bytes = image.data().get(start..start.checked_add(140)?)?;
+        // Both RecordLayer boxes and the preceding Option<Vec<u8>> use the same allocator.
+        if !(Self::matches_words(&bytes[..36], CALLED_BOX_DROP)
+            && Self::word(bytes, 40)? == 0xa9425674
+            && Self::matches_words(&bytes[44..76], &CALLED_BOX_DROP[1..])
+            && Self::matches_words(&bytes[80..100], CALLED_OPTION)
+            && Self::word(bytes, 104)? == 0x910b6260
+            && Self::matches_words(&bytes[112..128], CALLED_CERTIFICATES)
+            && Self::word(bytes, 132)? == 0x910bc260)
+        {
+            return None;
+        }
+        let deallocate = Self::branch_target(image, start + 36, 0x94000000)?;
+        if Self::branch_target(image, start + 76, 0x94000000)? != deallocate {
+            return None;
+        }
+        let noop = Self::branch_target(image, start + 100, 0x94000000)?;
+        let noop_offset =
+            usize::try_from(image.file_offset_for_virtual_address(noop).ok()?).ok()?;
+        let noop_matches = image
+            .data()
+            .get(noop_offset..noop_offset.checked_add(4)?)
+            .is_some_and(|bytes| Self::word(bytes, 0) == Some(0xd65f03c0));
+        image.release_scan_range(noop_offset, 4);
+        if !noop_matches {
+            return None;
+        }
+        let byte_vec = Self::branch_target(image, start + 108, 0x94000000)?;
+        let elements = Self::branch_target(image, start + 128, 0x94000000)?;
+        let certificate_vec = Self::branch_target(image, start + 136, 0x94000000)?;
+        Self::vec_deallocation(image, byte_vec, BYTE_VEC_FREE, deallocate)?;
+        Self::vec_deallocation(image, certificate_vec, CERTIFICATE_VEC_FREE, deallocate)?;
+        Self::certificate_elements_drop(image, elements, byte_vec)
+    }
+
+    fn vec_deallocation(
+        image: &ElfImage,
+        address: u64,
+        prefix: &[u32],
+        deallocate: u64,
+    ) -> Option<()> {
+        let offset = usize::try_from(image.file_offset_for_virtual_address(address).ok()?).ok()?;
+        let branch = prefix.len() * 4;
+        let result = (|| {
+            let bytes = image.data().get(offset..offset.checked_add(branch + 8)?)?;
+            (Self::matches_words(&bytes[..branch], prefix)
+                && Self::word(bytes, branch + 4)? == 0xd65f03c0
+                && Self::branch_target(image, offset + branch, 0x14000000)? == deallocate)
+                .then_some(())
+        })();
+        image.release_scan_range(offset, branch + 8);
+        result
+    }
+
+    fn certificate_elements_drop(image: &ElfImage, address: u64, byte_vec: u64) -> Option<()> {
+        let offset = usize::try_from(image.file_offset_for_virtual_address(address).ok()?).ok()?;
+        let result = (|| {
+            let bytes = image.data().get(offset..offset.checked_add(88)?)?;
+            (Self::matches_words(&bytes[..64], CERTIFICATE_ELEMENTS_DROP)
+                && Self::branch_target(image, offset + 64, 0x94000000)? == byte_vec
+                && Self::matches_words(&bytes[68..], CERTIFICATE_ELEMENTS_RETURN))
+            .then_some(())
+        })();
+        image.release_scan_range(offset, 88);
+        result
+    }
+
+    fn branch_target(image: &ElfImage, offset: usize, opcode: u32) -> Option<u64> {
+        let instruction = Self::word(image.data().get(offset..offset.checked_add(4)?)?, 0)?;
+        if instruction & 0xfc000000 != opcode {
+            return None;
+        }
+        let pc = image.virtual_address_for_file_offset(offset as u64).ok()?;
+        let displacement = i64::from((instruction << 6) as i32 >> 4);
+        Some(pc.wrapping_add_signed(displacement))
     }
 
     fn matches_words(bytes: &[u8], words: &[u32]) -> bool {

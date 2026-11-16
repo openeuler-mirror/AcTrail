@@ -42,6 +42,7 @@
     │   └── [x] src/ # OTLP 数据映射与序列化
     │       ├── [x] service.rs # 构建 OTEL span、属性和行为关联
     │       │   └── [x] struct OtelExportError # 表达导出数据构造失败
+    │       ├── [x] span_kind.rs # 统一 OTEL SpanKind 分类。
     │       ├── [x] serialize.rs # 序列化 OTLP 记录
     │       └── [x] otel_pb.rs # OTLP Protobuf 消息类型
     ├── [x] otel_http/ # 将在线观测批量发送到 OTLP HTTP 端点

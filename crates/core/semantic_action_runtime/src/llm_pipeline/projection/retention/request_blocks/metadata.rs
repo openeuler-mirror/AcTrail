@@ -93,20 +93,28 @@ fn is_tool_result_kind(kind: &str) -> bool {
 }
 
 pub(in crate::llm_pipeline) fn background_request_kind(body: &Value) -> Option<&'static str> {
-    let messages = body.get("messages").and_then(Value::as_array)?;
-    let mut system_parts = Vec::new();
-    for message in messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("system"))
-    {
-        collect_text(message.get("content").unwrap_or(message), &mut system_parts);
-    }
-    BackgroundRequestKind::classify(system_parts)
+    BackgroundRequestKind::from_body(body)
 }
 
 pub(in crate::llm_pipeline) struct BackgroundRequestKind;
 
 impl BackgroundRequestKind {
+    fn from_body(body: &Value) -> Option<&'static str> {
+        let mut system_parts = Vec::new();
+        if let Some(system) = body.get("system") {
+            collect_text(system, &mut system_parts);
+        }
+        if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+            for message in messages
+                .iter()
+                .filter(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+            {
+                collect_text(message.get("content").unwrap_or(message), &mut system_parts);
+            }
+        }
+        Self::classify(system_parts)
+    }
+
     pub(in crate::llm_pipeline) fn classify<'a>(
         parts: impl IntoIterator<Item = &'a str>,
     ) -> Option<&'static str> {
@@ -212,36 +220,5 @@ fn collect_text<'a>(value: &'a Value, parts: &mut Vec<&'a str>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{tool_result_count, user_message_metadata};
-
-    #[test]
-    fn counts_tool_results_across_supported_request_shapes() {
-        let anthropic = json!({"messages": [{"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "a", "content": "one"},
-            {"type": "tool-result", "tool_use_id": "b", "content": "two"}
-        ]}]});
-        let chat = json!({"messages": [
-            {"role": "tool", "tool_call_id": "a", "content": "ok"}
-        ]});
-        let responses = json!({"input": [
-            {"type": "function_call_output", "call_id": "a", "output": "ok"}
-        ]});
-
-        assert_eq!(tool_result_count(&anthropic), 2);
-        assert_eq!(tool_result_count(&chat), 1);
-        assert_eq!(tool_result_count(&responses), 1);
-    }
-
-    #[test]
-    fn tool_only_user_content_is_not_counted_as_user_input() {
-        let body = json!({"messages": [{"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "a", "content": "ok"}
-        ]}]});
-
-        assert_eq!(tool_result_count(&body), 1);
-        assert_eq!(user_message_metadata(&body).count, 0);
-    }
-}
+#[path = "../../../../../../../../tests/unit/crates/core/semantic_action_runtime/llm_pipeline/projection/retention/request_blocks/metadata/tests.rs"]
+mod tests;

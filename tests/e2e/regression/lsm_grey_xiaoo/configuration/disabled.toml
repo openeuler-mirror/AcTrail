@@ -1,0 +1,3 @@
+# Use ordinary LSM enforcement and rule fallbacks.
+[access_control.backends.lsm.grey]
+mode = "disabled"

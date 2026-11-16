@@ -19,6 +19,7 @@ pub(in crate::daemon::operator::document) struct L0LlmCallDocument {
     pub stream_classifier: LlmStreamClassifierDocument,
     pub projection_state: LlmProjectionStateDocument,
     pub trajectory: LlmTrajectoryDocument,
+    pub context_compact: LlmContextCompactDocument,
 }
 
 impl Default for L0LlmCallDocument {
@@ -40,6 +41,7 @@ impl Default for L0LlmCallDocument {
             stream_classifier: LlmStreamClassifierDocument::default(),
             projection_state: LlmProjectionStateDocument::default(),
             trajectory: LlmTrajectoryDocument::default(),
+            context_compact: LlmContextCompactDocument::default(),
         }
     }
 }
@@ -74,6 +76,27 @@ impl L0LlmCallDocument {
                 stream_classifier.soft_sniff_max_bytes, assembly.max_buffer_bytes
             ));
         }
+        let trajectory = self.trajectory.to_config()?;
+        let context_compact = self.context_compact.to_config()?;
+        let response_content = parse_value(
+            "semantic_retention.l0_llm_call.response_content",
+            &self.response_content,
+        )?;
+        if self.enabled
+            && context_compact.enabled
+            && context_compact.inference_enabled
+            && (!trajectory.enabled
+                || !matches!(request_content, LlmRequestContentRetention::CanonicalBlocks)
+                || !matches!(
+                    response_content,
+                    LlmResponseContentRetention::AssembledProvider
+                ))
+        {
+            return Err(
+                "semantic_retention.l0_llm_call.context_compact.inference_enabled requires trajectory.enabled=true, request_content=\"canonical_blocks\" and response_content=\"assembled_provider\""
+                    .to_string(),
+            );
+        }
         Ok(L0LlmCallRetention {
             enabled: self.enabled,
             request_content,
@@ -82,10 +105,7 @@ impl L0LlmCallDocument {
                 "semantic_retention.l0_llm_call.request_body_export_max_bytes",
                 self.request_body_export_max_bytes,
             )?,
-            response_content: parse_value(
-                "semantic_retention.l0_llm_call.response_content",
-                &self.response_content,
-            )?,
+            response_content,
             tool_calls: parse_value(
                 "semantic_retention.l0_llm_call.tool_calls",
                 &self.tool_calls,
@@ -102,7 +122,8 @@ impl L0LlmCallDocument {
             assembly,
             stream_classifier,
             projection_state: self.projection_state.to_config()?,
-            trajectory: self.trajectory.to_config()?,
+            trajectory,
+            context_compact,
         })
     }
 }

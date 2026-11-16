@@ -1,15 +1,23 @@
 //! Local process supervision for `actraild start/stop/status`.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::os::unix::fs::FileTypeExt;
-use std::os::unix::net::UnixStream;
+use std::io::{self, Read, Write};
+use std::num::NonZeroU64;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use config_core::daemon::OperatorConfig;
+use uds_control_server::PeerCredentials;
+
+#[path = "process/runtime_socket.rs"]
+mod runtime_socket;
+
+use runtime_socket::RuntimeSocket;
+
+use crate::diagnostics::{DaemonDiagnostics, StartupLog};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DaemonProcessState {
@@ -19,7 +27,79 @@ pub enum DaemonProcessState {
     StaleSocket,
 }
 
-pub fn start_daemon(config_path: &Path, config: &OperatorConfig) -> Result<(), String> {
+pub(super) struct DaemonProcess<'a> {
+    config: &'a OperatorConfig,
+}
+
+impl<'a> DaemonProcess<'a> {
+    pub(super) fn new(config: &'a OperatorConfig) -> Self {
+        Self { config }
+    }
+
+    pub(super) fn restart(&self, config_path: &Path, max_bytes: NonZeroU64) -> Result<(), String> {
+        let state = status_daemon(self.config)
+            .map_err(|error| DaemonDiagnostics::operation("restart (stop)", self.config, error))?;
+        if let DaemonProcessState::Running { pid } = state {
+            self.stop_running(pid).map_err(|error| {
+                DaemonDiagnostics::operation("restart (stop)", self.config, error)
+            })?;
+        }
+        start_daemon(config_path, self.config, max_bytes)
+            .map_err(|error| DaemonDiagnostics::operation("restart (start)", self.config, error))
+    }
+
+    pub(super) fn print_status(&self) -> Result<(), String> {
+        match status_daemon(self.config)? {
+            DaemonProcessState::Running { pid } => println!(
+                "actraild running pid={} socket={}",
+                pid,
+                self.config.socket_path.display()
+            ),
+            DaemonProcessState::Stopped => println!("actraild stopped"),
+            DaemonProcessState::StalePid { pid } => println!(
+                "actraild stale pid_file={} pid={}",
+                self.config.pid_file.display(),
+                pid
+            ),
+            DaemonProcessState::StaleSocket => println!(
+                "actraild stale socket={}",
+                self.config.socket_path.display()
+            ),
+        }
+        Ok(())
+    }
+
+    fn verify_running(&self, pid: u32) -> Result<(), String> {
+        let stream = RuntimeSocket::new("control", &self.config.socket_path).listener()?;
+        let peer = PeerCredentials::from_stream(&stream)
+            .map_err(|error| format!("inspect control socket peer: {error}"))?;
+        if peer.pid != pid {
+            return Err(format!(
+                "pid file {} names pid {pid}, but control socket belongs to pid {}; refusing to stop",
+                self.config.pid_file.display(),
+                peer.pid
+            ));
+        }
+        Ok(())
+    }
+
+    fn stop_running(&self, pid: u32) -> Result<(), String> {
+        self.verify_running(pid)?;
+        if signal_process(pid, libc::SIGTERM)? {
+            wait_until_stopped(pid, self.config)?;
+        }
+        remove_runtime_file(&self.config.pid_file)?;
+        remove_runtime_file(&self.config.socket_path)?;
+        println!("actraild stopped pid={pid}");
+        Ok(())
+    }
+}
+
+pub fn start_daemon(
+    config_path: &Path,
+    config: &OperatorConfig,
+    max_bytes: NonZeroU64,
+) -> Result<(), String> {
     ensure_start_preconditions(config)?;
     create_parent_directory(&config.log_path, "log directory")?;
     let log = OpenOptions::new()
@@ -30,6 +110,7 @@ pub fn start_daemon(config_path: &Path, config: &OperatorConfig) -> Result<(), S
     let stderr = log
         .try_clone()
         .map_err(|error| format!("clone log {}: {error}", config.log_path.display()))?;
+    let startup_log = StartupLog::capture(&log, max_bytes)?;
     let mut command = Command::new(
         std::env::current_exe().map_err(|error| format!("resolve current executable: {error}"))?,
     );
@@ -52,7 +133,9 @@ pub fn start_daemon(config_path: &Path, config: &OperatorConfig) -> Result<(), S
     let child = command
         .spawn()
         .map_err(|error| format!("spawn actraild: {error}"))?;
-    DaemonStartSupervisor::new(child, config).wait_until_ready()
+    DaemonStartSupervisor::new(child, config)
+        .wait_until_ready()
+        .map_err(|error| startup_log.failure(&config.log_path, error))
 }
 
 pub fn stop_daemon(config: &OperatorConfig) -> Result<(), String> {
@@ -70,15 +153,7 @@ pub fn stop_daemon(config: &OperatorConfig) -> Result<(), String> {
             config.pid_file.display(),
             pid
         )),
-        DaemonProcessState::Running { pid } => {
-            if signal_process(pid, libc::SIGTERM)? {
-                wait_until_stopped(pid, config)?;
-            }
-            remove_runtime_file(&config.pid_file)?;
-            remove_runtime_file(&config.socket_path)?;
-            println!("actraild stopped pid={pid}");
-            Ok(())
-        }
+        DaemonProcessState::Running { pid } => DaemonProcess::new(config).stop_running(pid),
     }
 }
 
@@ -143,6 +218,13 @@ pub fn remove_runtime_file(path: &Path) -> Result<(), String> {
     }
 }
 
+pub(super) fn cleanup_pid_file(config: &OperatorConfig, pid_written: bool) -> Result<(), String> {
+    if pid_written {
+        remove_runtime_file(&config.pid_file)?;
+    }
+    Ok(())
+}
+
 pub(super) fn cleanup_runtime_files(
     config: &OperatorConfig,
     pid_written: bool,
@@ -173,27 +255,12 @@ fn ensure_start_preconditions(config: &OperatorConfig) -> Result<(), String> {
         DaemonProcessState::Running { pid } => {
             return Err(format!("actraild already running pid={pid}"));
         }
-        DaemonProcessState::StalePid { pid } => {
-            return Err(format!(
-                "stale pid file {} points to non-running pid {}; remove it explicitly",
-                config.pid_file.display(),
-                pid
-            ));
-        }
-        DaemonProcessState::StaleSocket => {
-            return Err(format!(
-                "socket path {} exists without pid file; remove it explicitly after confirming no daemon owns it",
-                config.socket_path.display()
-            ));
-        }
-        DaemonProcessState::Stopped => {}
+        DaemonProcessState::Stopped
+        | DaemonProcessState::StalePid { .. }
+        | DaemonProcessState::StaleSocket => {}
     }
-    if config.socket_path.exists() {
-        return Err(format!(
-            "socket path already exists: {}; remove it explicitly after confirming no daemon owns it",
-            config.socket_path.display()
-        ));
-    }
+    // Remove stale sockets before spawning so residual paths cannot look ready.
+    ensure_runtime_socket_available("control", &config.socket_path)?;
     if config.payload_config.tls.enabled && config.payload_config.tls.capture_backend.is_sync() {
         ensure_runtime_socket_available(
             "TLS sync event",
@@ -204,34 +271,7 @@ fn ensure_start_preconditions(config: &OperatorConfig) -> Result<(), String> {
 }
 
 pub(super) fn ensure_runtime_socket_available(label: &str, path: &Path) -> Result<(), String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "inspect {label} socket {}: {error}",
-                path.display()
-            ));
-        }
-    };
-    if !metadata.file_type().is_socket() {
-        return Err(format!(
-            "{label} socket path {} exists but is not a Unix socket; remove it explicitly",
-            path.display()
-        ));
-    }
-    match UnixStream::connect(path) {
-        Ok(_) => Err(format!(
-            "{label} socket {} already has an active listener",
-            path.display()
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => remove_runtime_file(path),
-        Err(error) => Err(format!(
-            "{label} socket {} exists but could not be verified stale: {error}; remove it explicitly",
-            path.display()
-        )),
-    }
+    RuntimeSocket::new(label, path).ensure_available()
 }
 
 struct DaemonStartSupervisor<'a> {
@@ -248,14 +288,9 @@ impl<'a> DaemonStartSupervisor<'a> {
         match self.wait_for_readiness() {
             Ok(()) => Ok(()),
             Err(start_error) => match self.stop_after_failure() {
-                Ok(outcome) => Err(format!(
-                    "{start_error}; startup_child={}; log={}",
-                    outcome.as_str(),
-                    self.config.log_path.display()
-                )),
+                Ok(outcome) => Err(format!("{start_error}; startup_child={}", outcome.as_str())),
                 Err(stop_error) => Err(format!(
-                    "{start_error}; startup child cleanup failed: {stop_error}; log={}",
-                    self.config.log_path.display()
+                    "{start_error}; startup child cleanup failed: {stop_error}"
                 )),
             },
         }
@@ -404,11 +439,24 @@ fn wait_until_stopped(pid: u32, config: &OperatorConfig) -> Result<(), String> {
 }
 
 fn read_pid_file(path: &Path) -> Result<Option<u32>, String> {
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("read pid file {}: {error}", path.display())),
     };
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect pid file {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("pid file {} is not a regular file", path.display()));
+    }
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)
+        .map_err(|error| format!("read pid file {}: {error}", path.display()))?;
     let pid = raw
         .trim()
         .parse::<u32>()
@@ -446,74 +494,5 @@ fn signal_process(pid: u32, signal: libc::c_int) -> Result<bool, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::os::unix::net::UnixListener;
-
-    use super::{ensure_runtime_socket_available, write_pid_file};
-
-    #[test]
-    fn write_pid_file_reclaims_stale_owner() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("actraild.pid");
-        let mut child = std::process::Command::new("/bin/true")
-            .spawn()
-            .expect("spawn short-lived process");
-        let stale_pid = child.id();
-        child.wait().expect("wait for short-lived process");
-        std::fs::write(&path, format!("{stale_pid}\n")).expect("write stale pid file");
-
-        write_pid_file(&path, std::process::id()).expect("replace stale pid file");
-
-        assert_eq!(
-            std::fs::read_to_string(path).expect("read replacement pid file"),
-            format!("{}\n", std::process::id())
-        );
-    }
-
-    #[test]
-    fn write_pid_file_preserves_live_owner() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("actraild.pid");
-        std::fs::write(&path, format!("{}\n", std::process::id())).expect("write live pid file");
-
-        let error = write_pid_file(&path, std::process::id()).expect_err("reject live owner");
-
-        assert!(error.contains("belongs to running pid"));
-        assert_eq!(
-            std::fs::read_to_string(path).expect("read preserved pid file"),
-            format!("{}\n", std::process::id())
-        );
-    }
-
-    #[test]
-    fn runtime_socket_check_removes_stale_socket() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("control.sock");
-        drop(UnixListener::bind(&path).expect("bind temporary listener"));
-
-        let mut result = ensure_runtime_socket_available("control", &path);
-        for _ in 0..20 {
-            if result.is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-            result = ensure_runtime_socket_available("control", &path);
-        }
-        result.expect("remove stale socket");
-
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn runtime_socket_check_preserves_active_listener() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("control.sock");
-        let _listener = UnixListener::bind(&path).expect("bind temporary listener");
-
-        let error =
-            ensure_runtime_socket_available("control", &path).expect_err("reject active listener");
-
-        assert!(error.contains("already has an active listener"));
-        assert!(path.exists());
-    }
-}
+#[path = "../../../../../../tests/unit/crates/apps/daemon/bin/actraild/process/tests.rs"]
+mod tests;

@@ -2,6 +2,18 @@
 
 use tls_payload_core::PayloadDirection;
 
+/// A Trace credential sent once before events on each process connection.
+#[derive(Clone, Eq, PartialEq)]
+pub struct EventRegistration {
+    pub token: String,
+}
+
+impl std::fmt::Debug for EventRegistration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("EventRegistration([redacted])")
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayloadEvent {
     pub trace_id: u64,

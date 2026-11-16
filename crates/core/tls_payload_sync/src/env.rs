@@ -4,6 +4,11 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use payload_capability::DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES;
+pub use payload_capability::{
+    DEFAULT_TLS_SYNC_EVENT_BATCH_BYTES as DEFAULT_EVENT_BATCH_BYTES,
+    DEFAULT_TLS_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS as DEFAULT_EVENT_SHUTDOWN_TIMEOUT_MS,
+    DEFAULT_TLS_SYNC_EVENT_TIMEOUT_MS as DEFAULT_EVENT_TIMEOUT_MS,
+};
 use tls_payload_core::RewriteRule;
 use tls_probe_point_finder::ProbePointPlan;
 
@@ -21,11 +26,14 @@ pub const ENV_MAX_FRAME_BYTES: &str = "TLS_PAYLOAD_SYNC_MAX_FRAME_BYTES";
 pub const ENV_REDACTION: &str = "TLS_PAYLOAD_SYNC_REDACTION";
 pub const ENV_EVENTS: &str = "TLS_PAYLOAD_SYNC_EVENTS";
 pub const ENV_TRACE_ID: &str = "TLS_PAYLOAD_SYNC_TRACE_ID";
+pub const ENV_EVENT_TOKEN: &str = "TLS_PAYLOAD_SYNC_EVENT_TOKEN";
+/// Set for checkpoint launches: a TLS read waits until the daemon releases what the process wrote
+/// before it on the same connection.
+pub const ENV_HOLD_RESPONSES: &str = "TLS_PAYLOAD_SYNC_HOLD_RESPONSES";
 pub const ENV_EVENT_SOCKET: &str = "TLS_PAYLOAD_SYNC_EVENT_SOCKET";
-pub const ENV_EVENT_FD: &str = "TLS_PAYLOAD_SYNC_EVENT_FD";
-pub const ENV_EVENT_WRITE_BUFFER_BYTES: &str = "TLS_PAYLOAD_SYNC_EVENT_WRITE_BUFFER_BYTES";
 pub const ENV_EVENT_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS";
-pub const DEFAULT_EVENT_TIMEOUT_MS: u64 = 100;
+pub const ENV_EVENT_SHUTDOWN_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS";
+pub const ENV_EVENT_BATCH_BYTES: &str = "TLS_PAYLOAD_SYNC_EVENT_BATCH_BYTES";
 pub const ENV_PLAN_TIMEOUT_MS: &str = "TLS_PAYLOAD_SYNC_PLAN_TIMEOUT_MS";
 pub const DEFAULT_PLAN_TIMEOUT_MS: u64 = 100;
 pub const ENV_FLOW_CONTROL_ENABLED: &str = "TLS_PAYLOAD_SYNC_FLOW_CONTROL_ENABLED";
@@ -55,8 +63,6 @@ pub struct RuntimeEnvConfig {
     pub events: EventFilter,
     pub trace_id: Option<u64>,
     pub event_socket_path: Option<PathBuf>,
-    pub event_fd: Option<i32>,
-    pub event_write_buffer_bytes: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,12 +222,6 @@ pub fn runtime_env_for_plan_descriptors(
     }
     if let Some(path) = &config.event_socket_path {
         env.push(pair(ENV_EVENT_SOCKET, &path.display().to_string()));
-    }
-    if let Some(fd) = config.event_fd {
-        env.push(pair(ENV_EVENT_FD, &fd.to_string()));
-    }
-    if let Some(bytes) = config.event_write_buffer_bytes {
-        env.push(pair(ENV_EVENT_WRITE_BUFFER_BYTES, &bytes.to_string()));
     }
     Ok(env)
 }

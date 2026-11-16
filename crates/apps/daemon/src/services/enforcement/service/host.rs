@@ -1,3 +1,5 @@
+//! File policy host calls backed by the admitted rule store.
+
 use super::{FileBackend, FilePolicyServiceHost};
 use config_core::daemon::EnforcementDecision;
 use plugin_system::{

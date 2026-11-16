@@ -13,8 +13,6 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
-use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
 use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
 use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
@@ -99,6 +97,12 @@ impl StorageBackend for SqliteStorage {
         query: &storage_core::TracePageQuery,
     ) -> Result<storage_core::TracePage, StorageError> {
         self.read_trace_page(query)
+    }
+    fn recent_action_ids(
+        &self,
+        query: &storage_core::RecentActionsQuery,
+    ) -> Result<Vec<String>, StorageError> {
+        self.read_recent_action_ids(query)
     }
     fn timeline_page(
         &self,
@@ -229,82 +233,6 @@ impl StorageBackend for SqliteStorage {
     ) -> Result<(), StorageError> {
         SqliteStorage::update_resource_scope_state(self, trace_id, lifecycle_state, updated_at)
             .map_err(|error| StorageError::new("update_resource_scope_state", error.to_string()))
-    }
-
-    fn create_external_cgroup_binding(
-        &mut self,
-        binding: ExternalCgroupBinding,
-    ) -> Result<(), StorageError> {
-        SqliteStorage::create_external_cgroup_binding(self, &binding)
-            .map_err(|error| StorageError::new("create_external_cgroup_binding", error.to_string()))
-    }
-
-    fn get_external_cgroup_binding(
-        &self,
-        trace_id: TraceId,
-    ) -> Result<Option<ExternalCgroupBinding>, StorageError> {
-        SqliteStorage::get_external_cgroup_binding(self, trace_id)
-            .map_err(|error| StorageError::new("get_external_cgroup_binding", error.to_string()))
-    }
-
-    fn list_live_external_cgroup_bindings(
-        &self,
-    ) -> Result<Vec<ExternalCgroupBinding>, StorageError> {
-        SqliteStorage::list_live_external_cgroup_bindings(self).map_err(|error| {
-            StorageError::new("list_live_external_cgroup_bindings", error.to_string())
-        })
-    }
-
-    fn record_external_cgroup_success(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: std::time::SystemTime,
-    ) -> Result<(), StorageError> {
-        SqliteStorage::record_external_cgroup_success(self, trace_id, observed_at)
-            .map_err(|error| StorageError::new("record_external_cgroup_success", error.to_string()))
-    }
-
-    fn record_external_cgroup_failure(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: std::time::SystemTime,
-    ) -> Result<u32, StorageError> {
-        SqliteStorage::record_external_cgroup_failure(self, trace_id, observed_at)
-            .map_err(|error| StorageError::new("record_external_cgroup_failure", error.to_string()))
-    }
-
-    fn mark_external_cgroup_stale(
-        &mut self,
-        trace_id: TraceId,
-        reason: ExternalBindingStaleReason,
-        updated_at: std::time::SystemTime,
-    ) -> Result<(), StorageError> {
-        SqliteStorage::mark_external_cgroup_stale(self, trace_id, reason, updated_at)
-            .map_err(|error| StorageError::new("mark_external_cgroup_stale", error.to_string()))
-    }
-
-    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError> {
-        self.connection()
-            .borrow_mut()
-            .execute(
-                "DELETE FROM trace_external_cgroup_bindings
-             WHERE trace_id=?1 AND lifecycle_state IN ('active','stale')
-             AND NOT EXISTS (SELECT 1 FROM traces WHERE trace_id=?1)",
-                rusqlite::params![trace_id.get()],
-            )
-            .map(|_| ())
-            .map_err(|error| {
-                StorageError::new("discard_orphan_external_binding", error.to_string())
-            })
-    }
-
-    fn close_external_cgroup_binding(
-        &mut self,
-        trace_id: TraceId,
-        closed_at: std::time::SystemTime,
-    ) -> Result<(), StorageError> {
-        SqliteStorage::close_external_cgroup_binding(self, trace_id, closed_at)
-            .map_err(|e| StorageError::new("close_external_cgroup_binding", e.to_string()))
     }
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError> {
@@ -781,6 +709,15 @@ impl StorageBackend for SqliteStorage {
             .map_err(StorageError::from)
     }
 
+    fn semantic_actions_by_ids_lite(
+        &self,
+        trace_id: TraceId,
+        action_ids: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError> {
+        SqliteStorage::semantic_actions_by_ids_lite(self, trace_id, action_ids)
+            .map_err(StorageError::from)
+    }
+
     fn semantic_action_summary(
         &self,
         trace_id: TraceId,
@@ -857,6 +794,7 @@ impl StorageBackend for SqliteStorage {
         trace_id: TraceId,
         display_parent_roles: &[&str],
         root_link_roles: &[&str],
+        excluded_fallback_kinds: &[&str],
         page: SemanticActionChildPageQuery,
     ) -> Result<SemanticActionDisplayRootChildPage, StorageError> {
         SqliteStorage::semantic_action_display_root_children_page(
@@ -864,6 +802,7 @@ impl StorageBackend for SqliteStorage {
             trace_id,
             display_parent_roles,
             root_link_roles,
+            excluded_fallback_kinds,
             crate::semantic_actions::SemanticActionChildPageQuery {
                 offset: page.offset,
                 limit: page.limit,
@@ -889,10 +828,26 @@ impl StorageBackend for SqliteStorage {
         .map_err(StorageError::from)
     }
 
+    fn semantic_action_display_root_offset(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<usize>, StorageError> {
+        SqliteStorage::semantic_action_display_root_offset(
+            self,
+            trace_id,
+            display_parent_roles,
+            action_id,
+        )
+        .map_err(StorageError::from)
+    }
+
     fn semantic_action_display_path_to_kind(
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
         target_kind: &str,
         after_action_id: Option<&str>,
     ) -> Result<Option<Vec<storage_core::SemanticActionDisplayPathEntry>>, StorageError> {
@@ -900,8 +855,26 @@ impl StorageBackend for SqliteStorage {
             self,
             trace_id,
             display_parent_roles,
+            selected_parent_roles,
             target_kind,
             after_action_id,
+        )
+        .map_err(StorageError::from)
+    }
+
+    fn semantic_action_display_path_to_action(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<Vec<storage_core::SemanticActionDisplayPathEntry>>, StorageError> {
+        SqliteStorage::semantic_action_display_path_to_action(
+            self,
+            trace_id,
+            display_parent_roles,
+            selected_parent_roles,
+            action_id,
         )
         .map_err(StorageError::from)
     }

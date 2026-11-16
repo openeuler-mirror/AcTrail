@@ -1,3 +1,4 @@
+//! Resolve deployment permissions from configured backends and actual availability.
 use model_core::capability::Capability;
 
 use super::CaptureProfile;
@@ -146,6 +147,8 @@ impl LaunchSeccompRequirements {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeploymentPermissionAvailability {
+    /// Whether the configured collector serves any capability in this profile.
+    pub host_ebpf_configured: bool,
     pub host_ebpf: Option<bool>,
     pub seccomp_notify: Option<bool>,
     pub seccomp_notify_detail: String,
@@ -173,7 +176,7 @@ pub fn resolve_deployment_permissions(
     launch_seccomp_requirements: LaunchSeccompRequirements,
     availability: &DeploymentPermissionAvailability,
 ) -> Result<PermissionDecision, String> {
-    let host_ebpf_configured = configured_profile.supports_host_ebpf_observation();
+    let host_ebpf_configured = availability.host_ebpf_configured;
     let seccomp_notify_configured = launch_seccomp_requirements.requires_seccomp_notify();
     let mut reasons = Vec::new();
 

@@ -393,14 +393,7 @@ static __always_inline int finalize_fork_trace_binding(__u32 child_kernel_pid) {
     identity = lookup_process_identity(child_kernel_pid);
     if (!identity || identity->start_boottime_ns != binding->child_generation) {
         bpf_map_delete_elem(&tracked_traces, &child_pid);
-        return 0;
     }
-    inherit_suppressed_fds_for_child(
-        binding->parent_pid,
-        binding->parent_generation,
-        child_pid,
-        binding->child_generation
-    );
     return 0;
 }
 

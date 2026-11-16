@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "integrations/checkpoint/context/xiaoo",
     "crates/access_control",
     "crates/apps/daemon",
     "crates/apps/ctl",
@@ -8,11 +9,13 @@ members = [
     "crates/apps/web",
     "crates/apps/vsock_gateway",
     "crates/apps/alert_proxy",
+    "crates/apps/grey_proxy",
     "crates/apps/sb",
     "crates/core/model",
     "crates/core/linux_platform",
     "crates/core/linux_cgroup",
     "crates/core/config",
+    "crates/core/config_export_filter",
     "crates/core/resource_profiling",
     "crates/core/idle_detector",
     "crates/adapters/agent_host",
@@ -26,16 +29,20 @@ members = [
     "crates/core/vsock_gateway_runtime",
     "crates/core/gateway_ingest_runtime",
     "crates/core/sandbox_agent_runtime",
+    "crates/core/checkpoint",
     "crates/core/process_identity",
     "crates/plugin/abi",
     "crates/plugins/sandbox_resource_alert",
     "crates/plugins/alert_forwarding",
+    "integrations/checkpoint/filesystem/agentns",
+    "integrations/checkpoint/filesystem/btrfs",
     "crates/contracts/collector/binding",
     "crates/contracts/collector/capability",
     "crates/contracts/collector/event",
     "crates/contracts/collector/instance",
     "crates/contracts/collector/stats",
     "crates/contracts/control_plane",
+    "crates/contracts/checkpoint",
     "crates/contracts/graph",
     "crates/contracts/payload/binding",
     "crates/contracts/payload/capability",
@@ -79,6 +86,7 @@ members = [
     "crates/adapters/export/json_graph",
     "crates/adapters/export/otel",
     "crates/adapters/provider/rule_set",
+    "crates/adapters/storage/checkpoint",
     "crates/adapters/storage/sandbox",
     "crates/adapters/storage/sandbox_alert",
     "crates/storage/factory",
@@ -94,5 +102,5 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.9.0"
+version = "0.9.1"
 rust-version = "1.90"

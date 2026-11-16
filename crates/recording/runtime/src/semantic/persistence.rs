@@ -8,6 +8,7 @@ use semantic_action::{SemanticAction, SemanticActionLink, SemanticActionUpdate};
 use storage_core::StorageBackend;
 
 use super::{RecordingError, SemanticActionBatch, SemanticActionRecorder};
+use crate::DeliveryReport;
 
 #[derive(Default)]
 pub(crate) struct SemanticActionPersistenceAccumulator {
@@ -41,7 +42,10 @@ impl SemanticActionPersistenceAccumulator {
         Ok(())
     }
 
-    pub(crate) fn persist(self, storage: &mut dyn StorageBackend) -> Result<(), RecordingError> {
+    pub(crate) fn persist(
+        self,
+        storage: &mut dyn StorageBackend,
+    ) -> Result<DeliveryReport, RecordingError> {
         let Self {
             actions,
             updates,
@@ -50,17 +54,18 @@ impl SemanticActionPersistenceAccumulator {
             payload_segments,
             ..
         } = self;
+        let mut delivery = DeliveryReport::default();
         let mut recorder = SemanticActionRecorder::new(storage);
         if !actions.is_empty() || !updates.is_empty() || !links.is_empty() {
-            recorder.persist_graph(actions, updates, links)?;
+            delivery.extend(recorder.persist_graph(actions, updates, links)?);
         }
         for auxiliary in auxiliary_batches {
-            recorder.persist_batch(auxiliary.as_record_batch())?;
+            delivery.extend(recorder.persist_batch(auxiliary.as_record_batch())?);
         }
         for segment in payload_segments {
             storage.append_payload_segment(segment)?;
         }
-        Ok(())
+        Ok(delivery)
     }
 
     fn push_link(&mut self, link: SemanticActionLink) {

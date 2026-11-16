@@ -65,7 +65,8 @@ sequenceDiagram
 
 ## 操作治理
 
-下图表示需要用户态响应的控制通知。LSM 规则预先编译并发布到内核，操作在内核裁决，用户态异步接收审计；要求同步用户态决定的规则无法编译为该 LSM 路径。
+下图表示需要用户态响应的控制通知。LSM 规则预先编译并发布到内核，allow/deny 规则直接在内核裁决。
+启用[LSM 动态裁决](../operations/daemon/configure.md#lsm-动态裁决)后，支持睡眠的 hook 命中 grey 规则时，由自定义模块挂起当前线程，等待 daemon 调用控制插件并返回结果。插件可以请求独立的本地安全分析服务。未启用动态裁决或 hook 不支持睡眠时，grey 使用规则的 fallback。最终结果通过审计通道异步上报。
 
 ```mermaid
 sequenceDiagram

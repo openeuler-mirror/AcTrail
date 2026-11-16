@@ -1,3 +1,3 @@
 mod proposals;
 
-pub(crate) use proposals::{LlmHttpRequestLink, LlmHttpResponseLink};
+pub(crate) use proposals::{LlmContextCompactLink, LlmHttpRequestLink, LlmHttpResponseLink};

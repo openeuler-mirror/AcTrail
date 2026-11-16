@@ -312,10 +312,10 @@ seccomp listener for, or inject a TLS event into container A's trace.
 Run the real-agent container acceptance case:
 
 ```bash
-sudo -E python3.11 tests/v2/regression/test_all.py --case container_agent_xiaoo
+sudo -E python3.11 tests/e2e/regression/test_all.py --case container_agent_xiaoo
 ```
 
-See the [test guide](../../tests/v2/regression/container_agent_xiaoo/README.zh.md).
+See the [test guide](../../tests/e2e/regression/container_agent_xiaoo/README.zh.md).
 
 On Debian/Ubuntu ARM64 builders, the eBPF build automatically adds
 `/usr/include/aarch64-linux-gnu` when it contains the target `asm` headers.

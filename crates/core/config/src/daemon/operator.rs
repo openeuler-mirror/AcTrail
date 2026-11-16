@@ -27,8 +27,10 @@ use crate::provider_rules::ProviderRuleSetConfig;
 
 pub const DEFAULT_OPERATOR_CONFIG_PATH: &str = "/etc/actrail/actraild.conf";
 pub const DEFAULT_CONTROL_PENDING_CONNECTION_MAX: u32 = 256;
+pub const DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS: u32 = 10;
 pub const DEFAULT_ACTIVE_TRACE_MAX: u32 = 128;
-pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORY: &str = "~/.actrail/plugins";
+pub const DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES: [&str; 2] =
+    ["~/.actrail/plugins", "/usr/share/actrail/plugins"];
 pub const DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES: u32 = 128;
 pub const DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES: u64 = 262_144;
 pub const DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY: u32 = 1024;
@@ -47,6 +49,7 @@ pub struct OperatorConfig {
     pub socket_path: PathBuf,
     pub socket_permissions: SocketPermissions,
     pub control_pending_connection_max: u32,
+    pub control_accept_retry_delay_ms: u32,
     pub active_trace_max: u32,
     pub pid_file: PathBuf,
     /// OTel `host.id` override. `None` → daemon probes DMI product_uuid at start.
@@ -79,6 +82,11 @@ pub struct OperatorConfig {
     pub resource_profiling: toml::Table,
     pub trace_finalization: TraceFinalizationConfig,
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
+    /// SQLite file of the checkpoint catalog; unset when checkpoints are disabled.
+    pub checkpoint_catalog_path: Option<PathBuf>,
+    /// Available checkpoint integrations loaded at daemon startup.
+    pub checkpoint_backends: Vec<CheckpointBackendConfig>,
+    pub checkpoint_runtime: CheckpointRuntimeConfig,
     pub access_control: AccessControlConfig,
     pub enforcement: EnforcementConfig,
     pub command_control: CommandControlConfig,
@@ -86,6 +94,37 @@ pub struct OperatorConfig {
     pub startup_wait_ms: u64,
     pub shutdown_wait_ms: u64,
     pub supervision_poll_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointBackendConfig {
+    pub name: String,
+    /// The integration's dynamic library.
+    pub library: PathBuf,
+    /// The integration's daemon-owned runtime configuration file.
+    pub config: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CheckpointRuntimeConfig {
+    pub busy_timeout_ms: u64,
+    pub stop_timeout_ms: u64,
+    pub stop_poll_interval_ms: u64,
+    pub shutdown_drain_timeout_ms: u64,
+    pub idle_poll_interval_ms: u64,
+}
+
+impl Default for CheckpointRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            busy_timeout_ms: 5_000,
+            stop_timeout_ms: 5_000,
+            stop_poll_interval_ms: 10,
+            shutdown_drain_timeout_ms: 10_000,
+            idle_poll_interval_ms: 10,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -174,7 +213,7 @@ pub struct SandboxAlertsConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginDiscoveryConfig {
-    pub directory: PathBuf,
+    pub directory: Vec<PathBuf>,
     pub max_packages: u32,
     pub manifest_max_bytes: u64,
 }
@@ -197,42 +236,43 @@ impl Default for PluginAlertRuntimeConfig {
 }
 
 impl PluginDiscoveryConfig {
-    pub fn resolved_directory(&self) -> Result<PathBuf, String> {
-        if self.directory.is_absolute() {
-            return Ok(self.directory.clone());
-        }
-        let raw = self.directory.to_str().ok_or_else(|| {
-            format!(
-                "plugins.discovery.directory is not UTF-8: {}",
-                self.directory.display()
-            )
-        })?;
-        let suffix = if raw == "~" {
-            ""
-        } else if let Some(suffix) = raw.strip_prefix("~/") {
-            suffix
-        } else {
-            return Err(format!(
-                "plugins.discovery.directory must be absolute or start with ~/: {raw}"
-            ));
-        };
-        let home = std::env::var_os("HOME")
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "plugins.discovery.directory uses ~/ but HOME is not available".to_string()
-            })?;
-        let home = PathBuf::from(home);
-        if !home.is_absolute() {
-            return Err(format!(
-                "HOME must be absolute to resolve plugins.discovery.directory: {}",
-                home.display()
-            ));
-        }
-        Ok(if suffix.is_empty() {
-            home
-        } else {
-            home.join(suffix)
-        })
+    pub fn resolved_directories(&self) -> Result<Vec<PathBuf>, String> {
+        self.directory
+            .iter()
+            .map(|directory| {
+                if directory.is_absolute() {
+                    return Ok(directory.clone());
+                }
+                let raw = directory.to_str().ok_or_else(|| {
+                    format!(
+                        "plugins.discovery.directory entry is not UTF-8: {}",
+                        directory.display()
+                    )
+                })?;
+                let suffix = raw.strip_prefix("~/").or_else(|| (raw == "~").then_some("")).ok_or_else(|| {
+                    format!(
+                        "plugins.discovery.directory entries must be absolute, ~, or start with ~/: {raw}"
+                    )
+                })?;
+                let home = std::env::var_os("HOME")
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        "plugins.discovery.directory uses ~ but HOME is not available".to_string()
+                    })?;
+                let home = PathBuf::from(home);
+                if !home.is_absolute() {
+                    return Err(format!(
+                        "HOME must be absolute to resolve plugins.discovery.directory: {}",
+                        home.display()
+                    ));
+                }
+                Ok(if suffix.is_empty() {
+                    home
+                } else {
+                    home.join(suffix)
+                })
+            })
+            .collect()
     }
 }
 
@@ -313,6 +353,27 @@ pub fn launch_seccomp_requirements(
 }
 
 impl OperatorConfig {
+    /// Reports string element types for directly addressable operator configuration arrays.
+    /// Callers apply their field selection policy and full configuration validation separately.
+    pub fn is_string_array_field(path: &str) -> bool {
+        matches!(
+            path,
+            "capture.capabilities"
+                | "capture.opportunistic_capabilities"
+                | "capture.disabled_capabilities"
+                | "agent_invocation.commands"
+                | "agent_invocation.tool_names"
+                | "plugins.discovery.directory"
+                | "storage.retention.protected_tags"
+                | "payload.tls.seccomp_syscalls"
+                | "payload.socket.seccomp_syscalls"
+                | "process_seccomp.syscalls"
+                | "network_control.syscalls"
+                | "file_observation.tty.paths"
+                | "file_observation.tty.operations"
+        )
+    }
+
     /// The seccomp-notify capabilities this config asks a launch to install.
     /// Delegates to [`launch_seccomp_requirements`] so ctl and the daemon
     /// derive identical requirements from one place.
@@ -647,5 +708,5 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 }
 
 #[cfg(test)]
-#[path = "operator/tests.rs"]
+#[path = "../../../../../tests/unit/crates/core/config/daemon/operator/tests.rs"]
 mod tests;

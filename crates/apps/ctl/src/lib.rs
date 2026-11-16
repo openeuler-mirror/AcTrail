@@ -1,6 +1,7 @@
 //! Control application package skeleton.
 
 pub(crate) mod args;
+pub(crate) mod checkpoint;
 mod clean;
 pub(crate) mod dispatch;
 mod entry;

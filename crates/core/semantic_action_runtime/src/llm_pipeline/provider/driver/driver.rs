@@ -608,4 +608,5 @@ pub(in crate::llm_pipeline) fn parse_json_value(text: &str) -> Option<Value> {
 }
 
 #[cfg(test)]
+#[path = "../../../../../../../tests/unit/crates/core/semantic_action_runtime/llm_pipeline/provider/driver/driver/tests.rs"]
 mod tests;

@@ -123,6 +123,8 @@ impl StorageAttachService {
             trace_runtime,
             &self.process_registry,
             &self.control_plugins,
+            &self.alert_ingress,
+            &mut self.network_boundary_alerts,
         )?;
         let seccomp_notify = &mut self.seccomp_notify;
         let seccomp_tls = &mut self.seccomp_tls;
@@ -139,6 +141,8 @@ impl StorageAttachService {
             let process_seccomp = &self.process_seccomp;
             let command_control = &self.command_control;
             let network_control = &self.network_control;
+            let network_boundary_alerts = &mut self.network_boundary_alerts;
+            let alert_ingress = &self.alert_ingress;
             let control_plugins = &self.control_plugins;
             let enforcement = &mut self.enforcement;
             let identity_reader = &self.identity_reader;
@@ -204,6 +208,8 @@ impl StorageAttachService {
                         notification,
                         continuation,
                         control_plugins,
+                        alert_ingress,
+                        network_boundary_alerts,
                     )?);
                     pending_process_observations.extend(process_seccomp.handle_notification(
                         trace_runtime,

@@ -100,7 +100,7 @@ impl PluginAlertRuntimeDocument {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct PluginDiscoveryDocument {
-    pub directory: String,
+    pub directory: Vec<String>,
     pub max_packages: u32,
     pub manifest_max_bytes: u64,
 }
@@ -108,7 +108,10 @@ pub(super) struct PluginDiscoveryDocument {
 impl Default for PluginDiscoveryDocument {
     fn default() -> Self {
         Self {
-            directory: DEFAULT_PLUGIN_DISCOVERY_DIRECTORY.to_string(),
+            directory: DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
             max_packages: DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
             manifest_max_bytes: DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
         }
@@ -118,7 +121,11 @@ impl Default for PluginDiscoveryDocument {
 impl PluginDiscoveryDocument {
     fn from_config(config: &PluginDiscoveryConfig) -> Self {
         Self {
-            directory: config.directory.display().to_string(),
+            directory: config
+                .directory
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
             max_packages: config.max_packages,
             manifest_max_bytes: config.manifest_max_bytes,
         }
@@ -126,10 +133,13 @@ impl PluginDiscoveryDocument {
 
     fn to_config(&self) -> Result<PluginDiscoveryConfig, String> {
         let config = PluginDiscoveryConfig {
-            directory: PathBuf::from(required_non_empty(
-                "plugins.discovery.directory",
-                &self.directory,
-            )?),
+            directory: self
+                .directory
+                .iter()
+                .map(|directory| {
+                    required_non_empty("plugins.discovery.directory", directory).map(PathBuf::from)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             max_packages: require_positive_u32(
                 "plugins.discovery.max_packages",
                 self.max_packages,
@@ -139,7 +149,7 @@ impl PluginDiscoveryDocument {
                 self.manifest_max_bytes,
             )?,
         };
-        config.resolved_directory()?;
+        config.resolved_directories()?;
         Ok(config)
     }
 }

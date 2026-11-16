@@ -68,17 +68,31 @@
     │           └── [x] locale/ # 保存归因统计标签和问题提示文案。
     ├── [x] tabs/ # 根据统一注册表将单 trace 数据映射为叶视图。
     │   ├── [x] registry.js # 定义 TAB_DEFINITIONS 与 TAB_GROUP_DEFINITIONS，绑定视图标识、分组及组件。
+    │   ├── [x] actionLabels.js # 生成上下文压缩动作的标签与模型目标。
     │   ├── [x] tableModel.js # 将列表记录转换为可排序和筛选的表格行。
     │   ├── [x] tableConfig.js # 配置各类表格列和展示选项。
     │   ├── [x] TableTraceTab.vue # 提供各类 trace 列表共用的表格容器。
-    │   ├── [x] shared/ # 复用工具调用等跨 tab 的显示投影。
+    │   ├── [x] shared/ # 复用工具调用、上下文压缩等跨 tab 的显示投影。
+    │   │   └── [x] contextCompactDisplay.js # 构造上下文压缩的显示关联。
     │   ├── [x] core/ # 展示动作、命令、模型轨迹及多种时间视图。
     │   │   ├── [x] overview/ # 汇总 trace 基本信息与关键指标。
     │   │   ├── [x] action-tree/ # 根据动作关系构造树并展示上下游动作。
     │   │   │   ├── [x] ActionTreeTab.vue # 管理动作树展开、选择和详情联动。
     │   │   │   └── [x] model.js # 将动作与关系边整理为展示树。
+    │   │   ├── [x] checkpoints/ # 展示 checkpoint 历史与 operation，并与 ActionTree 中边界所在的 LLM 调用互相跳转。
+    │   │   │   ├── [x] CheckpointsTab.vue # 组织 checkpoint 页：按 daemon 当前状态提示暂停或状态未知，不从历史失败或 resume 已受理推断解除；提示等待中的恢复，响应顶栏刷新；已结束或 disconnect 时禁用创建，恢复和删除先确认，操作经服务端 actions 接口交给 daemon。
+    │   │   │   ├── [x] CheckpointHistory.vue # 展示回滚后的当前路径，在目标节点保留收起过记录的回滚标记及最新一次标记，后续保存从该节点向下接续。
+    │   │   │   ├── [x] CheckpointRollback.vue # 展开本次回滚收起的路径，点击旧记录查看详情，并提供恢复结果入口。
+    │   │   │   ├── [x] graph.js # 按实际执行时间重建当前路径和回滚前收起的尾段，旧分支不混入当前路径。
+    │   │   │   ├── [x] CheckpointDetail.vue # 在详情面板展示选中的 checkpoint 或 operation：状态、保护范围、操作结果和可用操作。
+    │   │   │   ├── [x] checkpoints.css # 历史时间线、提示条与按钮样式，只用主题变量。
+    │   │   │   ├── [x] useCheckpointHistory.js # 读取 checkpoint 历史与当前暂停状态；运行中 Trace、仍持有暂停或有工作、未结束的 operation 和待释放快照定时刷新，读取失败后继续定时重试，切换 Trace 时取消旧请求并清空旧记录。
+    │   │   │   ├── [x] model.js # 计算记录状态和 ActionTree 标记。
+    │   │   │   ├── [x] navigation.js # 读取 operation 匹配到的 LLM 调用的 ActionTree 路径。
+    │   │   │   ├── [x] markers.js # 把匹配结果按 LLM 调用提供给 ActionTreeNode。
+    │   │   │   └── [x] CheckpointMarker.vue # 在 ActionTreeNode 上显示保存或恢复标记，阶段和结果按语言翻译，点击打开对应的 checkpoint 或 operation。
     │   │   ├── [x] commands/ # 展示命令执行和关联输入输出。
-    │   │   ├── [x] llm-trajectory/ # 展示模型请求、工具调用与返回轨迹。
+    │   │   ├── [x] llm-trajectory/ # 展示模型请求、工具调用与返回轨迹及上下文压缩关系。
     │   │   ├── [x] timeline/ # 将进程与动作渲染为顺序时间线。
     │   │   ├── [x] time-attribution/ # 展示单 trace 的时间分类、覆盖率和问题。
     │   │   ├── [x] time-navigation/ # 统一时间视图的缩放、平移和范围限制。
@@ -86,12 +100,15 @@
     │   │   ├── [x] waterfall/ # 渲染动作瀑布图并关联空闲区间和详情。
     │   │   │   ├── [x] WaterfallTab.vue # 协调瀑布图布局、选中项和视口联动。
     │   │   │   ├── [x] model/ # 计算动作层次、显示字段和绘制模型。
+    │   │   │   │   ├── [x] main.js # 将上下文压缩动作关联到实现调用并添加压缩标签。
+    │   │   │   │   └── [x] llm.js # 按调用关联读取上下文压缩实现调用的请求和响应详情。
     │   │   │   ├── [x] view/ # 管理瀑布图展示、详情和交互状态。
     │   │   │   └── [x] idle/ # 分页读取并展示空闲区间。
     │   │   └── [x] flame-graph/ # 将动作时间区间转换为火焰轨道并按画布绘制。
     │   │       ├── [x] FlameGraphTab.vue # 管理火焰图的选择、范围和轨道视图。
     │   │       ├── [x] canvas-renderer.js # 绘制当前可见的轨道与区间。
     │   │       └── [x] model/ # 将动作、工具影响和时间关系整理为火焰图帧。
+    │   │           └── [x] main.js # 标注上下文压缩实现调用并过滤对应的压缩动作。
     │   ├── [x] activity/ # 展示事件、文件、网络和负载列表。
     │   │   ├── [x] events/ # 展示原始事件及事件详情。
     │   │   ├── [x] files/ # 展示文件访问与路径相关事实。
@@ -104,9 +121,11 @@
     │       ├── [x] diagnostics/ # 展示采集与处理诊断。
     │       └── [x] alerts/ # 展示关联 trace 的告警。
     ├── [x] components/ # 提供详情、表格、协议洞察和递进内容加载控件。
+    │   ├── [x] ActionTreeNode.vue # 渲染单个动作树节点及其展开状态。
     │   ├── [x] DetailPanel.vue # 展示所选记录的详情容器。
     │   ├── [x] DataTable.vue # 提供共享行表格与选择交互。
     │   ├── [x] JsonTree.vue # 展示 JSON 内容的树形结构。
+    │   ├── [x] ActionTreeNode/ # 保存动作树节点样式及上下文压缩动作标识。
     │   ├── [x] json/ # 延后创建尚未展开的 JSON 子节点。
     │   ├── [x] llm/ # 按需读取并渲染模型请求块与响应内容。
     │   │   ├── [x] NodeReader.js # 对单个动作的内容节点请求实施并发限制和统一取消。

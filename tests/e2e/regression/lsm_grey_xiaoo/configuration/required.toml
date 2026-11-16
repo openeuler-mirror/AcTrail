@@ -1,0 +1,3 @@
+# Require kernel support for grey decisions on the LSM backend.
+[access_control.backends.lsm.grey]
+mode = "required"

@@ -12,4 +12,6 @@
 - [沙箱观测数据模型](data-model/sandbox-observation.md)
 - [沙箱告警数据模型](data-model/sandbox-alert.md)
 - [Alert proxy 协议](protocols/alert-proxy.md)
+- [Grey 外部安全裁决服务协议](protocols/grey-decision-service.md)
+- [Web 查询与管理接口](protocols/web-api.md)
 - [插件 API](plugin-api/README.md)

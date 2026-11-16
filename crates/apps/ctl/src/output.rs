@@ -4,6 +4,7 @@ use control_contract::reply::{ControlReply, LaunchTlsPlanStatus};
 
 pub fn format_reply(reply: &ControlReply) -> String {
     match reply {
+        ControlReply::Checkpoint(reply) => crate::checkpoint::format_reply(reply),
         ControlReply::LaunchPermissions(reply) => format!(
             "launch permissions profile={} host_ebpf={} seccomp_notify={} degraded={}",
             reply.selected_profile_name,

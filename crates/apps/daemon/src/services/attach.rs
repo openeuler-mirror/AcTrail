@@ -24,6 +24,9 @@ mod plugins;
 mod preflight;
 #[path = "attach/service.rs"]
 mod service;
+#[path = "attach/watched.rs"]
+mod watched;
+pub(crate) use watched::{HeldLlmRequest, WatchedTraces};
 
 use collector_binding::TraceBindingRequest;
 use collector_instance::CollectorInstance;
@@ -91,11 +94,13 @@ pub(crate) struct StorageAttachService {
     pub(super) host_id: Option<String>,
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
+    pub(super) storage_config: storage_factory::StorageConfig,
     pub(super) process_registry: ProcessIdentityManager,
     pub(super) process_id_block_size: u64,
     pub(super) collector: EbpfCollector,
     pub(super) lsm_access_control: Option<std::sync::Arc<access_control::lsm::LsmController>>,
     pub(super) lsm_boundary_alerts: crate::services::access_control::LsmBoundaryAlerts,
+    pub(super) network_boundary_alerts: crate::services::network_control::NetworkBoundaryAlerts,
     pub(super) host_ebpf_preflight:
         BTreeMap<model_core::ids::ProfileName, preflight::EbpfPreflightReport>,
     pub(super) identity_reader: ProcfsIdentityReader,
@@ -160,6 +165,7 @@ pub(crate) struct StorageAttachService {
     /// to retroactively set command.tool.name on CommandInvocations that were persisted
     /// before their corresponding LlmResponse was processed.
     pub(super) pending_tool_names: BTreeMap<TraceId, BTreeMap<String, String>>,
+    pub(super) watched: watched::WatchedTraces,
 }
 impl StorageAttachService {
     pub(super) fn resolve_process_observation(
@@ -421,7 +427,6 @@ impl StorageAttachService {
                 root_namespace_pid: command.root.namespace_pid,
                 profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
-                initial_suppressed_fds: command.initial_suppressed_fds.clone(),
             };
             let bind_result = if command.launch_mode {
                 let pidfd = launch_pidfd.ok_or_else(|| {
@@ -467,10 +472,7 @@ impl StorageAttachService {
                 let entry = trace_runtime.get_trace(bootstrap.trace_id).ok_or_else(|| {
                     ControlError::new("trace_missing", "trace disappeared during bootstrap")
                 })?;
-                if let Err(error) = self
-                    .resource_metrics
-                    .admit_external_container(entry, coordinates)
-                {
+                if let Err(error) = self.resource_metrics.admit_binding(entry, coordinates) {
                     if uses_ebpf_collector {
                         let _ = self.collector.unbind_trace(bootstrap.trace_id);
                     }

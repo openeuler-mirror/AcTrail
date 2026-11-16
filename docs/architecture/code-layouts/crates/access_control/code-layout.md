@@ -2,25 +2,25 @@
 
 ```text
 [x] crates/access_control/ # 文件、命令和网络策略管理，以及共享进程范围的 LSM 执行
-├── [x] build.rs # 编译访问控制 BPF 对象
-│   └── [x] struct LsmObjectBuilder # 生成不同进程范围存储方式的 LSM 对象
+├── [x] build.rs # 编译 task-storage 和 PID/generation-hash 两种 LSM 对象
+│   └── [x] struct LsmObjectBuilder # 生成与观测 launch 绑定相匹配的对象
 ├── [x] bpf/ # 内核操作拦截、策略匹配和审计输出
-│   ├── [x] access_control.bpf.c # 挂载进程、执行、文件和网络 LSM 程序
+│   ├── [x] access_control.bpf.c # 组合治理程序，exec 入组独立于按配置加载的命令裁决
 │   ├── [x] abi.h # 定义策略、范围和审计的内核 ABI
-│   ├── [x] scope.h # 读取共享进程范围与待执行绑定
-│   ├── [x] policy.h # 在内核中查询策略并生成裁决
+│   ├── [x] scope.h # 定义治理任务范围，复用观测 runtime 的待执行绑定 maps
+│   ├── [x] policy.h # 查询策略并生成裁决，使用 abi.h 定义的策略和审计布局
 │   └── [x] directory.h # 提供目录操作的路径判断
 └── [x] src/ # 用户态规则管理、策略发布与审计消费
     ├── [x] lib.rs # 导出 policy 与 lsm 能力
     ├── [x] lsm/ # 持有 LSM 对象、策略映射和审计环形缓冲
-    │   ├── [x] runtime.rs # 复用观测运行时的进程范围 map 并挂载 LSM 程序
-    │   │   └── [x] struct LsmRuntime # attach 创建对象和 links；poll_fd、drain 提供有界审计消费
+    │   ├── [x] runtime.rs # 与观测 runtime 一次装配并共同保留到 daemon 退出
+    │   │   └── [x] struct LsmRuntime # 持有治理 Object、Links、策略发布器和审计消费者，复用共享 launch 绑定
     │   ├── [x] controller.rs # 管理策略存储并协调内核策略更新
     │   │   ├── [x] struct LsmController # publish_file_rules 发布文件规则；remove_owner 清理插件所属规则
     │   │   └── [x] struct PolicyStores # 聚合命令和网络策略存储
     │   ├── [x] compiler.rs # 将用户态规则编译为内核策略快照
     │   │   └── [x] struct PolicySnapshot # 保存一次发布的完整策略内容
-    │   ├── [x] publisher.rs # 更新策略 map 中的快照槽位
+    │   ├── [x] publisher.rs # 原子替换策略 map 快照槽位
     │   │   └── [x] struct PolicyPublisher # 持有策略 map 句柄与容量
     │   ├── [x] audit.rs # 将内核审计字节解码为操作记录
     │   │   └── [x] struct LsmAuditEvent # 表达操作、进程和决策的审计结果

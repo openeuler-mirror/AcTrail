@@ -48,7 +48,7 @@ const { t } = useModuleLocale({
     invalidRange: 'Choose a time range within this trace.',
     kinds: 'Action categories', apply: 'Apply',
     actionKinds: {
-      command_invocation: 'Command', agent_invocation: 'Agent invocation', llm_call: 'Model call',
+      command_invocation: 'Command', agent_invocation: 'Agent invocation', agent_context_compaction: 'context compaction', llm_call: 'Model call',
       llm_request: 'Model request', llm_response: 'Model response', llm_tool_call: 'Tool call', llm_tool_result: 'Tool result',
       process_exec: 'Process execution', process_fork_attempt: 'Process fork', process_exit: 'Process exit',
       file_read: 'File read', file_write: 'File write', file_modify: 'File change', file_tty_io: 'Terminal I/O',
@@ -63,7 +63,7 @@ const { t } = useModuleLocale({
     invalidRange: '请选择此 trace 范围内的时间。',
     kinds: 'Action 类别', apply: '应用',
     actionKinds: {
-      command_invocation: '命令', agent_invocation: 'Agent 调用', llm_call: '模型调用',
+      command_invocation: '命令', agent_invocation: 'Agent 调用', agent_context_compaction: '上下文压缩', llm_call: '模型调用',
       llm_request: '模型请求', llm_response: '模型响应', llm_tool_call: '工具调用', llm_tool_result: '工具结果',
       process_exec: '进程执行', process_fork_attempt: '进程创建', process_exit: '进程退出',
       file_read: '文件读取', file_write: '文件写入', file_modify: '文件变更', file_tty_io: '终端读写',

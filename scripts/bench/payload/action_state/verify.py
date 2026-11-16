@@ -4,7 +4,7 @@ import sqlite3
 import subprocess
 import tomllib
 
-from tests.v2.common.mcp_test_support.action_contract import McpActionContract
+from tests.e2e.common.mcp_test_support.action_contract import McpActionContract
 
 
 class ActionStateVerifier:

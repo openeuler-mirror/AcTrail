@@ -95,11 +95,14 @@ impl StorageAttachService {
     }
 
     pub(super) fn write_semantic_action_batch(&mut self, batch: SemanticActionBatch) {
-        if let Err(error) =
-            RecordingWriter::new(self.storage.as_mut()).persist_semantic_actions(batch)
-        {
-            tracing::warn!(stage = %error.stage, message = %error.message,
-                "Semantic action storage failed locally");
+        match RecordingWriter::new(self.storage.as_mut()).persist_semantic_actions(batch) {
+            Ok((_, report)) => {
+                let _ = Self::handle_delivery_report(report);
+            }
+            Err(error) => {
+                tracing::warn!(stage = %error.stage, message = %error.message,
+                    "Semantic action storage failed locally");
+            }
         }
     }
 

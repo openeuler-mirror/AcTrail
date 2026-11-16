@@ -77,7 +77,7 @@ impl RustlsHandshakeLocator {
         image: &ElfImage,
         plaintext: u64,
     ) -> Result<HandshakeLocation, Rejection> {
-        let key = format!("rustls-handshake-v2:{plaintext:x}:{:?}", self.limits);
+        let key = format!("rustls-handshake-v3:{plaintext:x}:{:?}", self.limits);
         if let Some(Some(cached)) = image.cached_named_addresses(&key) {
             if let Some(code) = cached.get("rejection") {
                 return Err(Rejection::from_code(*code));

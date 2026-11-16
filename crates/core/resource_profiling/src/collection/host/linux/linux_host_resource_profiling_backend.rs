@@ -46,6 +46,7 @@ impl ResourceProfilingBackend for LinuxHostResourceProfilingBackend {
             memory_available_bytes: counters.memory_available_bytes,
             memory_free_bytes: counters.memory_free_bytes,
             load_average: counters.load_average,
+            cpu_count: Some(counters.cpu_count).filter(|count| *count > 0),
         }))
     }
 }

@@ -13,8 +13,6 @@ use model_core::ids::TraceId;
 use model_core::payload::PayloadSegment;
 use model_core::process::{ProcessIdentity, ProcessMembership, ProcessRecord};
 use model_core::trace::{TraceHealth, TraceLifecycleState, TraceRecord};
-use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
-use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
 use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
 use resource_profiling::model::resource_scope::TraceResourceScope;
 use semantic_action::{
@@ -102,7 +100,7 @@ pub struct SemanticActionChildPageQuery {
     pub limit: usize,
 }
 
-pub trait StorageBackend: crate::CgroupV1BindingStore {
+pub trait StorageBackend: crate::CgroupV1BindingStore + crate::CgroupV2BindingStore {
     /// Whether observation records are retained and need protection from purge during history reads.
     fn retains_observations(&self) -> bool;
 
@@ -152,42 +150,6 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         lifecycle_state: ResourceScopeLifecycleState,
 
         updated_at: SystemTime,
-    ) -> Result<(), StorageError>;
-
-    fn create_external_cgroup_binding(
-        &mut self,
-        binding: ExternalCgroupBinding,
-    ) -> Result<(), StorageError>;
-    fn get_external_cgroup_binding(
-        &self,
-        trace_id: TraceId,
-    ) -> Result<Option<ExternalCgroupBinding>, StorageError>;
-    fn list_live_external_cgroup_bindings(
-        &self,
-    ) -> Result<Vec<ExternalCgroupBinding>, StorageError>;
-    fn record_external_cgroup_success(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: SystemTime,
-    ) -> Result<(), StorageError>;
-    fn record_external_cgroup_failure(
-        &mut self,
-        trace_id: TraceId,
-        observed_at: SystemTime,
-    ) -> Result<u32, StorageError>;
-    fn mark_external_cgroup_stale(
-        &mut self,
-        trace_id: TraceId,
-        reason: ExternalBindingStaleReason,
-        updated_at: SystemTime,
-    ) -> Result<(), StorageError>;
-    /// Discard a legacy interrupted admission only if its trace does not exist.
-    fn discard_orphan_external_binding(&mut self, trace_id: TraceId) -> Result<(), StorageError>;
-
-    fn close_external_cgroup_binding(
-        &mut self,
-        trace_id: TraceId,
-        closed_at: SystemTime,
     ) -> Result<(), StorageError>;
 
     fn append_event(&mut self, event: DomainEvent) -> Result<(), StorageError>;
@@ -278,6 +240,11 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         offset: usize,
         limit: usize,
     ) -> Result<SemanticActionPage, StorageError>;
+    /// Select IDs only, newest first, with bounded index scans per requested kind.
+    fn recent_action_ids(
+        &self,
+        query: &crate::RecentActionsQuery,
+    ) -> Result<Vec<String>, StorageError>;
     fn timeline_page(
         &self,
         query: &crate::TimelineQuery,
@@ -326,6 +293,13 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         trace_id: TraceId,
         kinds: &[&str],
     ) -> Result<Vec<SemanticAction>, StorageError>;
+    /// Read requested actions with their attributes and derived relationships,
+    /// omitting evidence as with matching_kinds_lite.
+    fn semantic_actions_by_ids_lite(
+        &self,
+        trace_id: TraceId,
+        action_ids: &[&str],
+    ) -> Result<Vec<SemanticAction>, StorageError>;
     fn semantic_action_summary(
         &self,
         trace_id: TraceId,
@@ -359,11 +333,14 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
     ///
     /// This is a storage-level display query; web-only legacy LLM normalization and
     /// global cycle removal remain owned by the full projection path.
+    /// `excluded_fallback_kinds` are positioned by the caller's projection and
+    /// are omitted from command fallback child counts.
     fn semantic_action_display_root_children_page(
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
         root_link_roles: &[&str],
+        excluded_fallback_kinds: &[&str],
         page: SemanticActionChildPageQuery,
     ) -> Result<SemanticActionDisplayRootChildPage, StorageError>;
     fn semantic_action_display_root_child_count(
@@ -371,15 +348,34 @@ pub trait StorageBackend: crate::CgroupV1BindingStore {
         trace_id: TraceId,
         display_parent_roles: &[&str],
     ) -> Result<usize, StorageError>;
+    /// Returns the position of an eligible root using the root page's ordering.
+    fn semantic_action_display_root_offset(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<usize>, StorageError>;
     /// Locates one action and its display ancestors without materializing the
     /// complete semantic-action graph. `after_action_id` selects the next
     /// matching action in chronological display order.
+    /// `selected_parent_roles` controls ancestor selection; full display roles
+    /// still determine sibling offsets. Root offsets use the root-page predicate.
     fn semantic_action_display_path_to_kind(
         &self,
         trace_id: TraceId,
         display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
         target_kind: &str,
         after_action_id: Option<&str>,
+    ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError>;
+    /// Locates one action and its display ancestors, in the shape of
+    /// `semantic_action_display_path_to_kind`.
+    fn semantic_action_display_path_to_action(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        selected_parent_roles: &[&str],
+        action_id: &str,
     ) -> Result<Option<Vec<SemanticActionDisplayPathEntry>>, StorageError>;
     fn semantic_action_children_matching_kinds(
         &self,

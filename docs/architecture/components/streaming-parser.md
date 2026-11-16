@@ -34,7 +34,7 @@ HTTP/1 由 `Http1Session` 唯一消费消息 framing，处理 header、fixed bod
 
 daemon 的 `Http1Observer` 消费共享消息事件，按配置生成 headers、body 与 SSE 观测。HTTP application event 携带 `http.message_id`，用于补充已有 HTTP action 的正文和 event evidence；该事件不启动另一轮 HTTP 配对。一次 payload transaction 完成观测补充后释放本批已结束的临时消息事实。
 
-HTTP/2 的 `Http2Protocol` 唯一拥有 frame 解析。decoder 只交付完整 frame，daemon 消费同一结果生成 preface、frame 与 DATA 观测。connection assembly 按 `stream_id` 解复用 DATA，每个 stream 各自持有正文、evidence、SSE cache 和进行中的 response。来源身份在进入 LLM 内容解析前确定；同一连接的 stream ID 决定请求—响应关系。partial frame 不会退化成普通 payload，也不会与其他 stream 合并。当前未解码 HPACK，method、path 和 HTTP status 保持未知。
+HTTP/2 的 `Http2Protocol` 唯一拥有 frame 解析。decoder 只交付完整 frame，daemon 消费同一结果生成 preface、frame 与 DATA 观测。每个连接方向维护一个 HPACK 解码上下文；HEADERS/CONTINUATION 完成后建立消息头和稳定来源，method、path、status 与内容编码来自真实头字段。trailer 继续更新压缩上下文并结束原消息。connection assembly 按 `stream_id` 解复用 DATA，每个 stream 方向独立持有内容解码器、evidence、SSE cache 和进行中的 response。同一连接的 stream ID 决定请求—响应关系。partial frame 不会退化成普通 payload，也不会与其他 stream 合并。
 
 gap、truncation、decoder failure 或容量越界按实际协议影响范围隔离。HTTP/2 framing 损坏后停止该连接解析至关闭；一个连接或 stream 的问题不会清空同一 trace 的其他连接。
 
@@ -58,7 +58,7 @@ response parser 的当前选择顺序是 OpenAI Responses、Structured JSON SSE�
 
 ## Evidence 与语义投影
 
-evidence tracker 维护 decoded body offset 到 payload segment 的紧凑映射，并检查 syscall operation 是否连续、内容是否完整。它让投影器引用真实采集范围，而不需要把整个 wire payload 复制到 parser state。
+HTTP/2 evidence tracker 维护原始 DATA 字节坐标到 payload segment 的紧凑映射，并检查 syscall operation 是否连续、内容是否完整。内容解码器唯一持有解压正文，快照供 JSON/SSE 解析；解压尚未产出内容的片段也保留 wire evidence。投影分别记录原始字节数和解码正文长度，不复制压缩输入到 parser state。
 
 provider parser 输出与厂商无关的增量状态。HTTP 的 LLM request/response 直接保留解析输入的消息身份，Call 沿唯一 HTTP exchange 关系生成。已解析的失败 HTTP 状态先是协议事实，待对应请求确认为 LLM 后产生失败语义结果。WebSocket 使用应用协议关联状态。保留策略分别约束 assembly、stream classifier 和 projection state；这些上限来自 `semantic_retention` 子配置。
 
@@ -101,7 +101,7 @@ gzip 委托 `flate2::write::MultiGzDecoder`；Brotli 委托
 `semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 约束累计解码正文，
 库的历史窗口、上下文和临时输出缓冲区另有内存开销。
 
-本模块处理 HTTP/1.x 消息的单个 Content-Encoding。
+共享内容解码器处理 HTTP/1.x 及 HTTP/2 消息的单个 Content-Encoding。HTTP/2 在完整头部确定编码后创建句柄，DATA 增量追加，END_STREAM 完成库校验；内容消费失败仅终止对应 stream，继续维护连接方向的 HPACK 上下文。
 
 ### 常量
 

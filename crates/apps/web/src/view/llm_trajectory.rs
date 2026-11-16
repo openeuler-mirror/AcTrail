@@ -4,9 +4,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::UNIX_EPOCH;
 
 use model_core::ids::TraceId;
-use semantic_action::{LlmTrajectoryStartReason, SemanticAction, attr_keys as attrs};
+use semantic_action::{
+    LlmTrajectoryStartReason, SemanticAction, SemanticActionKind, attr_keys as attrs,
+};
 use serde::Serialize;
 use storage_core::StorageBackend;
+
+use super::actions::ContextCompactDisplay;
+
+#[path = "llm_trajectory/compact_edges.rs"]
+mod compact_edges;
 
 #[derive(Serialize)]
 struct GraphResponse {
@@ -37,6 +44,8 @@ struct GraphNode {
     status: &'static str,
     completeness: &'static str,
     compaction_boundary: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_compact_action_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -50,6 +59,8 @@ struct GraphEdge {
     target: String,
     kind: &'static str,
     confidence: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_compact_action_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -79,10 +90,16 @@ pub(super) fn graph_json(
         .llm_request_lineages(trace_id)
         .map_err(|error| format!("read LLM request lineages failed: {error:?}"))?;
     let actions = storage
-        .semantic_actions_matching_kinds_lite(trace_id, &["llm.request"])
+        .semantic_actions_matching_kinds_lite(
+            trace_id,
+            &["llm.request", "agent.context_compaction"],
+        )
         .map_err(|error| format!("read LLM request actions failed: {error:?}"))?;
+    let compact = ContextCompactDisplay::for_actions(storage, trace_id, &actions)?;
+    let compact_requests = compact.request_compactions(&actions);
     let actions = actions
         .into_iter()
+        .filter(|action| action.kind == SemanticActionKind::LlmRequest)
         .map(|action| (action.action_id.clone(), action))
         .collect::<BTreeMap<_, _>>();
 
@@ -105,7 +122,13 @@ pub(super) fn graph_json(
             "duplicate_root" => duplicate_count += 1,
             _ => {}
         }
-        nodes.push(node_from(action, lineage));
+        let mut node = node_from(action, lineage);
+        node.context_compact_action_id = compact_requests
+            .implementations
+            .get(&action.action_id)
+            .cloned();
+        node.compaction_boundary |= compact_requests.adoptions.contains_key(&action.action_id);
+        nodes.push(node);
     }
 
     nodes.sort_by(|left, right| {
@@ -143,8 +166,18 @@ pub(super) fn graph_json(
             target: lineage.action_id.clone(),
             kind,
             confidence: "derived",
+            context_compact_action_id: None,
         });
     }
+    let compact_edges = GraphEdge::compact_relations(&compact_requests, &node_ids, &mut partial);
+    {
+        let compact_pairs = compact_edges
+            .iter()
+            .map(|edge| (edge.source.as_str(), edge.target.as_str()))
+            .collect::<BTreeSet<_>>();
+        edges.retain(|edge| !compact_pairs.contains(&(edge.source.as_str(), edge.target.as_str())));
+    }
+    edges.extend(compact_edges);
     edges.sort_by(|left, right| {
         left.target
             .cmp(&right.target)
@@ -171,7 +204,7 @@ pub(super) fn graph_json(
         capabilities: GraphCapabilities {
             strict_prefix_edges: true,
             related_edges: false,
-            compaction_detection: false,
+            compaction_detection: true,
         },
     };
     serde_json::to_string(&response)
@@ -204,6 +237,7 @@ fn node_from(action: &SemanticAction, lineage: &semantic_action::LlmRequestLinea
         completeness: action.completeness.as_str(),
         compaction_boundary: lineage.start_reason
             == LlmTrajectoryStartReason::ContextRewriteOrCompression,
+        context_compact_action_id: None,
     }
 }
 

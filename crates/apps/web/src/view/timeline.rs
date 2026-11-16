@@ -4,7 +4,7 @@ use model_core::ids::TraceId;
 use storage_core::TimelineQuery;
 use storage_factory::StorageConfig;
 
-use super::{actions, open_storage, traces::ProcessDisplayIndex};
+use super::{actions::ContextCompactDisplay, open_storage, traces::ProcessDisplayIndex};
 use crate::json;
 
 pub(crate) fn trace_metadata_json(config: &StorageConfig, trace_id: u64) -> Result<String, String> {
@@ -33,16 +33,29 @@ impl TimelineView {
         let page = storage
             .timeline_page(query)
             .map_err(|error| format!("read timeline: {}: {}", error.stage, error.message))?;
+        let compact = ContextCompactDisplay::for_actions(
+            storage.as_ref(),
+            query.trace_id,
+            page.actions
+                .iter()
+                .chain(&page.context_actions)
+                .chain(page.root_command_before_window.iter()),
+        )?;
         let actions = page
             .actions
             .iter()
-            .map(actions::action_json_lite)
+            .map(|action| compact.action_json(action, true))
             .collect::<Vec<_>>();
         let context = page
             .context_actions
             .iter()
-            .map(actions::action_json_lite)
+            .map(|action| compact.action_json(action, true))
             .collect::<Vec<_>>();
+        let root_command = page
+            .root_command_before_window
+            .as_ref()
+            .map(|action| compact.action_json(action, true))
+            .unwrap_or_else(|| "null".into());
         let links = page
             .links
             .iter()
@@ -71,8 +84,9 @@ impl TimelineView {
             .transpose()?
             .unwrap_or_else(|| "null".into());
         Ok(format!(
-            "{{\"actions\":[{}],\"context_actions\":[{}],\"links\":[{}],\"next_cursor\":{},\"has_more\":{},\"scanned\":{},\"links_truncated\":{},\"partial\":true}}",
+            "{{\"actions\":[{}],\"root_command_before_window\":{},\"context_actions\":[{}],\"links\":[{}],\"next_cursor\":{},\"has_more\":{},\"scanned\":{},\"links_truncated\":{},\"partial\":true}}",
             actions.join(","),
+            root_command,
             context.join(","),
             links.join(","),
             cursor,

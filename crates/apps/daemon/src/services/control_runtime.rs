@@ -2,7 +2,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use control_contract::reply::ControlError;
 use plugin_system::{
@@ -17,7 +17,29 @@ pub(in crate::services) struct ControlPluginRuntime {
     next_instance_index: Arc<AtomicU64>,
 }
 
+// Policy hosts may own their decision adapter; keep that return edge weak.
+pub(in crate::services) struct WeakControlPluginRuntime {
+    deciders: Weak<RwLock<Vec<Arc<ControlDeciderSlot>>>>,
+    next_instance_index: Weak<AtomicU64>,
+}
+
+impl WeakControlPluginRuntime {
+    pub(in crate::services) fn upgrade(&self) -> Option<ControlPluginRuntime> {
+        Some(ControlPluginRuntime {
+            deciders: self.deciders.upgrade()?,
+            next_instance_index: self.next_instance_index.upgrade()?,
+        })
+    }
+}
+
 impl ControlPluginRuntime {
+    pub(in crate::services) fn downgrade(&self) -> WeakControlPluginRuntime {
+        WeakControlPluginRuntime {
+            deciders: Arc::downgrade(&self.deciders),
+            next_instance_index: Arc::downgrade(&self.next_instance_index),
+        }
+    }
+
     pub(in crate::services) fn new() -> Self {
         Self {
             deciders: Arc::new(RwLock::new(Vec::new())),
@@ -105,10 +127,42 @@ impl ControlPluginRuntime {
                 format!("plugin instance {instance_id_or_index} not found"),
             ));
         };
+        self.decide_slot(slot, request, budget)
+    }
+
+    // Preserve the selected registration even when another instance has a numeric name.
+    pub(in crate::services) fn decide_by_index(
+        &self,
+        instance_index: u64,
+        request: ControlDecisionRequest,
+        budget: ControlDecisionBudget,
+    ) -> Result<ControlDecisionResponse, PluginRuntimeError> {
+        let slot = self
+            .deciders
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .find(|slot| slot.instance_index == instance_index)
+            .cloned()
+            .ok_or_else(|| {
+                PluginRuntimeError::new(
+                    "plugin_runtime",
+                    format!("plugin registration {instance_index} not found"),
+                )
+            })?;
+        self.decide_slot(slot, request, budget)
+    }
+
+    fn decide_slot(
+        &self,
+        slot: Arc<ControlDeciderSlot>,
+        request: ControlDecisionRequest,
+        budget: ControlDecisionBudget,
+    ) -> Result<ControlDecisionResponse, PluginRuntimeError> {
         if !slot.active.load(Ordering::Relaxed) {
             return Err(PluginRuntimeError::new(
                 "plugin_runtime",
-                format!("plugin instance {instance_id_or_index} is not active"),
+                format!("plugin registration {} is not active", slot.instance_index),
             ));
         }
         let decision = catch_unwind(AssertUnwindSafe(|| slot.decider.decide(request, budget)))

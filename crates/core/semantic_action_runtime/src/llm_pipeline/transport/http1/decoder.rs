@@ -1,6 +1,6 @@
 //! Stateful HTTP/1 wire decoder.
 
-use super::content_decoder::{DecoderFactory, DecoderHandle};
+use super::super::content_decoder::{ContentDecodeFailure, DecoderFactory, DecoderHandle};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -217,9 +217,8 @@ impl Http1Decoder {
         };
         let header_end = search_start + relative_end;
         let body_start = header_end + HEADER_END.len();
-        let headers_text = std::str::from_utf8(&wire[..header_end])
-            .map_err(|_| Http1DecodeFailure::InvalidHead)?
-            .to_string();
+        ParsedHead::validate_wire(&wire[..header_end])?;
+        let headers_text = String::from_utf8_lossy(&wire[..header_end]).into_owned();
         let parsed = ParsedHead::parse(self.direction, &headers_text)?;
         let content = DecoderFactory::create(
             if parsed.framing == BodyFraming::None {
@@ -228,7 +227,8 @@ impl Http1Decoder {
                 &headers_text
             },
             self.max_decoded_bytes,
-        );
+        )
+        .map_err(Http1DecodeFailure::from);
         let content_failure = content.as_ref().err().copied();
         let content = content.ok();
         self.state = DecodeState::ReadingBody(ActiveMessage {
@@ -290,7 +290,7 @@ impl Http1Decoder {
             && let Some(body) = &mut active.body
         {
             if let Err(failure) = body.finish() {
-                active.content_failure = Some(failure);
+                active.content_failure = Some(failure.into());
                 active.body = None;
             }
         }
@@ -408,7 +408,7 @@ impl ActiveMessage {
         }
         if let Some(body) = &mut self.body {
             if let Err(failure) = body.append(&wire[self.wire_cursor..end]) {
-                self.content_failure = Some(failure);
+                self.content_failure = Some(failure.into());
                 self.body = None;
             }
         }
@@ -456,6 +456,71 @@ struct ParsedHead {
 }
 
 impl ParsedHead {
+    fn validate_wire(wire: &[u8]) -> Result<(), Http1DecodeFailure> {
+        let mut lines = wire.split(|byte| *byte == b'\n').peekable();
+        let first = lines.next().ok_or(Http1DecodeFailure::InvalidHead)?;
+        let first = if lines.peek().is_some() {
+            first
+                .strip_suffix(b"\r")
+                .ok_or(Http1DecodeFailure::InvalidHead)?
+        } else {
+            first
+        };
+        // Only ordinary field values accept opaque bytes. Keep the start line strict.
+        std::str::from_utf8(first).map_err(|_| Http1DecodeFailure::InvalidHead)?;
+        if !Self::valid_field_value(first) {
+            return Err(Http1DecodeFailure::InvalidHead);
+        }
+        while let Some(line) = lines.next() {
+            let line = if lines.peek().is_some() {
+                line.strip_suffix(b"\r")
+                    .ok_or(Http1DecodeFailure::InvalidHead)?
+            } else {
+                line
+            };
+            let colon = line
+                .iter()
+                .position(|byte| *byte == b':')
+                .ok_or(Http1DecodeFailure::InvalidHead)?;
+            let (name, value) = line.split_at(colon);
+            if !Self::valid_field_name(name) || !Self::valid_field_value(&value[1..]) {
+                return Err(Http1DecodeFailure::InvalidHead);
+            }
+        }
+        Ok(())
+    }
+
+    fn valid_field_name(name: &[u8]) -> bool {
+        !name.is_empty()
+            && name.iter().copied().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+    }
+
+    fn valid_field_value(value: &[u8]) -> bool {
+        value
+            .iter()
+            .copied()
+            .all(|byte| matches!(byte, b'\t' | b' '..=b'~' | 0x80..=0xff))
+    }
+
     fn parse(direction: Http1Direction, headers_text: &str) -> Result<Self, Http1DecodeFailure> {
         let first_line = headers_text
             .split("\r\n")
@@ -595,4 +660,13 @@ fn sse_field_line(line: &[u8]) -> bool {
         || line.starts_with(b"id:")
         || line.starts_with(b"retry:")
         || line.starts_with(b":")
+}
+
+impl From<ContentDecodeFailure> for Http1DecodeFailure {
+    fn from(failure: ContentDecodeFailure) -> Self {
+        match failure {
+            ContentDecodeFailure::BufferCapacity => Self::BufferCapacity,
+            ContentDecodeFailure::InvalidContentEncoding => Self::InvalidContentEncoding,
+        }
+    }
 }

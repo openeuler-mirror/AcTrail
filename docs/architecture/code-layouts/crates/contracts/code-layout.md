@@ -51,8 +51,27 @@
 │       ├── [x] reply.rs # 定义控制成功响应与错误
 │       │   ├── [x] enum ControlReply # 区分跟踪、查询、诊断与插件操作结果
 │       │   └── [x] struct LaunchTlsPlanReply # 返回 launch TLS 计划解析结果
+│       ├── [x] checkpoint.rs # checkpoint 保存、恢复与查询命令及回复
+│       │   ├── [x] struct LaunchCheckpointConfig # 随 TrackAdd 交给 daemon 的 scope，来自 --checkpoint 文件
+│       │   ├── [x] struct CheckpointCommand # 携带 request_id 和一个 CheckpointAction
+│       │   ├── [x] enum CheckpointAction # Save、Restore、Delete、Disconnect、Force、Resume、Status、List、Operations、Operation；List 带一个 CheckpointFilterMode，Status 查询当前 daemon 的暂停和工作线程状态
+│       │   ├── [x] enum CheckpointFilterMode # List 选全部、最新若干个，或某个创建时间范围内的 checkpoint
+│       │   ├── [x] enum CheckpointReply # operation 编号、受理确认、当前 held/busy 状态、checkpoint 历史、operation 列表或单个 operation
+│       │   ├── [x] struct CheckpointView # checkpoint 的 object、失效与删除状态
+│       │   └── [x] struct OperationView # operation 的阶段、结果、目标、边界和失效记录
 │       └── [x] selector.rs # 选择控制操作作用的 trace
 │           └── [x] enum TraceSelector # 表达支持的 trace 选择方式
+├── [x] checkpoint/ # core 与集成动态库共用的同步 abi_stable 契约
+│   ├── [x] Cargo.toml # 声明 ABI 类型与 trait 生成所需依赖
+│   └── [x] src/ # 同步操作、ABI 对象、快照标识与错误
+│       ├── [x] lib.rs # 精确导出公共契约
+│       ├── [x] backend.rs # 同步 backend trait、统一 ABI 对象类型与动态库创建入口声明
+│       │   ├── [x] trait RestorableCheckpointBackend # connect/disconnect 管理对接；snapshot/restore/delete 管理快照；restore 成功或失败都报告失效的快照
+│       │   ├── [x] type CheckpointBackend # sabi_trait 生成的稳定对象；跨动态库直接传递
+│       │   └── [x] struct CheckpointModule # 动态库入口表，create 按配置创建 backend，kind 声明类型
+│       ├── [x] types.rs # ABI 稳定的 BackendKind、BackendConfig、SnapshotContext、TraceProcess、SnapshotScope 与 SnapshotId
+│       │   └── [x] struct SnapshotContext # connect 时绑定的内容：Trace 编号、根进程和这个实例负责的 scope
+│       └── [x] error.rs # ABI 稳定的 BackendError、BackendErrorKind 与 RestoreFailure
 ├── [x] agent_lifecycle/ # Agent 轮次、用户交互、工作单元和会话结束事件
 │   └── [x] src/ # Agent 生命周期模型
 │       └── [x] model.rs # 定义生命周期种类及其关联字段
@@ -79,12 +98,16 @@
 │               └── [x] trait ProviderClassifier # classify 将证据转换为提供方标签
 ├── [x] semantic_action/ # 语义行为、证据关系、正文和请求轨迹的共享模型
 │   └── [x] src/ # 语义数据、解析扩展和持久化端口
+│       ├── [x] attr_keys.rs # 定义语义行为属性键。
+│       ├── [x] evidence_roles.rs # 定义语义证据角色。
+│       ├── [x] link_roles.rs # 定义语义关系角色。
 │       ├── [x] model.rs # 定义行为、链接、证据及正文记录
 │       │   ├── [x] struct SemanticAction # 表达行为身份、类型、时序、状态和证据
 │       │   ├── [x] struct SemanticActionLink # 表达行为间关系、来源与角色
 │       │   ├── [x] struct LlmRequestContentWrite # 携带 LLM 请求正文写入数据
 │       │   └── [x] struct LlmRequestLineageWrite # 携带请求轨迹延续、分叉及起点依据
-│       ├── [x] update.rs # 定义已建立行为的增量变化与终态原因
+│       ├── [x] model/ # 语义种类及行为关联规则。
+│       ├── [x] update.rs # 定义已建立行为的增量变化、终态原因和属性补充
 │       │   ├── [x] struct SemanticActionUpdate # 携带一次行为更新
 │       │   └── [x] enum SemanticActionChange # 区分语义字段与生命周期变化
 │       ├── [x] llm.rs # 定义模型响应解析和流式消费接口

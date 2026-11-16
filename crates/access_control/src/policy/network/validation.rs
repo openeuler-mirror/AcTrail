@@ -1,12 +1,13 @@
 //! Network rule shape validation and static policy parsing.
 
-use std::collections::BTreeMap;
-use std::net::{IpAddr, SocketAddr};
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::SocketAddr;
 
 use config_core::daemon::EnforcementDecision;
 use plugin_system::{
     NetworkPolicyApplyError, NetworkPolicyApplyRequest, NetworkPolicyDecision,
-    NetworkPolicyRemoteSelector, NetworkPolicyRuleDraft, NetworkPolicyRulesApplyGrant,
+    NetworkPolicyEndpointSelector, NetworkPolicyOperation, NetworkPolicyProtocol,
+    NetworkPolicyRuleDraft, NetworkPolicyRulesApplyGrant,
 };
 
 use super::rule::{STATIC_POLICY_OWNER, StoredNetworkRule};
@@ -21,19 +22,19 @@ impl NetworkRuleValidator {
         Ok(())
     }
 
-    pub(super) fn endpoint(remote: &str) -> Result<SocketAddr, String> {
-        remote
+    pub(super) fn endpoint(endpoint: &str) -> Result<SocketAddr, String> {
+        endpoint
             .parse::<SocketAddr>()
-            .map_err(|error| format!("network remote must be a numeric IP endpoint: {error}"))
+            .map_err(|error| format!("network endpoint must be a numeric IP endpoint: {error}"))
     }
 
-    pub(super) fn selector(remote: &str) -> Result<NetworkPolicyRemoteSelector, String> {
-        NetworkPolicyRemoteSelector::parse(remote)
+    pub(super) fn selector(endpoint: &str) -> Result<NetworkPolicyEndpointSelector, String> {
+        NetworkPolicyEndpointSelector::parse(endpoint)
     }
 
     pub(super) fn shape(
         draft: &NetworkPolicyRuleDraft,
-    ) -> Result<NetworkPolicyRemoteSelector, String> {
+    ) -> Result<NetworkPolicyEndpointSelector, String> {
         if draft.decision == NetworkPolicyDecision::Default {
             return Err("network rule decision cannot be default".to_string());
         }
@@ -62,7 +63,7 @@ impl NetworkRuleValidator {
                 return Err("gray network rule requires fallback".to_string());
             }
         }
-        Self::selector(&draft.remote)
+        Self::selector(&draft.endpoint)
     }
 
     pub(super) fn request(
@@ -116,7 +117,7 @@ impl NetworkRuleValidator {
                     "network policy owner {owner_instance_id} has inconsistent rule id {key}"
                 ));
             }
-            remotes.insert(rule.remote, owner_instance_id)?;
+            remotes.insert(rule, owner_instance_id)?;
         }
         Ok(())
     }
@@ -127,7 +128,7 @@ impl NetworkRuleValidator {
         let mut remotes = NetworkRemoteOwners::default();
         for (owner, rules) in owners {
             for rule in rules.values() {
-                remotes.insert(rule.remote, owner)?;
+                remotes.insert(rule, owner)?;
             }
         }
         Ok(())
@@ -136,12 +137,14 @@ impl NetworkRuleValidator {
     pub(super) fn draft_grant(
         grants: &[NetworkPolicyRulesApplyGrant],
         draft: &NetworkPolicyRuleDraft,
-        selector: NetworkPolicyRemoteSelector,
+        selector: NetworkPolicyEndpointSelector,
     ) -> Result<(), String> {
-        if grants
-            .iter()
-            .any(|grant| grant.decision == draft.decision && grant.remote_scope.covers(selector))
-        {
+        if grants.iter().any(|grant| {
+            grant.decision == draft.decision
+                && grant.operation == draft.operation
+                && grant.protocol.covers(draft.protocol)
+                && grant.endpoint_scope.covers(selector)
+        }) {
             return Ok(());
         }
         Err(format!(
@@ -163,59 +166,56 @@ impl NetworkRuleValidator {
     }
 }
 
+/// Publication-only conflict checks. Same-owner groups need no overlap scan.
 #[derive(Default)]
 struct NetworkRemoteOwners<'a> {
-    by_endpoint: BTreeMap<SocketAddr, &'a str>,
-    endpoint_by_ip: BTreeMap<IpAddr, BTreeMap<&'a str, SocketAddr>>,
-    by_ip: BTreeMap<IpAddr, &'a str>,
+    unique: BTreeSet<(
+        NetworkPolicyOperation,
+        NetworkPolicyProtocol,
+        NetworkPolicyEndpointSelector,
+    )>,
+    owners: BTreeMap<
+        &'a str,
+        BTreeMap<
+            NetworkPolicyOperation,
+            Vec<(NetworkPolicyProtocol, NetworkPolicyEndpointSelector)>,
+        >,
+    >,
 }
 
 impl<'a> NetworkRemoteOwners<'a> {
-    fn insert(
-        &mut self,
-        remote: NetworkPolicyRemoteSelector,
-        owner: &'a str,
-    ) -> Result<(), String> {
-        match remote {
-            NetworkPolicyRemoteSelector::Endpoint(endpoint) => {
-                if let Some(existing_owner) = self.by_endpoint.get(&endpoint) {
-                    return Err(format!(
-                        "network remote {remote} is already owned by {existing_owner}"
-                    ));
-                }
-                if let Some(existing_owner) = self.by_ip.get(&endpoint.ip())
-                    && *existing_owner != owner
-                {
-                    let any_port = NetworkPolicyRemoteSelector::AnyPort(endpoint.ip());
-                    return Err(format!(
-                        "network remote {remote} overlaps {any_port} owned by {existing_owner}"
-                    ));
-                }
-                self.by_endpoint.insert(endpoint, owner);
-                self.endpoint_by_ip
-                    .entry(endpoint.ip())
-                    .or_default()
-                    .entry(owner)
-                    .or_insert(endpoint);
+    fn insert(&mut self, rule: &StoredNetworkRule, owner: &'a str) -> Result<(), String> {
+        if !self
+            .unique
+            .insert((rule.operation, rule.protocol, rule.endpoint))
+        {
+            return Err(format!(
+                "network endpoint {} is already owned",
+                rule.endpoint
+            ));
+        }
+        for (existing, operations) in &self.owners {
+            if *existing == owner {
+                continue;
             }
-            NetworkPolicyRemoteSelector::AnyPort(ip) => {
-                if let Some(existing_owner) = self.by_ip.get(&ip) {
+            if let Some(scopes) = operations.get(&rule.operation) {
+                if scopes.iter().any(|(protocol, scope)| {
+                    (protocol.covers(rule.protocol) || rule.protocol.covers(*protocol))
+                        && scope.overlaps(rule.endpoint)
+                }) {
                     return Err(format!(
-                        "network remote {remote} is already owned by {existing_owner}"
+                        "network endpoint {} overlaps scope owned by {existing}",
+                        rule.endpoint
                     ));
                 }
-                if let Some((existing_owner, endpoint)) = self
-                    .endpoint_by_ip
-                    .get(&ip)
-                    .and_then(|owners| owners.iter().find(|(existing, _)| **existing != owner))
-                {
-                    return Err(format!(
-                        "network remote {remote} overlaps {endpoint} owned by {existing_owner}"
-                    ));
-                }
-                self.by_ip.insert(ip, owner);
             }
         }
+        self.owners
+            .entry(owner)
+            .or_default()
+            .entry(rule.operation)
+            .or_default()
+            .push((rule.protocol, rule.endpoint));
         Ok(())
     }
 }
@@ -226,13 +226,16 @@ impl StaticRuleParser {
     pub(super) fn parse(line: &str, sequence: u64) -> Result<StoredNetworkRule, String> {
         let parts = line.split_whitespace().collect::<Vec<_>>();
         match parts.as_slice() {
-            [rule_id, decision @ ("allow" | "deny"), "connect", remote] => {
+            [rule_id, decision @ ("allow" | "deny"), operation, endpoint] | [rule_id, decision @ ("allow" | "deny"), operation, endpoint, "protocol", _] => {
+                let protocol = NetworkPolicyProtocol::from_wire(parts.get(5).copied().unwrap_or("any"))?;
+                let operation = NetworkPolicyOperation::from_wire(operation)?;
                 NetworkRuleValidator::rule_id(rule_id)?;
                 Ok(StoredNetworkRule {
                     owner_instance_id: STATIC_POLICY_OWNER.to_string(),
                     rule_id: (*rule_id).to_string(),
                     decision: NetworkPolicyDecision::from_wire(decision)?,
-                    remote: NetworkRuleValidator::selector(remote)?,
+                    operation, protocol,
+                    endpoint: NetworkRuleValidator::selector(endpoint)?,
                     gray_target: None,
                     timeout_ms: None,
                     concurrency_limit: None,
@@ -252,14 +255,15 @@ impl StaticRuleParser {
                 "fallback",
                 fallback,
                 "connect",
-                remote,
+                endpoint,
             ] => {
                 NetworkRuleValidator::rule_id(rule_id)?;
                 Ok(StoredNetworkRule {
                     owner_instance_id: STATIC_POLICY_OWNER.to_string(),
                     rule_id: (*rule_id).to_string(),
                     decision: NetworkPolicyDecision::Gray,
-                    remote: NetworkRuleValidator::selector(remote)?,
+                    operation: NetworkPolicyOperation::Connect, protocol: NetworkPolicyProtocol::Any,
+                    endpoint: NetworkRuleValidator::selector(endpoint)?,
                     gray_target: Some((*instance).to_string()),
                     timeout_ms: Some(Self::positive_u64("timeout-ms", timeout_ms)?),
                     concurrency_limit: Some(Self::positive_u32(
@@ -271,7 +275,7 @@ impl StaticRuleParser {
                     updated_sequence: sequence,
                 })
             }
-            _ => Err("expected: <rule-id> <allow|deny> connect <ip:port|ip:*>, or <rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <ip:port|ip:*>".to_string()),
+            _ => Err("expected: <rule-id> <allow|deny> <connect|send|bind|listen> <ip-or-cidr:port-or-range-or-*> [protocol <any|tcp|udp>], or <rule-id> sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> connect <ip-or-cidr:port-or-range-or-*>".to_string()),
         }
     }
 

@@ -5,10 +5,10 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.core import CommonTestConfig, TestOutput
-from tests.v2.common.plugin_test_environment import PluginRuntimeSpec, PluginTestEnvironment
-from tests.v2.regression.otel_http.receiver import OtlpHttpReceiver
+from tests.e2e.common.actrail_runtime import ActrailRuntime
+from tests.e2e.common.core import CommonTestConfig, TestOutput
+from tests.e2e.common.plugin_test_environment import PluginRuntimeSpec, PluginTestEnvironment
+from tests.e2e.regression.otel_http.receiver import OtlpHttpReceiver
 
 
 class DeliveryEnvironment(PluginTestEnvironment):

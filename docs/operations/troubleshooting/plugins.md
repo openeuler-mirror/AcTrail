@@ -4,9 +4,11 @@
 
 ## 插件未被发现
 
-**检查：** 候选 package 必须是 `plugins.discovery.directory` 的直接子目录，并且只包含一个 `*.plugin.toml` manifest。
+**检查：** 候选 package 必须是 `plugins.discovery.directory` 数组中任一目录的直接子目录，并且只包含一个 `*.plugin.toml` manifest。空数组关闭发现；不存在的目录会跳过。检查所有目录的合计候选包数量是否超过 `max_packages`。
 
 **处理：** 将 manifest、artifact、配置 schema 和 alert schema 放在同一 package 目录内；移除重复 manifest 和逃逸 package 目录的路径。
+
+同一 `plugin_id` 只展示目录顺序靠前的包，同目录内按子目录路径排序。若预期的包被隐藏，检查前面的目录是否已有同 ID 包；即使优先包不可加载，只要能解析出非空 ID，它仍会遮蔽后续包。应修复或移除优先包，或调整目录顺序后重启 Web。
 
 ## 加载被拒绝
 

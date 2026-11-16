@@ -9,5 +9,9 @@ pub const DEFAULT_TLS_SYNC_FLOW_UNKNOWN_STREAM_BYTES: u64 = 1024 * 1024;
 /// Configured independently from the captured operation limit to bound plan replies too.
 pub const DEFAULT_TLS_SYNC_MAX_FRAME_BYTES: u32 = 32 * 1024 * 1024;
 
+pub const DEFAULT_TLS_SYNC_EVENT_TIMEOUT_MS: u64 = 5_000;
+pub const DEFAULT_TLS_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS: u64 = 100;
+pub const DEFAULT_TLS_SYNC_EVENT_BATCH_BYTES: u32 = 32 * 1024;
+
 /// Fixed binary TLS IPC header size, included in the frame limit.
 pub const TLS_SYNC_FRAME_HEADER_BYTES: usize = 8;

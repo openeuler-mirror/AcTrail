@@ -1,3 +1,4 @@
+//! Load control components and own their grey proxy child resources.
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
@@ -50,8 +51,18 @@ pub fn build_wasm_control_decider(
     file_policy_host: Option<Arc<dyn FilePolicyHost>>,
     command_policy_host: Option<Arc<dyn CommandPolicyHost>>,
     network_policy_host: Option<Arc<dyn NetworkPolicyHost>>,
+    storage_path: Option<&std::path::Path>,
 ) -> Result<WasmControlDecider, PluginRuntimeError> {
     let instance_id = instance_id.into();
+    let mut manifest = manifest.clone();
+    let mut plugin_config = plugin_config.map(str::to_owned);
+    let grey_proxy = crate::grey_proxy::GreyProxyProcess::prepare(
+        &mut manifest,
+        &mut plugin_config,
+        storage_path,
+    )?;
+    let manifest = &manifest;
+    let plugin_config = plugin_config.as_deref();
     let wasm = manifest.selected_wasm().ok_or_else(|| {
         PluginRuntimeError::new(
             "wasm_runtime",
@@ -60,6 +71,12 @@ pub fn build_wasm_control_decider(
     })?;
     match wasm.abi {
         PluginWasmAbi::LegacyModule => {
+            if host_grants.can_request_http() {
+                return Err(PluginRuntimeError::new(
+                    "wasm_runtime",
+                    "http.request requires a WIT component plugin",
+                ));
+            }
             if host_grants.can_query_current_network_action_context()
                 || host_grants.can_read_network_policy_rules()
                 || host_grants.can_match_dry_run_network_policy_rules()
@@ -79,7 +96,7 @@ pub fn build_wasm_control_decider(
                 file_policy_host,
                 command_policy_host,
             )?;
-            Ok(WasmControlDecider::new(Box::new(decider)))
+            Ok(WasmControlDecider::new(Box::new(decider), grey_proxy))
         }
         PluginWasmAbi::WitComponent => {
             let decider = WitComponentControlDecider::load(
@@ -91,18 +108,25 @@ pub fn build_wasm_control_decider(
                 command_policy_host,
                 network_policy_host,
             )?;
-            Ok(WasmControlDecider::new(Box::new(decider)))
+            Ok(WasmControlDecider::new(Box::new(decider), grey_proxy))
         }
     }
 }
 
 pub struct WasmControlDecider {
     inner: Box<dyn ControlDecider>,
+    _grey_proxy: Option<crate::grey_proxy::GreyProxyProcess>,
 }
 
 impl WasmControlDecider {
-    fn new(inner: Box<dyn ControlDecider>) -> Self {
-        Self { inner }
+    fn new(
+        inner: Box<dyn ControlDecider>,
+        grey_proxy: Option<crate::grey_proxy::GreyProxyProcess>,
+    ) -> Self {
+        Self {
+            inner,
+            _grey_proxy: grey_proxy,
+        }
     }
 }
 
@@ -560,6 +584,10 @@ fn control_envelope(request: &ControlDecisionRequest) -> Result<String, PluginRu
     );
 
     let mut envelope = Map::new();
+    envelope.insert(
+        "logical_process_id".into(),
+        json!(request.logical_process_id),
+    );
     envelope.insert(
         control_envelope::key::VERSION.to_string(),
         json!(control_envelope::VERSION),

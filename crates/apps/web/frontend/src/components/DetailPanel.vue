@@ -11,6 +11,13 @@
       </button>
     </div>
 
+    <dl v-if="supplementalRowEntries.length" class="detail-rows">
+      <template v-for="[key, value] in supplementalRowEntries" :key="key">
+        <dt>{{ key }}</dt>
+        <dd>{{ value }}</dd>
+      </template>
+    </dl>
+
     <template v-if="detail?.raw?.kind === 'llm.request'">
       <p v-if="panelError" class="detail-error">{{ panelError }}</p>
       <LlmInsightPanel :detail="detail" :trace-id="traceId" />
@@ -154,6 +161,10 @@ const props = defineProps({
     type: Object,
     default: null,
   },
+  supplementalRows: {
+    type: Object,
+    default: null,
+  },
   traceId: {
     type: [String, Number],
     default: null,
@@ -196,6 +207,7 @@ let activeFilePathSetLoad = null;
 
 const detailTitle = computed(() => props.detail?.title ?? t('detail.noSelection'));
 const detailKind = computed(() => props.detail?.kind ?? 'detail');
+const supplementalRowEntries = computed(() => Object.entries(props.supplementalRows ?? {}));
 const isLlmCall = computed(() => props.detail?.raw?.kind === 'llm.call');
 // Focus on the selected action; retain association metadata in the expanded view.
 const detailRows = computed(() => Object.entries(props.detail?.rows ?? {}).filter(([key, value]) => (

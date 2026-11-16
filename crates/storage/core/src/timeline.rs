@@ -45,6 +45,11 @@ pub struct TimelineQuery {
 #[derive(Clone, Debug, Default)]
 pub struct TimelinePage {
     pub actions: Vec<SemanticAction>,
+    /// First page only: latest root-process command candidate starting before the
+    /// requested lower bound, if valid and command/process filters allow it. At most one
+    /// index candidate is checked; its raw lifecycle does not imply intersection
+    /// or liveness. Independent of actions, cursor, scanned and relationship budgets.
+    pub root_command_before_window: Option<SemanticAction>,
     /// Direct endpoints only; these may fall outside the requested filter/window.
     pub context_actions: Vec<SemanticAction>,
     pub links: Vec<SemanticActionLink>,

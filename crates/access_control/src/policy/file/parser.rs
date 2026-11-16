@@ -32,7 +32,7 @@ impl FileRuleParser {
                 path,
             ),
             _ => Err(
-                "expected: <rule_id> <allow|deny> <any|open|mkdir|rmdir> <absolute-path> or <rule_id> gray sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> <any|open|mkdir|rmdir> <absolute-path>"
+                "expected: <rule_id> <allow|deny> <any|open|read|write|delete|attr|rename|link|mkdir|rmdir> <absolute-path> or <rule_id> gray sync-plugin <instance> timeout-ms <positive-ms> concurrency <positive-limit> fallback <allow|deny> <any|open|read|write|delete|attr|rename|link|mkdir|rmdir> <absolute-path>"
                     .to_string(),
             ),
         }

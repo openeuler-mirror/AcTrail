@@ -29,6 +29,7 @@ default = false
 "fs.enumerate" = false
 "http.message" = false
 "llm.call" = true
+"agent.context_compaction" = true
 "llm.request" = true
 "llm.response" = true
 "sse.stream" = false

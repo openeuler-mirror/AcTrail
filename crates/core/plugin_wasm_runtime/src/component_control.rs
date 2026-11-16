@@ -75,7 +75,7 @@ impl WitComponentControlDecider {
         if unsupported_grants {
             return Err(PluginRuntimeError::new(
                 "wasm_runtime",
-                "only context, file-policy, command-policy, and network-policy grants are implemented for WIT component control plugins",
+                "WIT component control plugins support context, file-policy, command-policy, network-policy, and http.request grants",
             ));
         }
         let artifact_path = manifest
@@ -91,6 +91,7 @@ impl WitComponentControlDecider {
         let fuel_per_call = fuel_per_call(manifest);
         let memory_max_bytes = memory_max_bytes(manifest)?;
         let host_limits = host_limits(manifest)?;
+        let http = crate::engine::HttpClient::load(manifest, &host_grants)?;
         let hostcall_metrics = Arc::new(WasmHostcallMetrics::default());
         let engine = metered_engine()?;
         let component = Component::from_file(&engine, artifact_path).map_err(|error| {
@@ -131,6 +132,7 @@ impl WitComponentControlDecider {
                 host_limits.clone(),
                 Arc::clone(&hostcall_metrics),
             );
+            store.data_mut().http = http.clone();
             store
                 .data_mut()
                 .set_file_policy_host(instance_id.clone(), file_policy_host.clone());
@@ -272,6 +274,9 @@ impl ControlDecider for WitComponentControlDecider {
             &deadline_generation,
         );
         let mut results = [Val::Result(Ok(None))];
+        if let Some(service) = &mut state.store.data_mut().http {
+            service.begin_call(started_at, budget.timeout_ms);
+        }
         state
             .store
             .data_mut()
@@ -289,6 +294,9 @@ impl ControlDecider for WitComponentControlDecider {
             .data_mut()
             .set_network_action_context(request.network_action_context.clone());
         let result = decide.call(&mut state.store, &[input], &mut results);
+        if let Some(service) = &mut state.store.data_mut().http {
+            service.end_call();
+        }
         state.store.data_mut().clear_control_context();
         state.store.data_mut().clear_file_policy_context();
         state.store.data_mut().clear_command_execution_context();
@@ -344,7 +352,14 @@ impl ControlDecider for WitComponentControlDecider {
             &deadline_generation,
         );
         let mut results = [Val::Result(Ok(None))];
+        // Synchronous HTTP uses the same budget as the enclosing command.
+        if let Some(service) = &mut state.store.data_mut().http {
+            service.begin_call(started_at, timeout_ms);
+        }
         let result = handle_command.call(&mut state.store, &[input], &mut results);
+        if let Some(service) = &mut state.store.data_mut().http {
+            service.end_call();
+        }
         disarm_epoch_timeout(&mut state.store, deadline, &deadline_generation);
         if let Err(error) = result {
             return Err(call_timeout_error(

@@ -128,7 +128,7 @@ pub(super) fn required_query_param(query: &str, key: &'static str) -> Result<Str
             continue;
         };
         if candidate == key {
-            return percent_decode(value)
+            return decode_query_value(value)
                 .map_err(|error| format!("invalid query parameter {key}: {error}"));
         }
     }
@@ -144,12 +144,18 @@ pub(super) fn optional_query_param(
             continue;
         };
         if candidate == key {
-            return percent_decode(value)
+            return decode_query_value(value)
                 .map(Some)
                 .map_err(|error| format!("invalid query parameter {key}: {error}"));
         }
     }
     Ok(None)
+}
+
+fn decode_query_value(value: &str) -> Result<String, String> {
+    // Form query encoding uses '+' for spaces. Decode it before percent escapes so %2B
+    // remains a literal plus, while URL path decoding below keeps '+' unchanged.
+    percent_decode(&value.replace('+', " "))
 }
 
 pub(super) fn parse_u64(value: &str) -> Result<u64, String> {

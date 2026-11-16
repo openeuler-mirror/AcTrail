@@ -15,8 +15,8 @@ from pathlib import Path
 from scripts.bench.payload.action_state.workload import McpAgentWorkload
 from scripts.bench.payload.measurement import DaemonCpu
 from scripts.bench.payload.runtime import CollectionRuntime
-from tests.v2.common.mcp_test_support.probe import McpProbeWorkspace
-from tests.v2.common.test_suite_tools.mcp.mcp_probe_server import (
+from tests.e2e.common.mcp_test_support.probe import McpProbeWorkspace
+from tests.e2e.common.test_suite_tools.mcp.mcp_probe_server import (
     EventRecorder, McpApplication, StdioMcpServer,
 )
 

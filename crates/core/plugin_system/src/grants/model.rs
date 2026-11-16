@@ -1,10 +1,19 @@
+//! Capability grant sets and policy publication authorization.
+mod host_grant;
+mod policy_grants;
+mod wire;
+pub use host_grant::PluginHostGrant;
+pub use policy_grants::{
+    CommandPolicyRulesApplyGrant, FilePolicyRulesApplyGrant, NetworkPolicyRulesApplyGrant,
+};
 use std::collections::BTreeSet;
 
 use model_core::payload::PayloadSourceBoundary;
 
 use crate::{
     CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision,
-    NetworkPolicyRemoteGrantScope, PluginCapability,
+    NetworkPolicyEndpointGrantScope, NetworkPolicyOperation, NetworkPolicyProtocol,
+    PluginCapability,
 };
 
 use super::parser::ScopedApplyGrantParser;
@@ -12,6 +21,7 @@ use super::validation::GrantValidator;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PluginHostGrants {
+    http_request: bool,
     payload_read_all: bool,
     payload_read_sources: BTreeSet<String>,
     context_query: bool,
@@ -38,24 +48,6 @@ pub struct PluginHostGrants {
     env_read: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FilePolicyRulesApplyGrant {
-    pub decision: FilePolicyDecision,
-    pub path_scope: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandPolicyRulesApplyGrant {
-    pub decision: CommandPolicyDecision,
-    pub path_scope: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NetworkPolicyRulesApplyGrant {
-    pub decision: NetworkPolicyDecision,
-    pub remote_scope: NetworkPolicyRemoteGrantScope,
-}
-
 impl PluginHostGrants {
     pub fn parse(values: &[String]) -> Result<Self, String> {
         let mut grants = Self::default();
@@ -65,6 +57,7 @@ impl PluginHostGrants {
                 return Err(format!("duplicate plugin host grant {value}"));
             }
             match PluginHostGrant::parse(value)? {
+                PluginHostGrant::HttpRequest => grants.http_request = true,
                 PluginHostGrant::PayloadRead => grants.allow_payload_read(),
                 PluginHostGrant::PayloadReadSource { source } => {
                     grants.allow_payload_read_source(source)?
@@ -113,9 +106,13 @@ impl PluginHostGrants {
                 PluginHostGrant::NetworkPolicyRulesValidate => {
                     grants.allow_network_policy_rules_validate()
                 }
-                PluginHostGrant::NetworkPolicyRulesApply { decision, remote } => {
-                    grants.allow_network_policy_rules_apply(decision, remote)?
-                }
+                PluginHostGrant::NetworkPolicyRulesApply {
+                    decision,
+                    operation,
+                    protocol,
+                    endpoint,
+                } => grants
+                    .allow_network_policy_rules_apply(decision, operation, protocol, endpoint)?,
                 PluginHostGrant::EnvRead { name } => grants.allow_env_read(name)?,
             }
         }
@@ -158,6 +155,10 @@ impl PluginHostGrants {
 
     pub fn allow_context_query(&mut self) {
         self.context_query = true;
+    }
+
+    pub fn can_request_http(&self) -> bool {
+        self.http_request
     }
 
     pub fn can_query_context(&self) -> bool {
@@ -351,14 +352,18 @@ impl PluginHostGrants {
     pub fn allow_network_policy_rules_apply(
         &mut self,
         decision: NetworkPolicyDecision,
-        remote_scope: impl Into<String>,
+        operation: NetworkPolicyOperation,
+        protocol: NetworkPolicyProtocol,
+        endpoint_scope: impl Into<String>,
     ) -> Result<(), String> {
         GrantValidator::network_decision(decision)?;
-        let remote_scope = GrantValidator::network_remote_scope(&remote_scope.into())?;
+        let endpoint_scope = GrantValidator::network_endpoint_scope(&endpoint_scope.into())?;
         self.network_policy_rules_apply
             .push(NetworkPolicyRulesApplyGrant {
                 decision,
-                remote_scope,
+                operation,
+                protocol,
+                endpoint_scope,
             });
         Ok(())
     }
@@ -379,102 +384,9 @@ impl PluginHostGrants {
         self.env_read.iter().map(String::as_str)
     }
 
-    pub fn to_wire_values(&self) -> Vec<String> {
-        let mut values = Vec::new();
-        if self.payload_read_all {
-            values.push(PluginHostGrant::PayloadRead.to_wire());
-        }
-        values.extend(self.payload_read_sources.iter().map(|source| {
-            PluginHostGrant::PayloadReadSource {
-                source: source.clone(),
-            }
-            .to_wire()
-        }));
-        if self.context_query {
-            values.push(PluginHostGrant::ContextQuery.to_wire());
-        }
-        if self.trace_analysis_read {
-            values.push(PluginHostGrant::TraceAnalysisRead.to_wire());
-        }
-        if self.trace_activity_read {
-            values.push(PluginHostGrant::TraceActivityRead.to_wire());
-        }
-        if self.trace_file_state_read {
-            values.push(PluginHostGrant::TraceFileStateRead.to_wire());
-        }
-        if self.alert_write {
-            values.push(PluginHostGrant::AlertWrite.to_wire());
-        }
-        if self.file_access_current_match_get {
-            values.push(PluginHostGrant::FileAccessCurrentMatchGet.to_wire());
-        }
-        if self.file_access_current_context_query {
-            values.push(PluginHostGrant::FileAccessCurrentContextQuery.to_wire());
-        }
-        if self.file_policy_rules_read {
-            values.push(PluginHostGrant::FilePolicyRulesRead.to_wire());
-        }
-        if self.file_policy_rules_match_dry_run {
-            values.push(PluginHostGrant::FilePolicyRulesMatchDryRun.to_wire());
-        }
-        if self.file_policy_rules_validate {
-            values.push(PluginHostGrant::FilePolicyRulesValidate.to_wire());
-        }
-        values.extend(self.file_policy_rules_apply.iter().map(|grant| {
-            PluginHostGrant::FilePolicyRulesApply {
-                decision: grant.decision,
-                path: grant.path_scope.clone(),
-            }
-            .to_wire()
-        }));
-        if self.command_execution_current_context_query {
-            values.push(PluginHostGrant::CommandExecutionCurrentContextQuery.to_wire());
-        }
-        if self.command_policy_rules_read {
-            values.push(PluginHostGrant::CommandPolicyRulesRead.to_wire());
-        }
-        if self.command_policy_rules_match_dry_run {
-            values.push(PluginHostGrant::CommandPolicyRulesMatchDryRun.to_wire());
-        }
-        if self.command_policy_rules_validate {
-            values.push(PluginHostGrant::CommandPolicyRulesValidate.to_wire());
-        }
-        values.extend(self.command_policy_rules_apply.iter().map(|grant| {
-            PluginHostGrant::CommandPolicyRulesApply {
-                decision: grant.decision,
-                path: grant.path_scope.clone(),
-            }
-            .to_wire()
-        }));
-        if self.network_action_current_context_query {
-            values.push(PluginHostGrant::NetworkActionCurrentContextQuery.to_wire());
-        }
-        if self.network_policy_rules_read {
-            values.push(PluginHostGrant::NetworkPolicyRulesRead.to_wire());
-        }
-        if self.network_policy_rules_match_dry_run {
-            values.push(PluginHostGrant::NetworkPolicyRulesMatchDryRun.to_wire());
-        }
-        if self.network_policy_rules_validate {
-            values.push(PluginHostGrant::NetworkPolicyRulesValidate.to_wire());
-        }
-        values.extend(self.network_policy_rules_apply.iter().map(|grant| {
-            PluginHostGrant::NetworkPolicyRulesApply {
-                decision: grant.decision,
-                remote: grant.remote_scope.to_string(),
-            }
-            .to_wire()
-        }));
-        values.extend(
-            self.env_read
-                .iter()
-                .map(|name| PluginHostGrant::EnvRead { name: name.clone() }.to_wire()),
-        );
-        values
-    }
-
     pub fn is_empty(&self) -> bool {
-        !self.payload_read_all
+        !self.http_request
+            && !self.payload_read_all
             && self.payload_read_sources.is_empty()
             && !self.context_query
             && !self.trace_analysis_read
@@ -498,215 +410,5 @@ impl PluginHostGrants {
             && !self.network_policy_rules_validate
             && self.network_policy_rules_apply.is_empty()
             && self.env_read.is_empty()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PluginHostGrant {
-    PayloadRead,
-    PayloadReadSource {
-        source: String,
-    },
-    ContextQuery,
-    TraceAnalysisRead,
-    TraceActivityRead,
-    TraceFileStateRead,
-    AlertWrite,
-    FileAccessCurrentMatchGet,
-    FileAccessCurrentContextQuery,
-    FilePolicyRulesRead,
-    FilePolicyRulesMatchDryRun,
-    FilePolicyRulesValidate,
-    FilePolicyRulesApply {
-        decision: FilePolicyDecision,
-        path: String,
-    },
-    CommandExecutionCurrentContextQuery,
-    CommandPolicyRulesRead,
-    CommandPolicyRulesMatchDryRun,
-    CommandPolicyRulesValidate,
-    CommandPolicyRulesApply {
-        decision: CommandPolicyDecision,
-        path: String,
-    },
-    NetworkActionCurrentContextQuery,
-    NetworkPolicyRulesRead,
-    NetworkPolicyRulesMatchDryRun,
-    NetworkPolicyRulesValidate,
-    NetworkPolicyRulesApply {
-        decision: NetworkPolicyDecision,
-        remote: String,
-    },
-    EnvRead {
-        name: String,
-    },
-}
-
-impl PluginHostGrant {
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        if raw == "payload-read" {
-            return Ok(Self::PayloadRead);
-        }
-        if raw == "context-query" {
-            return Ok(Self::ContextQuery);
-        }
-        if raw == "trace-analysis-read" {
-            return Ok(Self::TraceAnalysisRead);
-        }
-        if raw == "trace-activity-read" {
-            return Ok(Self::TraceActivityRead);
-        }
-        if raw == "trace-file-state-read" {
-            return Ok(Self::TraceFileStateRead);
-        }
-        if raw == "alert-write" {
-            return Ok(Self::AlertWrite);
-        }
-        if raw == "file-access.current-match-get" {
-            return Ok(Self::FileAccessCurrentMatchGet);
-        }
-        if raw == "file-access.current-context-query" {
-            return Ok(Self::FileAccessCurrentContextQuery);
-        }
-        if raw == "file-policy.rules.read" {
-            return Ok(Self::FilePolicyRulesRead);
-        }
-        if raw == "file-policy.rules.match-dry-run" {
-            return Ok(Self::FilePolicyRulesMatchDryRun);
-        }
-        if raw == "file-policy.rules.validate" {
-            return Ok(Self::FilePolicyRulesValidate);
-        }
-        if raw == "command-execution.current-context-query" {
-            return Ok(Self::CommandExecutionCurrentContextQuery);
-        }
-        if raw == "command-policy.rules.read" {
-            return Ok(Self::CommandPolicyRulesRead);
-        }
-        if raw == "command-policy.rules.match-dry-run" {
-            return Ok(Self::CommandPolicyRulesMatchDryRun);
-        }
-        if raw == "command-policy.rules.validate" {
-            return Ok(Self::CommandPolicyRulesValidate);
-        }
-        if raw == "network-action.current-context-query" {
-            return Ok(Self::NetworkActionCurrentContextQuery);
-        }
-        if raw == "network-policy.rules.read" {
-            return Ok(Self::NetworkPolicyRulesRead);
-        }
-        if raw == "network-policy.rules.match-dry-run" {
-            return Ok(Self::NetworkPolicyRulesMatchDryRun);
-        }
-        if raw == "network-policy.rules.validate" {
-            return Ok(Self::NetworkPolicyRulesValidate);
-        }
-        let Some((kind, value)) = raw.split_once(':') else {
-            return Err(format!(
-                "invalid plugin host grant {raw}; expected a declared unscoped grant, payload-read:source=<boundary>, file-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, command-policy.rules.apply:kind=<allow|deny|gray>,path=<absolute|/absolute/**>, network-policy.rules.apply:kind=<allow|deny|gray>,remote=<*|ip:port|ip:*>, or env-read:NAME"
-            ));
-        };
-        match kind {
-            "payload-read" => {
-                let Some(source) = value.strip_prefix("source=") else {
-                    return Err(format!(
-                        "invalid plugin host grant {raw}; expected payload-read:source=syscall, payload-read:source=tls-user-space, or payload-read:source=stdio"
-                    ));
-                };
-                GrantValidator::payload_source(source)?;
-                Ok(Self::PayloadReadSource {
-                    source: source.to_string(),
-                })
-            }
-            "env-read" => {
-                GrantValidator::env_name(value)?;
-                Ok(Self::EnvRead {
-                    name: value.to_string(),
-                })
-            }
-            "file-policy.rules.apply" => ScopedApplyGrantParser::file(value),
-            "command-policy.rules.apply" => ScopedApplyGrantParser::command(value),
-            "network-policy.rules.apply" => ScopedApplyGrantParser::network(value),
-            other => Err(format!(
-                "unsupported plugin host grant {other}; managed policy grants use their declared read, match-dry-run, validate, or scoped apply form"
-            )),
-        }
-    }
-
-    pub fn capability(&self) -> PluginCapability {
-        match self {
-            Self::PayloadRead | Self::PayloadReadSource { .. } => PluginCapability::PayloadRead,
-            Self::ContextQuery => PluginCapability::ContextQuery,
-            Self::TraceAnalysisRead => PluginCapability::TraceAnalysisRead,
-            Self::TraceActivityRead => PluginCapability::TraceActivityRead,
-            Self::TraceFileStateRead => PluginCapability::TraceFileStateRead,
-            Self::AlertWrite => PluginCapability::AlertWrite,
-            Self::FileAccessCurrentMatchGet => PluginCapability::FileAccessCurrentMatchGet,
-            Self::FileAccessCurrentContextQuery => PluginCapability::FileAccessCurrentContextQuery,
-            Self::FilePolicyRulesRead => PluginCapability::FilePolicyRulesRead,
-            Self::FilePolicyRulesMatchDryRun => PluginCapability::FilePolicyRulesMatchDryRun,
-            Self::FilePolicyRulesValidate => PluginCapability::FilePolicyRulesValidate,
-            Self::FilePolicyRulesApply { .. } => PluginCapability::FilePolicyRulesApply,
-            Self::CommandExecutionCurrentContextQuery => {
-                PluginCapability::CommandExecutionCurrentContextQuery
-            }
-            Self::CommandPolicyRulesRead => PluginCapability::CommandPolicyRulesRead,
-            Self::CommandPolicyRulesMatchDryRun => PluginCapability::CommandPolicyRulesMatchDryRun,
-            Self::CommandPolicyRulesValidate => PluginCapability::CommandPolicyRulesValidate,
-            Self::CommandPolicyRulesApply { .. } => PluginCapability::CommandPolicyRulesApply,
-            Self::NetworkActionCurrentContextQuery => {
-                PluginCapability::NetworkActionCurrentContextQuery
-            }
-            Self::NetworkPolicyRulesRead => PluginCapability::NetworkPolicyRulesRead,
-            Self::NetworkPolicyRulesMatchDryRun => PluginCapability::NetworkPolicyRulesMatchDryRun,
-            Self::NetworkPolicyRulesValidate => PluginCapability::NetworkPolicyRulesValidate,
-            Self::NetworkPolicyRulesApply { .. } => PluginCapability::NetworkPolicyRulesApply,
-            Self::EnvRead { .. } => PluginCapability::EnvRead,
-        }
-    }
-
-    pub fn to_wire(&self) -> String {
-        match self {
-            Self::PayloadRead => "payload-read".to_string(),
-            Self::PayloadReadSource { source } => format!("payload-read:source={source}"),
-            Self::ContextQuery => "context-query".to_string(),
-            Self::TraceAnalysisRead => "trace-analysis-read".to_string(),
-            Self::TraceActivityRead => "trace-activity-read".to_string(),
-            Self::TraceFileStateRead => "trace-file-state-read".to_string(),
-            Self::AlertWrite => "alert-write".to_string(),
-            Self::FileAccessCurrentMatchGet => "file-access.current-match-get".to_string(),
-            Self::FileAccessCurrentContextQuery => "file-access.current-context-query".to_string(),
-            Self::FilePolicyRulesRead => "file-policy.rules.read".to_string(),
-            Self::FilePolicyRulesMatchDryRun => "file-policy.rules.match-dry-run".to_string(),
-            Self::FilePolicyRulesValidate => "file-policy.rules.validate".to_string(),
-            Self::FilePolicyRulesApply { decision, path } => format!(
-                "file-policy.rules.apply:kind={},path={}",
-                decision.as_str(),
-                path
-            ),
-            Self::CommandExecutionCurrentContextQuery => {
-                "command-execution.current-context-query".to_string()
-            }
-            Self::CommandPolicyRulesRead => "command-policy.rules.read".to_string(),
-            Self::CommandPolicyRulesMatchDryRun => "command-policy.rules.match-dry-run".to_string(),
-            Self::CommandPolicyRulesValidate => "command-policy.rules.validate".to_string(),
-            Self::CommandPolicyRulesApply { decision, path } => format!(
-                "command-policy.rules.apply:kind={},path={}",
-                decision.as_str(),
-                path
-            ),
-            Self::NetworkActionCurrentContextQuery => {
-                "network-action.current-context-query".to_string()
-            }
-            Self::NetworkPolicyRulesRead => "network-policy.rules.read".to_string(),
-            Self::NetworkPolicyRulesMatchDryRun => "network-policy.rules.match-dry-run".to_string(),
-            Self::NetworkPolicyRulesValidate => "network-policy.rules.validate".to_string(),
-            Self::NetworkPolicyRulesApply { decision, remote } => format!(
-                "network-policy.rules.apply:kind={},remote={}",
-                decision.as_str(),
-                remote
-            ),
-            Self::EnvRead { name } => format!("env-read:{name}"),
-        }
     }
 }

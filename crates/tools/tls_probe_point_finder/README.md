@@ -5,19 +5,19 @@ Rust workspace tool for finding TLS plaintext uprobe points.
 Build:
 
 ```bash
-cargo build -p tls_probe_point_finder
+cargo build --release -p tls_probe_point_finder
 ```
 
 Run:
 
 ```bash
-target/debug/tls-probe-point-finder -h
-target/debug/tls-probe-point-finder detect -h
-target/debug/tls-probe-point-finder fast -h
-target/debug/tls-probe-point-finder detect codex
-target/debug/tls-probe-point-finder fast /path/to/agent
-target/debug/tls-probe-point-finder detect --provider=boringssl --source=executable opencode
-target/debug/tls-probe-point-finder pattern codex --address 0x1a66950 --length 0x20
+target/release/tls-probe-point-finder -h
+target/release/tls-probe-point-finder detect -h
+target/release/tls-probe-point-finder fast -h
+target/release/tls-probe-point-finder detect codex
+target/release/tls-probe-point-finder fast /path/to/agent
+target/release/tls-probe-point-finder detect --provider=boringssl --source=executable opencode
+target/release/tls-probe-point-finder pattern codex --address 0x1a66950 --length 0x20
 ```
 
 ## Detect
@@ -35,6 +35,8 @@ target/debug/tls-probe-point-finder pattern codex --address 0x1a66950 --length 0
 `detect` accepts `--provider auto|openssl|boringssl|rustls|go`, `--source auto|executable|shared-library`, and `--arch auto|aarch64|x86_64`. The documented default `--match-limit` is `8`; decimal and `0x` integer forms are accepted.
 
 Detection and rendering are separate. The detection command builds an internal report structure, and `reporter.rs` is the only module that controls terminal formatting, list markers, and indentation. Human-readable output uses two spaces per nesting level.
+
+BoringSSL failures retain architecture and static-candidate rejection reasons. Use `detect --provider boringssl --source executable --scan full /path/to/agent` to inspect the failed entry lookup. Finder output describes the on-disk detector; `actrailctl tls-plan query -- /path/to/agent` describes the running daemon's detector and cached plan.
 
 ## Fast
 
@@ -94,10 +96,26 @@ Codex 0.146.0 also embeds OpenSSL 3.6.3 in the stripped aarch64 musl executable.
 
 A real aarch64 Codex request produced 86 `SSL_read_ex` hits and 21 `SSL_write_ex` hits. These points are used by the API-key/OpenSSL route and can be attached alongside the rustls points below.
 
+The independent BoringSSL x86_64 `read-write-pair-19-40` candidate is enabled only for GNU BuildID `588d7307f333293c728b74df19b7323c20736899`, verified with OpenCode 1.19.5. Both pattern registration and matching check the existing ELF identity before scanning. This ELF retains public ABI symbols but has no TLS function symbols. Both executable entry patterns must match uniquely and BoringSSL identity markers must be present:
+
+- `SSL_read`, 19 bytes: `55 48 89 e5 41 57 41 56 53 50 48 83 bf 98 00 00 00 00 74`
+- `SSL_write`, 40 bytes: `55 48 89 e5 41 57 41 56 41 55 41 54 53 48 83 ec 18 41 89 d7 49 89 f6 48 89 fb 48 8b 47 30 c7 80 c4 00 00 00 00 00 00 00`
+
+The verified read entry is VA `0x28673b0`, file offset `0x265f3b0`; the write entry is VA `0x28fd5c0`, file offset `0x26f55c0`. Their separation is `0x96210`. The write prefix includes clearing the SSL record's error state and contains no position-dependent calls. Function bodies, BoringSSL source-location references, and Bun TLS callers verify the existing capture ABI: `rdi` is the same `SSL*` connection, `rsi` is the plaintext buffer, `edx` is the signed requested length, and positive `eax` is the completed byte count.
+
+The related-entry detector and this pair are independent candidates with sibling paths `tls/boringssl/x86_64/static-pattern` and `tls/boringssl/x86_64/read-write-pair-19-40`. Selection accepts identical complete read/write closures and rejects conflicting closures in both Single and All resolution modes. Their shared read pattern uses the existing scan cache; registration adds only the 40-byte write pattern for the verified build. BoringSSL marker checks run after both entries match uniquely. GNU BuildID identifies the linked runtime build; packaged clients may share it, and a modified ELF may retain it. Conflict detection remains required after the build check. The related-entry detector retains its existing offsets and search window.
+
 Rustls stripped x86_64 probing uses these documented entry patterns:
 
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 27 bytes: `55 41 57 41 56 41 55 41 54 53 48 83 ec 28 49 89 d6 48 89 f3 4c 8b a7 08 03 00 00`
 - `rustls_take_received_plaintext`, `CommonState::take_received_plaintext`, 32 bytes: `41 57 41 56 41 54 53 50 49 89 ff c6 87 2e 03 00 00 20 4c 8b 26 4c 8b 76 08 4c 89 e0 48 f7 d8 48`
+
+The independent x86_64 `common-state-pair-28-36-stack72` candidate supports the stripped xiaoO ELF with GNU BuildID `b4d3610f17f2e51ade209618330d2bbd4eab068d`, which embeds Rustls 0.23.43 and tokio-rustls 0.26.4. Its unoptimized outbound entry reserves a 72-byte stack frame. Both entry signatures must match uniquely:
+
+- `rustls_buffer_plaintext`, 28 bytes: `48 83 ec 48 48 89 7c 24 08 48 89 34 24 48 89 54 24 10 48 89 7c 24 18 48 89 54 24 20`
+- `rustls_take_received_plaintext`, 36 bytes: `48 83 ec 68 48 89 7c 24 08 48 89 74 24 10 48 89 7c 24 50 c6 44 24 4f 00 c6 44 24 4f 01 48 81 c7 2c 03 00 00`
+
+The verified entry virtual addresses and ELF file offsets are both `0x289d6f0` outbound and `0x289b2d0` inbound. Both functions receive the same CommonState pointer in `rdi` and their payload object in `rsi`; the outbound function returns the accepted plaintext length in `rax`. Outbound Single chunks use `[0, pointer, length]`, Multiple chunks use `[chunks, count, start, end]`, and inbound borrowed Payload uses `[-1, pointer, length]`. These layouts use the existing Rustls collector ABI. The x86_64 candidate uses CommonState pointer connection identity. Source paths, caller locations, function bodies, ELF unwind boundaries, and unique `pattern` results establish these entries; Rustls and tokio-rustls version numbers identify separate crates.
 
 Rustls stripped aarch64 probing uses these documented entry patterns, collected from stripped `xiaoo`/`xiaoo-tui` aarch64 rustls 0.23.40 ThinLTO release binaries and verified with `pattern` as unique in both binaries:
 
@@ -113,3 +131,10 @@ The independent `common-state-pair-52-64-x22` candidate supports the stripped Co
 
 - `rustls_buffer_plaintext`, 52 bytes: `ff 83 01 d1 fd 7b 02 a9 f8 5f 03 a9 f6 57 04 a9 f4 4f 05 a9 fd 83 00 91 16 84 41 f9 08 00 f0 d2 f4 03 02 aa f3 03 01 aa f5 03 00 aa 08 84 01 f9 df 02 08 eb`
 - `rustls_take_received_plaintext`, 64 bytes: `fd 7b bc a9 f7 0b 00 f9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 36 50 40 a9 09 00 f0 d2 33 08 40 f9 f5 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb a1 00 00 54 73 01 f8 b6 e0 03 1f aa e1 03 13 aa`
+
+The independent `common-state-pair-52-64-stack160` candidate supports the stripped Grok 1.0.70 aarch64 static executable, built with rustc 1.94.0 and rustls 0.23.37. The outbound entry reserves a 160-byte frame and loads all three queued-update Vec fields. Both entry signatures must match uniquely. `x0` carries CommonState, `x1` carries the payload, and the outbound return value is the accepted plaintext length:
+
+- `rustls_buffer_plaintext`, 52 bytes: `ff 83 02 d1 fd 7b 06 a9 f8 5f 07 a9 f6 57 08 a9 f4 4f 09 a9 fd 83 01 91 14 84 41 f9 08 00 f0 d2 15 88 41 f9 16 8c 41 f9 f3 03 02 aa 08 84 01 f9 9f 02 08 eb`
+- `rustls_take_received_plaintext`, 64 bytes: `fd 7b bc a9 f7 0b 00 f9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 36 54 40 a9 09 00 f0 d2 33 08 40 f9 f4 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb c1 02 00 54 b3 00 f8 b6 f7 03 1f aa e0 03 17 aa`
+
+Connection identity augmentation also validates certificate ownership through the inline or called destructor shapes documented in `src/probe_detector/detector/tls/rustls/handshake_locator/README.md`. Rebuild both the finder and the daemon after adding a candidate. Restart the daemon to clear cached unavailable plans before retrying the same executable.

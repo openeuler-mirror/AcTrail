@@ -1,7 +1,8 @@
 use model_core::payload::PayloadSourceBoundary;
 
 use crate::{
-    CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision, NetworkPolicyRemoteGrantScope,
+    CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision,
+    NetworkPolicyEndpointGrantScope,
 };
 
 pub(super) struct GrantValidator;
@@ -28,12 +29,12 @@ impl GrantValidator {
         Ok(())
     }
 
-    pub(super) fn network_remote_scope(
-        remote: &str,
-    ) -> Result<NetworkPolicyRemoteGrantScope, String> {
-        NetworkPolicyRemoteGrantScope::parse(remote).map_err(|error| {
+    pub(super) fn network_endpoint_scope(
+        endpoint: &str,
+    ) -> Result<NetworkPolicyEndpointGrantScope, String> {
+        NetworkPolicyEndpointGrantScope::parse(endpoint).map_err(|error| {
             format!(
-                "network-policy.rules.apply remote scope must be *, a numeric IP endpoint, or an IP any-port selector: {error}"
+                "network-policy.rules.apply endpoint scope must be *, a numeric IP endpoint, or an IP any-port selector: {error}"
             )
         })
     }

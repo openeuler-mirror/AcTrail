@@ -4,7 +4,8 @@ use model_core::diagnostics::LlmPipelineDiagnostic;
 use model_core::payload::PayloadSegment;
 use semantic_action::{LlmRequestContentWrite, LlmRequestLineageWrite, SemanticAction};
 
-use super::links::{LlmHttpRequestLink, LlmHttpResponseLink};
+use super::compact::{CompletedResponse, LlmRequestObservation, LlmResponseObservation};
+use super::links::{LlmContextCompactLink, LlmHttpRequestLink, LlmHttpResponseLink};
 use super::projector::{
     ProjectedLlmRequestHistory, ProjectedLlmToolResult, ProjectedProviderResponseId,
 };
@@ -22,6 +23,8 @@ pub(crate) struct ProjectionBatch {
     pub(crate) updates: Vec<semantic_action::SemanticActionUpdate>,
     pub(crate) updated_actions: Vec<SemanticAction>,
     pub(crate) llm_request_contents: Vec<LlmRequestContentWrite>,
+    pub(in crate::llm_pipeline) request_observations: Vec<LlmRequestObservation>,
+    pub(in crate::llm_pipeline) response_observations: Vec<LlmResponseObservation>,
     pub(crate) llm_request_lineages: Vec<LlmRequestLineageWrite>,
     pub(crate) llm_tool_results: Vec<ProjectedLlmToolResult>,
     pub(crate) diagnostics: Vec<LlmPipelineDiagnostic>,
@@ -30,6 +33,16 @@ pub(crate) struct ProjectionBatch {
     pub(crate) payload_segments: Vec<PayloadSegment>,
     pub(crate) http_request_links: Vec<LlmHttpRequestLink>,
     pub(crate) http_response_links: Vec<LlmHttpResponseLink>,
+    pub(crate) context_compact_links: Vec<LlmContextCompactLink>,
+}
+
+/// One owner-resolved association consumed during the current projection batch.
+pub(in crate::llm_pipeline) struct ProjectedResponseBinding {
+    pub(in crate::llm_pipeline) request: SemanticAction,
+    pub(in crate::llm_pipeline) completion: Option<CompletedResponse>,
+    pub(in crate::llm_pipeline) provider_response_id: Option<String>,
+    pub(in crate::llm_pipeline) observed_at: std::time::SystemTime,
+    pub(in crate::llm_pipeline) failed: bool,
 }
 
 impl ProjectionBatch {
@@ -54,6 +67,10 @@ impl ProjectionBatch {
             proposal.llm_response.evidence.retain(&retain);
             proposal.http_response.evidence.retain(&retain);
         }
+        for proposal in &mut self.context_compact_links {
+            proposal.compact.evidence.retain(&retain);
+            proposal.implementation_call.evidence.retain(&retain);
+        }
     }
 
     pub(in crate::llm_pipeline) fn extend(&mut self, other: Self) {
@@ -66,6 +83,9 @@ impl ProjectionBatch {
         self.updates.extend(other.updates);
         self.updated_actions.extend(other.updated_actions);
         self.llm_request_contents.extend(other.llm_request_contents);
+        self.request_observations.extend(other.request_observations);
+        self.response_observations
+            .extend(other.response_observations);
         self.llm_request_lineages.extend(other.llm_request_lineages);
         self.llm_tool_results.extend(other.llm_tool_results);
         self.diagnostics.extend(other.diagnostics);
@@ -76,5 +96,7 @@ impl ProjectionBatch {
         self.payload_segments.extend(other.payload_segments);
         self.http_request_links.extend(other.http_request_links);
         self.http_response_links.extend(other.http_response_links);
+        self.context_compact_links
+            .extend(other.context_compact_links);
     }
 }

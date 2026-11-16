@@ -84,7 +84,8 @@
 │           │   ├── [x] factory.rs # 从环境和配置创建注入依赖
 │           │   │   └── [x] struct RuntimeConfigFactory # 组装 RuntimeBootstrap 与实际运行配置
 │           │   ├── [x] state.rs # 保存 hook 点、过滤和事件传输配置
-│           │   │   └── [x] struct RuntimeConfig # 持有注入运行时生效配置
+│           │   │   ├── [x] struct ProcessTransport # 每进程按需创建连接和响应等待状态，发送不争用配置锁
+│           │   │   └── [x] struct RuntimeConfig # 持有注入配置和进程独立的传输指针；fork 子进程关闭继承连接并重置指针
 │           │   └── [x] plan.rs # 保存待安装的运行计划
 │           │       └── [x] struct RuntimePlan # 携带同步探针安装信息
 │           ├── [x] hook/ # 实现 x86_64 与 aarch64 指令重定位和函数跳转
@@ -94,9 +95,10 @@
 │           │       └── [x] core/ # 保存目标槽位并执行捕获包装
 │           │           └── [x] slot_table.rs # 管理动态 TLS 目标槽位
 │           │               └── [x] struct SlotTable # 持有已分配目标及其槽位索引
+│           ├── [x] response_hold.rs # 交付响应前等待 daemon 放行这条 TLS 连接上已上报的出站内容；只在 checkpoint launch 时等待
 │           └── [x] flow_control/ # 按流恢复协议并执行有界明文处理
 │               └── [x] controller.rs # 协调流状态、淘汰与输出动作
-│                   └── [x] struct FlowController # 管理每条流的协议恢复与内容处理
+│                   └── [x] struct FlowController # 管理每条流的协议恢复与内容处理；完整出站 HTTP/2 preface 清除该地址的双向流状态及 LRU 记录
 ├── [ ] graph_inspect/ # 图导出诊断工具的包骨架；查询和报告待实现
 │   └── [x] src/ # 已建立的命令输入、入口与报告模块位置
 │       ├── [x] lib.rs # 声明 args、entry 和 report 模块

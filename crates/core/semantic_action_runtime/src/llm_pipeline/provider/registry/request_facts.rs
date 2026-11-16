@@ -1,8 +1,12 @@
 use serde_json::Value;
 
+use crate::llm_pipeline::provider::ParsedRequestContext;
+use crate::llm_pipeline::provider::request_context::{RequestContextLimits, RequestContextParser};
+
 /// Classification facts for one request, independent of retained content.
 #[derive(Default)]
 pub(in crate::llm_pipeline) struct LlmRequestFacts {
+    pub(in crate::llm_pipeline) context: Option<ParsedRequestContext>,
     pub(in crate::llm_pipeline) model_present: bool,
     pub(in crate::llm_pipeline) model: Option<String>,
     pub(in crate::llm_pipeline) model_name_present: bool,
@@ -14,11 +18,15 @@ pub(in crate::llm_pipeline) struct LlmRequestFacts {
 }
 
 impl LlmRequestFacts {
-    pub(in crate::llm_pipeline) fn from_json(value: &Value) -> Self {
+    pub(in crate::llm_pipeline) fn from_json(
+        value: &Value,
+        context_limits: Option<RequestContextLimits>,
+    ) -> Self {
         let Some(object) = value.as_object() else {
             return Self::default();
         };
         Self {
+            context: context_limits.map(|limits| RequestContextParser::new(limits).parse(value)),
             model_present: object.contains_key("model"),
             model: object
                 .get("model")

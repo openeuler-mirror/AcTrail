@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.v2.common.kata_runtime.runtime_config import (
+from .runtime_config import (
     REQUIRED_EBPF_KERNEL_CONFIG,
     discover_kernel_config,
     missing_kernel_config_entries,
@@ -46,6 +46,7 @@ class PreparationInputs:
     data_vcpus: int
     sandbox_observer: bool = False
     egress_mode: str = "network"
+    otel_attribute_mode: str = "metadata-only"
     tool_inputs: tuple[Path, ...] = ()
 
     @property
@@ -75,6 +76,10 @@ class PreparationInputs:
             raise ValueError("Guest OTLP/HTTP endpoint must be omitted or non-empty")
         if self.egress_mode == "vsock-bridge" and self.otel_endpoint is None:
             raise ValueError("vsock-bridge egress requires a Guest OTLP/HTTP endpoint")
+        if self.otel_attribute_mode not in {"metadata-only", "full"}:
+            raise ValueError("OTLP attribute mode must be metadata-only or full")
+        if self.otel_attribute_mode != "metadata-only" and self.otel_endpoint is None:
+            raise ValueError("OTLP attribute mode full requires a Guest OTLP/HTTP endpoint")
         if not 1 <= self.socket_gid <= 2_147_483_647:
             raise ValueError("socket GID must be between 1 and 2147483647")
         if self.data_vcpus < 2:

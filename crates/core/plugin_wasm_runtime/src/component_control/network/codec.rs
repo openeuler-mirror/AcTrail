@@ -4,7 +4,8 @@ use plugin_system::{
     ControlVerdict, NetworkActionContext, NetworkPolicyApplyRequest, NetworkPolicyApplyResult,
     NetworkPolicyApplyStatus, NetworkPolicyDecision, NetworkPolicyListFilter,
     NetworkPolicyListResult, NetworkPolicyMatchDryRunRequest, NetworkPolicyMatchDryRunResult,
-    NetworkPolicyPatchItem, NetworkPolicyPatchOp, NetworkPolicyRuleDraft, NetworkPolicyRuleView,
+    NetworkPolicyOperation, NetworkPolicyPatchItem, NetworkPolicyPatchOp, NetworkPolicyProtocol,
+    NetworkPolicyRuleDraft, NetworkPolicyRuleView,
 };
 use wasmtime::component::Val;
 
@@ -32,9 +33,22 @@ impl NetworkComponentCodec {
                 None => None,
             };
         Ok(NetworkPolicyListFilter {
+            operation: match component_field_option(fields, "operation")? {
+                Some(Val::Enum(value)) => Some(NetworkPolicyOperation::from_wire(value)?),
+                None => None,
+                _ => return Err("invalid network operation filter".into()),
+            },
+            protocol: match component_field_option(fields, "protocol")? {
+                Some(Val::Enum(value)) => Some(NetworkPolicyProtocol::from_wire(value)?),
+                None => None,
+                _ => return Err("invalid network protocol filter".into()),
+            },
             decision,
-            remote: component_field_option_string(fields, component_abi::network_policy::REMOTE)?
-                .map(str::to_string),
+            endpoint: component_field_option_string(
+                fields,
+                component_abi::network_policy::ENDPOINT,
+            )?
+            .map(str::to_string),
         })
     }
 
@@ -42,7 +56,12 @@ impl NetworkComponentCodec {
         fields: &[(String, Val)],
     ) -> Result<NetworkPolicyMatchDryRunRequest, String> {
         Ok(NetworkPolicyMatchDryRunRequest {
-            remote: component_field_string(fields, component_abi::network_policy::REMOTE)?
+            operation: NetworkPolicyOperation::from_wire(component_field_enum(
+                fields,
+                "operation",
+            )?)?,
+            protocol: NetworkPolicyProtocol::from_wire(component_field_enum(fields, "protocol")?)?,
+            endpoint: component_field_string(fields, component_abi::network_policy::ENDPOINT)?
                 .to_string(),
         })
     }
@@ -85,9 +104,14 @@ impl NetworkComponentCodec {
 
     fn parse_rule_draft(fields: &[(String, Val)]) -> Result<NetworkPolicyRuleDraft, String> {
         Ok(NetworkPolicyRuleDraft {
+            operation: NetworkPolicyOperation::from_wire(component_field_enum(
+                fields,
+                "operation",
+            )?)?,
+            protocol: NetworkPolicyProtocol::from_wire(component_field_enum(fields, "protocol")?)?,
             rule_id: component_field_option_string(fields, "rule-id")?.map(str::to_string),
             decision: NetworkPolicyDecision::from_wire(component_field_enum(fields, "decision")?)?,
-            remote: component_field_string(fields, "remote")?.to_string(),
+            endpoint: component_field_string(fields, "endpoint")?.to_string(),
             gray_target: component_field_option_string(fields, "gray-target")?.map(str::to_string),
             timeout_ms: Self::option_u64(fields, "timeout-ms")?,
             concurrency_limit: Self::option_u32(fields, "concurrency-limit")?,
@@ -146,7 +170,12 @@ impl NetworkComponentCodec {
                 "decision".to_string(),
                 Val::Enum(rule.decision.as_str().to_string()),
             ),
-            ("remote".to_string(), Val::String(rule.remote)),
+            (
+                "operation".into(),
+                Val::Enum(rule.operation.as_str().into()),
+            ),
+            ("protocol".into(), Val::Enum(rule.protocol.as_str().into())),
+            ("endpoint".to_string(), Val::String(rule.endpoint)),
             (
                 "gray-target".to_string(),
                 component_option_string(rule.gray_target),
@@ -187,8 +216,8 @@ impl NetworkComponentCodec {
                 component_option_string(result.owner_instance_id),
             ),
             (
-                "resolved-remote".to_string(),
-                Val::String(result.resolved_remote),
+                "resolved-endpoint".to_string(),
+                Val::String(result.resolved_endpoint),
             ),
             (
                 "rule-revision".to_string(),
@@ -291,7 +320,7 @@ impl NetworkComponentCodec {
                         rule.rule_id
                             .as_ref()
                             .map_or(0, String::len)
-                            .saturating_add(rule.remote.len())
+                            .saturating_add(rule.endpoint.len())
                             .saturating_add(rule.gray_target.as_ref().map_or(0, String::len))
                     }))
             }))
@@ -312,14 +341,14 @@ impl NetworkComponentCodec {
             .saturating_add(result.rules.iter().fold(0_usize, |size, rule| {
                 size.saturating_add(rule.rule_id.len())
                     .saturating_add(rule.owner_instance_id.len())
-                    .saturating_add(rule.remote.len())
+                    .saturating_add(rule.endpoint.len())
                     .saturating_add(rule.gray_target.as_ref().map_or(0, String::len))
             }))
     }
 
     pub(super) fn match_result_size(result: &NetworkPolicyMatchDryRunResult) -> usize {
         result
-            .resolved_remote
+            .resolved_endpoint
             .len()
             .saturating_add(result.rule_id.as_ref().map_or(0, String::len))
             .saturating_add(result.owner_instance_id.as_ref().map_or(0, String::len))

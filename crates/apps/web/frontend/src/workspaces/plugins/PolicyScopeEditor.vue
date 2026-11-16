@@ -23,6 +23,18 @@
           />
           <small>{{ pathHint }}</small>
         </label>
+        <label v-if="network">
+          <span>{{ t('policy.operation') }}</span>
+          <select :value="scope.operation" :disabled="busy" @change="updateScope(index, { operation: $event.target.value })">
+            <option v-for="operation in ['connect', 'send', 'bind', 'listen']" :key="operation" :value="operation">{{ operation }}</option>
+          </select>
+        </label>
+        <label v-if="network">
+          <span>{{ t('policy.protocol') }}</span>
+          <select :value="scope.protocol" :disabled="busy" @change="updateScope(index, { protocol: $event.target.value })">
+            <option v-for="protocol in ['any', 'tcp', 'udp']" :key="protocol" :value="protocol">{{ protocol }}</option>
+          </select>
+        </label>
         <fieldset>
           <legend>{{ t('policy.ruleTypes') }}</legend>
           <label v-for="decision in decisionOptions" :key="decision.value">
@@ -71,6 +83,7 @@ const props = defineProps({
   placeholder: { type: String, required: true },
   pathHint: { type: String, required: true },
   busy: { type: Boolean, default: false },
+  network: { type: Boolean, default: false },
   addLabel: { type: String, default: '' },
 });
 
@@ -87,6 +100,7 @@ function newScope() {
   return {
     key: `policy-scope-${nextKey}`,
     path_scope: '',
+    ...(props.network ? { operation: 'connect', protocol: 'any' } : {}),
     decisions: decisionOptions.map((decision) => decision.value),
   };
 }

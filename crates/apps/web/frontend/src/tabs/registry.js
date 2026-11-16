@@ -3,6 +3,7 @@ import FilesTab from './activity/files/FilesTab.vue';
 import NetworkTab from './activity/network/NetworkTab.vue';
 import PayloadsTab from './activity/payloads/PayloadsTab.vue';
 import ActionTreeTab from './core/action-tree/ActionTreeTab.vue';
+import CheckpointsTab from './core/checkpoints/CheckpointsTab.vue';
 import CommandsTab from './core/commands/CommandsTab.vue';
 import FlameGraphTab from './core/flame-graph/FlameGraphTab.vue';
 import LlmTrajectoryTab from './core/llm-trajectory/LlmTrajectoryTab.vue';
@@ -16,6 +17,7 @@ import ResourcesTab from './system/resources/ResourcesTab.vue';
 
 export const TAB_IDS = Object.freeze({
   actionTree: 'action_tree',
+  checkpoints: 'checkpoints',
   flameGraph: 'flame_graph',
   llmTrajectory: 'llm_trajectory',
   waterfall: 'waterfall',
@@ -41,6 +43,7 @@ export const TAB_GROUP_IDS = Object.freeze({
 export const TAB_DEFINITIONS = Object.freeze([
   { id: TAB_IDS.actionTree, labelKey: 'views.actionTree', component: ActionTreeTab },
   { id: TAB_IDS.llmTrajectory, labelKey: 'views.llmTrajectory', component: LlmTrajectoryTab },
+  { id: TAB_IDS.checkpoints, labelKey: 'views.checkpoints', component: CheckpointsTab },
   { id: TAB_IDS.flameGraph, labelKey: 'views.flameGraph', component: FlameGraphTab },
   { id: TAB_IDS.waterfall, labelKey: 'views.waterfall', component: WaterfallTab },
   { id: TAB_IDS.commands, labelKey: 'views.commands', component: CommandsTab },
@@ -65,6 +68,7 @@ export const TAB_GROUP_DEFINITIONS = Object.freeze([
       TAB_IDS.flameGraph,
       TAB_IDS.actionTree,
       TAB_IDS.llmTrajectory,
+      TAB_IDS.checkpoints,
       TAB_IDS.commands,
       TAB_IDS.processes,
       TAB_IDS.processTree,

@@ -8,6 +8,7 @@ use crate::ids::{ProfileName, TraceId, TraceName};
 use crate::process::{NamespaceIdentity, ProcessIdentity};
 
 const TRACE_ALERT_TOKEN_BYTES: usize = 32;
+const TLS_EVENT_TOKEN_BYTES: usize = 32;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TraceAlertToken([u8; TRACE_ALERT_TOKEN_BYTES]);
@@ -31,6 +32,40 @@ impl TraceAlertToken {
 impl fmt::Debug for TraceAlertToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("TraceAlertToken([redacted])")
+    }
+}
+
+/// Authorizes the TLS-sync event connections of one Trace. Its processes hold it in their
+/// environment, so unlike `TraceAlertToken` it grants nothing else and stays out of storage.
+#[derive(Clone, Eq, PartialEq)]
+pub struct TlsEventToken([u8; TLS_EVENT_TOKEN_BYTES]);
+
+impl TlsEventToken {
+    pub const BYTE_COUNT: usize = TLS_EVENT_TOKEN_BYTES;
+
+    pub const fn new(bytes: [u8; TLS_EVENT_TOKEN_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn to_hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    pub fn from_hex(value: &str) -> Option<Self> {
+        if value.len() != Self::BYTE_COUNT * 2 {
+            return None;
+        }
+        let mut bytes = [0; Self::BYTE_COUNT];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(value.get(index * 2..index * 2 + 2)?, 16).ok()?;
+        }
+        Some(Self(bytes))
+    }
+}
+
+impl fmt::Debug for TlsEventToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TlsEventToken([redacted])")
     }
 }
 

@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime};
 
-use config_core::daemon::LlmTrajectoryConfig;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{LlmRequestLineageWrite, LlmTrajectoryStartReason, LlmTrajectoryTransition};
@@ -13,54 +12,16 @@ use crate::llm_pipeline::projection::projector::{
 };
 use crate::llm_pipeline::projection::retention::{HistoryAtom, TrajectoryHistoryProjection};
 
+mod model;
 mod prefix;
 mod provider;
 
+pub(in crate::llm_pipeline) use model::{
+    TrajectoryAssignment, TrajectoryClassification, TrajectoryClassifierConfig,
+};
 use prefix::PrefixTrie;
 
-pub(super) const INFERENCE_VERSION: u32 = 2;
-
-#[derive(Clone, Debug)]
-pub(in crate::llm_pipeline) struct TrajectoryClassifierConfig {
-    pub(super) max_active_trajectories_per_scope: usize,
-    pub(super) max_candidate_nodes_per_trajectory: usize,
-    pub(super) max_prefix_nodes_per_scope: usize,
-    pub(super) max_history_atoms_per_request: usize,
-    pub(super) max_blocks_per_atom: usize,
-    pub(super) max_structural_bytes_per_atom: usize,
-    pub(super) idle_ttl: Duration,
-}
-
-impl From<LlmTrajectoryConfig> for TrajectoryClassifierConfig {
-    fn from(config: LlmTrajectoryConfig) -> Self {
-        Self {
-            max_active_trajectories_per_scope: config.max_active_trajectories_per_scope as usize,
-            max_candidate_nodes_per_trajectory: config.max_candidate_nodes_per_trajectory as usize,
-            max_prefix_nodes_per_scope: config.max_prefix_nodes_per_scope as usize,
-            max_history_atoms_per_request: config.max_history_atoms_per_request as usize,
-            max_blocks_per_atom: config.max_blocks_per_atom as usize,
-            max_structural_bytes_per_atom: config.max_structural_bytes_per_atom as usize,
-            idle_ttl: config.idle_ttl,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::llm_pipeline) struct TrajectoryAssignment {
-    pub(in crate::llm_pipeline) action_id: String,
-    pub(in crate::llm_pipeline) trajectory_id: String,
-    pub(in crate::llm_pipeline) parent_action_id: Option<String>,
-    pub(in crate::llm_pipeline) forked_from_action_id: Option<String>,
-    pub(in crate::llm_pipeline) position: u32,
-    pub(in crate::llm_pipeline) transition: LlmTrajectoryTransition,
-    pub(in crate::llm_pipeline) start_reason: LlmTrajectoryStartReason,
-    pub(in crate::llm_pipeline) inference_version: u32,
-}
-
-pub(in crate::llm_pipeline) enum TrajectoryClassification {
-    Assigned(TrajectoryAssignment),
-    Deferred,
-}
+pub(super) const INFERENCE_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct TrajectoryScope {
@@ -92,6 +53,32 @@ impl TrajectoryClassifier {
             scopes: HashMap::new(),
             resolved: Vec::new(),
         }
+    }
+
+    pub(in crate::llm_pipeline) fn refine_compaction_start_reason(
+        &mut self,
+        trace_id: TraceId,
+        process: ProcessIdentity,
+        classifier_id: String,
+        action_id: &str,
+    ) -> Option<&TrajectoryAssignment> {
+        let scope = TrajectoryScope::new(trace_id, process, classifier_id);
+        let stored = self
+            .scopes
+            .get_mut(&scope)
+            .and_then(|state| state.assignments.get_mut(action_id))?;
+        if !matches!(
+            stored.start_reason,
+            LlmTrajectoryStartReason::Unspecified
+                | LlmTrajectoryStartReason::ContextRewriteOrCompression
+        ) || !matches!(
+            stored.transition,
+            LlmTrajectoryTransition::Root | LlmTrajectoryTransition::ForkRoot
+        ) {
+            return None;
+        }
+        stored.start_reason = LlmTrajectoryStartReason::ContextRewriteOrCompression;
+        Some(stored)
     }
 
     pub(in crate::llm_pipeline) fn classify(
@@ -248,17 +235,6 @@ impl TrajectoryClassifier {
             .filter(|(scope, _)| scope.trace_id == trace_id)
             .flat_map(|(_, state)| state.finalize_deferred(maximum))
             .collect()
-    }
-}
-
-impl TrajectoryClassifierConfig {
-    fn assignment_cache_capacity(&self) -> usize {
-        let candidate_capacity = self
-            .max_active_trajectories_per_scope
-            .saturating_mul(self.max_candidate_nodes_per_trajectory);
-        self.max_prefix_nodes_per_scope
-            .max(candidate_capacity)
-            .saturating_add(self.max_active_trajectories_per_scope)
     }
 }
 

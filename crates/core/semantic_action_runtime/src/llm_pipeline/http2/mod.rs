@@ -5,3 +5,4 @@ mod protocol;
 mod state;
 
 pub(in crate::llm_pipeline) use protocol::Http2Protocol;
+mod headers;

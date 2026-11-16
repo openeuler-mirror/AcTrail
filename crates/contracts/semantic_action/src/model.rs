@@ -6,7 +6,9 @@ use std::time::SystemTime;
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 
+mod context_compact;
 mod kind;
+
 pub use kind::SemanticActionKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -457,6 +459,7 @@ fn stable_hash_bytes(bytes: &[u8]) -> String {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticActionLinkRole {
     AgentPerformedAction,
+    AgentContextCompactImplementationLlmCall,
     CommandContainsFileAccess,
     CommandContainsProcessForkAttempt,
     CommandContainsProcessExec,
@@ -493,6 +496,9 @@ impl SemanticActionLinkRole {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AgentPerformedAction => "agent.performed_action",
+            Self::AgentContextCompactImplementationLlmCall => {
+                "agent.context_compaction.implementation_llm_call"
+            }
             Self::CommandContainsFileAccess => "command.contains_file_access",
             Self::CommandContainsProcessForkAttempt => "command.contains_process_fork_attempt",
             Self::CommandContainsProcessExec => "command.contains_process_exec",
@@ -529,6 +535,9 @@ impl SemanticActionLinkRole {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "agent.performed_action" => Some(Self::AgentPerformedAction),
+            "agent.context_compaction.implementation_llm_call" => {
+                Some(Self::AgentContextCompactImplementationLlmCall)
+            }
             "command.contains_file_access" => Some(Self::CommandContainsFileAccess),
             "command.contains_process_fork_attempt" => {
                 Some(Self::CommandContainsProcessForkAttempt)

@@ -1,6 +1,8 @@
 # AcTrail host OTel Collector（验收/开发环境）
 
-本目录提供一个边界明确的主机侧 OpenTelemetry Collector 部署，用于接收 AcTrail 虚拟容器 Guest 通过 OTLP/HTTP 导出的 traces。Compose 固定使用官方 `otel/opentelemetry-collector-contrib:0.157.0` 镜像，并启用主机网络、只读根文件系统、非 root 用户、删除全部 capabilities 和 `no-new-privileges`。容器同时设置 384 MiB cgroup 上限、`GOMEMLIMIT=320MiB` Go runtime soft limit、128 PID 上限和有界 Docker JSON 日志轮转。
+> 完整部署步骤以 [虚机容器部署](../../../docs/operations/deployment/virtual-container.md) 为准；本页说明该组件的原理、参数和边界。
+
+本目录提供一个边界明确的主机侧 OpenTelemetry Collector 部署，用于接收 AcTrail 虚机容器 Guest 通过 OTLP/HTTP 导出的 traces。Compose 固定使用官方 `otel/opentelemetry-collector-contrib:0.157.0` 镜像，并启用主机网络、只读根文件系统、非 root 用户、删除全部 capabilities 和 `no-new-privileges`。容器同时设置 384 MiB cgroup 上限、`GOMEMLIMIT=320MiB` Go runtime soft limit、128 PID 上限和有界 Docker JSON 日志轮转。
 
 这不是生产级遥测后端。默认接收端是明文 HTTP，没有 TLS、认证或租户隔离；`debug` exporter 还可能把 span 属性中的敏感数据写入容器日志。只应在受控的开发/验收网络中使用，并通过主机防火墙限制 `4318/tcp` 的来源。生产环境应另行配置 TLS/mTLS、认证、访问控制和真正的持久化后端。
 

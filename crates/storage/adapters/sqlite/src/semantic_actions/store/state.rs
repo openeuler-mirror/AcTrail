@@ -6,7 +6,8 @@ use model_core::ids::TraceId;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use semantic_action::{
     SemanticAction, SemanticActionChange, SemanticActionFinalizationReason, SemanticActionKind,
-    SemanticActionStatus, SemanticActionStoreError, SemanticActionUpdate, SemanticCommandKind,
+    SemanticActionStatus, SemanticActionStoreError, SemanticActionUpdate,
+    SemanticAttributeSupplement, SemanticAttributeSupplementRejection, SemanticCommandKind,
     SemanticEvidence, SemanticToolResultBinding, attr_keys as attrs,
 };
 
@@ -15,7 +16,9 @@ use crate::semantic_actions::codebook::sqlite::{
     action_completeness_code, action_kind_code, action_status_code, decode_status,
     evidence_kind_code,
 };
-use crate::semantic_actions::cold_fields::{ColdFieldEncoder, upsert_action_attributes};
+use crate::semantic_actions::cold_fields::{
+    ColdFieldEncoder, decode_attributes_from_row, upsert_action_attributes,
+};
 
 macro_rules! assignment_sql {
     ($assignment:literal) => {
@@ -34,6 +37,7 @@ pub(super) struct InitialActionState {
     tool_binding: Option<i16>,
     command_kind: Option<i16>,
     command_tool_name: Option<String>,
+    command_exit_code: Option<i32>,
 }
 
 pub(super) struct ActionStateWriter<'a> {
@@ -86,6 +90,17 @@ impl<'a> ActionStateWriter<'a> {
                 )),
             })
             .transpose()?;
+        let command_exit_code = if action.kind == SemanticActionKind::CommandInvocation {
+            action
+                .attributes
+                .get(attrs::command::EXIT_CODE)
+                .and_then(|value| value.parse::<i32>().ok())
+        } else {
+            None
+        };
+        if command_exit_code.is_some() {
+            action.attributes.remove(attrs::command::EXIT_CODE);
+        }
         if action.kind == SemanticActionKind::McpToolCall {
             action.attributes.remove(attrs::mcp::EXECUTION_STATUS);
         }
@@ -99,6 +114,7 @@ impl<'a> ActionStateWriter<'a> {
             tool_binding,
             command_kind,
             command_tool_name,
+            command_exit_code,
         })
     }
 
@@ -110,11 +126,13 @@ impl<'a> ActionStateWriter<'a> {
     ) -> Result<(), SemanticActionStoreError> {
         self.connection.prepare_cached(
             "INSERT INTO semantic_action_state(action_key, end_time, status_code, completeness_code,
-                tool_result_binding, command_invocation_kind, command_tool_name, finalization_reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
+                tool_result_binding, command_invocation_kind, command_tool_name, finalization_reason,
+                command_exit_code)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
             .and_then(|mut statement| statement.execute(params![key, action.end_time.map(encode_time),
                 action_status_code(action.status), action_completeness_code(action.completeness),
-                initial.tool_binding, initial.command_kind, initial.command_tool_name, initial.finalization_reason]))
+                initial.tool_binding, initial.command_kind, initial.command_tool_name, initial.finalization_reason,
+                initial.command_exit_code]))
             .map(|_| ()).map_err(|e| Self::error("insert_semantic_action_state", e))
     }
 
@@ -154,7 +172,16 @@ impl<'a> ActionStateWriter<'a> {
                 status,
                 completeness,
                 finalization_reason,
+                command_exit_code,
             } => {
+                if command_exit_code.is_some()
+                    && update.kind != SemanticActionKind::CommandInvocation
+                {
+                    return Err(Self::error(
+                        "update_semantic_action_kind",
+                        "command exit code requires command",
+                    ));
+                }
                 let reason = finalization_reason.map(|reason| match reason {
                     SemanticActionFinalizationReason::TraceClosed => 1,
                     SemanticActionFinalizationReason::CapacityEvicted => 2,
@@ -162,7 +189,8 @@ impl<'a> ActionStateWriter<'a> {
                 self.assigned(
                     assignment_sql!(
                         "UPDATE semantic_action_state SET end_time=?5,
-                    status_code=?6, completeness_code=?7, finalization_reason=?8"
+                    status_code=?6, completeness_code=?7, finalization_reason=?8,
+                    command_exit_code=COALESCE(?9, command_exit_code)"
                     ),
                     params![
                         update.action_id,
@@ -172,7 +200,8 @@ impl<'a> ActionStateWriter<'a> {
                         end_time.map(encode_time),
                         action_status_code(*status),
                         action_completeness_code(*completeness),
-                        reason
+                        reason,
+                        command_exit_code
                     ],
                 )?
             }
@@ -260,9 +289,85 @@ impl<'a> ActionStateWriter<'a> {
                     ],
                 )?
             }
+            SemanticActionChange::SupplementAttributes { supplement } => {
+                self.supplement_attributes(&update, supplement, encoder)?
+            }
         };
         self.append_evidence(key, &update.evidence)?;
         self.revise(update.trace_id)
+    }
+
+    fn supplement_attributes(
+        &self,
+        update: &SemanticActionUpdate,
+        supplement: &SemanticAttributeSupplement,
+        encoder: &ColdFieldEncoder,
+    ) -> Result<i64, SemanticActionStoreError> {
+        let required = supplement.required_action.as_ref();
+        let (key, mut attributes, required_action_matches) = self
+            .connection
+            .prepare_cached(
+                "SELECT action.action_key,
+                cold.encoding_code AS attributes_encoding_code,
+                cold.uncompressed_bytes AS attributes_uncompressed_bytes,
+                cold.payload AS attributes_payload,
+                (?5 IS NULL OR EXISTS (
+                 SELECT 1 FROM semantic_action_ids related_ids
+                 JOIN semantic_actions related ON related.action_key = related_ids.action_key
+                 WHERE related_ids.action_id = ?5 AND related_ids.trace_id = ?6
+                   AND related.trace_id = ?6 AND related.process_id = ?7
+                   AND related.kind_code = ?8
+                )) AS required_action_matches
+             FROM semantic_actions action
+             JOIN semantic_action_ids ids ON ids.action_key = action.action_key
+             LEFT JOIN semantic_action_cold_fields cold ON cold.owner_key = action.action_key
+             WHERE ids.action_id = ?1 AND ids.trace_id = ?2 AND action.trace_id = ?2
+               AND action.kind_code = ?3 AND action.process_id = ?4",
+            )
+            .and_then(|mut statement| {
+                statement.query_row(
+                    params![
+                        update.action_id,
+                        update.trace_id.get(),
+                        action_kind_code(update.kind),
+                        update.process.get(),
+                        required.map(|action| action.action_id.as_str()),
+                        required.map(|action| action.trace_id.get()),
+                        required.map(|action| action.process.get()),
+                        required.map(|action| action_kind_code(action.kind)),
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            decode_attributes_from_row(row)?,
+                            row.get::<_, bool>("required_action_matches")?,
+                        ))
+                    },
+                )
+            })
+            .optional()
+            .map_err(|error| Self::error("supplement_attributes", error))?
+            .ok_or_else(|| {
+                SemanticActionStoreError::supplement_rejected(
+                    SemanticAttributeSupplementRejection::Identity,
+                    "update_semantic_action_identity",
+                    "action identity is missing or conflicts",
+                )
+            })?;
+        // Check target identity conditions before optional related-record failures.
+        let changed = supplement.merge_attributes(&mut attributes)?;
+        if !required_action_matches {
+            return Err(SemanticActionStoreError::supplement_rejected(
+                SemanticAttributeSupplementRejection::Conflict,
+                "update_semantic_action_identity",
+                "required action identity is missing or conflicts",
+            ));
+        }
+        if changed {
+            upsert_action_attributes(self.connection, key, &attributes, encoder)
+                .map_err(|error| Self::error("supplement_attributes", error))?;
+        }
+        Ok(key)
     }
 
     fn assigned(
@@ -336,6 +441,9 @@ impl<'a> ActionStateWriter<'a> {
         }
         if let Some(value) = row.get::<_, Option<String>>("command_tool_name")? {
             attributes.insert(attrs::command::TOOL_NAME.into(), value);
+        }
+        if let Some(value) = row.get::<_, Option<i32>>("command_exit_code")? {
+            attributes.insert(attrs::command::EXIT_CODE.into(), value.to_string());
         }
         if let Some(code) = row.get::<_, Option<i16>>("tool_result_binding")? {
             let value = match code {

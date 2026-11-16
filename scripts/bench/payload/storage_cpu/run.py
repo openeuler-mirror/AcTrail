@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "tests/v2/common/test_suites/local_maas_server"))
+sys.path.insert(0, str(ROOT / "tests/e2e/common/test_suites/local_maas_server"))
 
 from scripts.bench.detail.benchmark import BenchmarkLock
 from scripts.bench.payload.benchmark import PayloadBenchmark

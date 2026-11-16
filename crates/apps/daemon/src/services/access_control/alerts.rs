@@ -9,6 +9,7 @@ use trace_runtime::registry::TraceRuntime;
 use crate::services::alert_ingress::{
     AlertIngress, BoundaryAlertAggregation, CommandExecutionBoundaryAlert,
     CommandExecutionDenySource, FileAccessBoundaryAlert, FileAccessDenySource,
+    NetworkConnectionBoundaryAlert, NetworkConnectionDenySource,
 };
 
 /// The daemon's sole aggregation state. Admission credits last the entire window,
@@ -26,6 +27,7 @@ pub(in crate::services) struct LsmBoundaryAlerts {
 struct RuleKey {
     trace_id: TraceId,
     domain: u32,
+    protocol: u8,
     owner: String,
     rule_id: String,
     revision: u64,
@@ -67,7 +69,7 @@ impl LsmBoundaryAlerts {
         if audit.decision != 1
             || audit.error != 0
             || audit.rule_id.is_empty()
-            || !(1..=4).contains(&audit.domain)
+            || !(1..=14).contains(&audit.domain)
         {
             return;
         }
@@ -77,6 +79,7 @@ impl LsmBoundaryAlerts {
         let key = RuleKey {
             trace_id: TraceId::new(audit.trace_id),
             domain: audit.domain,
+            protocol: audit.protocol,
             owner: audit.owner.clone(),
             rule_id: audit.rule_id.clone(),
             revision: audit.revision,
@@ -180,7 +183,31 @@ impl PendingDenials {
             last_observed_at: self.last,
         };
         let token = trace.trace.alert_token.clone();
-        let result = if key.domain == 4 {
+        let result = if matches!(key.domain, 5 | 12..=14) {
+            ingress.submit_network_connection_boundary_alert(
+                key.trace_id,
+                token,
+                NetworkConnectionBoundaryAlert::new(
+                    self.resource.clone(),
+                    key.rule_id.clone(),
+                    key.owner.clone(),
+                    self.process_id,
+                    NetworkConnectionDenySource::FastPathDeny,
+                    None,
+                    None,
+                )
+                .with_action(
+                    match key.domain {
+                        5 => "connect",
+                        12 => "send",
+                        13 => "bind",
+                        _ => "listen",
+                    },
+                    key.protocol,
+                )
+                .with_aggregation(aggregation),
+            )
+        } else if key.domain == 4 {
             ingress.submit_command_execution_boundary_alert(
                 key.trace_id,
                 token,
@@ -201,6 +228,12 @@ impl PendingDenials {
                 1 => "open",
                 2 => "mkdir",
                 3 => "rmdir",
+                6 => "read",
+                7 => "write",
+                8 => "delete",
+                9 => "attr",
+                10 => "rename",
+                11 => "link",
                 _ => unreachable!("validated LSM domain"),
             };
             ingress.submit_file_access_boundary_alert(

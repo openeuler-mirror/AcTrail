@@ -125,10 +125,18 @@ impl FunctionAnalysis {
                 Some(state),
             ) = (instruction, states[index])
             {
+                let mut comparison = index + 1;
+                if matches!(
+                    self.instructions.get(comparison),
+                    Some(Instruction::Load { target: other, bytes: 8, .. })
+                        if other != target && other != base
+                ) {
+                    comparison += 1;
+                }
                 if state.get(*base) == Origin::Argument(0, 0)
-                    && matches!(self.instructions.get(index + 1), Some(Instruction::CompareOne(register)) if register == target)
+                    && matches!(self.instructions.get(comparison), Some(Instruction::CompareOne(register)) if register == target)
                     && matches!(
-                        self.instructions.get(index + 2),
+                        self.instructions.get(comparison + 1),
                         Some(Instruction::Branch {
                             conditional: true,
                             ..
@@ -172,7 +180,11 @@ impl FunctionAnalysis {
                     register,
                     target,
                     zero: true,
-                } if state.get(register) == Origin::Reference(1, 0) => {
+                } if matches!(
+                    state.get(register),
+                    Origin::Reference(1, 0) | Origin::Argument(1, 0)
+                ) =>
+                {
                     nullable = Some((index, target, register))
                 }
                 _ => {}
@@ -234,8 +246,17 @@ impl FunctionAnalysis {
         else {
             return Ok(None);
         };
+        let mut length_branch = branch + 2;
+        if matches!(
+            self.instructions.get(length_branch),
+            Some(Instruction::Move(destination, source, true))
+                if *source == reference && destination != length
+        ) {
+            Self::consume(budget)?;
+            length_branch += 1;
+        }
         if *base != reference
-            || !matches!(self.instructions.get(branch + 2), Some(Instruction::ZeroBranch { register, target, zero: true }) if register == length && *target == exit)
+            || !matches!(self.instructions.get(length_branch), Some(Instruction::ZeroBranch { register, target, zero: true }) if register == length && *target == exit)
         {
             return Ok(None);
         }
@@ -246,7 +267,7 @@ impl FunctionAnalysis {
             .iter()
             .enumerate()
             .take(exit_index)
-            .skip(branch + 3)
+            .skip(length_branch + 1)
         {
             Self::consume(budget)?;
             let target = match instruction {

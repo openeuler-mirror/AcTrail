@@ -4,6 +4,7 @@
 pub struct StorageError {
     pub stage: String,
     pub message: String,
+    pub supplement_rejection: Option<semantic_action::SemanticAttributeSupplementRejection>,
 }
 
 impl StorageError {
@@ -11,13 +12,18 @@ impl StorageError {
         Self {
             stage: stage.into(),
             message: message.into(),
+            supplement_rejection: None,
         }
     }
 }
 
 impl From<semantic_action::SemanticActionStoreError> for StorageError {
     fn from(error: semantic_action::SemanticActionStoreError) -> Self {
-        Self::new(error.stage, error.message)
+        Self {
+            stage: error.stage,
+            message: error.message,
+            supplement_rejection: error.supplement_rejection,
+        }
     }
 }
 

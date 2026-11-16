@@ -22,7 +22,7 @@ impl PolicyPublisher {
             MapType::LpmTrie,
             Some("ac_policy"),
             260,
-            288,
+            432,
             self.capacity,
             &opts,
         )

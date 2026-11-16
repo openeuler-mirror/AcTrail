@@ -1,6 +1,8 @@
+//! Queries and builtin rules for a backend-bound file policy store.
+
 use super::super::model::StoredPolicyRule;
 use super::super::scope::PathScope;
-use super::super::types::{BuiltinIgnoreMark, EnforcementRule};
+use super::super::types::{BuiltinIgnoreMark, EnforcementRule, RuleDecision};
 use super::EnforcementRules;
 use plugin_system::{
     FilePolicyDecision, FilePolicyListFilter, FilePolicyListResult, FilePolicyMatchDryRunRequest,
@@ -71,6 +73,15 @@ impl EnforcementRules {
             .iter()
             .map(StoredPolicyRule::execution_view)
             .collect()
+    }
+
+    /// Preserve the decision budget while compiling the same ordered execution views.
+    pub(crate) fn effective_lsm_rule_views(
+        &self,
+    ) -> impl Iterator<Item = (FilePolicyRuleView, &RuleDecision)> {
+        self.effective_rules
+            .iter()
+            .map(|rule| (rule.execution_view(), &rule.rule.decision))
     }
 
     pub fn list(

@@ -1,5 +1,26 @@
 package actrail:plugin@0.4.0;
 
+interface http-host {
+  record http-request {
+    method: string,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+  record http-response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+  request: func(request: http-request) -> result<http-response, string>;
+}
+
+world http-control-plugin {
+  import host;
+  import http-host;
+  export control-decider;
+}
+
 interface host {
   use types.{payload-ref, payload-chunk, config-chunk, decision-summary, file-policy-view, file-policy-apply-request, file-policy-apply-result, file-policy-list-filter, file-policy-list-result, file-policy-match-dry-run-request, file-policy-match-dry-run-result, command-policy-apply-request, command-policy-apply-result, command-policy-list-filter, command-policy-list-result, command-policy-match-dry-run-request, command-policy-match-dry-run-result, command-execution-context};
 

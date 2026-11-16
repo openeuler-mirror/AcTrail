@@ -6,7 +6,9 @@ pub use action_content::{ActionContentSource, HttpContentPage, HttpContentQuery}
 mod error;
 mod idle;
 mod payload_retention;
+mod recent_actions;
 mod timeline;
+pub use recent_actions::RecentActionsQuery;
 mod trace_page;
 mod transaction;
 pub use idle::{IdleInterval, IdlePage, IdleQuery};
@@ -37,4 +39,6 @@ pub use store_snapshot_contract::view::SnapshotView;
 pub use transaction::StorageTransaction;
 
 mod cgroup_v1_bindings;
+mod cgroup_v2_bindings;
 pub use cgroup_v1_bindings::CgroupV1BindingStore;
+pub use cgroup_v2_bindings::CgroupV2BindingStore;

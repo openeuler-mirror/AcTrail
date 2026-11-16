@@ -64,6 +64,9 @@ retain_assembled_payload = false
 [semantic_retention.l0_llm_call.trajectory]
 enabled = false
 
+[semantic_retention.l0_llm_call.context_compact]
+inference_enabled = false
+
 [semantic_retention.l1_sse]
 enabled = false
 stream_summary = false

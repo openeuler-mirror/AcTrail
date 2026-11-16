@@ -11,7 +11,6 @@ use config_core::daemon::{
 };
 use control_contract::command::LaunchTlsProbePlan;
 use model_core::ids::RequestId;
-use model_core::process::SuppressedFdPurpose;
 use tls_payload_sync::{
     LibcFamily, RuntimeLibraryPath, RuntimeLibrarySet, RuntimePlanDescriptor, TargetRuntime,
     launch_command_for_plan_descriptor, resolve_program_path, resolve_target_runtime,
@@ -19,7 +18,6 @@ use tls_payload_sync::{
 };
 
 use super::super::java_agent::java_agent_env_required;
-use super::super::suppress::InheritableSuppressedFd;
 use super::super::timing::LaunchTiming;
 use crate::tls_plan::{QueriedLaunchTlsPlan, query_launch_tls_plan};
 use crate::transport::ControlClientPort;
@@ -415,14 +413,17 @@ impl super::LaunchInjection for TlsSyncInjection {
             context.agent_commands,
             context.timing,
         )?;
-        let event_fd = if launch.sync_runtime_required {
-            Some(InheritableSuppressedFd::connect_unix_socket(
-                &context.config.sync_event_socket_path,
-                SuppressedFdPurpose::TlsSyncEvent,
-            )?)
-        } else {
-            None
-        };
+        if launch.sync_runtime_required {
+            drop(
+                std::os::unix::net::UnixStream::connect(&context.config.sync_event_socket_path)
+                    .map_err(|error| {
+                        format!(
+                            "connect TLS-sync event socket {}: {error}",
+                            context.config.sync_event_socket_path.display()
+                        )
+                    })?,
+            );
+        }
         *command = std::mem::take(&mut launch.command);
         let direct_probe_plans = std::mem::take(&mut launch.direct_probe_plans)
             .into_iter()
@@ -436,10 +437,7 @@ impl super::LaunchInjection for TlsSyncInjection {
             })
             .collect();
         self.launch = Some(launch);
-        Ok(super::InjectionResources {
-            event_fd,
-            direct_probe_plans,
-        })
+        Ok(super::InjectionResources { direct_probe_plans })
     }
 
     fn envs(
@@ -450,13 +448,6 @@ impl super::LaunchInjection for TlsSyncInjection {
             .launch
             .as_ref()
             .ok_or_else(|| "TLS sync injection has not been prepared".to_string())?;
-        env::sync_launch_envs(
-            context.trace_id,
-            context.config,
-            context.socket_max_segment_bytes,
-            launch,
-            context.event_fd,
-            context.timing,
-        )
+        env::sync_launch_envs(context.trace_id, context.config, launch, context.timing)
     }
 }

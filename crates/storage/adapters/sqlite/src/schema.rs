@@ -437,7 +437,7 @@ CREATE INDEX IF NOT EXISTS idx_llm_request_lineage_fork ON llm_request_lineage (
 "#;
 
 pub(crate) const CREATE_EXTERNAL_CGROUP_BINDINGS_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS trace_external_cgroup_bindings (
+CREATE TABLE IF NOT EXISTS trace_external_cgroup_v2_bindings (
     trace_id             INTEGER PRIMARY KEY,
     runtime              TEXT NOT NULL CHECK (
         runtime IN ('docker', 'containerd', 'kubernetes-unknown-cri', 'podman', 'crio')
@@ -476,8 +476,8 @@ CREATE TABLE IF NOT EXISTS trace_external_cgroup_bindings (
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_trace_external_cgroup_bindings_lifecycle
-    ON trace_external_cgroup_bindings (lifecycle_state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_trace_external_cgroup_v2_bindings_lifecycle
+    ON trace_external_cgroup_v2_bindings (lifecycle_state, updated_at);
 "#;
 
 pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
@@ -485,7 +485,7 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
     validate_writable_schema_state(connection, version)?;
     connection.execute_batch(CREATE_TABLES_SQL)?;
     connection.execute_batch(CREATE_EXTERNAL_CGROUP_BINDINGS_SQL)?;
-    connection.execute_batch(include_str!("cgroup_v1/schema.sql"))?;
+    connection.execute_batch(include_str!("cgroup_v1_binding/schema.sql"))?;
     connection.execute_batch(include_str!("semantic_actions/store/schema.sql"))?;
     connection.execute_batch(crate::alerts::schema::CREATE_SQL)?;
     codebook::for_schema_version(SQLITE_SCHEMA_VERSION_CURRENT)
@@ -497,73 +497,8 @@ pub fn initialize(connection: &Connection) -> Result<(), rusqlite::Error> {
 }
 
 #[cfg(test)]
-mod baseline_upgrade_tests {
-    use super::*;
-
-    fn create_dev_baseline_without_external_bindings(
-        connection: &Connection,
-        with_host_scopes: bool,
-    ) {
-        connection.execute_batch(CREATE_TABLES_SQL).unwrap();
-        connection
-            .execute_batch(include_str!("semantic_actions/store/schema.sql"))
-            .unwrap();
-        connection
-            .execute_batch(crate::alerts::schema::CREATE_SQL)
-            .unwrap();
-        if !with_host_scopes {
-            connection
-                .execute_batch("DROP TABLE trace_resource_scopes")
-                .unwrap();
-        }
-        connection
-            .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_CURRENT)
-            .unwrap();
-    }
-
-    #[test]
-    fn archived_database_opens_read_only_without_creating_resource_registry() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("archive.sqlite");
-        let connection = Connection::open(&path).unwrap();
-        create_dev_baseline_without_external_bindings(&connection, false);
-        drop(connection);
-        let before = std::fs::read(&path).unwrap();
-        let storage = crate::SqliteStorage::open_read_only(&path).unwrap();
-        assert!(
-            storage_core::StorageBackend::list_events(&storage, model_core::ids::TraceId::new(1))
-                .unwrap()
-                .is_empty()
-        );
-        drop(storage);
-        assert_eq!(std::fs::read(&path).unwrap(), before);
-        let connection =
-            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        assert_eq!(
-            user_version(&connection).unwrap(),
-            SQLITE_SCHEMA_VERSION_CURRENT
-        );
-        assert!(!column_exists(&connection, "trace_resource_scopes", "trace_id").unwrap());
-        assert!(!column_exists(&connection, "trace_external_cgroup_bindings", "trace_id").unwrap());
-    }
-
-    #[test]
-    fn dev_and_host_databases_gain_external_bindings() {
-        for with_host_scopes in [false, true] {
-            let connection = Connection::open_in_memory().unwrap();
-            create_dev_baseline_without_external_bindings(&connection, with_host_scopes);
-            initialize(&connection).unwrap();
-            assert_eq!(
-                user_version(&connection).unwrap(),
-                SQLITE_SCHEMA_VERSION_CURRENT
-            );
-            require_schema_object(&connection, "table", "trace_resource_scopes").unwrap();
-            require_schema_object(&connection, "table", "trace_external_cgroup_bindings").unwrap();
-            validate_read_schema(&connection).unwrap();
-            initialize(&connection).unwrap();
-        }
-    }
-}
+#[path = "../../../../../tests/unit/crates/storage/adapters/sqlite/schema/baseline_upgrade_tests.rs"]
+mod baseline_upgrade_tests;
 
 pub fn validate_read_schema(connection: &Connection) -> Result<(), rusqlite::Error> {
     if user_version(connection)? != SQLITE_SCHEMA_VERSION_CURRENT {
@@ -603,7 +538,7 @@ fn validate_schema(
 ) -> Result<(), rusqlite::Error> {
     crate::alerts::schema::validate(connection)?;
     if require_external_bindings {
-        require_schema_object(connection, "table", "trace_cgroup_v1_bindings")?;
+        require_schema_object(connection, "table", "trace_external_cgroup_v1_bindings")?;
         for column in [
             "trace_id",
             "host_boot_id",
@@ -613,7 +548,7 @@ fn validate_schema(
             "stale_reason",
             "closed_at",
         ] {
-            require_column(connection, "trace_cgroup_v1_bindings", column)?;
+            require_column(connection, "trace_external_cgroup_v1_bindings", column)?;
         }
     }
     require_schema_object(connection, "table", "tls_flow_diagnostics")?;
@@ -700,6 +635,7 @@ fn validate_schema(
         "finalization_reason",
         "failure_http_status",
         "command_invocation_kind",
+        "command_exit_code",
         "tool_result_binding",
     ] {
         require_integer_column(connection, "semantic_action_state", column)?;
@@ -761,7 +697,7 @@ fn validate_schema(
     require_column(connection, "semantic_action_cold_fields", "payload")?;
     require_column(connection, "semantic_action_link_cold_fields", "payload")?;
     if require_external_bindings {
-        require_schema_object(connection, "table", "trace_external_cgroup_bindings")?;
+        require_schema_object(connection, "table", "trace_external_cgroup_v2_bindings")?;
         for column in [
             "trace_id",
             "runtime",
@@ -778,12 +714,12 @@ fn validate_schema(
             "last_good_at",
             "closed_at",
         ] {
-            require_column(connection, "trace_external_cgroup_bindings", column)?;
+            require_column(connection, "trace_external_cgroup_v2_bindings", column)?;
         }
         require_schema_object(
             connection,
             "index",
-            "idx_trace_external_cgroup_bindings_lifecycle",
+            "idx_trace_external_cgroup_v2_bindings_lifecycle",
         )?;
     }
     Ok(())

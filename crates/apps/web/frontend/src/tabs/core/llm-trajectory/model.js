@@ -17,7 +17,8 @@ const TRAJECTORY_COLORS = [
 
 export function buildTrajectoryLayout(graph) {
   const nodes = [...(graph?.nodes ?? [])].sort(compareNodes);
-  const trajectories = buildTrajectories(nodes, graph?.edges ?? []);
+  const graphEdges = graph?.edges ?? [];
+  const trajectories = buildTrajectories(nodes, graphEdges);
   const trajectoryById = new Map(
     trajectories.map((trajectory) => [trajectory.id, trajectory]),
   );
@@ -50,7 +51,7 @@ export function buildTrajectoryLayout(graph) {
     };
   });
   const byId = new Map(positionedNodes.map((node) => [node.id, node]));
-  const edges = (graph?.edges ?? [])
+  const edges = graphEdges
     .map((edge) => {
       const source = byId.get(edge.source);
       const target = byId.get(edge.target);
@@ -252,5 +253,9 @@ function edgePath(source, target, kind) {
     return `M ${source.x} ${source.y + 11} L ${target.x} ${target.y - 11}`;
   }
   const middleY = source.y + (target.y - source.y) * 0.52;
+  if (kind === 'compaction-source') {
+    const approachX = target.x + (target.x >= source.x ? 18 : -18);
+    return `M ${source.x} ${source.y + 11} C ${source.x} ${middleY}, ${approachX} ${middleY}, ${target.x} ${target.y - 11}`;
+  }
   return `M ${source.x} ${source.y + 11} C ${source.x} ${middleY}, ${target.x} ${middleY}, ${target.x} ${target.y - 11}`;
 }

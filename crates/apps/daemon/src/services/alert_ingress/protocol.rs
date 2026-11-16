@@ -10,7 +10,9 @@ use model_core::ids::TraceId;
 use model_core::trace::TraceAlertToken;
 use plugin_system::{AlertHost, PluginRuntimeError};
 
-use super::system::{CommandExecutionBoundaryAlert, FileAccessBoundaryAlert};
+use super::system::{
+    CommandExecutionBoundaryAlert, FileAccessBoundaryAlert, NetworkConnectionBoundaryAlert,
+};
 
 pub(super) struct AlertHostClient {
     admission: Arc<AlertAdmission>,
@@ -55,6 +57,20 @@ impl AlertHostClient {
             trace_id,
             alert_token,
             QueuedAlertDraft::CommandExecutionBoundary(alert),
+            AlertAuthorization::RuntimeAuthorized,
+        )
+    }
+
+    pub(super) fn submit_network_connection_boundary_alert(
+        &self,
+        trace_id: TraceId,
+        alert_token: TraceAlertToken,
+        alert: NetworkConnectionBoundaryAlert,
+    ) -> Result<(), PluginRuntimeError> {
+        self.enqueue(
+            trace_id,
+            alert_token,
+            QueuedAlertDraft::NetworkConnectionBoundary(alert),
             AlertAuthorization::RuntimeAuthorized,
         )
     }
@@ -312,6 +328,7 @@ pub(super) enum QueuedAlertDraft {
     Ready(AlertDraft),
     FileAccessBoundary(FileAccessBoundaryAlert),
     CommandExecutionBoundary(CommandExecutionBoundaryAlert),
+    NetworkConnectionBoundary(NetworkConnectionBoundaryAlert),
 }
 
 impl QueuedAlertDraft {
@@ -320,6 +337,7 @@ impl QueuedAlertDraft {
             Self::Ready(draft) => Ok(draft),
             Self::FileAccessBoundary(alert) => alert.into_draft(),
             Self::CommandExecutionBoundary(alert) => alert.into_draft(),
+            Self::NetworkConnectionBoundary(alert) => alert.into_draft(),
         }
     }
 }

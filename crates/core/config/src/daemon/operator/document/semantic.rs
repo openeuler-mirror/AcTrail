@@ -1,15 +1,20 @@
+#[path = "semantic/compact.rs"]
+mod compact;
 #[path = "semantic/http.rs"]
 mod http;
 use http::{Http1ProtocolDocument, Http2ProtocolDocument};
 #[path = "semantic/llm.rs"]
 mod llm;
+use compact::LlmContextCompactDocument;
 use llm::L0LlmCallDocument;
 #[path = "semantic/websocket.rs"]
 mod websocket;
 use websocket::{L2WebSocketDocument, LlmWebSocketDocument};
 
 use super::*;
-use crate::daemon::agent::DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES;
+use crate::daemon::agent::{
+    DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES, LlmContextCompactConfig,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -82,6 +87,9 @@ impl SemanticRetentionDocument {
                     &config.l0_llm_call.projection_state,
                 ),
                 trajectory: LlmTrajectoryDocument::from_config(&config.l0_llm_call.trajectory),
+                context_compact: LlmContextCompactDocument::from_config(
+                    &config.l0_llm_call.context_compact,
+                ),
             },
             l0_mcp_call: L0McpCallDocument {
                 request_content: mcp_jsonrpc_content_retention_as_str(

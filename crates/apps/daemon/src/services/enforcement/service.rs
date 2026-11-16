@@ -212,11 +212,7 @@ struct FileBackend {
 
 impl FileBackend {
     fn new(config: EnforcementConfig, operations: FileControlConfig) -> Result<Self, String> {
-        let mut rules = if operations.open.is_fanotify() {
-            EnforcementRules::load(&config.rules_path)?
-        } else {
-            EnforcementRules::load_for_lsm(&config.rules_path)?
-        };
+        let mut rules = EnforcementRules::load(&config.rules_path, &operations)?;
         rules.install_builtin_allow_rules(
             config
                 .builtin_rules

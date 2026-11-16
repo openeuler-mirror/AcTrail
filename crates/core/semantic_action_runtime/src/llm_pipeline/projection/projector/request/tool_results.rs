@@ -1,4 +1,4 @@
-//! Provider-neutral projection of the current request's trailing tool results.
+//! Provider-neutral projection of the tool results added since the model's latest turn.
 
 use config_core::daemon::SemanticRetentionConfig;
 use model_core::ids::TraceId;
@@ -35,9 +35,9 @@ pub(super) fn project_tool_results(
     }
     let mut raw = Vec::new();
     if let Some(messages) = body.get("messages").and_then(Value::as_array) {
-        collect_trailing_tool_results(messages, &mut raw);
+        collect_current_turn_tool_results(messages, &mut raw);
     } else if let Some(input) = body.get("input").and_then(Value::as_array) {
-        collect_trailing_tool_results(input, &mut raw);
+        collect_current_turn_tool_results(input, &mut raw);
     }
     raw.into_iter()
         .enumerate()
@@ -76,19 +76,27 @@ struct RawToolResult<'a> {
     content: &'a Value,
 }
 
-fn collect_trailing_tool_results<'a>(items: &'a [Value], output: &mut Vec<RawToolResult<'a>>) {
-    let mut suffix = Vec::new();
-    for item in items.iter().rev() {
-        let mut item_results = Vec::new();
-        collect_message_tool_results(item, &mut item_results);
-        if item_results.is_empty() {
-            break;
-        }
-        suffix.push(item_results);
+/// Every request repeats the whole history, so only the tool results after the
+/// model's latest output are new. Agents may append other messages after those
+/// results (for example a `system` or `user` reminder), so the results do not
+/// have to be at the end of the request.
+fn collect_current_turn_tool_results<'a>(items: &'a [Value], output: &mut Vec<RawToolResult<'a>>) {
+    let turn_start = items
+        .iter()
+        .rposition(is_model_output)
+        .map_or(0, |index| index + 1);
+    for item in &items[turn_start..] {
+        collect_message_tool_results(item, output);
     }
-    for item_results in suffix.into_iter().rev() {
-        output.extend(item_results);
-    }
+}
+
+/// An assistant message, or a Responses API call item such as `function_call`.
+fn is_model_output(item: &Value) -> bool {
+    item.get("role").and_then(Value::as_str) == Some("assistant")
+        || item
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.ends_with("_call"))
 }
 
 fn collect_message_tool_results<'a>(message: &'a Value, output: &mut Vec<RawToolResult<'a>>) {

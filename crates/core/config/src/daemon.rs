@@ -41,13 +41,26 @@ pub use crate::retention::{
 };
 pub use access_control::{
     AccessControlBackend, AccessControlConfig, FileControlConfig, FileOpenBackend, LsmConfig,
-    LsmDenySignal,
+    LsmDenySignal, LsmGreyConfig, LsmGreyMode,
 };
 pub use agent::{
     AgentInvocationConfig, DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS, DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
-    DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES, DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
+    DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES,
+    DEFAULT_LLM_CONTEXT_COMPACT_COMPACTION_CANDIDATES_MAX_ENTRIES_PER_SCOPE,
+    DEFAULT_LLM_CONTEXT_COMPACT_COMPACTION_CANDIDATES_TTL,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_ACTIVE_SCOPES_PER_TRACE,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_ARTIFACT_BYTES,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_CONTEXT_ITEMS_TO_SCAN,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_CONTEXT_SCAN_BYTES,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_FINGERPRINT_POSITIONS,
+    DEFAULT_LLM_CONTEXT_COMPACT_MAX_OPEN_REQUESTS_PER_SCOPE,
+    DEFAULT_LLM_CONTEXT_COMPACT_MIN_ARTIFACT_COVERAGE_PERCENT,
+    DEFAULT_LLM_CONTEXT_COMPACT_MIN_ARTIFACT_FLOW_BYTES,
+    DEFAULT_LLM_CONTEXT_COMPACT_PENDING_ADOPTIONS_MAX_ENTRIES_PER_SCOPE,
+    DEFAULT_LLM_CONTEXT_COMPACT_PENDING_ADOPTIONS_TTL,
+    DEFAULT_LLM_PROJECTION_MAX_ACTION_VERSIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_PENDING_TRAJECTORY_ACTIONS_PER_TRACE,
     DEFAULT_LLM_PROJECTION_MAX_TOOL_ENTRIES_PER_TRACE, DEFAULT_LLM_REQUEST_BODY_EXPORT_MAX_BYTES,
     DEFAULT_LLM_STREAM_CLASSIFIER_SOFT_SNIFF_MAX_BYTES, DEFAULT_LLM_TOOL_RESULT_EXPORT_MAX_BYTES,
@@ -60,11 +73,12 @@ pub use agent::{
     Http2DataContentRetention, Http2ProtocolConfig, HttpBodyRetention, HttpExchangeConfig,
     HttpHeadersRetention, L0LlmCallRetention, L0McpCallRetention, L1SseRetention, L2HttpRetention,
     L2WebSocketRetention, L3Http2FrameRetention, L4PayloadRetention, LlmAssemblyConfig,
-    LlmProjectionStateConfig, LlmRequestBodyExportRetention, LlmRequestContentRetention,
-    LlmResponseContentRetention, LlmStreamClassifierConfig, LlmToolCallRetention,
-    LlmToolResultContentExportRetention, LlmTrajectoryConfig, LlmUsageRetention,
-    LlmWebSocketConfig, McpJsonRpcContentRetention, PayloadBodyContentRetention,
-    SemanticContentOwner, SemanticRetentionConfig, SseEventContentRetention,
+    LlmContextCompactConfig, LlmContextCompactPoolConfig, LlmProjectionStateConfig,
+    LlmRequestBodyExportRetention, LlmRequestContentRetention, LlmResponseContentRetention,
+    LlmStreamClassifierConfig, LlmToolCallRetention, LlmToolResultContentExportRetention,
+    LlmTrajectoryConfig, LlmUsageRetention, LlmWebSocketConfig, McpJsonRpcContentRetention,
+    PayloadBodyContentRetention, SemanticContentOwner, SemanticRetentionConfig,
+    SseEventContentRetention,
 };
 pub use application::{ApplicationProtocolConfig, SseDataPolicy};
 pub use cluster::{
@@ -98,15 +112,16 @@ pub use logging::{
 };
 pub use network::{NetworkControlConfig, NetworkControlSeccompSyscall};
 pub use operator::{
-    AlertForwardingConfig, DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_PENDING_CONNECTION_MAX,
-    DEFAULT_OPERATOR_CONFIG_PATH, DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS,
-    DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY, DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE,
-    DEFAULT_PLUGIN_DISCOVERY_DIRECTORY, DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES,
-    DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES, HandObservationConfig, OperatorConfig,
-    OperatorConfigInitStatus, PluginAlertRuntimeConfig, PluginDiscoveryConfig, SandboxAlertsConfig,
-    SandboxAlertsSynchronousConfig, SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig,
-    StartupPluginFailurePolicy, StartupPluginLoadConfig, StartupPluginsConfig,
-    launch_seccomp_requirements,
+    AlertForwardingConfig, CheckpointBackendConfig, CheckpointRuntimeConfig,
+    DEFAULT_ACTIVE_TRACE_MAX, DEFAULT_CONTROL_ACCEPT_RETRY_DELAY_MS,
+    DEFAULT_CONTROL_PENDING_CONNECTION_MAX, DEFAULT_OPERATOR_CONFIG_PATH,
+    DEFAULT_PLUGIN_ALERT_DRAIN_TIMEOUT_MS, DEFAULT_PLUGIN_ALERT_QUEUE_CAPACITY,
+    DEFAULT_PLUGIN_ALERT_WRITES_PER_CYCLE, DEFAULT_PLUGIN_DISCOVERY_DIRECTORIES,
+    DEFAULT_PLUGIN_DISCOVERY_MANIFEST_MAX_BYTES, DEFAULT_PLUGIN_DISCOVERY_MAX_PACKAGES,
+    HandObservationConfig, OperatorConfig, OperatorConfigInitStatus, PluginAlertRuntimeConfig,
+    PluginDiscoveryConfig, SandboxAlertsConfig, SandboxAlertsSynchronousConfig,
+    SandboxEvidenceConfig, SandboxEvidenceSynchronousConfig, StartupPluginFailurePolicy,
+    StartupPluginLoadConfig, StartupPluginsConfig, launch_seccomp_requirements,
 };
 pub use payload::{
     DEFAULT_MCP_PARSE_BUFFER_MAX_BYTES, DEFAULT_MCP_PENDING_STDIO_CANDIDATE_MAX_ENTRIES,
@@ -145,6 +160,23 @@ pub struct WebServerConfig {
     pub listen_addr: SocketAddr,
     pub request_read_timeout: Option<Duration>,
     pub alerts: WebAlertsConfig,
+    pub checkpoints: WebCheckpointsConfig,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebCheckpointsConfig {
+    pub status_timeout_ms: u64,
+    pub poll_interval_ms: u32,
+}
+
+impl Default for WebCheckpointsConfig {
+    fn default() -> Self {
+        Self {
+            status_timeout_ms: 500,
+            poll_interval_ms: 1_500,
+        }
+    }
 }
 
 pub const DEFAULT_WEB_ALERTS_LIMIT: u32 = 30;

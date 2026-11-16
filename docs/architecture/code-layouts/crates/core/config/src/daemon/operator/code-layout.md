@@ -19,6 +19,7 @@
     ├── [x] semantic.rs # 汇总语义层保留文档及投影开关。
     ├── [x] semantic/ # LLM、HTTP 和 WebSocket 的内容及状态预算。
     │   ├── [x] llm.rs # 请求正文、工具结果、trajectory 和 assembly 的保留参数。
+    │   ├── [x] compact.rs # 解析并校验上下文压缩配置。
     │   ├── [x] http.rs # HTTP、SSE、HTTP/2 的语义和正文保留参数。
     │   └── [x] websocket.rs # WebSocket 消息和语义内容的保留参数。
     ├── [x] plugin/ # 插件发现、告警队列和启动加载文档。
@@ -28,6 +29,7 @@
     ├── [x] hand_observation/ # daemon 隔离观测 TCP 入口及连接限制。
     ├── [x] sandbox_evidence/ # 无兴趣 observation 的 SQLite 路径、写队列及保留策略。
     ├── [x] sandbox_alerts/ # Sandbox 告警独立存储和读写预算。
+    ├── [x] checkpoint.rs # [checkpoint] 段：是否启用、记录库 SQLite 路径和可用的 [[checkpoint.backends]]，每项包含注册名 name、动态库 library 和运行配置文件 config。
     ├── [x] process.rs # seccomp 通知、进程观测和 agent invocation 文档。
     ├── [x] file.rs # 文件事件采集需求、路径和 IO 摘要配置。
     ├── [x] idle_detection.rs # 将 idle detector 子配置交给领域模块校验。

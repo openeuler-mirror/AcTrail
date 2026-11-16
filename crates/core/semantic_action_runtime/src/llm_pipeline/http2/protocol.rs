@@ -21,7 +21,6 @@ pub(in crate::llm_pipeline) struct Http2Protocol {
     pub(super) stream_counts: BTreeMap<TraceId, usize>,
     pub(super) max_streams: usize,
     pub(super) retain_http: bool,
-    max_frame_bytes: usize,
     max_connection_bytes: usize,
     max_evidence_ranges: usize,
 }
@@ -37,7 +36,6 @@ impl Http2Protocol {
             stream_counts: BTreeMap::new(),
             max_streams: config.l2_http.http2.max_active_streams_per_trace as usize,
             retain_http: config.http_message_summary_enabled(),
-            max_frame_bytes: config.l2_http.http2.max_frame_bytes as usize,
             max_connection_bytes: config.l2_http.http2.max_connection_buffer_bytes as usize,
             max_evidence_ranges: config.l2_http.http2.max_evidence_ranges as usize,
         }
@@ -46,6 +44,16 @@ impl Http2Protocol {
         self.connections
             .contains_key(&ConnectionKey(identity.clone()))
     }
+    pub(in crate::llm_pipeline) fn at_frame_boundary(
+        &self,
+        identity: &PayloadStreamIdentity,
+    ) -> bool {
+        self.connections
+            .get(&ConnectionKey(identity.clone()))
+            .and_then(|connection| connection.directions.get(&LiveStreamDirection::Outbound))
+            .is_none_or(|direction| direction.decoder.buffered_bytes() == 0)
+    }
+
     pub(in crate::llm_pipeline) fn advance(
         &mut self,
         segment: &PayloadSegment,
@@ -68,6 +76,7 @@ impl Http2Protocol {
             };
             self.next_connection = next;
             Connection {
+                header_config: config.l2_http.http2,
                 observed_at: segment.observed_at,
                 prefix: format!("trace:{}:h2:{}", segment.trace_id.get(), next),
                 directions: BTreeMap::new(),
@@ -95,7 +104,7 @@ impl Http2Protocol {
             return self.abort_identity(&identity, reason, config, codecs, projection);
         }
         decoder.append(segment);
-        let events = decoder.advance(self.max_frame_bytes);
+        let events = decoder.advance(self.max_connection_bytes);
         let framed_all = decoder.buffered_bytes() == 0 && !segment.bytes.is_empty();
         let group = PayloadStreamGroupKey::from_segment(segment);
         let (terminal, failed, clean) = self.observe_frames(
@@ -112,7 +121,11 @@ impl Http2Protocol {
                 .direction(direction)
                 .body
                 .project(config, codecs, &group, direction);
-            self.consume(projected, &mut output);
+            self.consume(
+                projected,
+                &mut output,
+                config.l0_llm_call.context_compact.enabled,
+            );
         }
         for event in terminal {
             if let crate::Http1MessageEvent::End(end) = &event {
@@ -181,7 +194,12 @@ impl Http2Protocol {
             .extend(codecs.take_decode_diagnostic(&identity, segment.observed_at));
         output
     }
-    pub(super) fn consume(&mut self, mut projected: ProjectionBatch, output: &mut ProjectionBatch) {
+    pub(super) fn consume(
+        &mut self,
+        mut projected: ProjectionBatch,
+        output: &mut ProjectionBatch,
+        observe_compaction: bool,
+    ) {
         projected.actions.retain_mut(|action| {
             let Some((id, _)) = action.action_id.rsplit_once(":llm.") else {
                 return true;
@@ -195,6 +213,15 @@ impl Http2Protocol {
                 .iter()
                 .find(|metadata| metadata.action_id == action.action_id)
                 .map(|metadata| metadata.provider_response_id.clone());
+            if observe_compaction
+                && let Some(index) = projected
+                    .response_observations
+                    .iter()
+                    .position(|observation| observation.action_id == action.action_id)
+            {
+                fact.response_observation =
+                    Some(projected.response_observations.swap_remove(index));
+            }
             action
                 .attributes
                 .insert("http.message_id".into(), id.clone());
@@ -215,13 +242,11 @@ impl Http2Protocol {
         projection: &mut ProjectionCoordinator,
     ) -> ProjectionBatch {
         let mut output = projection.changed_actions(config, output);
-        for (request, provider_id, observed_at, failed) in self.facts.take_trajectory_bindings() {
-            output.extend(projection.observe_response_trajectory(
-                &request,
-                provider_id.as_deref(),
-                observed_at,
-                failed,
-            ));
+        for binding in self
+            .facts
+            .take_response_bindings(config.l0_llm_call.context_compact.enabled)
+        {
+            output.extend(projection.observe_response_binding(binding));
         }
         HttpMessageFacts::filter_retention(output, self.retain_http)
     }

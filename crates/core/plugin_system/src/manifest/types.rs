@@ -77,6 +77,8 @@ pub enum PluginPostTraceTrigger {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginCapability {
+    #[serde(rename = "http.request")]
+    HttpRequest,
     PayloadRead,
     ContextQuery,
     TraceAnalysisRead,
@@ -122,6 +124,7 @@ pub enum PluginCapability {
 impl PluginCapability {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::HttpRequest => "http.request",
             Self::PayloadRead => "payload-read",
             Self::ContextQuery => "context-query",
             Self::TraceAnalysisRead => "trace-analysis-read",

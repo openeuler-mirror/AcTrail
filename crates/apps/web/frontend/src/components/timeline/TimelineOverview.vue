@@ -110,7 +110,7 @@ onBeforeUnmount(() => {
   stopDrag();
 });
 
-watch(() => props.lanes, () => nextTick(draw));
+watch([() => props.lanes, () => props.bounds.startMs, () => props.bounds.spanMs], () => nextTick(draw));
 
 function draw() {
   const element = track.value;
@@ -165,7 +165,7 @@ function draw() {
       context.globalAlpha = interval.aggregate ? 0.55 : 0.82;
       context.fillStyle = interval.status === 'error' ? error : color;
       context.fillRect(
-        Math.max(left, 0),
+        Math.min(Math.max(left, 0), Math.max(rect.width - 1, 0)),
         y,
         Math.max(Math.min(right, rect.width) - Math.max(left, 0), 1),
         Math.max(slotHeight - 1, 1),

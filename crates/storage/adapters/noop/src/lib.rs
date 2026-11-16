@@ -7,4 +7,5 @@ mod transaction;
 
 pub use storage::NoOpStorage;
 
-mod cgroup_v1;
+mod cgroup_v1_binding;
+mod cgroup_v2_binding;

@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionLinkOrigin,
-    SemanticActionLinkRole, SemanticEvidence, attr_keys as attrs,
+    SemanticAction, SemanticActionCompleteness, SemanticActionKind, SemanticActionLink,
+    SemanticActionLinkOrigin, SemanticActionLinkRole, SemanticActionStatus, SemanticEvidence,
+    attr_keys as attrs,
 };
 
 use crate::live::actions::action_for_live_state;
@@ -202,6 +203,51 @@ impl AgentPerformedActionLinkProjector {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ContextCompactLinkProjector {
+    emitted_links: BTreeSet<ActionLinkKey>,
+}
+
+impl ContextCompactLinkProjector {
+    pub(super) fn observe_exact(
+        &mut self,
+        compact: &SemanticAction,
+        implementation: &SemanticAction,
+    ) -> Option<SemanticActionLink> {
+        // The compact confirmation carries the response result; its implementation
+        // call remains a nonterminal request/response correlation action.
+        if !compact.references_context_compact_implementation(implementation)
+            || compact.status != SemanticActionStatus::Success
+            || compact.completeness != SemanticActionCompleteness::Complete
+        {
+            return None;
+        }
+        let link_key = ActionLinkKey {
+            trace_id: compact.trace_id,
+            parent_action_id: compact.action_id.clone(),
+            child_action_id: implementation.action_id.clone(),
+            role: SemanticActionLinkRole::AgentContextCompactImplementationLlmCall,
+        };
+        if !self.emitted_links.insert(link_key) {
+            return None;
+        }
+        Some(SemanticActionLink {
+            trace_id: compact.trace_id,
+            parent_action_id: compact.action_id.clone(),
+            child_action_id: implementation.action_id.clone(),
+            role: SemanticActionLinkRole::AgentContextCompactImplementationLlmCall,
+            origin: SemanticActionLinkOrigin::Observed,
+            valid: true,
+            evidence: Vec::new(),
+            attributes: BTreeMap::new(),
+        })
+    }
+
+    pub(super) fn forget_trace(&mut self, trace_id: TraceId) {
+        self.emitted_links.retain(|key| key.trace_id != trace_id);
+    }
+}
+
 fn is_observed_agent_process(action: &SemanticAction) -> bool {
     action.kind == SemanticActionKind::AgentIdentity
 }
@@ -213,6 +259,7 @@ fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
     matches!(
         action.kind,
         SemanticActionKind::LlmCall
+            | SemanticActionKind::AgentContextCompact
             | SemanticActionKind::CommandInvocation
             | SemanticActionKind::FileRead
             | SemanticActionKind::FileWrite
@@ -227,6 +274,7 @@ fn agent_performed_action_candidate(action: &SemanticAction) -> bool {
 fn candidate_agent_process(action: &SemanticAction) -> Option<ProcessIdentity> {
     match action.kind {
         SemanticActionKind::LlmCall
+        | SemanticActionKind::AgentContextCompact
         | SemanticActionKind::FileRead
         | SemanticActionKind::FileWrite
         | SemanticActionKind::FileModify

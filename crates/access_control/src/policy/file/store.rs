@@ -1,3 +1,5 @@
+//! Backend-bound file rules and incremental policy mutations.
+
 mod query;
 
 use super::model::{RuleIdentityKind, RuleTier, StoredPolicyRule};
@@ -22,6 +24,7 @@ use std::path::{Path, PathBuf};
 enum FileRuleCoverage {
     Fanotify,
     Lsm,
+    Disabled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -36,14 +39,19 @@ pub struct EnforcementRules {
 }
 
 impl EnforcementRules {
-    pub fn load(path: &Path) -> Result<Self, String> {
-        Self::load_with_coverage(path, FileRuleCoverage::Fanotify)
-    }
-
-    /// Loads rules without fanotify directory coverage validation or mark planning.
-    /// The same mode applies to subsequent validation and policy mutations.
-    pub fn load_for_lsm(path: &Path) -> Result<Self, String> {
-        Self::load_with_coverage(path, FileRuleCoverage::Lsm)
+    /// Bind rule admission and mark planning to the configured backend once.
+    pub fn load(
+        path: &Path,
+        operations: &config_core::daemon::FileControlConfig,
+    ) -> Result<Self, String> {
+        let coverage = if operations.open.is_fanotify() {
+            FileRuleCoverage::Fanotify
+        } else if operations.open.is_lsm() {
+            FileRuleCoverage::Lsm
+        } else {
+            FileRuleCoverage::Disabled
+        };
+        Self::load_with_coverage(path, coverage)
     }
 
     fn load_with_coverage(path: &Path, coverage: FileRuleCoverage) -> Result<Self, String> {
@@ -212,6 +220,8 @@ impl EnforcementRules {
     }
 
     fn insert_static_rule(&mut self, mut rule: EnforcementRule) -> Result<(), String> {
+        let operation = FilePolicyOperation::from_wire(&rule.operation)?;
+        self.validate_operation(operation)?;
         let decision = match &rule.decision {
             RuleDecision::Local(EnforcementDecision::Allow) => FilePolicyDecision::Allow,
             RuleDecision::Local(EnforcementDecision::Deny) => FilePolicyDecision::Deny,
@@ -227,7 +237,7 @@ impl EnforcementRules {
             tier: RuleTier::Static,
             identity: RuleIdentityKind::Static,
             decision,
-            operation: FilePolicyOperation::from_wire(&rule.operation)?,
+            operation,
             scope,
             execution_scope,
             mark_directories: BTreeSet::new(),
@@ -292,6 +302,27 @@ impl EnforcementRules {
         Ok(())
     }
 
+    // Existing rules retain this invariant. Deletes and publication need no scan.
+    fn validate_operation(&self, operation: FilePolicyOperation) -> Result<(), String> {
+        if self.coverage != FileRuleCoverage::Lsm
+            && matches!(
+                operation,
+                FilePolicyOperation::Read
+                    | FilePolicyOperation::Write
+                    | FilePolicyOperation::Delete
+                    | FilePolicyOperation::Attr
+                    | FilePolicyOperation::Rename
+                    | FilePolicyOperation::Link
+            )
+        {
+            return Err(format!(
+                "file operation {} requires access_control.file.open backend lsm",
+                operation.as_str()
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_apply_items(
         &self,
         owner_instance_id: &str,
@@ -326,6 +357,7 @@ impl EnforcementRules {
                     .rule
                     .as_ref()
                     .ok_or_else(|| "upsert requires rule".to_string())?;
+                self.validate_operation(draft.operation)?;
                 FilePolicyValidation::validate_draft_grant(grants, draft)?;
                 let mut draft_rule = StoredPolicyRule::from_draft(
                     owner_instance_id,

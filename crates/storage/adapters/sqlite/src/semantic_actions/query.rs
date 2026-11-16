@@ -1,5 +1,8 @@
 //! Targeted semantic action queries.
 
+use std::collections::BTreeSet;
+use std::sync::OnceLock;
+
 use model_core::ids::TraceId;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value;
@@ -15,6 +18,49 @@ use crate::semantic_actions::store::{
 };
 
 impl SqliteStorage {
+    pub fn semantic_actions_by_ids_lite(
+        &self,
+        trace_id: TraceId,
+        action_ids: &[&str],
+    ) -> Result<Vec<SemanticAction>, SemanticActionStoreError> {
+        let error = |error: &dyn std::fmt::Display| {
+            SemanticActionStoreError::new("semantic_actions_by_ids_lite", error.to_string())
+        };
+        if self.is_purged(trace_id) {
+            return Err(error(&"trace has been purged"));
+        }
+        if action_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: BTreeSet<_> = action_ids.iter().copied().collect();
+        let selected = serde_json::to_string(&ids).map_err(|err| error(&err))?;
+        static SQL: OnceLock<String> = OnceLock::new();
+        // Keep the input set outermost: every ID seeks the unique ID index,
+        // independent of trace size. JSON keeps the prepared SQL stable.
+        let sql = SQL.get_or_init(|| {
+            format!(
+                "SELECT {ACTION_SELECT_COLUMNS}
+             FROM json_each(?2) selected
+             CROSS JOIN semantic_action_ids ids
+               ON ids.action_id = selected.value AND ids.trace_id = ?1
+             CROSS JOIN semantic_actions action
+               ON action.action_key = ids.action_key AND action.trace_id = ?1
+             {}
+             ORDER BY action.start_time ASC, ids.action_id ASC",
+                action_cold_field_join()
+            )
+        });
+        let connection = self.connection().borrow();
+        let mut statement = connection.prepare_cached(sql).map_err(|err| error(&err))?;
+        let mut actions = statement
+            .query_map(rusqlite::params![trace_id.get(), selected], action_from_row)
+            .map_err(|err| error(&err))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| error(&err))?;
+        ActionReadHydrator::hydrate(&connection, actions.iter_mut(), false)?;
+        Ok(actions)
+    }
+
     pub fn semantic_actions_matching_kinds(
         &self,
         trace_id: TraceId,

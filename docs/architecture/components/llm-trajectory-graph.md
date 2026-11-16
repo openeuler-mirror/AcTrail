@@ -19,7 +19,13 @@ LLM Trajectory 图在一个 trace 内展示 LLM request 节点、延续与分叉
 
 `parent_action_id` 生成 `append` 边；没有 parent 时，`forked_from_action_id` 生成 `fork` 边。当前关系 confidence 为 `derived`。缺少关联 action 或边端点时省略不可建立的部分并返回 `partial=true`。
 
-`duplicate_root` 仍作为节点显示并计数，transition 在提示与详情中可见；目前 lineage 未保存重复源节点身份。`context_rewrite_or_compression` 可投影为 `compaction_boundary` 并显示圆环，但当前分类器尚未生成该原因。
+`duplicate_root` 仍作为节点显示并计数，transition 在提示与详情中可见；目前 lineage 未保存重复源节点身份。已确认的 `agent.context_compaction` 通过精确实现调用与后续请求 ID 关联，生成 confidence 为 `confirmed` 的 `compaction` 采用边，并在后续请求设置 `compaction_boundary`。实现请求显示压缩圆环；存在已确认来源时生成 `compaction-source` 来源边。
+
+Trajectory 边界由 `HistoryAtom` 的结构投影确定。压缩识别通过 `LlmRequestParser`
+输出的 provider context 获取 `RequestHistorySource`，验证摘要对原始请求历史的消费。
+provider 解析历史、载体和协议事实，compact 判定历史替换与摘要采用。
+压缩候选共享不可变请求来源，确认时按配置预算展开历史证据；同一次确认复用展开结果。
+轨迹分类和压缩识别分别由 trajectory 与 compact 配置控制。
 
 | 统计 | 含义 |
 | --- | --- |
@@ -39,7 +45,7 @@ LLM Trajectory 图在一个 trace 内展示 LLM request 节点、延续与分叉
 | `GET /api/traces/{trace_id}/llm-trajectories/{trajectory_id}` | 查询单条轨迹的 lineage |
 | `GET /api/traces/{trace_id}/actions/{action_id}/lineage/llm-request` | 查询单 action lineage |
 
-整图一次读取当前 trace 的 lineage 和 `llm.request` lite actions，通过 action map 关联并排序。lite 查询省去 evidence hydration，仍读取 action 属性及所需冷字段。前端生成完整 SVG；数据量、内存和绘制成本随节点数增加。当前整图接口没有分页、节点上限或专用预算。
+整图读取当前 trace 的 lineage、`llm.request` 和 `agent.context_compaction` lite actions，通过精确实现 ID 批量读取关联调用，再经 action map 关联并排序。lite 查询省去 evidence hydration，仍读取 action 属性及所需冷字段。前端生成完整 SVG；数据量、内存和绘制成本随节点数增加。当前整图接口没有分页、节点上限或专用预算。
 
 页签首次激活时加载；切换 trace 或刷新时清空缓存，加载 token 防止旧响应覆盖新 trace。同一 trace 已加载的数据复用。点击节点使用既有 action detail API，正文按需读取。
 
@@ -47,7 +53,7 @@ LLM Trajectory 图在一个 trace 内展示 LLM request 节点、延续与分叉
 
 ## 能力与源码
 
-有可用数据源时，接口声明 `strict_prefix_edges=true`、`related_edges=false`、`compaction_detection=false`。`strict_prefix_edges` 是当前接口字段名，强关系来源也包括已确认 provider binding。
+有可用数据源时，接口声明 `strict_prefix_edges=true`、`related_edges=false`、`compaction_detection=true`。`strict_prefix_edges` 是当前接口字段名，强关系来源也包括已确认 provider binding。
 
 | 实现 | 路径 |
 | --- | --- |

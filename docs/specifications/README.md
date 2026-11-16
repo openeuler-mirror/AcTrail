@@ -9,3 +9,4 @@
 - 执行隔离：[运行时生命周期](isolation/runtime-lifecycle.md)和[告警交付](isolation/alert-delivery.md)
 - 导出：[动作交付](export/action-delivery.md)和[File I/O 终态动作](export/file-io-terminal-actions.md)
 - [插件](plugins/)
+- Checkpoint：[保存与恢复](checkpoint/save-and-restore.md)

@@ -85,6 +85,10 @@ export function flameSummaryMarkerKind(kind) {
   return kind === 'file.tty_io';
 }
 
+export function commandEndUnknown(action, end = action.end_time_unix_nanos) {
+  return action.kind === 'command.invocation' && end == null && action.status === 'unknown';
+}
+
 export function observedInterval(action) {
   const startNanos = parseNanos(action.start_time_unix_nanos);
   return {
@@ -229,17 +233,6 @@ export function validTimedAction(action) {
 
 export function compareActivities(left, right) {
   return left.startOffsetMs - right.startOffsetMs || String(left.id).localeCompare(String(right.id));
-}
-
-export function compareTimedActions(left, right) {
-  const byStart = parseNanos(left.start_time_unix_nanos) - parseNanos(right.start_time_unix_nanos);
-  if (byStart < 0n) {
-    return -1;
-  }
-  if (byStart > 0n) {
-    return 1;
-  }
-  return String(left.id).localeCompare(String(right.id));
 }
 
 export function parseNanos(value) {

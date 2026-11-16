@@ -6,25 +6,11 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
-
-from tests.v2.common.kata_runtime import (  # noqa: E402
-    DeploymentArtifacts,
-    kata_backend,
-    sha256_file,
-)
-from tests.v2.common.kata_runtime.image import (  # noqa: E402
-    containerd_image_check_ready,
-    verified_image_archive_snapshot,
-)
-from v2_artifacts_support import (  # noqa: E402
+from v2_artifacts_support import (
     PreparationInputs,
     PreparedWorkloadImage,
     V2TestProfile,
@@ -40,6 +26,14 @@ from v2_artifacts_support import (  # noqa: E402
     shell_display,
     source_commit,
 )
+from v2_artifacts_support.backend import kata_backend
+from v2_artifacts_support.checksums import sha256_file
+from v2_artifacts_support.containerd_image import (
+    containerd_image_check_ready,
+    verified_image_archive_snapshot,
+)
+from v2_artifacts_support.manifest import DeploymentArtifacts
+from v2_artifacts_support.store import ArtifactStore
 
 
 class CommandExecutor:
@@ -75,14 +69,35 @@ class CommandExecutor:
         return result
 
 
+def _profile_manifests(profiles: Sequence[Path]) -> list[Path] | Path:
+    """Artifact manifests V2 test profiles point at, or the unreadable profile."""
+    manifests: list[Path] = []
+    for profile in profiles:
+        try:
+            environment = json.loads(profile.read_text(encoding="utf-8"))[
+                "environment"
+            ]
+            manifests.extend(
+                Path(value)
+                for key, value in environment.items()
+                if key.endswith("_ARTIFACT_MANIFEST") and isinstance(value, str)
+            )
+        except (OSError, KeyError, TypeError, AttributeError, ValueError):
+            return profile
+    return manifests
+
+
 class ArtifactPreparer:
     def __init__(
         self,
         inputs: PreparationInputs,
         executor: CommandExecutor | None = None,
+        *,
+        store: ArtifactStore | None = None,
     ) -> None:
         self.inputs = inputs
         self.executor = executor or CommandExecutor()
+        self.store = store or ArtifactStore(inputs.output_root)
 
     def prepare(
         self,
@@ -90,24 +105,59 @@ class ArtifactPreparer:
         profile_path: Path | None,
         check_only: bool = False,
         ensure_workload_image: bool = True,
+        current_root: Path | None = None,
+        keep_profiles: Sequence[Path] = (),
+        profile_environment: Mapping[str, str] | None = None,
     ) -> Path:
         self.inputs.validate()
+        with self.store.locked(check_only=check_only):
+            self.store.current_root = current_root
+            return self._prepare(
+                profile_path=profile_path,
+                check_only=check_only,
+                ensure_workload_image=ensure_workload_image,
+                keep_profiles=keep_profiles,
+                profile_environment=profile_environment,
+            )
+
+    def _prepare(
+        self,
+        *,
+        profile_path: Path | None,
+        check_only: bool,
+        ensure_workload_image: bool,
+        keep_profiles: Sequence[Path],
+        profile_environment: Mapping[str, str] | None,
+    ) -> Path:
         print("artifact_inputs=hashing", flush=True)
         input_document = build_input_document(self.inputs)
         cache_key = cache_key_for(input_document)
         final = self.inputs.output_root / cache_key
         manifest = final / "manifest.json"
-        if manifest.is_file():
-            print(f"artifact_cache=hit digest={cache_key}", flush=True)
+        def validate(path: Path) -> None:
+            self._validate_published(path / "manifest.json")
+
+        if not check_only:
+            self.store.recover(final, validate)
+        try:
+            if final.is_symlink():
+                raise RuntimeError(f"artifact directory is a symlink: {final}")
             self._validate_published(manifest)
-        else:
-            print(f"artifact_cache=miss digest={cache_key}", flush=True)
+        except (OSError, RuntimeError, ValueError) as error:
             if check_only:
-                raise RuntimeError(
-                    "content-addressed artifact is missing; rerun without "
-                    f"--check-only: {manifest}"
-                )
+                if not manifest.is_file():
+                    raise RuntimeError(
+                        "content-addressed artifact is missing; rerun without "
+                        f"--check-only: {manifest}"
+                    ) from error
+                raise
+            state = "invalid" if os.path.lexists(final) else "miss"
+            print(f"artifact_cache={state} digest={cache_key} reason={error}", flush=True)
+            if os.path.lexists(final):
+                self.store.assert_unused(final)
             manifest = self._build(final, cache_key, input_document)
+        else:
+            print(f"artifact_cache=hit digest={cache_key}", flush=True)
         try:
             (
                 workload_image,
@@ -130,6 +180,34 @@ class ArtifactPreparer:
                         profile_path,
                         workload_image=workload_image,
                         workload_image_archive=workload_image_archive,
+                        extra_environment=profile_environment,
+                    )
+            if not check_only:
+                self.store.activate(
+                    manifest,
+                    backend=self.inputs.backend,
+                    egress_mode=self.inputs.egress_mode,
+                )
+                profile_manifests = (
+                    _profile_manifests(keep_profiles)
+                    if self.store.current_root is not None
+                    else []
+                )
+                if isinstance(profile_manifests, Path):
+                    print(
+                        "artifact_cleanup=skipped reason=unreadable V2 test "
+                        f"profile {profile_manifests}",
+                        flush=True,
+                    )
+                else:
+                    self.store.cleanup(
+                        manifest,
+                        inputs=[
+                            Path(value)
+                            for value in input_document["paths"].values()
+                        ]
+                        + [self.inputs.bin_dir]
+                        + profile_manifests,
                     )
         finally:
             restore_invoking_user_ownership(
@@ -153,14 +231,23 @@ class ArtifactPreparer:
         output_root = self.inputs.output_root
         output_root.mkdir(parents=True, exist_ok=True)
         staging = Path(
-            tempfile.mkdtemp(prefix=f".{cache_key}.", dir=output_root)
+            tempfile.mkdtemp(prefix=f".{cache_key}.build.", dir=output_root)
         )
         try:
             guest_bundle = staging / "guest-bundle"
             host_bundle = staging / "host-bundle"
             workload_bundle = staging / "workload-bundle"
-            base_image = staging / "guest-base.img"
-            data_image = staging / "guest-data.img"
+            # Both profiles boot the same injected image when their sources are
+            # identical; the Guest mounts its rootfs read-only.
+            shared_image = (
+                input_document["files"]["base_image_source"]
+                == input_document["files"]["data_image_source"]
+            )
+            if shared_image:
+                base_image = data_image = staging / "guest.img"
+            else:
+                base_image = staging / "guest-base.img"
+                data_image = staging / "guest-data.img"
             base_config = staging / "configuration-base.toml"
             data_config = staging / "configuration-data.toml"
             final_base_image = final / base_image.name
@@ -179,8 +266,7 @@ class ArtifactPreparer:
                 [
                     str(
                         self.inputs.repo
-                        / "tests/v2/regression/virtual_container/"
-                        "prepare-guest-bundle.sh"
+                        / "deploy/virtual-container/guest/prepare-guest-bundle.sh"
                     )
                 ],
                 environment=environment,
@@ -202,7 +288,12 @@ class ArtifactPreparer:
                 environment=environment,
             )
             self._inject(self.inputs.base_image_source, base_image, guest_bundle)
-            self._inject(self.inputs.data_image_source, data_image, guest_bundle)
+            if not shared_image:
+                self._inject(
+                    self.inputs.data_image_source,
+                    data_image,
+                    guest_bundle,
+                )
             self._make_config(
                 self.inputs.base_config_source,
                 self.inputs.base_kernel,
@@ -234,18 +325,15 @@ class ArtifactPreparer:
                 input_document,
                 staging,
                 prepared_workload_image,
+                images={"base": base_image.name, "data": data_image.name},
             )
             atomic_json(staging / "manifest.json", manifest_document)
             fsync_tree(staging)
-            try:
-                os.replace(staging, final)
-            except OSError:
-                if not (final / "manifest.json").is_file():
-                    raise
-                shutil.rmtree(staging)
-            manifest = final / "manifest.json"
-            self._validate_published(manifest)
-            return manifest
+            return self.store.publish(
+                staging,
+                final,
+                lambda path: self._validate_published(path / "manifest.json"),
+            )
         except Exception:
             if staging.exists():
                 shutil.rmtree(staging)
@@ -300,7 +388,14 @@ class ArtifactPreparer:
             "128",
         ]
         if self.inputs.otel_endpoint is not None:
-            command.extend(["--otel-endpoint", self.inputs.otel_endpoint])
+            command.extend(
+                [
+                    "--otel-endpoint",
+                    self.inputs.otel_endpoint,
+                    "--otel-attribute-mode",
+                    self.inputs.otel_attribute_mode,
+                ]
+            )
         if self.inputs.sandbox_observer:
             command.append("--with-sandbox-observer")
         self.executor.run(command)
@@ -319,7 +414,7 @@ class ArtifactPreparer:
             "python3",
             str(
                 self.inputs.repo
-                / "deploy/virtual-container/host/prepare-stratovirt-config.py"
+                / "deploy/virtual-container/host/prepare-kata-config.py"
             ),
             "--kata-prefix",
             str(self.inputs.kata_prefix),
@@ -354,6 +449,8 @@ class ArtifactPreparer:
         input_document: dict[str, Any],
         staging: Path,
         prepared_workload_image: PreparedWorkloadImage | None,
+        *,
+        images: dict[str, str],
     ) -> dict[str, Any]:
         guest_bundle = staging / "guest-bundle"
         host_bundle = staging / "host-bundle"
@@ -366,6 +463,7 @@ class ArtifactPreparer:
             "runtime": self.inputs.runtime,
             "egress_mode": self.inputs.egress_mode,
             "otel_export_enabled": self.inputs.otel_endpoint is not None,
+            "otel_attribute_mode": self.inputs.otel_attribute_mode,
             "sandbox_observer_enabled": self.inputs.sandbox_observer,
             "release": release_hashes(self.inputs.bin_dir),
             "guest_bundle": {
@@ -405,7 +503,7 @@ class ArtifactPreparer:
                     workload_bundle / "bin/actrailctl"
                 ),
             },
-            "images": {"base": "guest-base.img", "data": "guest-data.img"},
+            "images": images,
             "runtime_configs": {
                 "base": "configuration-base.toml",
                 "data": "configuration-data.toml",

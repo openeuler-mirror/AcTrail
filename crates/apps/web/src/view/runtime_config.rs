@@ -11,11 +11,12 @@ use crate::json;
 pub(crate) fn current_config_json(
     config_path: Option<&Path>,
     operator_config: Option<&OperatorConfig>,
+    operator_config_text: Option<&str>,
 ) -> Result<String, String> {
     let Some(config) = operator_config else {
         return Ok(unavailable_json());
     };
-    let text = config.to_hierarchical_toml()?;
+    let text = operator_config_text.ok_or("startup configuration document is unavailable")?;
     let plugin_count = config.startup_plugins.load.len();
     let plugin_enabled_count = config
         .startup_plugins
@@ -71,7 +72,7 @@ pub(crate) fn current_config_json(
     output.push(',');
     json::field(&mut output, "summary", &summary);
     output.push(',');
-    json::field(&mut output, "text", &json::string(&text));
+    json::field(&mut output, "text", &json::string(text));
     output.push('}');
     Ok(output)
 }

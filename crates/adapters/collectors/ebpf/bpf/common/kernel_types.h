@@ -37,6 +37,14 @@ struct inode___private {
     struct timespec64 __i_ctime;
 } __attribute__((preserve_access_index));
 
+/* Linux 6.11+ stores inode timestamps as separate seconds and nanoseconds fields. */
+struct inode___split_time {
+    __s64 i_mtime_sec;
+    __u32 i_mtime_nsec;
+    __s64 i_ctime_sec;
+    __u32 i_ctime_nsec;
+} __attribute__((preserve_access_index));
+
 struct vfsmount;
 struct dentry;
 struct path {

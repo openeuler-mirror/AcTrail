@@ -57,7 +57,7 @@ capabilities = ["proc-lifecycle", "fs-access-basic"]
 enabled = false
 
 [plugins.discovery]
-directory = "~/.actrail/plugins"
+directory = ["~/.actrail/plugins"]
 
 [plugins.startup]
 enabled = false

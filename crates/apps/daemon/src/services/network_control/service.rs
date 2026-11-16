@@ -19,12 +19,14 @@ use plugin_system::{
 use process_identity::ProcessIdentityManager;
 use trace_runtime::registry::TraceRuntime;
 
+use super::alerts::NetworkBoundaryAlerts;
 use super::audit::{NetworkAuditBuilder, NetworkDecisionSource, failure_event};
 use super::request::{NetworkConnectContext, NetworkRemote};
 use super::worker::{
     CachedNetworkDecision, GrayDecisionWorker, NetworkWakeFd, PluginDecisionCompletion,
     ReusableDecisionKey, respond_deferred,
 };
+use crate::services::alert_ingress::AlertIngress;
 use crate::services::control_runtime::ControlPluginRuntime;
 use crate::services::identity::ResolvedTraceProcess;
 use crate::services::seccomp_notify::NotificationContinuation;
@@ -60,6 +62,9 @@ impl NetworkControlService {
             return Ok(Self { backend: None });
         }
         let rules = NetworkPolicyStore::load(&config.rules_path)
+            .map_err(|message| ControlError::new("network_control_policy", message))?;
+        rules
+            .validate_seccomp()
             .map_err(|message| ControlError::new("network_control_policy", message))?;
         let queue_capacity = usize::try_from(config.pending_decision_max).map_err(|error| {
             ControlError::new(
@@ -153,6 +158,8 @@ impl NetworkControlService {
         notification: &libc::seccomp_notif,
         continuation: &mut NotificationContinuation,
         plugins: &ControlPluginRuntime,
+        alert_ingress: &AlertIngress,
+        alerts: &mut NetworkBoundaryAlerts,
     ) -> Result<Vec<RawCollectorEvent>, ControlError> {
         let Some(backend_ref) = &self.backend else {
             return Ok(Vec::new());
@@ -252,19 +259,18 @@ impl NetworkControlService {
             NetworkPolicyDecision::Allow | NetworkPolicyDecision::Deny => {
                 let decision = policy_decision(rule.decision)?;
                 respond_continuation(continuation, decision)?;
+                let audit = NetworkAuditBuilder::new(
+                    &context,
+                    decision,
+                    Some(&rule),
+                    NetworkDecisionSource::Rule,
+                    elapsed_us(started_at),
+                );
+                audit.submit_boundary_alert(alert_ingress, trace_runtime, alerts);
                 if !audit_enabled {
                     return Ok(Vec::new());
                 }
-                Ok(vec![
-                    NetworkAuditBuilder::new(
-                        &context,
-                        decision,
-                        Some(&rule),
-                        NetworkDecisionSource::Rule,
-                        elapsed_us(started_at),
-                    )
-                    .build(process_registry)?,
-                ])
+                Ok(vec![audit.build(process_registry)?])
             }
             NetworkPolicyDecision::Gray => self.handle_gray(
                 backend_ref,
@@ -274,6 +280,9 @@ impl NetworkControlService {
                 rule,
                 continuation,
                 started_at,
+                trace_runtime,
+                alert_ingress,
+                alerts,
             ),
             NetworkPolicyDecision::Default => Err(ControlError::new(
                 "network_control_policy",
@@ -349,6 +358,9 @@ impl NetworkControlService {
         rule: StoredNetworkRule,
         continuation: &mut NotificationContinuation,
         started_at: Instant,
+        trace_runtime: &TraceRuntime,
+        alert_ingress: &AlertIngress,
+        alerts: &mut NetworkBoundaryAlerts,
     ) -> Result<Vec<RawCollectorEvent>, ControlError> {
         let cache_key = ReusableDecisionKey {
             trace_id: context.trace_id(),
@@ -365,23 +377,24 @@ impl NetworkControlService {
             .to_string();
         let mut backend = backend_ref.lock().map_err(lock_control_error)?;
         if let Some(cached) = backend.reusable_decisions.get(&cache_key).cloned() {
+            let audit_enabled = backend.config.audit_enabled;
+            drop(backend);
             respond_continuation(continuation, cached.decision)?;
-            if !backend.config.audit_enabled {
+            let audit = NetworkAuditBuilder::new(
+                &context,
+                cached.decision,
+                Some(&rule),
+                NetworkDecisionSource::GrayPluginCache {
+                    instance_id: cached.instance_id,
+                    reason: cached.reason,
+                },
+                elapsed_us(started_at),
+            );
+            audit.submit_boundary_alert(alert_ingress, trace_runtime, alerts);
+            if !audit_enabled {
                 return Ok(Vec::new());
             }
-            return Ok(vec![
-                NetworkAuditBuilder::new(
-                    &context,
-                    cached.decision,
-                    Some(&rule),
-                    NetworkDecisionSource::GrayPluginCache {
-                        instance_id: cached.instance_id,
-                        reason: cached.reason,
-                    },
-                    elapsed_us(started_at),
-                )
-                .build(process_registry)?,
-            ]);
+            return Ok(vec![audit.build(process_registry)?]);
         }
         let Some((target_instance_index, instance_limit)) =
             plugins.active_instance_registration(&target)
@@ -488,9 +501,13 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
         request: &NetworkPolicyApplyRequest,
     ) -> Result<NetworkPolicyApplyResult, PluginRuntimeError> {
         let backend = self.lock_backend()?;
-        Ok(backend
+        let result = backend
             .rules
-            .validate_apply(owner_instance_id, grants, request))
+            .validate_apply(owner_instance_id, grants, request);
+        let mut candidate = backend.rules.clone();
+        candidate.apply(owner_instance_id, grants, request.clone());
+        candidate.validate_seccomp().map_err(policy_runtime_error)?;
+        Ok(result)
     }
 
     fn rules_apply(
@@ -500,7 +517,10 @@ impl NetworkPolicyHost for NetworkPolicyHostFacade {
         request: NetworkPolicyApplyRequest,
     ) -> Result<NetworkPolicyApplyResult, PluginRuntimeError> {
         let mut backend = self.lock_backend()?;
-        let result = backend.rules.apply(owner_instance_id, grants, request);
+        let mut candidate = backend.rules.clone();
+        let result = candidate.apply(owner_instance_id, grants, request);
+        candidate.validate_seccomp().map_err(policy_runtime_error)?;
+        backend.rules = candidate;
         if result.status == NetworkPolicyApplyStatus::Accepted && result.applied_count > 0 {
             backend.clear_reusable_cache();
         }

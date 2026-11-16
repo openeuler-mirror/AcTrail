@@ -9,9 +9,11 @@ use plugin_system::{
 };
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 
+use super::HttpClient;
 use super::WasmHostcallMetrics;
 
 pub(crate) struct WasmStoreState {
+    pub(crate) http: Option<HttpClient>,
     limits: StoreLimits,
     host_grants: PluginHostGrants,
     host_limits: WasmHostLimits,
@@ -108,6 +110,7 @@ impl WasmStoreState {
         hostcall_metrics: Arc<WasmHostcallMetrics>,
     ) -> Self {
         Self {
+            http: None,
             limits: StoreLimitsBuilder::new()
                 .memory_size(memory_max_bytes)
                 .build(),

@@ -1,30 +1,25 @@
 use super::super::super::java_agent::maybe_append_java_agent_env;
-use super::super::super::suppress::InheritableSuppressedFd;
 use super::super::super::timing::LaunchTiming;
 use super::SyncLaunch;
 use config_core::daemon::PayloadTlsConfig;
 use model_core::ids::TraceId;
 use std::ffi::OsString;
 use tls_payload_sync::{
-    EventFilter, LibcFamily, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig,
-    audit_bind_now_env, audit_env_value_for_libraries, preload_env_value_for_libraries,
+    ENV_EVENT_BATCH_BYTES, ENV_EVENT_SHUTDOWN_TIMEOUT_MS, ENV_EVENT_TIMEOUT_MS, EventFilter,
+    LibcFamily, RedactionMode, RuntimeEnvConfig, RuntimeFlowControlConfig, audit_bind_now_env,
+    audit_env_value_for_libraries, preload_env_value_for_libraries,
     runtime_env_for_plan_descriptors, runtime_library_envs,
 };
 
 pub(super) fn sync_launch_envs(
     trace_id: TraceId,
     config: &PayloadTlsConfig,
-    socket_max_segment_bytes: u32,
     launch: &SyncLaunch,
-    sync_event_fd: Option<&InheritableSuppressedFd>,
     timing: &mut LaunchTiming,
 ) -> Result<Vec<(OsString, OsString)>, String> {
     if !launch.sync_runtime_required {
         return Ok(Vec::new());
     }
-    let sync_event_fd = sync_event_fd
-        .ok_or_else(|| "TLS sync launch requires an inherited event fd".to_string())?;
-    timing.mark("sync_env.require_event_fd");
     let mut envs = runtime_env_for_plan_descriptors(
         &RuntimeEnvConfig {
             rules: Vec::new(),
@@ -49,16 +44,26 @@ pub(super) fn sync_launch_envs(
             events: EventFilter::none(),
             trace_id: Some(trace_id.get()),
             event_socket_path: Some(config.sync_event_socket_path.clone()),
-            event_fd: Some(sync_event_fd.raw_fd()),
-            event_write_buffer_bytes: Some(
-                usize::try_from(socket_max_segment_bytes).map_err(|error| {
-                    format!("payload_socket_max_segment_bytes overflow: {error}")
-                })?,
-            ),
         },
         &launch.plans,
     )
     .map_err(|error| error.to_string())?;
+    for (key, value) in [
+        (
+            ENV_EVENT_TIMEOUT_MS,
+            config.sync_event_timeout_ms.to_string(),
+        ),
+        (
+            ENV_EVENT_SHUTDOWN_TIMEOUT_MS,
+            config.sync_event_shutdown_timeout_ms.to_string(),
+        ),
+        (
+            ENV_EVENT_BATCH_BYTES,
+            config.sync_event_batch_bytes.to_string(),
+        ),
+    ] {
+        envs.push((OsString::from(key), OsString::from(value)));
+    }
     timing.mark_detail(
         "sync_env.runtime_env_for_plans",
         format_args!("plan_count={} env_count={}", launch.plans.len(), envs.len()),

@@ -66,12 +66,36 @@ sudo target/release/actraild --config operator.conf plugin status \
 `active`，同时 `last_error`、retry 和 dropped batch 指标报告交付失败。卸载会触发
 consumer `finish`，在 `shutdown_flush_deadline_ms` 内尝试发送尾批次，不会重启 daemon。
 
-## 关联 Agent 二进制与 trace
+## 识别 Agent 产品与关联 trace
 
 当某个进程首次产生 `llm.request` 时，AcTrail 会输出一个 `agent.identity` span。
-该 span 的 `process.executable` 是同一 `(trace_id, process)` 最近一次完成 exec 的二进制，
-并与其他 span 共用 OTLP `traceId`；消费者可用 `traceId` 和 `actrail.process.id` 将 Agent
-身份关联回具体进程。`metadata-only` 模式会保留这几个身份关联字段，但仍会删除正文类属性。
+该 span 与其他 span 共用 OTLP `traceId`；消费者可用 `traceId` 和 `actrail.process.id`
+将 Agent 身份关联回具体进程。`action_kinds` 白名单需要同时放行 `agent.identity`，
+否则该 span 不会出境。
+
+span 上同时给出观测事实与由它推导出的产品结论：
+
+| 属性 | 含义 |
+| --- | --- |
+| `process.executable` | 同一 `(trace_id, process)` 观测到的二进制，观测事实 |
+| `actrail.agent.type` | 由该二进制推导出的 Agent 产品名，**推断结果** |
+| `actrail.agent.type.source` | 推断来源，见下表 |
+
+`actrail.agent.type.source` 的取值决定这个产品名有多可信：
+
+| 取值 | 含义 |
+| --- | --- |
+| `known_product` | 二进制名或其所在的包路径命中了已知 Agent 产品，可直接用于分组 |
+| `executable` | 未命中已知产品，退化为程序名。`python3 /srv/app/main.py` 这类由解释器托管的 Agent 会落在这里，取值可能只是 `python3` |
+
+一个进程可能连续 exec 多次：shebang 脚本会先报告脚本本身、再报告解释器最终落到的二进制
+（`#!/usr/bin/env node` 会经由 `env` exec 到 `node`）。此时保留信息量更大的那一个 ——
+已命中已知产品的二进制不会被未命中的覆盖；而 `sh -c "codex ..."` 这类包装器仍然会被它
+启动的程序覆盖。
+
+未观测到该进程的 exec 时（例如挂载到一个已在运行的进程），上述三个属性都不会出现。
+
+`metadata-only` 模式保留这几个身份字段，但仍会删除正文类属性。
 
 ## 排错
 

@@ -6,6 +6,7 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) llm_request_websocket_message: i16,
     pub(crate) llm_response_websocket_message: i16,
     pub(crate) agent_performed_action: i16,
+    pub(crate) agent_context_compact_implementation_llm_call: i16,
     pub(crate) command_contains_file_access: i16,
     pub(crate) command_contains_process_fork_attempt: i16,
     pub(crate) command_contains_process_exec: i16,
@@ -46,6 +47,9 @@ impl LinkRoleCodes {
                 self.llm_request_websocket_message
             }
             SemanticActionLinkRole::AgentPerformedAction => self.agent_performed_action,
+            SemanticActionLinkRole::AgentContextCompactImplementationLlmCall => {
+                self.agent_context_compact_implementation_llm_call
+            }
             SemanticActionLinkRole::CommandContainsFileAccess => self.command_contains_file_access,
             SemanticActionLinkRole::CommandContainsProcessForkAttempt => {
                 self.command_contains_process_fork_attempt
@@ -111,6 +115,9 @@ impl LinkRoleCodes {
             }
             value if value == self.agent_performed_action => {
                 Ok(SemanticActionLinkRole::AgentPerformedAction)
+            }
+            value if value == self.agent_context_compact_implementation_llm_call => {
+                Ok(SemanticActionLinkRole::AgentContextCompactImplementationLlmCall)
             }
             value if value == self.command_contains_file_access => {
                 Ok(SemanticActionLinkRole::CommandContainsFileAccess)
@@ -197,7 +204,7 @@ impl LinkRoleCodes {
         }
     }
 
-    pub(super) fn entries(self) -> [(&'static str, i16); 31] {
+    pub(super) fn entries(self) -> [(&'static str, i16); 32] {
         [
             (
                 SemanticActionLinkRole::LlmResponseWebSocketMessage.as_str(),
@@ -210,6 +217,10 @@ impl LinkRoleCodes {
             (
                 SemanticActionLinkRole::AgentPerformedAction.as_str(),
                 self.agent_performed_action,
+            ),
+            (
+                SemanticActionLinkRole::AgentContextCompactImplementationLlmCall.as_str(),
+                self.agent_context_compact_implementation_llm_call,
             ),
             (
                 SemanticActionLinkRole::CommandContainsFileAccess.as_str(),

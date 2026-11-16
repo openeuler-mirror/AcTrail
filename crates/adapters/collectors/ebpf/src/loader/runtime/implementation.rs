@@ -217,13 +217,9 @@ impl EbpfRuntime {
         observer_tgid: u32,
         trace_id: TraceId,
         generation: u64,
-        suppressed_fds: &[InitialSuppressedFd],
     ) -> Result<ArmedLaunchBinding, LoaderError> {
         let target = LaunchBindingTarget::new(pidfd, observer_tgid, generation)?;
-        let pending = PendingLaunchBinding::new(trace_id, suppressed_fds);
-        if !suppressed_fds.is_empty() {
-            self.suppressed_fd_config.activate()?;
-        }
+        let pending = PendingLaunchBinding::new(trace_id);
         self.launch_bindings.arm(target, &pending)
     }
 
@@ -282,35 +278,6 @@ impl EbpfRuntime {
         self.trace_pid_namespaces
             .delete(&key)
             .map_err(|error| LoaderError::new("trace_pid_namespace", error.to_string()))
-    }
-
-    pub fn suppress_fd(
-        &self,
-        trace_id: TraceId,
-        suppressed_fd: &ProcessSuppressedFd,
-    ) -> Result<(), LoaderError> {
-        self.suppressed_fd_config.activate()?;
-        suppressed_fd::suppress_fd(
-            &self.suppressed_fds,
-            &self.suppressed_fd_index,
-            self.suppressed_fd_config.capacity(),
-            trace_id,
-            suppressed_fd,
-        )
-    }
-
-    pub fn unsuppress_fd(
-        &self,
-        process: &KernelProcessCoordinates,
-        fd: i32,
-    ) -> Result<(), LoaderError> {
-        suppressed_fd::unsuppress_fd(
-            &self.suppressed_fds,
-            &self.suppressed_fd_index,
-            self.suppressed_fd_config.capacity(),
-            process,
-            fd,
-        )
     }
 
     pub fn sweep_suppressed_fds_for_process(

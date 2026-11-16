@@ -35,7 +35,7 @@ export function buildActionTreeChildNodes({ parentNode, childData }) {
   if (parentAction?.id) sources.set(parentAction.id, parentAction);
   const toolDisplay = new ToolCallDisplay(sources);
   const actionChildren = displayActions(actions, links)
-    .sort(parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentDisplayActions : sortDisplayActionByTime)
+    .sort(parentNode.kind === 'llm.call' ? sortLlmChildren : parentNode.nodeType === TREE_NODE_TYPES.agent ? sortAgentDisplayActions : sortDisplayActionByTime)
     .map(({ action }) => actionTreeNode(action, childState, toolDisplay.target(action)))
     .filter(Boolean);
   return groupActionNodes(actionChildren);
@@ -169,6 +169,11 @@ function displayLinkByChild(actions, links) {
     }
   }
   return linkByChild;
+}
+
+function sortLlmChildren(left, right) {
+  const rank = { 'llm.request': 0, 'llm.response': 1, 'agent.context_compaction': 2 };
+  return (rank[left.action.kind] ?? 3) - (rank[right.action.kind] ?? 3) || sortDisplayActionByTime(left, right);
 }
 
 function sortDisplayActionByTime(left, right) {

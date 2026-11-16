@@ -16,6 +16,7 @@ pub(crate) struct ActionKindCodes {
     pub(crate) http_message: i16,
     pub(crate) websocket_message: i16,
     pub(crate) llm_call: i16,
+    pub(crate) agent_context_compact: i16,
     pub(crate) llm_request: i16,
     pub(crate) llm_response: i16,
     pub(crate) llm_tool_call: i16,
@@ -49,6 +50,7 @@ impl ActionKindCodes {
             SemanticActionKind::HttpMessage => self.http_message,
             SemanticActionKind::WebSocketMessage => self.websocket_message,
             SemanticActionKind::LlmCall => self.llm_call,
+            SemanticActionKind::AgentContextCompact => self.agent_context_compact,
             SemanticActionKind::LlmRequest => self.llm_request,
             SemanticActionKind::LlmResponse => self.llm_response,
             SemanticActionKind::LlmToolCall => self.llm_tool_call,
@@ -90,6 +92,9 @@ impl ActionKindCodes {
             value if value == self.http_message => Ok(SemanticActionKind::HttpMessage),
             value if value == self.websocket_message => Ok(SemanticActionKind::WebSocketMessage),
             value if value == self.llm_call => Ok(SemanticActionKind::LlmCall),
+            value if value == self.agent_context_compact => {
+                Ok(SemanticActionKind::AgentContextCompact)
+            }
             value if value == self.llm_request => Ok(SemanticActionKind::LlmRequest),
             value if value == self.llm_response => Ok(SemanticActionKind::LlmResponse),
             value if value == self.llm_tool_call => Ok(SemanticActionKind::LlmToolCall),
@@ -113,7 +118,7 @@ impl ActionKindCodes {
         }
     }
 
-    pub(super) fn entries(self) -> [(&'static str, i16); 28] {
+    pub(super) fn entries(self) -> [(&'static str, i16); 29] {
         [
             (SemanticActionKind::ProcessExec.as_str(), self.process_exec),
             (SemanticActionKind::ProcessExit.as_str(), self.process_exit),
@@ -137,6 +142,10 @@ impl ActionKindCodes {
                 self.websocket_message,
             ),
             (SemanticActionKind::LlmCall.as_str(), self.llm_call),
+            (
+                SemanticActionKind::AgentContextCompact.as_str(),
+                self.agent_context_compact,
+            ),
             (SemanticActionKind::LlmRequest.as_str(), self.llm_request),
             (SemanticActionKind::LlmResponse.as_str(), self.llm_response),
             (SemanticActionKind::LlmToolCall.as_str(), self.llm_tool_call),

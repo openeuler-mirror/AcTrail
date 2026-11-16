@@ -19,6 +19,8 @@ ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
 # Explicit port of the last validated endpoint; empty when none was given.
 ACTRAIL_GUEST_OTEL_ENDPOINT_PORT=""
 ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT="network"
+# otel-http attribute_mode written into the Guest exporter configuration.
+ACTRAIL_GUEST_OTEL_ATTRIBUTE_MODE_DEFAULT="metadata-only"
 
 actrail_guest_otel_endpoint_reject() {
   ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR="$1"
@@ -62,6 +64,28 @@ actrail_validate_guest_otel_selection() {
     return 0
   fi
   actrail_validate_guest_otel_endpoint "$endpoint" "$mode"
+}
+
+# Validate the otel-http attribute mode. "full" exports content attributes and
+# only makes sense together with an exporter endpoint.
+actrail_validate_guest_otel_attribute_mode() {
+  local attribute_mode="${1-}"
+  local endpoint="${2-}"
+
+  case "$attribute_mode" in
+    metadata-only|full) ;;
+    *)
+      actrail_guest_otel_endpoint_reject \
+        "--otel-attribute-mode must be metadata-only or full: $attribute_mode"
+      return 1
+      ;;
+  esac
+  if [[ "$attribute_mode" != "$ACTRAIL_GUEST_OTEL_ATTRIBUTE_MODE_DEFAULT" && -z "$endpoint" ]]; then
+    actrail_guest_otel_endpoint_reject "--otel-attribute-mode requires --otel-endpoint"
+    return 1
+  fi
+  ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
+  return 0
 }
 
 actrail_validate_guest_otel_endpoint() {
@@ -272,13 +296,20 @@ actrail_write_guest_otel_endpoint_config() {
   local target="${2-}"
   local endpoint="${3-}"
   local mode="$ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT"
+  local attribute_mode="$ACTRAIL_GUEST_OTEL_ATTRIBUTE_MODE_DEFAULT"
   local temp_path=""
 
   if [[ "$#" -ge 4 ]]; then
     mode="$4"
   fi
+  if [[ "$#" -ge 5 ]]; then
+    attribute_mode="$5"
+  fi
   ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
   if ! actrail_validate_guest_otel_endpoint "$endpoint" "$mode"; then
+    return 1
+  fi
+  if ! actrail_validate_guest_otel_attribute_mode "$attribute_mode" "$endpoint"; then
     return 1
   fi
   if [[ ! -f "$template" ]]; then
@@ -295,7 +326,7 @@ actrail_write_guest_otel_endpoint_config() {
       "cannot create temporary otel-http config beside: $target"
     return 1
   fi
-  if ! awk -v endpoint="$endpoint" '
+  if ! awk -v endpoint="$endpoint" -v attribute_mode="$attribute_mode" '
       $0 == "# Replace the placeholder host before deployment. Production deployments" {
         next
       }
@@ -310,12 +341,19 @@ actrail_write_guest_otel_endpoint_config() {
         }
         next
       }
+      /^[[:space:]]*attribute_mode[[:space:]]*=/ {
+        attribute_mode_count++
+        if (attribute_mode_count == 1) {
+          printf "attribute_mode = \"%s\"\n", attribute_mode
+        }
+        next
+      }
       { print }
-      END { if (endpoint_count != 1) exit 42 }
+      END { if (endpoint_count != 1 || attribute_mode_count != 1) exit 42 }
     ' "$template" >"$temp_path"; then
     rm -f -- "$temp_path"
     actrail_guest_otel_endpoint_reject \
-      "otel-http config template must contain exactly one endpoint assignment"
+      "otel-http config template must contain exactly one endpoint and one attribute_mode assignment"
     return 1
   fi
   if ! install -m 0640 -- "$temp_path" "$target"; then
@@ -327,6 +365,11 @@ actrail_write_guest_otel_endpoint_config() {
   if ! grep -Fqx -- "endpoint = \"$endpoint\"" "$target"; then
     actrail_guest_otel_endpoint_reject \
       "installed otel-http config does not contain the requested endpoint"
+    return 1
+  fi
+  if ! grep -Fqx -- "attribute_mode = \"$attribute_mode\"" "$target"; then
+    actrail_guest_otel_endpoint_reject \
+      "installed otel-http config does not contain the requested attribute_mode"
     return 1
   fi
   return 0

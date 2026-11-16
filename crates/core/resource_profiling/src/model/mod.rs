@@ -1,5 +1,5 @@
 pub mod cgroup_v1_binding;
-pub mod external_cgroup;
+pub mod cgroup_v2_binding;
 pub mod host_resource;
 mod resource_sample;
 pub mod resource_scope;

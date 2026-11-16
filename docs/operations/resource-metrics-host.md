@@ -88,7 +88,9 @@ fanotify and excludes their database, WAL and SHM files from self interception.
 Output is best-effort. Bounded queues and write timeouts isolate storage failures
 from collection and control completion. Full queues or failed writes may lose
 samples, including final samples. Resource retention runs during writes and is
-independent of trace retention.
+independent of trace retention. Each sweep deletes expired samples in batches of
+`max_samples_per_sweep` until none are left or 50 ms is spent; a sweep that ends
+behind continues on the next write instead of waiting for `sweep_interval_seconds`.
 
 `remote` sends to Prometheus remote-write or InfluxDB line-protocol endpoints.
 `hybrid` sends independently to a configured list of database and remote backends.
@@ -107,14 +109,15 @@ require exactly one database child. Remote-only data is queried through the
 receiving service. Web serves workload samples at
 `GET /api/traces/{id}/resources?limit=100` on the originating host.
 
-Main storage schema version 42 requires a database created with the current
-schema. An incompatible database is rejected at startup.
+Main storage schema version 44 requires a database created with the current
+schema. Existing databases with a different schema version are rejected at
+startup; configure a new database path before starting the current binaries.
 
 ## Verification
 
 ```bash
 cargo build --release -p daemon -p ctl -p view -p web
-sudo -E python3 tests/v2/regression/test_all.py --no-profile --case resource_metrics_cgroup
+sudo -E python3 tests/e2e/regression/test_all.py --no-profile --case resource_metrics_cgroup
 ```
 
 The privileged cgroup v2 regression

@@ -5,7 +5,6 @@ use std::time::SystemTime;
 use collector_event::{RawCollectorEvent, RawObservationPayload};
 use collector_instance::{CollectorError, CollectorPollBatch};
 use model_core::ids::TraceId;
-use model_core::process::{KernelProcessCoordinates, ProcessSuppressedFd};
 
 use crate::decode::{
     self, decode_file_path, decode_observation, decode_process_exec_failure,
@@ -212,7 +211,7 @@ impl EbpfCollector {
                             .map_err(|error| CollectorError::new(error.stage, error.message))?,
                     );
                 }
-                self.apply_file_lifecycle_before_decode(&event)?;
+                self.apply_file_lifecycle_before_decode(&event);
                 let descriptor_generation = match &event.payload {
                     KernelObservationPayload::Network(payload) => payload.fd_object_generation,
                     KernelObservationPayload::FdIo(payload) => payload.fd_object_generation,
@@ -406,7 +405,6 @@ impl EbpfCollector {
             .file_paths
             .then(|| pending.root_working_directory.clone())
             .flatten();
-        let initial_suppressed_fds = pending.initial_suppressed_fds.clone();
         self.bindings.track_with_kernel_tgid(
             common.trace_id,
             root_observation.clone(),
@@ -421,23 +419,6 @@ impl EbpfCollector {
                 consumers,
             );
         }
-        let process = KernelProcessCoordinates {
-            pid: common.subject.kernel_tgid,
-            start_time: common.subject.start_boottime_ns,
-        };
-        self.suppressed_fds
-            .extend(
-                initial_suppressed_fds
-                    .into_iter()
-                    .map(|initial| super::TraceSuppressedFd {
-                        trace_id: common.trace_id,
-                        fd: ProcessSuppressedFd {
-                            process,
-                            fd: initial.fd,
-                            purpose: initial.purpose,
-                        },
-                    }),
-            );
         self.pending_launches.remove(&common.trace_id);
         Ok(())
     }
@@ -451,10 +432,7 @@ impl EbpfCollector {
                 .is_some_and(|binding| binding.trace_id != event.common.trace_id)
     }
 
-    fn apply_file_lifecycle_before_decode(
-        &mut self,
-        event: &KernelObservationEvent,
-    ) -> Result<(), CollectorError> {
+    fn apply_file_lifecycle_before_decode(&mut self, event: &KernelObservationEvent) {
         match &event.payload {
             KernelObservationPayload::Exit(_) => {
                 let common = &event.common;
@@ -471,16 +449,13 @@ impl EbpfCollector {
                     generation,
                     &self.bindings,
                 )
-                .is_ok()
+                .is_err()
                 {
-                    self.cleanup_suppressed_fds_for_process(binding_tgid, generation)?;
-                } else {
                     self.record_exit_lifecycle_binding_gap();
                 }
             }
             _ => {}
         }
-        Ok(())
     }
 
     fn apply_file_lifecycle_after_decode(

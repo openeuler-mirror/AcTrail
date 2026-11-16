@@ -11,7 +11,9 @@ use crate::probe_detector::contract::selection::DetectionSelector;
 use super::X86_64RustlsProbeDetectorConfig;
 use super::common_state_pair_27_31::CommonStatePair2731ProbeDetector;
 use super::common_state_pair_27_32::CommonStatePair2732ProbeDetector;
+use super::common_state_pair_27_36::CommonStatePair2736ProbeDetector;
 use super::common_state_pair_28_36::CommonStatePair2836ProbeDetector;
+use super::common_state_pair_28_36_stack72::CommonStatePair2836Stack72ProbeDetector;
 use super::common_state_pair_41_32::CommonStatePair4132ProbeDetector;
 use crate::probe_detector::detector::tls::rustls::static_pattern::PatternPairProbeDetector;
 
@@ -19,7 +21,7 @@ pub(crate) struct X86_64RustlsProbeDetector {
     path: DetectorPath,
     match_limit: usize,
     selector: DetectionSelector,
-    candidates: [PatternPairProbeDetector; 4],
+    candidates: [PatternPairProbeDetector; 6],
 }
 
 impl X86_64RustlsProbeDetector {
@@ -39,8 +41,14 @@ impl X86_64RustlsProbeDetector {
                     .into_pattern_pair(),
                 CommonStatePair2732ProbeDetector::try_new(config.common_state_pair_27_32)?
                     .into_pattern_pair(),
+                CommonStatePair2736ProbeDetector::try_new(config.common_state_pair_27_36)?
+                    .into_pattern_pair(),
                 CommonStatePair2836ProbeDetector::try_new(config.common_state_pair_28_36)?
                     .into_pattern_pair(),
+                CommonStatePair2836Stack72ProbeDetector::try_new(
+                    config.common_state_pair_28_36_stack72,
+                )?
+                .into_pattern_pair(),
                 CommonStatePair4132ProbeDetector::try_new(config.common_state_pair_41_32)?
                     .into_pattern_pair(),
             ],

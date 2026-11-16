@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use model_core::ids::TraceId;
-use model_core::process::{ExitStatus, NamespaceIdentity, ProcessMembership};
+use model_core::process::NamespaceIdentity;
 use model_core::trace::{TraceLifecycleState, TraceRecord};
 use plugin_system::{
     PluginRuntimeError, TraceActivityContext, TraceAnalysisAction, TraceAnalysisContext,
@@ -182,34 +182,12 @@ fn response_status(
 pub(super) fn project_command_executions(
     actions: Vec<SemanticAction>,
     links: &[SemanticActionLink],
-    memberships: &[ProcessMembership],
 ) -> Result<Vec<TraceCommandExecution>, PluginRuntimeError> {
     let command_by_id = actions
         .iter()
         .filter(|action| action.kind == SemanticActionKind::CommandInvocation)
         .map(|action| (action.action_id.as_str(), action))
         .collect::<BTreeMap<_, _>>();
-    let membership_by_process = memberships
-        .iter()
-        .map(|membership| (&membership.identity, membership))
-        .collect::<BTreeMap<_, _>>();
-    let mut commands_by_process = BTreeMap::<_, Vec<&SemanticAction>>::new();
-    for command in command_by_id.values().copied() {
-        commands_by_process
-            .entry(&command.process)
-            .or_default()
-            .push(command);
-    }
-    let mut next_command_by_id = BTreeMap::<&str, &SemanticAction>::new();
-    for commands in commands_by_process.values_mut() {
-        commands.sort_by(|left, right| {
-            (left.start_time, left.action_id.as_str())
-                .cmp(&(right.start_time, right.action_id.as_str()))
-        });
-        for pair in commands.windows(2) {
-            next_command_by_id.insert(pair[0].action_id.as_str(), pair[1]);
-        }
-    }
     let mut agent_by_child = BTreeMap::<&str, &str>::new();
     let mut command_parent_by_child = BTreeMap::<&str, &str>::new();
     for link in links.iter().filter(|link| valid_link(link)) {
@@ -245,17 +223,10 @@ pub(super) fn project_command_executions(
                 .copied()
                 .map(str::to_string);
             let top_level_agent_child = agent_action_id.is_some();
-            let (ended_at, status, exit_code) = if let Some(next) =
-                next_command_by_id.get(action.action_id.as_str())
-            {
-                (
-                    next.end_time.or(Some(next.start_time)),
-                    SemanticActionStatus::Success,
-                    None,
-                )
-            } else {
-                command_terminal_state(action, membership_by_process.get(&action.process).copied())
-            };
+            let exit_code = action
+                .attributes
+                .get(attr_keys::command::EXIT_CODE)
+                .and_then(|raw| raw.parse::<i32>().ok());
             Ok(TraceCommandExecution {
                 action_id: action.action_id.clone(),
                 process_id: action.process.to_string(),
@@ -265,8 +236,8 @@ pub(super) fn project_command_executions(
                     .cloned(),
                 command_line: action.attributes.get(attr_keys::command::LINE).cloned(),
                 started_at: action.start_time,
-                ended_at,
-                status,
+                ended_at: action.end_time,
+                status: action.status,
                 exit_code,
                 agent_action_id,
                 parent_command_action_id,
@@ -274,27 +245,6 @@ pub(super) fn project_command_executions(
             })
         })
         .collect()
-}
-
-fn command_terminal_state(
-    action: &SemanticAction,
-    membership: Option<&ProcessMembership>,
-) -> (Option<SystemTime>, SemanticActionStatus, Option<i32>) {
-    let Some(exit) = membership
-        .and_then(|membership| membership.exit_status.as_ref())
-        .filter(|exit| exit.observed_at >= action.start_time)
-    else {
-        return (None, SemanticActionStatus::Unknown, None);
-    };
-    (Some(exit.observed_at), command_exit_status(exit), exit.code)
-}
-
-fn command_exit_status(exit: &ExitStatus) -> SemanticActionStatus {
-    match exit.code {
-        Some(0) => SemanticActionStatus::Success,
-        Some(_) => SemanticActionStatus::Error,
-        None => SemanticActionStatus::Unknown,
-    }
 }
 
 fn required_attribute<'a>(

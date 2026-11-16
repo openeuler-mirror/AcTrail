@@ -2,7 +2,10 @@
 
 #[path = "view/action_content.rs"]
 mod action_content;
+#[path = "view/action_path.rs"]
+mod action_path;
 pub(crate) use action_content::ActionContentView;
+pub(crate) use action_path::{action_tree_path_json, llm_call_of_request};
 #[path = "view/action_tree_roles.rs"]
 mod action_tree_roles;
 #[path = "view/actions.rs"]
@@ -100,8 +103,9 @@ impl LlmNavMode {
 pub fn current_config_json(
     config_path: Option<&std::path::Path>,
     operator_config: Option<&config_core::daemon::OperatorConfig>,
+    operator_config_text: Option<&str>,
 ) -> Result<String, String> {
-    runtime_config::current_config_json(config_path, operator_config)
+    runtime_config::current_config_json(config_path, operator_config, operator_config_text)
 }
 
 pub fn plugin_enablement_json(

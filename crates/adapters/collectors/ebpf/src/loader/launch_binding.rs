@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use libbpf_rs::{MapCore, MapFlags, MapHandle, Object};
 use model_core::ids::TraceId;
-use model_core::process::InitialSuppressedFd;
 
 #[cfg(actrail_launch_binding_pid_generation_hash)]
 use self::pid_generation_hash::{Adapter as SelectedAdapter, Reservation as SelectedReservation};
@@ -21,7 +20,6 @@ use self::pid_generation_hash::{Adapter as SelectedAdapter, Reservation as Selec
 use self::task_storage::{Adapter as SelectedAdapter, Reservation as SelectedReservation};
 use super::LoaderError;
 use super::object::map_handle;
-use super::suppressed_fd::{SUPPRESSED_FD_INDEX_SLOT_MAX, suppressed_fd_purpose_code};
 
 #[cfg(not(target_has_atomic = "64"))]
 compile_error!("launch binding requires lock-free 64-bit atomics");
@@ -36,12 +34,8 @@ compile_error!("a launch binding Adapter must be selected");
 ))]
 compile_error!("exactly one launch binding Adapter must be selected");
 
-const PENDING_EXEC_SUPPRESSED_FD_MAX: usize = SUPPRESSED_FD_INDEX_SLOT_MAX as usize;
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
-const PENDING_EXEC_BINDING_HEADER_SIZE: usize = 32;
-const PENDING_EXEC_SUPPRESSED_FD_SIZE: usize = 8;
-const PENDING_EXEC_BINDING_VALUE_SIZE: usize = PENDING_EXEC_BINDING_HEADER_SIZE
-    + PENDING_EXEC_SUPPRESSED_FD_MAX * PENDING_EXEC_SUPPRESSED_FD_SIZE;
+const PENDING_EXEC_BINDING_VALUE_SIZE: usize = 24;
 pub(crate) struct ArmedLaunchBinding {
     target: LaunchBindingTarget,
     reservation: SelectedReservation,
@@ -73,23 +67,18 @@ impl LaunchBindingTarget {
     }
 }
 
-pub(super) struct PendingLaunchBinding<'a> {
+pub(super) struct PendingLaunchBinding {
     trace_id: TraceId,
-    suppressed_fds: &'a [InitialSuppressedFd],
 }
 
-impl<'a> PendingLaunchBinding<'a> {
-    pub(super) fn new(trace_id: TraceId, suppressed_fds: &'a [InitialSuppressedFd]) -> Self {
-        Self {
-            trace_id,
-            suppressed_fds,
-        }
+impl PendingLaunchBinding {
+    pub(super) fn new(trace_id: TraceId) -> Self {
+        Self { trace_id }
     }
 
     fn encode(
         &self,
         target: &LaunchBindingTarget,
-        suppressed_fd_limit: usize,
         counted: bool,
     ) -> Result<[u8; PENDING_EXEC_BINDING_VALUE_SIZE], LoaderError> {
         if self.trace_id.get() == 0 {
@@ -98,34 +87,11 @@ impl<'a> PendingLaunchBinding<'a> {
                 "launch binding requires a non-zero trace ID",
             ));
         }
-        if self.suppressed_fds.len() > suppressed_fd_limit {
-            return Err(LoaderError::new(
-                "launch_binding",
-                format!(
-                    "{} initial suppressed fds exceed configured per-process limit {}",
-                    self.suppressed_fds.len(),
-                    suppressed_fd_limit
-                ),
-            ));
-        }
-        let suppressed_fd_count = u32::try_from(self.suppressed_fds.len()).map_err(|error| {
-            LoaderError::new(
-                "launch_binding",
-                format!("suppressed fd count overflow: {error}"),
-            )
-        })?;
         let mut value = [0_u8; PENDING_EXEC_BINDING_VALUE_SIZE];
         value[0..8].copy_from_slice(&self.trace_id.get().to_ne_bytes());
         value[8..16].copy_from_slice(&target.generation.to_ne_bytes());
         value[16..20].copy_from_slice(&target.observer_tgid.to_ne_bytes());
-        value[20..24].copy_from_slice(&suppressed_fd_count.to_ne_bytes());
-        value[24..28].copy_from_slice(&u32::from(counted).to_ne_bytes());
-        for (index, suppressed_fd) in self.suppressed_fds.iter().enumerate() {
-            let offset = PENDING_EXEC_BINDING_HEADER_SIZE + index * PENDING_EXEC_SUPPRESSED_FD_SIZE;
-            value[offset..offset + 4].copy_from_slice(&suppressed_fd.fd.to_ne_bytes());
-            value[offset + 4..offset + 8]
-                .copy_from_slice(&suppressed_fd_purpose_code(suppressed_fd.purpose).to_ne_bytes());
-        }
+        value[20..24].copy_from_slice(&u32::from(counted).to_ne_bytes());
         Ok(value)
     }
 }
@@ -133,28 +99,10 @@ impl<'a> PendingLaunchBinding<'a> {
 pub(super) struct LaunchExecBindings {
     adapter: SelectedAdapter,
     count: PendingExecCount,
-    suppressed_fd_limit: usize,
 }
 
 impl LaunchExecBindings {
-    pub(super) fn from_object(
-        object: &Object,
-        suppressed_fd_limit: u32,
-    ) -> Result<Self, LoaderError> {
-        let suppressed_fd_limit = usize::try_from(suppressed_fd_limit).map_err(|error| {
-            LoaderError::new(
-                "launch_binding",
-                format!("suppressed fd limit overflow: {error}"),
-            )
-        })?;
-        if suppressed_fd_limit > PENDING_EXEC_SUPPRESSED_FD_MAX {
-            return Err(LoaderError::new(
-                "launch_binding",
-                format!(
-                    "suppressed fd limit {suppressed_fd_limit} exceeds pending binding capacity {PENDING_EXEC_SUPPRESSED_FD_MAX}"
-                ),
-            ));
-        }
+    pub(super) fn from_object(object: &Object) -> Result<Self, LoaderError> {
         Ok(Self {
             adapter: SelectedAdapter::from_object(object)?,
             count: PendingExecCount::map(map_handle(
@@ -162,16 +110,15 @@ impl LaunchExecBindings {
                 "pending_exec_count",
                 "pending_exec_count",
             )?)?,
-            suppressed_fd_limit,
         })
     }
 
     pub(super) fn arm(
         &self,
         target: LaunchBindingTarget,
-        pending: &PendingLaunchBinding<'_>,
+        pending: &PendingLaunchBinding,
     ) -> Result<ArmedLaunchBinding, LoaderError> {
-        let uncounted = pending.encode(&target, self.suppressed_fd_limit, false)?;
+        let uncounted = pending.encode(&target, false)?;
         let reservation = self
             .adapter
             .reserve(&target, pending.trace_id, &uncounted)?;
@@ -180,7 +127,7 @@ impl LaunchExecBindings {
             return Err(transaction_error(increment_error, rollback));
         }
 
-        let counted = pending.encode(&target, self.suppressed_fd_limit, true)?;
+        let counted = pending.encode(&target, true)?;
         if let Err(publish_error) = self.adapter.publish(&target, &reservation, &counted) {
             let rollback = self.adapter.delete(&target, &reservation);
             let decrement = self.count.decrement();

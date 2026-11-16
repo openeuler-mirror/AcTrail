@@ -218,6 +218,19 @@ impl ProtocolRouter {
         }
     }
 
+    pub(super) fn is_routed(&self, identity: &PayloadStreamIdentity) -> bool {
+        [PayloadDirection::Outbound, PayloadDirection::Inbound]
+            .into_iter()
+            .any(|direction| {
+                self.streams
+                    .get(&ProtocolDirectionKey {
+                        identity: identity.clone(),
+                        direction,
+                    })
+                    .is_some_and(|state| state.route != ProtocolRoute::Pending)
+            })
+    }
+
     pub(super) fn upgrade(&mut self, identity: &PayloadStreamIdentity) {
         for direction in [PayloadDirection::Outbound, PayloadDirection::Inbound] {
             let key = ProtocolDirectionKey {

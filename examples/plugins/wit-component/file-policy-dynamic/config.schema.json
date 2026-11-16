@@ -28,9 +28,9 @@
           },
           "operation": {
             "title": "Operation",
-            "description": "Any applies the route to open, directory creation, and directory removal.",
+            "description": "Any applies to all file operations supported by the selected backend. Read, write, delete, attr, rename and link require the LSM file backend.",
             "type": "string",
-            "enum": ["any", "open", "mkdir", "rmdir"],
+            "enum": ["any", "open", "read", "write", "delete", "attr", "rename", "link", "mkdir", "rmdir"],
             "default": "any"
           },
           "path": {

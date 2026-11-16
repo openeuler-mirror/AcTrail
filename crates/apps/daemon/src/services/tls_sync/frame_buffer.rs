@@ -27,9 +27,13 @@ impl FrameBuffer {
         Ok(Some(message))
     }
 
-    pub(super) fn compact(&mut self) {
+    pub(super) fn compact(&mut self, retain_max_bytes: usize) {
         if self.consumed == self.bytes.len() {
-            self.bytes.clear();
+            if self.bytes.capacity() > retain_max_bytes {
+                self.bytes = Vec::new();
+            } else {
+                self.bytes.clear();
+            }
         } else if self.consumed != 0 {
             self.bytes.copy_within(self.consumed.., 0);
             self.bytes.truncate(self.bytes.len() - self.consumed);

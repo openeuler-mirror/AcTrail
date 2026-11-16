@@ -17,6 +17,9 @@ pub(in crate::runtime) trait EvictionPolicy {
 
     /// Remove and return the next candidate to evict, or `None` when empty.
     fn evict_candidate(&mut self) -> Option<FlowKey>;
+
+    /// Remove recency records belonging to a TLS connection whose address was reused.
+    fn forget_stream(&mut self, stream_key: usize);
 }
 
 /// Least-recently-used policy: evicts the stream with the oldest last access.
@@ -45,5 +48,10 @@ impl EvictionPolicy for LruPolicy {
             .map(|(key, _)| *key)?;
         self.last_access.remove(&key);
         Some(key)
+    }
+
+    fn forget_stream(&mut self, stream_key: usize) {
+        self.last_access
+            .retain(|key, _| key.stream_key != stream_key);
     }
 }

@@ -2,6 +2,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 
 use crate::args::WebConfig;
+use crate::configuration::ConfigEditor;
 use crate::{render, view};
 use config_core::daemon::OperatorConfig;
 use storage_core::StorageOpenMode;
@@ -16,8 +18,12 @@ use storage_factory::{StorageConfig, open_storage_backend};
 
 #[path = "http/alerts.rs"]
 mod alerts;
+#[path = "http/checkpoints/mod.rs"]
+mod checkpoints;
 #[path = "http/cluster_routes.rs"]
 mod cluster_routes;
+#[path = "http/configuration/endpoint.rs"]
+mod configuration;
 #[path = "http/idle.rs"]
 mod idle;
 #[path = "http/plugins.rs"]
@@ -33,6 +39,7 @@ mod trace_list;
 #[path = "http/trace_routes.rs"]
 mod trace_routes;
 use cluster_routes::route_cluster_trace_api;
+use configuration::{ConfigHttp, ConfigRequestHeaders};
 use query::{
     parse_action_tree_page, parse_llm_activity_query, parse_llm_export_query, parse_llm_nav_mode,
     parse_llm_rows_query, parse_time_attribution_range_query, parse_time_attribution_rows_query,
@@ -44,6 +51,7 @@ const STATUS_OK: &str = "200 OK";
 const STATUS_BAD_REQUEST: &str = "400 Bad Request";
 const STATUS_NOT_FOUND: &str = "404 Not Found";
 const STATUS_METHOD_NOT_ALLOWED: &str = "405 Method Not Allowed";
+const STATUS_CONFLICT: &str = "409 Conflict";
 const STATUS_INTERNAL_ERROR: &str = "500 Internal Server Error";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +101,8 @@ pub fn serve_listener(
         trace_list: trace_list::TraceListLimits::load()?,
         operator_config_path: None,
         operator_config: None,
+        operator_config_text: None,
+        config_editor: None,
     };
     serve_listener_context(listener, context, budget)
 }
@@ -111,8 +121,14 @@ fn serve_listener_with_config(
         idle: idle::IdleLimits::load()?,
         content: query::ContentLimits::load()?,
         trace_list: trace_list::TraceListLimits::load()?,
-        operator_config_path: config.operator_config_path,
+        operator_config_path: config.operator_config_path.clone(),
         operator_config: config.operator_config,
+        operator_config_text: config.operator_config_text,
+        config_editor: config
+            .operator_config_path
+            .map(ConfigEditor::file)
+            .transpose()?
+            .map(Arc::new),
     };
     serve_listener_context(listener, context, budget)
 }
@@ -150,6 +166,8 @@ struct WebContext {
     trace_list: trace_list::TraceListLimits,
     operator_config_path: Option<std::path::PathBuf>,
     operator_config: Option<OperatorConfig>,
+    operator_config_text: Option<Arc<str>>,
+    config_editor: Option<Arc<ConfigEditor>>,
 }
 
 fn detach_connection(stream: TcpStream, context: WebContext) {
@@ -260,6 +278,8 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Resul
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<Request, RequestReadError> {
+    let local_addr = stream.local_addr().map_err(RequestReadError::from_io)?;
+    let peer_addr = stream.peer_addr().map_err(RequestReadError::from_io)?;
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     let read = reader
@@ -280,6 +300,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestReadError> {
     }
     let mut accepts_gzip = false;
     let mut content_length = 0usize;
+    let mut config_headers = ConfigRequestHeaders::default();
     loop {
         let mut header = String::new();
         let read = reader
@@ -292,6 +313,9 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestReadError> {
             break;
         }
         let lower = header.to_ascii_lowercase();
+        if let Some((name, value)) = header.split_once(':') {
+            config_headers.capture(name, value.trim());
+        }
         if lower.starts_with("accept-encoding:") && lower.contains("gzip") {
             accepts_gzip = true;
         }
@@ -315,11 +339,17 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestReadError> {
         path: parts[1].to_string(),
         accepts_gzip,
         body,
+        config_headers,
+        local_addr,
+        peer_addr,
     })
 }
 
 fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
     let (path, query) = split_request_target(&request.path);
+    if path == "/api/config/editable" {
+        return ConfigHttp::new(context.config_editor.as_deref()).route(request);
+    }
     if path == "/api/cache/clear" {
         if request.method != "POST" {
             return Ok(Response::text(
@@ -348,6 +378,11 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         context.operator_config.as_ref(),
     )
     .route(&request.method, path, query, &request.body)
+    {
+        return response;
+    }
+    if let Some(response) =
+        checkpoints::CheckpointHttp::new(context).route(&request.method, path, query)
     {
         return response;
     }
@@ -387,6 +422,7 @@ fn route(request: &Request, context: &WebContext) -> Result<Response, String> {
         "/api/config/current" => view::current_config_json(
             context.operator_config_path.as_deref(),
             context.operator_config.as_ref(),
+            context.operator_config_text.as_deref(),
         )
         .map(Response::json),
         "/api/plugins/enabled" => view::plugin_enablement_json(
@@ -464,6 +500,9 @@ struct Request {
     path: String,
     accepts_gzip: bool,
     body: Vec<u8>,
+    config_headers: ConfigRequestHeaders,
+    local_addr: std::net::SocketAddr,
+    peer_addr: std::net::SocketAddr,
 }
 
 struct Response {
@@ -529,20 +568,5 @@ impl Response {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::client_disconnected;
-
-    #[test]
-    fn recognizes_expected_client_disconnects() {
-        for kind in [
-            std::io::ErrorKind::BrokenPipe,
-            std::io::ErrorKind::ConnectionReset,
-            std::io::ErrorKind::ConnectionAborted,
-        ] {
-            assert!(client_disconnected(&std::io::Error::from(kind)));
-        }
-        assert!(!client_disconnected(&std::io::Error::from(
-            std::io::ErrorKind::WriteZero,
-        )));
-    }
-}
+#[path = "../../../../tests/unit/crates/apps/web/http/tests.rs"]
+mod tests;

@@ -45,6 +45,24 @@ daemon 的解析工作线程持有有界的最近最少使用（LRU）缓存，�
 
 每次查询都在当前进程根目录下重新发现依赖，再把缓存分析结果绑定到本次运行路径。同一个二进制文件可以复用扫描结果，路径和进程标识由当前查询提供。缓存容量由 `payload.tls.binary_analysis_cache_capacity` 控制。
 
+## 每进程连接
+
+ctl 在启动检查时连接后立即关闭 socket。每个运行时进程按需建立自己的事件连接，不传递 fd；fork 子进程关闭继承的写 fd 和 release reader fd，使用新的连接及响应等待状态。连接失败后该进程停止上报，不重连。应用线程只把事件入队；发送批次和单次 write 上限由 `payload.tls.sync_event_batch_bytes` 配置，默认 32 KiB。无进度时限由 `sync_event_timeout_ms` 配置，默认 5 秒，每次成功写入后重置；退出排空总预算由 `sync_event_shutdown_timeout_ms` 独立配置，默认 100 ms。ctl 将这些配置传入新 launch 的 runtime。
+
+daemon 接入时只保留 `SO_PEERCRED`，不读取发送进程的 `/proc`。TrackAdd 的 `reply_track_added_v2` 回复将 Trace 专用的 TLS 事件凭据交给 ctl。该凭据由 daemon 随机生成，只保存在内存，不与告警凭据共用；只有启用 TLS-sync 的 launch 才由 ctl 写入子进程的 `TLS_PAYLOAD_SYNC_EVENT_TOKEN`。每个进程的发送线程先发 `Register` 帧（kind 9），再发事件；`Register` 带有该进程是否等待放行（checkpoint launch 设置 `TLS_PAYLOAD_SYNC_HOLD_RESPONSES`），daemon 只为等待放行的连接记录放行进度。首个事件使用登记凭据校验 Trace 归属并绑定连接，后续事件必须属于同一 Trace。凭据在 Debug 输出中遮蔽。即使发送进程在 accept 前已退出，daemon 仍可校验并处理 socket 中完整的缓冲事件。daemon、ctl 和 native runtime 必须配套更新，不接受缺少登记帧的旧事件连接。
+
+daemon 用 epoll 读取就绪连接，`sync_ready_client_batch_max` 默认每轮 128 条，`sync_read_buffer_bytes` 默认 64 KiB，`sync_read_max_bytes_per_client` 默认每条连接每轮 1 MiB。连接的组帧缓冲在清空后，容量超过 `sync_frame_buffer_retain_max_bytes` 时释放，默认阈值 1 MiB。`sync_trace_connection_max` 默认 128，按 Trace 统计，包括工具和子 Agent；计划查询不占配额。启动时按 Trace 数、连接上限、待接入连接和查询队列计算 fd 预算并提高 RLIMIT_NOFILE。fd 耗尽时暂停接入并继续读取已有连接，连接关闭或后台重试后恢复。
+
+启用 checkpoint 时，每批明文识别出的 LLM 请求先按 Trace 和 TLS 连接登记 hold，再生成 `Release`；其他 Trace 的同名连接不参与匹配。没有 hold 的连接进度条目在放行消息进入发送队列后回收，同一 TLS 连接后续上报时重新登记；仍等待 checkpoint 的条目继续保留。回收依据是放行进度，不依赖 TLS 连接关闭通知。
+
+daemon 记下每条进程上报连接送过的 stream。连接断开时，先处理已读到的明文，再通过现有 stream close 流程结束这些 stream，释放协议路由和解析状态。TLS 对象本身仍没有结束事件：存活进程中正常结束的 TLS 连接仍占路由，地址持续不复用时可能耗尽路由方向数配额。采集缺口和非 WebSocket upgrade 对条目的处理不变。
+
+已判定协议的连接收到以完整 preface 开头的出站片段时（旧连接是 HTTP/2 时须在帧边界），投影先调用 `finalize_payload_stream`，再按新连接处理，重建 stream 编号、HPACK 和协议路由状态；运行时 `FlowController` 同时清除该地址的双向流状态及 LRU 记录。此判断不扫描帧正文，也不 hook TLS 对象释放；旧 HTTP/2 地址改作 HTTP/1 的情况仍不支持。
+
+计划查询仍解析活进程身份并打开 peer root，然后把 socket 交给 `payload.tls.sync_plan_queue_capacity` 限制的解析队列，默认最多 1024 项。队列满时 daemon 直接关闭这次查询，不回复 Unsupported。解析线程跳过已断开的请求；运行时不缓存连接、超时、提前关闭或解码失败，下次加载时重新查询，明确的 Unsupported 仍缓存。已加载库扫描和 dlopen 预取共用基础库跳过名单。
+
+采集层按配置的完整 Unix socket 路径排除内部 connect 及后续读写，dup 登记副本，close 和进程退出删除条目。退出时由 BPF 按索引清理最多 64 项，用户态不再为每次退出扫描全表；超过部分留到 Trace 结束统一清理。这些 fd 都在 exec 时关闭，所以 exec 清除该进程的全部条目，fork 子进程也不继承；新程序重新连接时再登记。路径按字节比较，容器内挂载到其他路径时不会命中排除规则。
+
 ## 明文捕获与故障边界
 
 函数入口拦截、OpenSSL 符号替换、审计和符号查询包装函数，以及 Java 安全套接字接口（JSSE）探针，最终都产生 TLS 明文片段（payload segment）。原生包装函数先调用真实 TLS 函数，再根据返回值确定有效长度和收发方向。片段经 Unix socket 发送给 daemon 的明文接收入口，然后交给应用协议解析和语义投影。

@@ -21,6 +21,7 @@ use super::protocol::{
 };
 use super::system::{
     self, CommandExecutionBoundaryAlert, DAEMON_ENFORCEMENT_INSTANCE_ID, FileAccessBoundaryAlert,
+    NetworkConnectionBoundaryAlert,
 };
 
 pub(crate) struct AlertIngress {
@@ -105,6 +106,17 @@ impl AlertIngress {
     ) -> Result<(), ControlError> {
         self.daemon_alert_host
             .submit_command_execution_boundary_alert(trace_id, alert_token, alert)
+            .map_err(|error| ControlError::new(error.code, error.message))
+    }
+
+    pub(in crate::services) fn submit_network_connection_boundary_alert(
+        &self,
+        trace_id: TraceId,
+        alert_token: TraceAlertToken,
+        alert: NetworkConnectionBoundaryAlert,
+    ) -> Result<(), ControlError> {
+        self.daemon_alert_host
+            .submit_network_connection_boundary_alert(trace_id, alert_token, alert)
             .map_err(|error| ControlError::new(error.code, error.message))
     }
 

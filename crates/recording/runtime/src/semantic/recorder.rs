@@ -1,11 +1,15 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use model_core::ids::TraceId;
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionUpdate,
+    SemanticAction, SemanticActionChange, SemanticActionKind, SemanticActionLink,
+    SemanticActionUpdate, SemanticAttributeSupplementRejection,
 };
 use storage_core::StorageBackend;
 
 use super::{RecordingError, SemanticActionRecordBatch};
+use crate::{DeliveryFailureKind, DeliveryReport};
 
 static LINEAGE_PERSISTENCE_FAILURES: AtomicU64 = AtomicU64::new(0);
 
@@ -21,8 +25,8 @@ impl<'a> SemanticActionRecorder<'a> {
     pub(crate) fn persist_batch(
         &mut self,
         batch: SemanticActionRecordBatch<'_>,
-    ) -> Result<(), RecordingError> {
-        self.persist_graph(
+    ) -> Result<DeliveryReport, RecordingError> {
+        let delivery = self.persist_graph(
             batch
                 .actions()
                 .iter()
@@ -52,7 +56,7 @@ impl<'a> SemanticActionRecorder<'a> {
         }
         self.storage
             .upsert_mcp_jsonrpc_contents(batch.mcp_jsonrpc_contents())?;
-        Ok(())
+        Ok(delivery)
     }
 
     pub(super) fn persist_graph(
@@ -60,18 +64,56 @@ impl<'a> SemanticActionRecorder<'a> {
         actions: impl IntoIterator<Item = SemanticAction>,
         updates: impl IntoIterator<Item = SemanticActionUpdate>,
         links: impl IntoIterator<Item = SemanticActionLink>,
-    ) -> Result<(), RecordingError> {
+    ) -> Result<DeliveryReport, RecordingError> {
+        let mut delivery = DeliveryReport::default();
+        let mut rejected_identities: HashMap<TraceId, HashSet<String>> = HashMap::new();
         // Persist actions before links so graph edges never race ahead of their nodes.
         for action in actions {
             self.storage.insert_semantic_action(action)?;
         }
         for update in updates {
-            self.storage.update_semantic_action(update)?;
+            if !matches!(
+                update.change,
+                SemanticActionChange::SupplementAttributes { .. }
+            ) {
+                self.storage.update_semantic_action(update)?;
+                continue;
+            }
+            let action_id = update.action_id.clone();
+            let trace_id = update.trace_id;
+            let process = update.process;
+            if let Err(error) = self.storage.update_semantic_action(update) {
+                let Some(rejection) = error.supplement_rejection else {
+                    return Err(error.into());
+                };
+                if rejection == SemanticAttributeSupplementRejection::Identity {
+                    rejected_identities
+                        .entry(trace_id)
+                        .or_default()
+                        .insert(action_id.clone());
+                }
+                delivery.record(
+                    DeliveryFailureKind::StorageSupplement,
+                    Err(RecordingError::new(error.stage, format!(
+                        "action supplement rejected: trace_id={} process_id={} action_id={} reason={}",
+                        trace_id.get(), process.get(), action_id, error.message
+                    ))),
+                );
+            }
         }
         for link in links {
+            if rejected_identities
+                .get(&link.trace_id)
+                .is_some_and(|identities| {
+                    identities.contains(link.parent_action_id.as_str())
+                        || identities.contains(link.child_action_id.as_str())
+                })
+            {
+                continue;
+            }
             self.storage.upsert_semantic_action_link(link)?;
         }
-        Ok(())
+        Ok(delivery)
     }
 
     pub(super) fn persists_action_kind(kind: SemanticActionKind) -> bool {

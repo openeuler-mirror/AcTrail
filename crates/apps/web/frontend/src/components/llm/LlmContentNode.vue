@@ -67,10 +67,10 @@ const error = ref('');
 const previousOffsets = ref([]);
 let failed = null;
 const container = computed(() => ['object', 'array'].includes(props.descriptor.type));
-const entry = computed(() => ['message', 'tool', 'body'].includes(props.presentation));
+const entry = computed(() => ['message', 'tool', 'body', 'block'].includes(props.presentation));
 const transparent = computed(() => props.presentation === 'body' && !header.value.name
   && (!header.value.type || ['text', 'input_text', 'output_text'].includes(header.value.type)));
-const prose = computed(() => props.presentation === 'body' || (!container.value && props.presentation === 'message')
+const prose = computed(() => ['body', 'block'].includes(props.presentation) || (!container.value && props.presentation === 'message')
   || PROSE_FIELDS.includes(props.descriptor.token));
 const title = computed(() => {
   if (header.value.name) return header.value.name;
@@ -90,7 +90,7 @@ function childPresentation(child) {
   if (props.descriptor.type === 'array') {
     if (['messages', 'input'].includes(token)) return 'message';
     if (['tools', 'functions', 'tool_calls'].includes(token)) return 'tool';
-    if (props.presentation === 'body' || token === 'system') return 'body';
+    if (['body', 'block'].includes(props.presentation) || token === 'system') return 'block';
   }
   if (entry.value && ['content', 'text', 'description'].includes(child.token)) return 'body';
   return 'field';
@@ -142,6 +142,7 @@ onMounted(() => {
 <style scoped>
 .llm-content-node { min-width: 0; color: var(--ui-text); }
 .llm-content-node.is-container:not(.body) { border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); overflow: hidden; }
+.llm-content-node.block:not(.is-container) { padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface); }
 .llm-content-node.message { border-left: 3px solid var(--ui-accent); }
 .llm-content-node.tool { border-left: 3px solid var(--trace-insight-tools-border); }
 .llm-content-node.section.is-container { border: 0; background: transparent; overflow: visible; }
@@ -163,7 +164,7 @@ onMounted(() => {
 .llm-prose-label { display: block; margin-bottom: 8px; font-weight: 600; }
 .llm-content-value { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; font: inherit; }
 .is-prose > .llm-content-value { line-height: 1.75; max-height: 480px; overflow: auto; padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); background: var(--ui-surface-soft); }
-.body.is-prose > .llm-content-value { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.body.is-prose > .llm-content-value, .block.is-prose > .llm-content-value { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .llm-content-pages { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 10px; grid-column: 1 / -1; }
 .llm-content-pages span { flex: 1 1 100%; color: var(--ui-muted); font-size: var(--ui-font-xs); }
 .llm-content-pages button, .llm-content-more { padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); color: var(--ui-text); background: var(--ui-surface); font: inherit; font-size: var(--ui-font-sm); cursor: pointer; }

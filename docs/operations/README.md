@@ -5,7 +5,7 @@
 ## 部署
 
 1. [选择部署模式](deployment/choose-a-mode.md)。
-2. 按运行边界选择 [Linux 主机](deployment/host.md)、[Docker workload](deployment/container.md) 或 [执行隔离](deployment/execution-isolation.md)。
+2. 按运行边界选择 [Linux 主机](deployment/host.md)、[Docker workload](deployment/container.md)、[虚机容器](deployment/virtual-container.md)或 [执行隔离](deployment/execution-isolation.md)。
 3. 启动前执行 [主机准备检查](troubleshooting/preflight.md)。
 
 ## 日常运行
@@ -14,6 +14,7 @@
 - [启动、停止和检查 daemon](daemon/start-stop.md)
 - [查看和导出 trace](daemon/inspect-traces.md)
 - [配置Agent 执行停滞告警与时间线](idle-detection.md)
+- [快照与回滚接入](checkpoint.md)：配置、启动与回滚操作，支持 Btrfs、AgentNS 和 Xiaoo 后端
 - [管理插件](plugins/manage.md)
 
 ## 集成

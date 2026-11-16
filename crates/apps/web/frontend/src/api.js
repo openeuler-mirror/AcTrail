@@ -53,6 +53,18 @@ export function readCurrentConfig() {
   return fetchJson('/api/config/current');
 }
 
+export function readEditableConfig() {
+  return fetchJson('/api/config/editable');
+}
+
+export function saveEditableConfig(editsJson) {
+  return fetchJson('/api/config/editable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: editsJson,
+  });
+}
+
 export function readPluginEnablement() {
   return fetchJson('/api/plugins/enabled');
 }
@@ -217,6 +229,15 @@ export function readTimelinePage(traceId, { signal, ...filters } = {}) {
   return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/actions/timeline?${query}`, { signal });
 }
 
+/** Downsampled host and trace resource tracks for one window, in Unix milliseconds. */
+export function readResourceTimeline(traceId, { fromMs, toMs, maxPoints, signal } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries({ from_ms: fromMs, to_ms: toMs, max_points: maxPoints })) {
+    if (value != null) query.set(key, String(Math.round(value)));
+  }
+  return fetchJson(`/api/traces/${encodeURIComponent(traceId)}/resource-timeline?${query}`, { signal });
+}
+
 export function readIdleIntervals(traceId, { signal, ...filters } = {}) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
@@ -233,6 +254,25 @@ export function readActionTreeChildren(traceId, parentId, { offset, limit }) {
   return fetchJson(
     `/api/traces/${encodeURIComponent(traceId)}/action-tree/children/${encodeURIComponent(parentId)}?offset=${offset}&limit=${limit}`,
   );
+}
+
+function checkpointPath(traceId, suffix = '') {
+  return `/api/traces/${encodeURIComponent(traceId)}/checkpoints${suffix}`;
+}
+
+export function readTraceCheckpoints(traceId, { signal } = {}) {
+  return fetchJson(checkpointPath(traceId), { signal });
+}
+
+export function readCheckpointNavigation(traceId, operationId) {
+  return fetchJson(checkpointPath(traceId, `/navigation?operation=${encodeURIComponent(operationId)}`));
+}
+
+/** `command` is save, restore, delete, force or resume; `params` names its checkpoint or operation. */
+export function sendCheckpointCommand(traceId, command, params = {}) {
+  const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
+  const suffix = query.size ? `?${query}` : '';
+  return fetchJson(checkpointPath(traceId, `/${command}${suffix}`), { method: 'POST' });
 }
 
 export function readActionTreeLlmNav(traceId, { mode, afterId = null } = {}) {

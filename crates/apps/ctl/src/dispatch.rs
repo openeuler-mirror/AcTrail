@@ -1,5 +1,6 @@
 //! Dispatch from validated input to control-plane contracts.
 
+use control_contract::checkpoint::CheckpointCommand;
 use control_contract::command::{
     ControlCommand, DoctorCommand, ListTracesCommand, ReportSessionClosedCommand,
     ReportWorkLifecycleCommand, TrackAddCommand, TrackRemoveCommand,
@@ -29,9 +30,9 @@ pub fn dispatch(
             profile_name,
             tags,
             launch_mode: false,
-            initial_suppressed_fds: Vec::new(),
             launch_target: None,
             tls_probe_plans: Vec::new(),
+            checkpoint: None,
         }),
         CtlCommand::TrackRemove { selector } => ControlCommand::TrackRemove(TrackRemoveCommand {
             request_id,
@@ -75,6 +76,9 @@ pub fn dispatch(
                 "invalid_dispatch",
                 "init is handled by the local actrailctl process",
             ));
+        }
+        CtlCommand::Checkpoint(action) => {
+            ControlCommand::Checkpoint(CheckpointCommand { request_id, action })
         }
         CtlCommand::Launch { .. } => {
             return Err(ControlError::new(

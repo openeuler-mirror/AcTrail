@@ -12,7 +12,8 @@ use semantic_action::{
 
 use crate::SqliteStorage;
 use crate::semantic_actions::codebook::sqlite::{
-    action_kind_code, decode_link_origin, decode_link_role, link_role_code, link_role_code_from_str,
+    action_kind_code, action_kind_code_from_str, decode_link_origin, decode_link_role,
+    link_role_code, link_role_code_from_str,
 };
 use crate::semantic_actions::cold_fields::decode_attributes_from_row;
 use crate::semantic_actions::evidence;
@@ -25,6 +26,9 @@ use crate::semantic_actions::tree_metadata::{
     display_child_counts, display_parent_link_absence_predicate, display_parent_link_value_count,
     push_display_parent_link_values,
 };
+
+mod query;
+pub(super) use query::DisplayRootQuery;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticActionDisplayRootChildRow {
@@ -47,7 +51,18 @@ impl SqliteStorage {
     ) -> Result<usize, SemanticActionStoreError> {
         ensure_semantic_trace(self, trace_id)?;
         let connection = self.connection().borrow();
-        root_child_count(&connection, trace_id, display_parent_roles)
+        DisplayRootQuery::new(trace_id, display_parent_roles).count(&connection)
+    }
+
+    pub fn semantic_action_display_root_offset(
+        &self,
+        trace_id: TraceId,
+        display_parent_roles: &[&str],
+        action_id: &str,
+    ) -> Result<Option<usize>, SemanticActionStoreError> {
+        ensure_semantic_trace(self, trace_id)?;
+        DisplayRootQuery::new(trace_id, display_parent_roles)
+            .offset_of(&self.connection().borrow(), action_id)
     }
 
     pub fn semantic_action_display_root_children_page(
@@ -55,22 +70,23 @@ impl SqliteStorage {
         trace_id: TraceId,
         display_parent_roles: &[&str],
         root_link_roles: &[&str],
+        excluded_fallback_kinds: &[&str],
         page: SemanticActionChildPageQuery,
     ) -> Result<SemanticActionDisplayRootChildPage, SemanticActionStoreError> {
         ensure_semantic_trace(self, trace_id)?;
         let connection = self.connection().borrow();
-        let total_count = root_child_count(&connection, trace_id, display_parent_roles)?;
-        let action_ids = root_child_action_ids(
-            &connection,
-            trace_id,
-            display_parent_roles,
-            page.offset,
-            page.limit,
-        )?;
+        let query = DisplayRootQuery::new(trace_id, display_parent_roles);
+        let total_count = query.count(&connection)?;
+        let action_ids = query.action_ids(&connection, page.offset, page.limit)?;
         let mut actions = read_actions(&connection, trace_id, &action_ids)?;
         let mut root_links = read_root_links(&connection, trace_id, &action_ids, root_link_roles)?;
-        let mut child_counts =
-            root_child_counts(&connection, trace_id, &actions, display_parent_roles)?;
+        let mut child_counts = root_child_counts(
+            &connection,
+            trace_id,
+            &actions,
+            display_parent_roles,
+            excluded_fallback_kinds,
+        )?;
         let rows = action_ids
             .into_iter()
             .filter_map(|action_id| {
@@ -85,61 +101,6 @@ impl SqliteStorage {
             .collect();
         Ok(SemanticActionDisplayRootChildPage { rows, total_count })
     }
-}
-
-fn root_child_count(
-    connection: &Connection,
-    trace_id: TraceId,
-    display_parent_roles: &[&str],
-) -> Result<usize, SemanticActionStoreError> {
-    let query = format!(
-        "SELECT COUNT(*)
-         FROM semantic_actions action
-         WHERE {}",
-        root_candidate_predicate(display_parent_roles)
-    );
-    let values = root_candidate_values(trace_id, display_parent_roles)?;
-    let count = connection
-        .query_row(&query, params_from_iter(values), |row| row.get::<_, i64>(0))
-        .map_err(|error| {
-            SemanticActionStoreError::new("count_semantic_action_root_children", error.to_string())
-        })?;
-    usize::try_from(count).map_err(|error| {
-        SemanticActionStoreError::new("count_semantic_action_root_children", error.to_string())
-    })
-}
-
-fn root_child_action_ids(
-    connection: &Connection,
-    trace_id: TraceId,
-    display_parent_roles: &[&str],
-    offset: usize,
-    limit: usize,
-) -> Result<Vec<String>, SemanticActionStoreError> {
-    let query = format!(
-        "SELECT ids.action_id
-         FROM semantic_actions action
-         JOIN semantic_action_ids ids
-           ON ids.action_key = action.action_key
-         WHERE {}
-         ORDER BY action.start_time ASC, ids.action_id ASC
-         LIMIT ? OFFSET ?",
-        root_candidate_predicate(display_parent_roles)
-    );
-    let mut values = root_candidate_values(trace_id, display_parent_roles)?;
-    values.push(usize_value(limit, "semantic_action_root_child_limit")?);
-    values.push(usize_value(offset, "semantic_action_root_child_offset")?);
-    let mut statement = connection.prepare(&query).map_err(|error| {
-        SemanticActionStoreError::new("prepare_semantic_action_root_children", error.to_string())
-    })?;
-    let rows = statement
-        .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
-        .map_err(|error| {
-            SemanticActionStoreError::new("query_semantic_action_root_children", error.to_string())
-        })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
-        SemanticActionStoreError::new("map_semantic_action_root_child", error.to_string())
-    })
 }
 
 fn read_actions(
@@ -255,6 +216,7 @@ fn root_child_counts(
     trace_id: TraceId,
     actions: &BTreeMap<String, SemanticAction>,
     display_parent_roles: &[&str],
+    excluded_fallback_kinds: &[&str],
 ) -> Result<BTreeMap<String, usize>, SemanticActionStoreError> {
     let action_ids = actions.keys().cloned().collect::<Vec<_>>();
     let mut counts = display_child_counts(connection, trace_id, &action_ids, display_parent_roles)?;
@@ -263,9 +225,13 @@ fn root_child_counts(
         .filter(|action| action.kind == SemanticActionKind::CommandInvocation)
         .map(|action| action.action_id.clone())
         .collect::<Vec<_>>();
-    for (action_id, fallback_count) in
-        command_fallback_child_counts(connection, trace_id, &command_ids, display_parent_roles)?
-    {
+    for (action_id, fallback_count) in command_fallback_child_counts(
+        connection,
+        trace_id,
+        &command_ids,
+        display_parent_roles,
+        excluded_fallback_kinds,
+    )? {
         *counts.entry(action_id).or_default() += fallback_count;
     }
     Ok(counts)
@@ -276,6 +242,7 @@ fn command_fallback_child_counts(
     trace_id: TraceId,
     command_ids: &[String],
     display_parent_roles: &[&str],
+    excluded_fallback_kinds: &[&str],
 ) -> Result<BTreeMap<String, usize>, SemanticActionStoreError> {
     if command_ids.is_empty() {
         return Ok(BTreeMap::new());
@@ -291,6 +258,7 @@ fn command_fallback_child_counts(
          JOIN semantic_actions child
            ON child.trace_id = command.trace_id
           AND child.kind_code != ?
+          AND child.kind_code NOT IN ({})
           AND child.process_id = command.process_id
           AND child.start_time >= command.start_time
           AND (command_state.end_time IS NULL OR child.start_time <= command_state.end_time)
@@ -301,15 +269,21 @@ fn command_fallback_child_counts(
            AND child.action_valid_code = 1
            {}
          GROUP BY command_ids.action_id",
+        sql_placeholders(excluded_fallback_kinds.len()),
         sql_placeholders(command_ids.len()),
         parent_filter
     );
     let mut values = Vec::with_capacity(
-        3 + command_ids.len() + display_parent_link_value_count(display_parent_roles),
+        3 + excluded_fallback_kinds.len()
+            + command_ids.len()
+            + display_parent_link_value_count(display_parent_roles),
     );
     values.push(Value::Integer(i64::from(action_kind_code(
         SemanticActionKind::CommandInvocation,
     ))));
+    for kind in excluded_fallback_kinds {
+        values.push(Value::Integer(i64::from(action_kind_code_from_str(kind)?)));
+    }
     values.push(trace_id_value(trace_id)?);
     values.extend(command_ids.iter().cloned().map(Value::Text));
     values.push(Value::Integer(i64::from(action_kind_code(
@@ -352,48 +326,6 @@ fn command_fallback_child_counts(
         );
     }
     Ok(counts)
-}
-
-fn root_candidate_predicate(display_parent_roles: &[&str]) -> String {
-    let parent_filter = display_parent_link_absence_predicate(display_parent_roles, "action");
-    format!(
-        "action.trace_id = ?
-         AND action.action_valid_code = 1
-         {}
-         AND (
-           action.kind_code = ?
-           OR NOT EXISTS (
-             SELECT 1
-             FROM semantic_actions command
-             JOIN semantic_action_state command_state
-               ON command_state.action_key = command.action_key
-             WHERE command.trace_id = action.trace_id
-               AND command.kind_code = ?
-               AND command.action_key != action.action_key
-               AND command.process_id = action.process_id
-               AND command.start_time <= action.start_time
-               AND (command_state.end_time IS NULL OR action.start_time <= command_state.end_time)
-               AND command.action_valid_code = 1
-           )
-         )",
-        parent_filter
-    )
-}
-
-fn root_candidate_values(
-    trace_id: TraceId,
-    display_parent_roles: &[&str],
-) -> Result<Vec<Value>, SemanticActionStoreError> {
-    let mut values = Vec::with_capacity(3 + display_parent_link_value_count(display_parent_roles));
-    values.push(trace_id_value(trace_id)?);
-    push_display_parent_link_values(&mut values, display_parent_roles)?;
-    values.push(Value::Integer(i64::from(action_kind_code(
-        SemanticActionKind::CommandInvocation,
-    ))));
-    values.push(Value::Integer(i64::from(action_kind_code(
-        SemanticActionKind::CommandInvocation,
-    ))));
-    Ok(values)
 }
 
 fn root_link_from_row(row: &Row<'_>) -> Result<SemanticActionLink, rusqlite::Error> {

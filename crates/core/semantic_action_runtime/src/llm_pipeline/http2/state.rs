@@ -1,4 +1,5 @@
 //! The connection incarnation owns each stream's directional message lifecycle.
+use super::headers::HeaderDecoder;
 use crate::llm_pipeline::assembly::http2::Http2BodyAssembly;
 use crate::llm_pipeline::assembly::router::LiveStreamDirection;
 use crate::llm_pipeline::transport::http2::Http2Decoder;
@@ -34,10 +35,12 @@ pub(super) struct StreamLifecycle {
     pub(super) ended: [bool; 2],
 }
 pub(super) struct Direction {
+    pub(super) headers: HeaderDecoder,
     pub(super) decoder: Http2Decoder,
     pub(super) body: Http2BodyAssembly,
 }
 pub(super) struct Connection {
+    pub(super) header_config: config_core::daemon::Http2ProtocolConfig,
     pub(super) prefix: String,
     pub(super) observed_at: std::time::SystemTime,
     pub(super) directions: BTreeMap<LiveStreamDirection, Direction>,
@@ -70,6 +73,7 @@ impl Connection {
         self.directions
             .entry(direction)
             .or_insert_with(|| Direction {
+                headers: HeaderDecoder::new(self.header_config),
                 decoder: Http2Decoder::new(format!(
                     "{}:{}",
                     self.prefix,

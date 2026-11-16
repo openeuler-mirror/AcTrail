@@ -93,7 +93,8 @@ import {
   mergeActionTreeChildren,
 } from './model';
 import { buildHttpExchangeArcOverlay } from './httpExchangeArcs';
-import { TREE_NODE_TYPES, UI_LIMITS } from './config';
+import { provideCheckpointMarkers } from '../checkpoints/markers';
+import { LLM_NAVIGATION_KINDS, TREE_NODE_TYPES, UI_LIMITS } from './config';
 import { useModuleLocale } from '../../../locale';
 import strings from './locale';
 
@@ -116,7 +117,22 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  /** `{ path, nonce }`: an LLM call to open, from the checkpoints tab. */
+  focusPath: {
+    type: Object,
+    default: null,
+  },
+  refreshNonce: {
+    type: Number,
+    default: 0,
+  },
 });
+const emit = defineEmits(['open-checkpoint', 'focus-consumed']);
+provideCheckpointMarkers(
+  () => props.traceKey,
+  () => props.refreshNonce,
+  (marker) => emit('open-checkpoint', marker),
+);
 
 const rootNode = ref(null);
 const actionTreeCanvas = ref(null);
@@ -155,6 +171,16 @@ watch(
           rootData: props.actionTree.rootData,
         })
       : null;
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [props.focusPath, rootNode.value],
+  ([focus, root]) => {
+    if (!focus || !root) return;
+    emit('focus-consumed');
+    runLlmNavigation(() => activateServerLlmPath(focus.path));
   },
   { immediate: true },
 );
@@ -494,7 +520,7 @@ async function loadMoreNodeChildren(node) {
 }
 
 function isLlmCallNode(node) {
-  return node?.kind === 'llm.call';
+  return LLM_NAVIGATION_KINDS.includes(node?.kind);
 }
 
 function nodeMatchesSelection(node, selectionId) {

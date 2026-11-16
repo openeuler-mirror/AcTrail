@@ -1,0 +1,10 @@
+{
+  "btrfs_path": "/usr/bin/btrfs",
+  "findmnt_path": "/usr/bin/findmnt",
+  "copy_path": "/usr/bin/cp",
+  "copy_batch_max_bytes": 65536,
+  "snapshot_root": "/data/.actrail",
+  "allowed_workspace_roots": [
+    "/data/workspaces"
+  ]
+}

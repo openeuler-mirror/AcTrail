@@ -71,6 +71,7 @@ ssh -L 18080:127.0.0.1:18080 root@192.0.2.10
 - Linux 主机支持 eBPF、fanotify permission events 和 seccomp notify；
 - 使用 root，或具备等价的 `CAP_SYS_ADMIN` 等权限；
 - 已安装 Rust 1.90 或更高版本、Node.js 18 或更高版本及仓库构建依赖；
+- 已安装 curl、jq，用于执行 REST 等价命令与解析插件 catalog；
 - Xiaoo 已安装并完成模型提供方配置，能真实响应一次 CLI 请求；
 - 仓库位于运行主机的本地磁盘；
 - 端口 `18080` 未被占用；
@@ -338,8 +339,21 @@ curl --noproxy '*' -sS \
 加载操作的 REST 等价命令如下。Web 已加载成功后不要重复执行 POST；此命令用于无浏览器彩排或排障：
 
 ```bash
+LEAKAGE_PACKAGE_QUERY="$(
+  curl --noproxy '*' -fsS 'http://127.0.0.1:18080/api/plugins/catalog' |
+    jq -er '
+      [.packages[] | select(
+        .plugin_id == "actrail.file-leakage"
+        and .runtime == "wasm"
+        and .activation_ready == true
+      )]
+      | if length == 1 then .[0].package_key | @uri
+        else error("expected one ready actrail.file-leakage package") end
+    '
+)"
+
 curl --noproxy '*' -sS -X POST \
-  'http://127.0.0.1:18080/api/plugins/catalog/load?package=file-leakage' \
+  "http://127.0.0.1:18080/api/plugins/catalog/load?package=$LEAKAGE_PACKAGE_QUERY" \
   -H 'Content-Type: application/json' \
   --data '{"instance_id":"actrail.file-leakage","grants":{"file_policy_rules_apply":[],"env_read":[]}}'
 ```
@@ -506,8 +520,21 @@ file-policy.rules.apply:kind=deny,path=/root/projects/AcTrail/temp/file-security
 REST 等价加载命令。Web 已加载成功后不要重复执行：
 
 ```bash
+FILE_POLICY_PACKAGE_QUERY="$(
+  curl --noproxy '*' -fsS 'http://127.0.0.1:18080/api/plugins/catalog' |
+    jq -er '
+      [.packages[] | select(
+        .plugin_id == "wasm.file-policy-dynamic"
+        and .runtime == "wasm"
+        and .activation_ready == true
+      )]
+      | if length == 1 then .[0].package_key | @uri
+        else error("expected one ready wasm.file-policy-dynamic package") end
+    '
+)"
+
 curl --noproxy '*' -sS -X POST \
-  'http://127.0.0.1:18080/api/plugins/catalog/load?package=file-policy-dynamic' \
+  "http://127.0.0.1:18080/api/plugins/catalog/load?package=$FILE_POLICY_PACKAGE_QUERY" \
   -H 'Content-Type: application/json' \
   --data "{\"instance_id\":\"wasm.file-policy-dynamic\",\"grants\":{\"file_policy_rules_apply\":[{\"decision\":\"deny\",\"path_scope\":\"$DEMO_ROOT/work/**\"}]}}"
 ```

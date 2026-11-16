@@ -1,24 +1,27 @@
 // Project bounded action windows onto the shared trace origin.
 import { ToolCallDisplay } from '../../../shared/toolCallDisplay.js';
-import { FLAME_GRAPH_ASSOCIATION_ROLES, BACKGROUND_LLM_KINDS, graphChildren, resolveCallRequest, collectDescendants, packActivityDepths, computeWindow, validTimedAction, compareTimedActions } from './utils.js';
+import { FLAME_GRAPH_ASSOCIATION_ROLES, BACKGROUND_LLM_KINDS, graphChildren, resolveCallRequest, collectDescendants, packActivityDepths, computeWindow, validTimedAction } from './utils.js';
 import { buildAgentLayer, buildLayer, emptyLayer, activityFromAction } from './presentation.js';
 import { derivedDisplayIntervals } from './tool-effects.js';
+import { CommandHierarchy } from './command-hierarchy.js';
 
-export function buildFlameGraph(actions, links, associations = [], t, contextActions = [], timelineWindow = null) {
-  const validActions = (actions ?? []).filter(validTimedAction);
-  if (!validActions.length) {
+export function buildFlameGraph(actions, links, associations = [], t, contextActions = [], timelineWindow = null, history = null) {
+  const observedActions = (actions ?? []).filter(validTimedAction);
+  const validActions = observedActions
+    .filter((action) => action.kind !== 'agent.context_compaction');
+  if (!validActions.length && (!timelineWindow || !history?.size)) {
     return { ...emptyFlameGraphModel(t), ...(timelineWindow ? { window: timelineWindow } : {}) };
   }
 
   const graphLinks = flameGraphLinks(links, associations);
   const window = timelineWindow ?? computeWindow(validActions);
-  const actionById = new Map([...contextActions, ...validActions].map((action) => [action.id, action]));
+  const actionById = new Map([...contextActions, ...observedActions].map((action) => [action.id, action]));
   const toolDisplay = new ToolCallDisplay(actionById);
-  const displayedIds = new Set(validActions.map((action) => action.id));
+  const availableCalls = [...actionById.values()].filter((action) => action.kind === 'llm.call');
   const callMessages = new Set(graphLinks
     .filter((link) => link.valid !== false
       && ['llm.call.request', 'llm.call.response'].includes(link.role)
-      && displayedIds.has(link.parent) && actionById.get(link.parent)?.kind === 'llm.call')
+      && actionById.get(link.parent)?.kind === 'llm.call')
     .map((link) => link.child));
   const displayIntervals = derivedDisplayIntervals(validActions, graphLinks, actionById);
   const childrenByParent = graphChildren(graphLinks, actionById);
@@ -28,14 +31,11 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
   const requestByCall = new Map();
   const backgroundKindByCall = new Map();
 
-  for (const action of validActions) {
-    if (action.kind !== 'llm.call') {
-      continue;
-    }
+  for (const action of availableCalls) {
     const request = resolveCallRequest(action, actionById, childrenByParent);
     requestByCall.set(action.id, request ?? null);
     const backgroundKind = request?.attributes?.['llm.request.background_kind'];
-    if (backgroundKind && !childRequests.has(request?.id)) {
+    if (backgroundKind && backgroundKind !== 'context_compaction' && !childRequests.has(request?.id)) {
       backgroundKindByCall.set(action.id, backgroundKind);
     }
   }
@@ -44,22 +44,16 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     childrenByParent,
     actionById,
   );
-  const callOrdinalById = new Map(
-    validActions
-      .filter((action) => action.kind === 'llm.call' && !backgroundKindByCall.has(action.id))
-      .sort(compareTimedActions)
-      .map((action, index) => [action.id, index + 1]),
-  );
+  const callOrdinalById = history?.ordinals();
 
   const agentActionIds = new Set();
-  for (const action of validActions) {
-    if (action.kind === 'llm.call' && !backgroundKindByCall.has(action.id)) {
+  for (const action of availableCalls) {
+    if (!backgroundKindByCall.has(action.id)) {
       collectDescendants(action.id, childrenByParent, agentActionIds);
     }
   }
 
-  const agentActivities = [];
-  const harnessActivities = [];
+  const activities = [];
   for (const action of validActions) {
     const backgroundKind = backgroundKindByAction.get(action.id) ?? null;
     const layer = backgroundKind ? 'harness' : (agentActionIds.has(action.id) ? 'agent' : 'harness');
@@ -69,7 +63,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
       layer,
       requestByCall.get(action.id) ?? null,
       backgroundKind,
-      callOrdinalById.get(action.id) ?? null,
+      callOrdinalById?.get(action.id) ?? null,
       displayIntervals.get(action.id) ?? null,
       null,
       toolDisplay,
@@ -81,7 +75,19 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
     activity.scopeIncomplete = true;
     activity.modelMessage = callMessages.has(action.id)
       && ['llm.request', 'llm.response'].includes(action.kind);
-    (layer === 'agent' ? agentActivities : harnessActivities).push(activity);
+    if (action.display?.context_compaction) {
+      const suffix = t('background.contextCompaction');
+      activity.label += ` (${suffix})`;
+      activity.searchText += ` ${suffix.toLowerCase()}`;
+    }
+    activities.push(activity);
+  }
+  history?.merge(activities, window, toolDisplay, t);
+
+  const agentActivities = [];
+  const harnessActivities = [];
+  for (const activity of activities) {
+    (activity.layer === 'agent' ? agentActivities : harnessActivities).push(activity);
   }
 
   const layers = [
@@ -93,7 +99,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
       window,
       t,
     ),
-    buildLayer('harness', t('partialOther'), t('partialOwnership'), harnessActivities, window, t),
+    buildLayer('harness', t('partialOther'), t('partialOwnership'), harnessActivities, window, t, graphLinks),
   ];
 
   return {
@@ -175,7 +181,7 @@ export function flameOverviewLanes(model) {
       .filter((track) => !track.synthetic)
       .flatMap((track) => track.activities.map((activity) => ({
         startOffsetMs: activity.startOffsetMs,
-        durMs: activity.live
+        durMs: activity.endUnknown ? 0 : activity.live
           ? activity.traceSpanMs - activity.startOffsetMs
           : activity.durMs,
         depth: activity.depth,
@@ -194,7 +200,13 @@ function filterTracks(tracks, normalized, showModelMessages) {
       if (track.synthetic) {
         return { ...track, activities };
       }
-      return { ...track, ...packActivityDepths(activities) };
+      if (activities.length === track.activities.length) return track;
+      return {
+        ...track,
+        ...(track.group === 'commands'
+          ? CommandHierarchy.packVisible(activities)
+          : packActivityDepths(activities)),
+      };
     })
     .filter((track) => track.activities.length > 0 || track.synthetic);
 }
@@ -212,4 +224,3 @@ function backgroundKindsByAction(backgroundKindByCall, childrenByParent, actionB
   }
   return kinds;
 }
-

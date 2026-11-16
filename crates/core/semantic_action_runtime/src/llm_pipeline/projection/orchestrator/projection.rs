@@ -41,11 +41,21 @@ impl ProjectionCoordinator {
         changed
             .http_response_links
             .append(&mut output.http_response_links);
+        changed
+            .context_compact_links
+            .append(&mut output.context_compact_links);
         let mut request_contents = output
             .llm_request_contents
             .into_iter()
             .map(|content| (content.manifest.action_id.clone(), content))
             .collect::<BTreeMap<_, _>>();
+        let mut request_observations = self.compact.as_ref().map(|_| {
+            output
+                .request_observations
+                .into_iter()
+                .map(|observation| (observation.action_id.clone(), observation))
+                .collect::<BTreeMap<_, _>>()
+        });
         let mut request_histories = output
             .llm_request_histories
             .into_iter()
@@ -66,7 +76,7 @@ impl ProjectionCoordinator {
             }
             let mut deferred_trajectory = false;
             let mut resolved_trajectories = Vec::new();
-            let lineage = if action.kind == SemanticActionKind::LlmRequest {
+            let mut trajectory_assignment = if action.kind == SemanticActionKind::LlmRequest {
                 self.projector.trajectory.as_mut().and_then(|classifier| {
                     let classification = match request_histories.remove(&action.action_id) {
                         Some(history) => classifier.classify(
@@ -92,7 +102,7 @@ impl ProjectionCoordinator {
                         attrs::llm_request::TRAJECTORY_INFERENCE_VERSION.to_string(),
                         assignment.inference_version.to_string(),
                     );
-                    Some(assignment.lineage(action.trace_id))
+                    Some(assignment)
                 })
             } else {
                 None
@@ -103,6 +113,7 @@ impl ProjectionCoordinator {
                 resolved_trajectories,
                 &mut changed,
             );
+            let mut compact_request_admitted = true;
             if deferred_trajectory {
                 let pending = PendingTrajectoryAction {
                     action: state_action.clone(),
@@ -113,8 +124,13 @@ impl ProjectionCoordinator {
                 };
                 match self.projector.defer_trajectory(pending) {
                     PendingTrajectoryAdmission::Deferred => {}
-                    PendingTrajectoryAdmission::Evicted(evicted)
-                    | PendingTrajectoryAdmission::Rejected(evicted) => {
+                    PendingTrajectoryAdmission::Evicted(evicted) => {
+                        if let Some(compact) = self.compact.as_mut() {
+                            compact.forget_pending_request(
+                                evicted.action.trace_id,
+                                &evicted.action.action_id,
+                            );
+                        }
                         changed.diagnostics.push(capacity_diagnostic(
                             &evicted.action,
                             LlmPipelineDiagnosticCode::PendingTrajectoryCapacityEvicted,
@@ -126,8 +142,40 @@ impl ProjectionCoordinator {
                         changed.llm_tool_results.extend(evicted.tool_results);
                         self.push_recorded_action(evicted.action, &mut changed);
                     }
+                    PendingTrajectoryAdmission::Rejected(rejected) => {
+                        compact_request_admitted = false;
+                        changed.diagnostics.push(capacity_diagnostic(
+                            &rejected.action,
+                            LlmPipelineDiagnosticCode::PendingTrajectoryCapacityEvicted,
+                        ));
+                        if let Some(content) = rejected.content {
+                            changed.llm_request_contents.push(content);
+                        }
+                        changed.llm_tool_results.extend(rejected.tool_results);
+                        self.push_recorded_action(rejected.action, &mut changed);
+                    }
                 }
             }
+            if let Some(compact) = self.compact.as_mut()
+                && state_action.kind == SemanticActionKind::LlmRequest
+                && compact_request_admitted
+            {
+                let projection = compact.observe_request(
+                    &state_action,
+                    request_observations
+                        .as_mut()
+                        .and_then(|observations| observations.remove(&state_action.action_id)),
+                    trajectory_assignment.as_ref(),
+                );
+                self.push_compact_projection(
+                    projection,
+                    trajectory_assignment.as_mut_slice(),
+                    &mut changed,
+                );
+            }
+            let lineage = trajectory_assignment
+                .as_ref()
+                .map(|assignment| assignment.lineage(action.trace_id));
             let action_record = self.projector.record_action(&state_action);
             changed.diagnostics.extend(action_record.diagnostic);
             let action_changed = action_record.changed;
@@ -172,6 +220,19 @@ impl ProjectionCoordinator {
     }
 
     pub(in crate::llm_pipeline) fn apply_resolved_trajectory_assignments(
+        &mut self,
+        trace_id: TraceId,
+        mut assignments: Vec<TrajectoryAssignment>,
+        changed: &mut LiveLlmOutput,
+    ) {
+        if let Some(compact) = self.compact.as_mut() {
+            let projection = compact.resolve_trajectory_assignments(trace_id, &assignments);
+            self.push_compact_projection(projection, &mut assignments, changed);
+        }
+        self.publish_resolved_trajectory_assignments(trace_id, assignments, changed);
+    }
+
+    pub(super) fn publish_resolved_trajectory_assignments(
         &mut self,
         trace_id: TraceId,
         assignments: Vec<TrajectoryAssignment>,

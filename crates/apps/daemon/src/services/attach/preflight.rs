@@ -1,10 +1,8 @@
-//! Daemon-start eBPF load preflight.
+//! Prepare the configured eBPF runtime once, then evaluate profile requirements.
 
-use std::collections::BTreeMap;
 use std::time::Instant;
 
 use config_core::daemon::DiagnosticLogLevel;
-use ebpf_collector::EbpfPreflightKey;
 use model_core::ids::ProfileName;
 
 use super::StorageAttachService;
@@ -36,68 +34,43 @@ impl EbpfPreflightReport {
 
 impl StorageAttachService {
     pub(in crate::services) fn require_lsm_preflight(
-        &mut self,
+        &self,
     ) -> Result<(), control_contract::reply::ControlError> {
-        let mut capabilities = Vec::new();
-        for (name, profile) in self.profiles.capture_profiles() {
-            let Some(report) = self.host_ebpf_preflight.get(name) else {
-                if !profile.requires_lsm_access_control() {
-                    continue;
-                }
-                return Err(control_contract::reply::ControlError::new(
-                    "lsm_preflight",
-                    "LSM profile was not preflighted",
-                ));
-            };
-            if !report.available {
-                if !profile.requires_lsm_access_control() {
-                    continue;
-                }
-                return Err(control_contract::reply::ControlError::new(
-                    "lsm_preflight",
-                    format!(
-                        "profile {}: {}: {}",
-                        name.as_str(),
-                        report.failure_stage.as_deref().unwrap_or("load"),
-                        report
-                            .failure_message
-                            .as_deref()
-                            .unwrap_or("LSM kernel control unavailable")
-                    ),
-                ));
-            }
-            capabilities.extend(
-                profile
-                    .capabilities
-                    .iter()
-                    .filter(|request| request.mode != model_core::capability::RequestMode::Disabled)
-                    .cloned(),
-            );
-        }
-        if capabilities.is_empty() {
-            return Err(control_contract::reply::ControlError::new(
+        self.collector.require_lsm_ready().map_err(|error| {
+            control_contract::reply::ControlError::new(
                 "lsm_preflight",
-                "LSM requires an available host eBPF capture profile",
-            ));
-        }
-        // Load the union once after individual startup checks. The collector
-        // deduplicates requests and keeps Required when profiles share a capability.
-        // This runtime owns LSM task scope for the daemon's entire lifetime.
-        self.collector
-            .preflight_capability_requests(&capabilities)
-            .map_err(|error| {
-                control_contract::reply::ControlError::new(
-                    "lsm_preflight",
-                    format!(
-                        "load configured profile union: {}: {}",
-                        error.stage, error.message
-                    ),
-                )
-            })
+                format!("{}: {}", error.stage, error.message),
+            )
+        })
     }
 
     pub(crate) fn preflight_host_ebpf(&mut self) {
         let started_at = Instant::now();
+        // Permission-derived launch candidates share this configuration. They
+        // consume the result below and never expand the loading scope.
+        let requests = self
+            .profiles
+            .configured_capture_profiles()
+            .flat_map(|(_, profile)| profile.capabilities.iter().cloned())
+            .collect::<Vec<_>>();
+        let needs_runtime =
+            self.collector.has_capability_requests(&requests) || self.lsm_access_control.is_some();
+        if needs_runtime {
+            self.log_diagnostic(
+                DiagnosticLogLevel::Info,
+                format_args!("host_ebpf_preparation started"),
+            );
+        }
+        let prepared = self.collector.prepare_capabilities(&requests);
+        self.log_diagnostic(
+            DiagnosticLogLevel::Info,
+            format_args!(
+                "host_ebpf_preparation completed requested={} available={} elapsed_ms={}",
+                needs_runtime,
+                prepared.is_ok(),
+                started_at.elapsed().as_millis()
+            ),
+        );
         self.host_ebpf_preflight.clear();
         let profiles = self
             .profiles
@@ -105,74 +78,19 @@ impl StorageAttachService {
             .map(|(name, profile)| {
                 (
                     name.clone(),
-                    profile.supports_host_ebpf_observation(),
+                    self.collector
+                        .has_capability_requests(&profile.capabilities),
                     profile.capabilities.clone(),
                 )
             })
             .collect::<Vec<_>>();
-        let mut cached_reports =
-            BTreeMap::<EbpfPreflightKey, (ProfileName, EbpfPreflightReport)>::new();
-        let mut host_ebpf_profiles = 0_usize;
-        let mut cache_hits = 0_usize;
-
-        for (profile_name, uses_host_ebpf, capabilities) in profiles {
+        let mut host_ebpf_profiles = 0;
+        for (name, uses_host_ebpf, capabilities) in profiles {
             let report = if uses_host_ebpf {
-                host_ebpf_profiles = host_ebpf_profiles.saturating_add(1);
-                let key = self.collector.preflight_key(&capabilities);
-                if let Some((source_profile, report)) = cached_reports.get(&key) {
-                    cache_hits = cache_hits.saturating_add(1);
-                    if report.available {
-                        self.log_diagnostic(
-                            DiagnosticLogLevel::Info,
-                            format_args!(
-                                "host_ebpf_preflight available profile={} cache=hit source_profile={}",
-                                profile_name.as_str(),
-                                source_profile.as_str()
-                            ),
-                        );
-                    } else {
-                        self.log_diagnostic(
-                            DiagnosticLogLevel::Info,
-                            format_args!(
-                                "host_ebpf_preflight unavailable profile={} cache=hit source_profile={} stage={} message={}",
-                                profile_name.as_str(),
-                                source_profile.as_str(),
-                                report.failure_stage.as_deref().unwrap_or("unknown"),
-                                report.failure_message.as_deref().unwrap_or("unknown")
-                            ),
-                        );
-                    }
-                    report.clone()
-                } else {
-                    let plan_started_at = Instant::now();
-                    let report = match self.collector.preflight_capability_requests(&capabilities) {
-                        Ok(()) => {
-                            self.log_diagnostic(
-                                DiagnosticLogLevel::Info,
-                                format_args!(
-                                    "host_ebpf_preflight available profile={} cache=miss elapsed_ms={}",
-                                    profile_name.as_str(),
-                                    plan_started_at.elapsed().as_millis()
-                                ),
-                            );
-                            EbpfPreflightReport::available()
-                        }
-                        Err(error) => {
-                            self.log_diagnostic(
-                                DiagnosticLogLevel::Info,
-                                format_args!(
-                                    "host_ebpf_preflight unavailable profile={} cache=miss elapsed_ms={} stage={} message={}",
-                                    profile_name.as_str(),
-                                    plan_started_at.elapsed().as_millis(),
-                                    error.stage,
-                                    error.message
-                                ),
-                            );
-                            EbpfPreflightReport::unavailable(error.stage, error.message)
-                        }
-                    };
-                    cached_reports.insert(key, (profile_name.clone(), report.clone()));
-                    report
+                host_ebpf_profiles += 1;
+                match self.collector.check_preflight_capabilities(&capabilities) {
+                    Ok(()) => EbpfPreflightReport::available(),
+                    Err(error) => EbpfPreflightReport::unavailable(error.stage, error.message),
                 }
             } else {
                 EbpfPreflightReport::unavailable(
@@ -180,16 +98,23 @@ impl StorageAttachService {
                     "capture profile does not request host eBPF observation",
                 )
             };
-            self.host_ebpf_preflight.insert(profile_name, report);
+            self.log_diagnostic(
+                DiagnosticLogLevel::Info,
+                format_args!(
+                    "host_ebpf_preflight profile={} available={} stage={} message={}",
+                    name.as_str(),
+                    report.available,
+                    report.failure_stage.as_deref().unwrap_or("ready"),
+                    report.failure_message.as_deref().unwrap_or("")
+                ),
+            );
+            self.host_ebpf_preflight.insert(name, report);
         }
-
         self.log_diagnostic(
             DiagnosticLogLevel::Info,
             format_args!(
-                "host_ebpf_preflight completed profiles={} unique_plans={} cache_hits={} event_transport={} elapsed_ms={}",
+                "host_ebpf_preflight completed profiles={} event_transport={} elapsed_ms={}",
                 host_ebpf_profiles,
-                cached_reports.len(),
-                cache_hits,
                 self.collector.event_transport(),
                 started_at.elapsed().as_millis()
             ),

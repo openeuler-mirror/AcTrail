@@ -4,6 +4,7 @@
 mod otel_pb;
 mod serialize;
 mod service;
+mod span_kind;
 
 pub use otel_pb::{
     OTLP_PROTOBUF_CONTENT_TYPE, parse_otlp_protobuf_partial_rejected, render_otlp_protobuf,

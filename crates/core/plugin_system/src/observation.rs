@@ -200,13 +200,19 @@ pub struct TraceCommandExecution {
     pub process_id: String,
     pub executable: Option<String>,
     pub command_line: Option<String>,
-    /// Time the exec-backed invocation completed.
+    /// Start time recorded by the exec-backed command action, including an earlier
+    /// matching exec intent when captured.
     pub started_at: SystemTime,
-    /// Next completed exec for the same process, or its durable exit observation.
+    /// Observed end stored on the command action: a direct process exit or the next
+    /// successful exec for the same process. `None` while running or when no reliable
+    /// end was observed; finalization without one leaves the source action `CaptureLimited`.
     pub ended_at: Option<SystemTime>,
-    /// Success when replaced cleanly, otherwise the durable final process result.
+    /// Status stored on the command action. A successful exec initially records `Success`;
+    /// a direct process exit supplies its result. Exec replacement or finalization
+    /// without a reliable end records `Unknown`.
     pub status: SemanticActionStatus,
-    /// Available only for the last invocation associated with a durable process exit.
+    /// Exit code, when available, from an event-sourced exit for this process whose
+    /// observation timestamp matches `ended_at`.
     pub exit_code: Option<i32>,
     pub agent_action_id: Option<String>,
     pub parent_command_action_id: Option<String>,

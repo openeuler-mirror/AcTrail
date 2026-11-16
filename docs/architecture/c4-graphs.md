@@ -28,6 +28,7 @@
 | Hand-side | [执行隔离](components/execution-isolation.md) |
 | Web | [Web Runtime](components/web-runtime.md)、[前端设计](components/web-frontend/README.md) |
 | 资源观测 | [资源设计与组件图](components/resource-profiling/design.md) |
+| Checkpoint | [保存与恢复](components/checkpoint.md) |
 
 观测、治理、资源、隔离观测和告警投递的路径见[关键数据流](system/key-data-flows.md)。
 

@@ -1,3 +1,4 @@
+mod columns;
 mod config;
 mod resource_storage_sqlite_backend;
 mod retention;

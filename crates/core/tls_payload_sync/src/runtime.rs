@@ -3,104 +3,148 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{BufWriter, Write};
-use std::os::fd::{FromRawFd, RawFd};
-use std::os::unix::net::UnixStream;
+use std::os::fd::RawFd;
 use std::path::Path;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[path = "runtime/hold.rs"]
+mod hold;
 #[path = "runtime/transport.rs"]
 mod transport;
 
+pub use hold::ResponseHold;
 pub(crate) use transport::{DeadlineStream, Endpoint};
 
-use crate::{FrameCodec, SyncError, SyncEvent, SyncResult};
+use crate::{EventRegistration, FrameCodec, SyncError, SyncEvent, SyncResult};
+use tls_payload_core::PayloadDirection;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EventClientConfig {
+    pub pending_byte_budget: usize,
+    pub max_frame_bytes: usize,
+    pub timeout: Duration,
+    pub shutdown_timeout: Duration,
+    pub batch_bytes: usize,
+}
+
+/// Only atomic loads and close(2) are used by the runtime's atfork child handler.
+#[derive(Debug)]
+pub struct EventTransportFds {
+    writer: AtomicI32,
+    reader: AtomicI32,
+}
+
+impl Default for EventTransportFds {
+    fn default() -> Self {
+        Self {
+            writer: AtomicI32::new(-1),
+            reader: AtomicI32::new(-1),
+        }
+    }
+}
+
+impl EventTransportFds {
+    pub fn close_after_fork(&self) {
+        for slot in [&self.writer, &self.reader] {
+            let fd = slot.swap(-1, Ordering::Relaxed);
+            if fd >= 0 {
+                unsafe { libc::close(fd) };
+            }
+        }
+    }
+
+    fn register(self: &Arc<Self>, fd: RawFd, reader: bool) -> FdRegistration {
+        let slot = if reader { &self.reader } else { &self.writer };
+        slot.store(fd, Ordering::Release);
+        FdRegistration {
+            fds: Arc::clone(self),
+            reader,
+        }
+    }
+}
+
+pub(super) struct FdRegistration {
+    fds: Arc<EventTransportFds>,
+    reader: bool,
+}
+
+impl Drop for FdRegistration {
+    fn drop(&mut self) {
+        let slot = if self.reader {
+            &self.fds.reader
+        } else {
+            &self.fds.writer
+        };
+        slot.store(-1, Ordering::Release);
+    }
+}
 
 pub struct EventClient {
     queue: Arc<EventQueue>,
     worker: Mutex<Option<JoinHandle<()>>>,
-    timeout: Duration,
+    hold: Option<Arc<ResponseHold>>,
+    shutdown_timeout: Duration,
 }
 
 impl EventClient {
+    /// With `hold`, the client also reads the daemon's releases into it. `config.timeout` bounds
+    /// sender progress; closing the client uses the separate configured drain budget.
     pub fn connect(
         path: &Path,
-        pending_byte_budget: usize,
-        write_buffer_bytes: usize,
-        max_frame_bytes: usize,
-        timeout: Duration,
+        config: EventClientConfig,
+        registration: EventRegistration,
+        hold: Option<Arc<ResponseHold>>,
+        fds: Arc<EventTransportFds>,
     ) -> SyncResult<Self> {
         Self::start(
-            Endpoint::Path(path.to_path_buf()),
-            pending_byte_budget,
-            write_buffer_bytes,
-            max_frame_bytes,
-            timeout,
-        )
-    }
-
-    pub fn connect_inherited_fd(
-        fd: RawFd,
-        pending_byte_budget: usize,
-        write_buffer_bytes: usize,
-        max_frame_bytes: usize,
-        timeout: Duration,
-    ) -> SyncResult<Self> {
-        if fd < 0 {
-            return Err(SyncError::new(format!(
-                "sync event fd must be non-negative: {fd}"
-            )));
-        }
-        set_exec_inheritable(fd)?;
-        let stream = unsafe { UnixStream::from_raw_fd(fd) };
-        Self::start(
-            Endpoint::Inherited(stream),
-            pending_byte_budget,
-            write_buffer_bytes,
-            max_frame_bytes,
-            timeout,
+            Endpoint(path.to_path_buf()),
+            config,
+            registration,
+            hold,
+            fds,
         )
     }
 
     fn start(
         endpoint: Endpoint,
-        pending_byte_budget: usize,
-        write_buffer_bytes: usize,
-        max_frame_bytes: usize,
-        timeout: Duration,
+        config: EventClientConfig,
+        registration: EventRegistration,
+        hold: Option<Arc<ResponseHold>>,
+        fds: Arc<EventTransportFds>,
     ) -> SyncResult<Self> {
-        if pending_byte_budget == 0 {
+        if config.pending_byte_budget == 0 || config.batch_bytes == 0 {
             return Err(SyncError::new(
-                "sync event pending byte budget must be positive",
+                "sync event pending byte budget and batch bytes must be positive",
             ));
         }
-        if write_buffer_bytes == 0 {
-            return Err(SyncError::new(
-                "sync event write buffer bytes must be positive",
-            ));
-        }
-        if max_frame_bytes < FrameCodec::HEADER_LEN {
+        if config.max_frame_bytes < FrameCodec::HEADER_LEN {
             return Err(SyncError::new(
                 "TLS frame limit must include the frame header",
             ));
         }
-        if timeout.is_zero() || Instant::now().checked_add(timeout).is_none() {
-            return Err(SyncError::new(
-                "sync event timeout must be a positive representable duration",
-            ));
+        for timeout in [config.timeout, config.shutdown_timeout] {
+            if timeout.is_zero() || Instant::now().checked_add(timeout).is_none() {
+                return Err(SyncError::new(
+                    "sync event timeouts must be positive representable durations",
+                ));
+            }
         }
-        let queue = Arc::new(EventQueue::new(pending_byte_budget));
+        let queue = Arc::new(EventQueue::new(config.pending_byte_budget));
         let worker_queue = Arc::clone(&queue);
+        let worker_hold = hold.clone();
         let worker = thread::Builder::new()
             .name("actrail-tls-sync-event-writer".to_string())
             .spawn(move || {
                 EventWriter {
                     endpoint,
                     queue: worker_queue,
-                    write_buffer_bytes,
-                    max_frame_bytes,
-                    timeout,
+                    config,
+                    registration,
+                    hold: worker_hold,
+                    fds,
                 }
                 .run()
             })
@@ -108,16 +152,22 @@ impl EventClient {
         Ok(Self {
             queue,
             worker: Mutex::new(Some(worker)),
-            timeout,
+            hold,
+            shutdown_timeout: config.shutdown_timeout,
         })
     }
 
     pub fn send(&self, event: SyncEvent) -> SyncResult<()> {
-        self.queue.push(event)
+        let outbound = self.hold.as_ref().and(outbound_sequence(&event));
+        self.queue.push(event)?;
+        if let (Some(hold), Some((stream_key, sequence))) = (&self.hold, outbound) {
+            hold.sent(stream_key, sequence);
+        }
+        Ok(())
     }
 
     pub fn close(&self) -> SyncResult<()> {
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now() + self.shutdown_timeout;
         self.queue.close(deadline);
         let result = self.queue.flush_until(deadline);
         if result.is_err() {
@@ -138,23 +188,6 @@ impl EventClient {
         }
         result
     }
-}
-
-fn set_exec_inheritable(fd: RawFd) -> SyncResult<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(SyncError::new(format!(
-            "read sync event fd flags: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
-        return Err(SyncError::new(format!(
-            "mark sync event fd inheritable across exec: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    Ok(())
 }
 
 impl fmt::Debug for EventClient {
@@ -301,7 +334,7 @@ impl EventQueue {
         }
     }
 
-    fn deadline(&self, batch_deadline: Instant) -> std::io::Result<Instant> {
+    fn deadline(&self, progress_deadline: Instant) -> std::io::Result<Instant> {
         let state = self
             .state
             .lock()
@@ -311,7 +344,7 @@ impl EventQueue {
         }
         Ok(state
             .close_deadline
-            .map_or(batch_deadline, |close| close.min(batch_deadline)))
+            .map_or(progress_deadline, |close| close.min(progress_deadline)))
     }
 
     fn dropped(&self) -> u64 {
@@ -336,17 +369,23 @@ struct QueuedEvent {
 struct EventWriter {
     endpoint: Endpoint,
     queue: Arc<EventQueue>,
-    write_buffer_bytes: usize,
-    max_frame_bytes: usize,
-    timeout: Duration,
+    config: EventClientConfig,
+    registration: EventRegistration,
+    hold: Option<Arc<ResponseHold>>,
+    fds: Arc<EventTransportFds>,
 }
 
 impl EventWriter {
     fn run(self) {
         let queue = Arc::clone(&self.queue);
+        let hold = self.hold.clone();
         let result = self.write();
         if result.is_err() {
             queue.fail();
+        }
+        // Without the transport no release can come.
+        if let Some(hold) = hold {
+            hold.end();
         }
         let dropped = queue.dropped();
         if result.is_err() || dropped != 0 {
@@ -367,24 +406,62 @@ impl EventWriter {
     }
 
     fn write(self) -> SyncResult<()> {
-        let deadline = self.queue.deadline(Instant::now() + self.timeout)?;
+        let deadline = self.queue.deadline(Instant::now() + self.config.timeout)?;
         let stream = self.endpoint.connect(deadline)?;
-        let stream = DeadlineStream::new(stream, self.write_buffer_bytes);
-        let mut writer = BufWriter::with_capacity(self.write_buffer_bytes, stream);
+        use std::os::fd::AsRawFd;
+        let registration = self.fds.register(stream.as_raw_fd(), false);
+        if let Some(hold) = &self.hold {
+            let reader = stream.try_clone()?;
+            let reader_registration = self.fds.register(reader.as_raw_fd(), true);
+            let hold = Arc::clone(hold);
+            let max_frame_bytes = self.config.max_frame_bytes;
+            thread::Builder::new()
+                .name("actrail-tls-sync-release-reader".to_string())
+                .spawn(move || hold.read_releases(reader, max_frame_bytes, reader_registration))?;
+        }
+        let mut stream = DeadlineStream::for_events(
+            stream,
+            self.config.timeout,
+            Arc::clone(&self.queue),
+            registration,
+            self.config.batch_bytes,
+        );
+        stream.set_deadline(self.queue.deadline(Instant::now() + self.config.timeout)?);
+        let mut writer = BufWriter::with_capacity(self.config.batch_bytes, stream);
+        FrameCodec::write_registration(
+            &mut writer,
+            &self.registration,
+            self.hold.is_some(),
+            self.config.max_frame_bytes,
+        )?;
+        writer.flush()?;
         loop {
-            let batch = self.queue.pop_batch(self.write_buffer_bytes);
+            let batch = self.queue.pop_batch(self.config.batch_bytes);
             if batch.is_empty() {
                 return Ok(());
             }
-            // A later close gets a later deadline; queue state is needed once per batch.
-            let deadline = self.queue.deadline(Instant::now() + self.timeout)?;
+            // Start a new idle window; writes also observe a later close deadline.
+            let deadline = self.queue.deadline(Instant::now() + self.config.timeout)?;
             writer.get_mut().set_deadline(deadline);
             for queued in &batch {
-                FrameCodec::write_event(&mut writer, &queued.event, self.max_frame_bytes)?;
+                FrameCodec::write_event(&mut writer, &queued.event, self.config.max_frame_bytes)?;
             }
             writer.flush()?;
             self.queue.finish_batch(batch.len());
         }
+    }
+}
+
+/// The connection and sequence of an event that carries bytes the process wrote.
+fn outbound_sequence(event: &SyncEvent) -> Option<(u64, u64)> {
+    match event {
+        SyncEvent::Payload(event) if event.direction == PayloadDirection::Outbound => {
+            Some((event.stream_key, event.sequence))
+        }
+        SyncEvent::Summary(event) if event.direction == PayloadDirection::Outbound => {
+            Some((event.stream_key, event.sequence))
+        }
+        _ => None,
     }
 }
 

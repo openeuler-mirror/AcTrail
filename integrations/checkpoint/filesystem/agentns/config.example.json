@@ -1,0 +1,7 @@
+{
+  "area_root": "/var/lib/actrail/checkpoint/agentns-areas",
+  "library_path": "/usr/lib/rns/current/librns.so",
+  "extra_excluded_paths": [
+    "/var/lib/actrail"
+  ]
+}

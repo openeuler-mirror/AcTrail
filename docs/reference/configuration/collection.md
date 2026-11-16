@@ -104,20 +104,42 @@ flowchart LR
 
 ### TLS sync 事件发送
 
-- **超时配置**：TLS-sync 事件发送端通过环境变量 `TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS` 配置等待预算，默认 `100` 毫秒，必须为正整数且可表示为运行时期限。无效值在 native runtime 初始化时拒绝。该环境变量应在启动被观测命令前设置。
-- **发送期限**：连接在发送线程内完成。每个发送批次共享一个绝对期限，部分写入或中断重试不重置期限。
-- **退出处理**：退出排空使用独立的总体期限，到期后停止等待发送线程。
+- **连接凭据**：ctl 从 TrackAdd 回复取得 Trace 的 TLS 事件凭据，只在启用 TLS-sync 的 launch 中通过 `TLS_PAYLOAD_SYNC_EVENT_TOKEN` 传给子进程；该凭据由 daemon 随机生成，不与告警凭据共用；runtime 在每条事件连接上先发送登记帧。daemon 校验凭据和 Trace，不依赖发送进程仍在 `/proc` 中，因此可以接收已退出短进程的完整缓冲事件。手动配置事件 socket 时也必须提供对应 Trace 的凭据；缺少凭据时 native runtime 初始化失败。daemon、ctl 和 native runtime 必须配套更新。
+- **超时配置**：`sync_event_timeout_ms` 配置发送线程的无进度时限，默认 `5000` 毫秒。应用线程只入队，不等待 socket 写入。ctl 将配置传入新 launch 的 native runtime；直接使用 runtime 时可设置环境变量 `TLS_PAYLOAD_SYNC_EVENT_TIMEOUT_MS`。值须为正整数且可表示为运行时期限，无效值在 native runtime 初始化时拒绝。
+- **连接和发送**：每个进程在发送线程内建立自己的连接，fork 子进程关闭继承连接并按需新建。connect 在期限内重试 backlog 满导致的 EAGAIN；事件每次成功写入后重置无进度时限，中断和不可写重试不重置。发送批次预算、写缓冲和单次 write 上限由 `sync_event_batch_bytes` 配置，默认 `32768` 字节；一个事件超过批次预算时仍单独发送。
+- **退出处理**：`sync_event_shutdown_timeout_ms` 配置独立的退出排空总预算，默认 `100` 毫秒，不随发送无进度时限改变；到期后停止等待发送线程。直接使用 runtime 时，对应环境变量为 `TLS_PAYLOAD_SYNC_EVENT_SHUTDOWN_TIMEOUT_MS` 和 `TLS_PAYLOAD_SYNC_EVENT_BATCH_BYTES`。
 - **队列满载**：队列满时丢弃新事件。
 - **通道故障**：连接或发送失败时停用当前进程的事件通道。
+- **连接配额**：`sync_trace_connection_max` 默认 `128`，必须为正；按 Trace 统计已上报首个事件的长连接，子进程和子 Agent 共用配额。只查询计划的连接不占配额。超限连接关闭，对应进程停止上报且不重连；每个配额占用周期只记录首次拒绝诊断。
+- **daemon fd 预算**：启动时将 `RLIMIT_NOFILE` 至少提高到 `active_trace_max × sync_trace_connection_max + sync_pending_connection_max + sync_plan_queue_capacity × 2 + sync_fd_reserve`，默认 `23552`；不能提高时启动报错。accept 遇到 fd 耗尽时暂停监听并保留已有连接的读取，连接关闭后恢复；暂停期间按 `sync_accept_retry_delay_ms` 重试，默认 `100` 毫秒，以便解析线程释放 fd 后恢复接入。
 - **诊断输出**：发生传输失败或队列丢失时，发送线程尝试输出一条本地汇总诊断。
 - **诊断计数**：`unconfirmed_events` 统计发送端未确认送达的事件，包含丢弃项及未完成发送批次。
 - **诊断可达性**：通道故障可能导致 daemon 缺少该诊断。
+
+上述参数均在 `[payload.tls]` 中设置，修改后重启 daemon，并重新 launch 使新的发送参数进入进程。容量与等待预算如下：
+
+| 字段 | 默认值 | 含义 |
+| --- | --- | --- |
+| `sync_pending_connection_max` | `1024` | 未归属 Trace 的连接在全局连接预算中的额外额度 |
+| `sync_plan_queue_capacity` | `1024` | 探针计划解析队列容量，`bpf-copy` 的计划解析也使用它 |
+| `sync_fd_reserve` | `4096` | 计算 fd 预算时为 daemon 其他用途预留的描述符数，可设为 `0` |
+| `sync_release_outbox_max_bytes` | `1048576` | 单条进程连接发生写阻塞时，尚未写出的回执上限；超限关闭该连接 |
+| `sync_accept_retry_delay_ms` | `100` | fd 耗尽后的接入重试间隔，毫秒 |
+| `sync_event_timeout_ms` | `5000` | 发送线程的无进度超时，毫秒 |
+| `sync_event_shutdown_timeout_ms` | `100` | runtime 退出排空的总预算，毫秒 |
+| `sync_event_batch_bytes` | `32768` | 发送批次预算及单次写入上限，字节 |
+| `sync_read_buffer_bytes` | `65536` | daemon 共享的 socket 读取缓冲大小，字节 |
+| `sync_read_max_bytes_per_client` | `1048576` | 每个连接每轮读取的字节预算 |
+| `sync_ready_client_batch_max` | `128` | 每轮处理的就绪连接数上限 |
+| `sync_frame_buffer_retain_max_bytes` | `1048576` | 每条连接的组帧缓冲清空后可继续保留的容量；超过就释放，`0` 表示清空后释放 |
+
+除 `sync_fd_reserve` 和 `sync_frame_buffer_retain_max_bytes` 外，上述字段均须大于零。`sync_ready_client_batch_max` 不得超过 `2147483647`。原有配置省略这些字段时使用默认值。
 
 ### TLS sync 探针查询
 
 - **超时配置**：TLS-sync 任务进程内的动态探针计划查询通过环境变量 `TLS_PAYLOAD_SYNC_PLAN_TIMEOUT_MS` 配置单次查询预算，默认 `100` 毫秒，必须为正整数且可表示为运行时期限。在启动被观测命令前设置，无效值在 native runtime 初始化时拒绝。
 - **查询期限**：连接、请求发送及完整响应读取共用一个绝对期限，部分读写及中断重试不重置期限。
-- **查询失败**：查询超时、连接或响应读取/解码失败时，按该二进制无探针点处理，并写入现有进程内计划缓存。同一缓存项不重复查询，业务继续运行。
+- **查询失败**：查询超时、连接或响应读取/解码失败时，本次跳过探针安装，业务继续运行，不写进程内计划缓存；之后遇到该二进制可重新查询。daemon 明确返回 `Unsupported` 时仍缓存。解析队列最多 `1024` 个任务，满载时直接关闭查询连接，不回复结果；取出任务时跳过已断开的请求。
 - **采集影响**：查询失败时，相关 TLS 采集会缺失，不逐查询输出告警。
 - **适用后端**：`bpf-copy` 不注入该 runtime，也不执行此查询。其启动探针发现和 daemon 侧动态发现由各自配置控制。
 
@@ -270,11 +292,15 @@ HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: b
 
 ### HTTP/2 协议容量
 
-- **单帧容量**：`semantic_retention.l2_http.http2.max_frame_bytes` 限制 HTTP/2 单帧大小，默认 `65536` 字节。
-- **连接缓冲**：`max_connection_buffer_bytes` 限制共享 HTTP/2 协议缓冲，默认 `4194304` 字节。
-- **配置要求**：两者必须大于零，作用于唯一 frame decoder，独立于 LLM 正文组装预算。
+- **连接缓冲**：`semantic_retention.l2_http.http2.max_connection_buffer_bytes` 统一限制 HTTP/2 framing 缓冲，默认 `4194304` 字节。完整帧的 payload 与 9 字节头都计入该预算，声明长度超出预算时提前拒绝。
+- **配置要求**：连接缓冲必须至少容纳 9 字节帧头，独立于头块及 LLM 正文组装预算。
 - **内容预览**：frame 内容预览仍由 application HTTP/2 观测配置控制。
+- **头块容量**：`max_header_block_bytes` 限制 HEADERS/CONTINUATION 拼接后的 HPACK 输入，默认 `65536` 字节。
+- **头列表容量**：`max_header_list_bytes` 限制解码字段的累计 `name + value + 32`，默认 `65536` 字节；超限终止该 stream 的内容消费，HPACK 仍完成本块解码以维护动态表。
+- **动态表容量**：`max_hpack_table_bytes` 是每个连接方向的 HPACK 动态表硬上限，默认 `65536` 字节，配置必须不小于协议初始表大小 `4096`。超过硬上限的编码更新终止受影响连接解析。
+- **正文解码**：根据已解头部的 Content-Encoding 增量处理 identity、gzip、Brotli、zstd；累计解码输出受 `semantic_retention.l0_llm_call.assembly.max_buffer_bytes` 限制。正文错误隔离到对应 stream，HTTP frame 观测继续。
 - **协议完整性**：捕获缺口或 framing 完整性丢失后，受影响连接停止解析至连接关闭，防止把帧中间的字节当作新消息。
+- **失败定位**：framing 首次失败记录原因、帧长度、缓冲预算、type、flags、stream ID、连接身份与偏移，不记录 payload。`connection_buffer_limit` 表示本地预算，`invalid_stream_id` 表示帧与 stream 的协议约束不符。
 
 `semantic_retention.l2_http.http2.max_active_streams_per_trace` 限制每个 trace 的活动 HTTP/2 stream 数，默认 `4096`，必须大于零。每个 stream 的两个方向共用一个名额，结束后释放。该上限限制协议生命周期状态，消息事实容量另由 `exchange.max_message_facts_per_trace` 控制。
 
@@ -357,6 +383,118 @@ HTTP/1 LLM 正文在 transfer framing 解码后增量处理 `Content-Encoding: b
 - **异常隔离**：容量耗尽、采集截断（`Truncated`）或操作未完整采集时，仅隔离受影响的传输方向或数据流，并记录诊断。
 - **恢复条件**：重新观察到可信的消息边界后恢复请求关联。
 - **预期限采**：达到配置采集上限（`PolicyLimited`）时也会隔离缺失字节，并在恢复时保持静默。
+
+### `[semantic_retention.l0_llm_call.context_compact]`
+
+当 `semantic_retention.l0_llm_call.enabled = true`、本节 `enabled = true` 且
+`inference_enabled = true` 时，启动配置要求同时启用
+`semantic_retention.l0_llm_call.trajectory.enabled`，并将
+`semantic_retention.l0_llm_call.request_content` 设为 `"canonical_blocks"`、
+`semantic_retention.l0_llm_call.response_content` 设为 `"assembled_provider"`。
+不满足这些前提时启动校验失败。关闭 `inference_enabled` 可单独使用显式协议压缩识别。
+
+`enabled = false` 时不创建压缩投影器，也不生成压缩专用的请求和响应观察记录。
+压缩专属字段解析、顶层 system 分类扩展、摘要扫描、状态维护及附加复制均跳过。
+LLM 内容保留和轨迹关联分别由各自配置控制。
+
+以下为所属配置模块的默认值，普通 `init` 导出所属模块提供的完整配置。可在 `[semantic_retention.l0_llm_call.context_compact]` 中手工配置或通过 `init --patch` 显式写入；使用 `init --filter` 时的字段选择见[配置生成规则](../../operations/daemon/configure.md)。
+
+| 字段 | 默认值 | 作用与取值要求 |
+| --- | --- | --- |
+| `enabled` | `true` | context compaction 识别总开关 |
+| `inference_enabled` | `true` | 通用内容采用推断开关 |
+| `inferred_candidate_root_only` | `true` | 限制推断压缩实现请求的轨迹类型 |
+| `max_active_scopes_per_trace` | `8` | 每个 Trace 的活跃 scope 数上限，正整数 |
+| `max_open_requests_per_scope` | `10` | 每个 scope 等待响应完成事实的请求收集数上限，正整数 |
+| `compaction_candidates.max_entries_per_scope` | `2` | 每个 scope 的压缩候选容量，正整数 |
+| `compaction_candidates.ttl` | `"30m"` | 压缩候选从实现响应结束起计算的有效期，正时长 |
+| `pending_adoptions.max_entries_per_scope` | `2` | 每个 scope 的待采用项容量，正整数 |
+| `pending_adoptions.ttl` | `"1m"` | 待采用项从请求开始起计算的墙钟等待期限，正时长 |
+| `max_artifact_bytes` | `131072` | 压缩候选原始响应、opaque 产物和显式协议内嵌元数据的字节上限，正整数 |
+| `max_context_items_to_scan` | `128` | 历史条目、载体、每消息 block、累计工具调用和 opaque 输入项的数量上限，正整数 |
+| `max_context_scan_bytes` | `524288` | 载体搜索的扫描字节预算，正整数 |
+| `max_history_source_bytes` | `524288` | 单份请求 JSON 来源的保留字节上限，正整数；历史快照预算派生为该值的2倍，倍增后须能表示为本机 `usize` |
+| `min_artifact_flow_bytes` | `256` | 原文完整或部分采用的匹配字节数、JSON 按序采用值的累计字节数下限，正整数 |
+| `min_artifact_coverage_percent` | `50` | 原文部分采用的载体覆盖率、JSON 按序采用值的摘要覆盖率下限，整数 `1..=100` |
+| `max_fingerprint_positions` | `16` | 单指纹来源位置数和单载体候选命中核验次数上限，正整数 |
+
+启动时校验 `min_artifact_flow_bytes <= max_artifact_bytes <= max_context_scan_bytes`，
+字节预算还须能表示为本机 `usize`。`2 × max_history_source_bytes` 在启动时校验溢出。
+`max_history_source_bytes` 与 `max_context_scan_bytes` 分别约束请求来源保留和载体搜索。
+
+请求历史准入要求整份解码请求 JSON 的原始字节数不超过 `max_history_source_bytes`。
+确认时按需生成历史快照，内容预算为 `2 × max_history_source_bytes`，默认 `1048576` 字节。
+该预算按快照逻辑内容的 UTF-8 字节数计量，包括 system 与消息的 canonical 内容、消息文本及工具调用文本。
+工具调用文本含名称、参数与括号，system 仅计入 canonical 内容。快照超限时跳过该份历史证据。
+载体搜索预算由 `max_context_scan_bytes` 设置，默认 `524288` 字节。
+
+例如，内容采用的默认门槛可通过以下字段调整：
+
+```toml
+[semantic_retention.l0_llm_call.context_compact]
+min_artifact_flow_bytes = 256
+min_artifact_coverage_percent = 50
+```
+
+`inferred_candidate_root_only` 默认 `true`，推断压缩实现请求接受的 trajectory transition 为
+`Root`、`ForkRoot` 和 `DuplicateRoot`。trajectory 事实尚未到达时，已完成调用按候选容量和 TTL 等待；
+事实确定为 `Append` 时，该推断候选停止参与确认和续期，并由 TTL 或容量回收释放。
+需要识别直接在原历史后追加摘要指令的压缩调用时，将该选项设为 `false`，
+允许 `Append` 参与内容采用及历史替换确认。显式协议候选依据协议意图准入。
+
+`min_artifact_flow_bytes` 默认 `256`。推断压缩候选准入要求响应文本达到该 UTF-8 字节数下限，显式协议候选按协议意图准入。
+该值还限制原文完整或部分采用的连续匹配长度，以及 JSON 响应字符串值
+采用的累计解码字节数。JSON 路径允许跳过缺失的有效字符串值，已采用的值须在单个后继载体中
+按源顺序完整出现，各段互不重叠。累计采用字节数须达到该下限，且至少占原摘要全部有效字符串值
+总字节数的 `min_artifact_coverage_percent`；空白字符串不计入。`summary_bytes` 统计实际采用值的字节数，
+字段间分隔及 JSON 外层结构不计入。JSON 解码受 `max_artifact_bytes` 限制，载体搜索沿用
+`max_context_items_to_scan` 和 `max_context_scan_bytes`；解析失败在当前候选内处理。
+载体内有效 JSON 字符串的引号、反斜杠及 Unicode 转义先解码后参与值匹配。
+原文采用使用载体原文，先匹配全文，再匹配连续片段。
+
+`min_artifact_coverage_percent` 默认 `50`。原文部分采用要求连续匹配片段的 UTF-8 字节数
+至少占待采用项中单个载体去除首尾空白后 UTF-8 字节数的该百分比；分母是待采用项的载体长度。
+长度与覆盖率门槛须同时满足。完整原文采用须满足 `min_artifact_flow_bytes`，
+不受该覆盖率门槛限制。显式协议确认不依赖明文长度。JSON 值路径以响应摘要的有效值总字节数为分母；
+原文片段路径独立按载体覆盖率判断。
+
+JSON 值有缺失或原文仅采用连续片段时，`evidence_mode` 为 `artifact_flow_partial_summary`；
+完整原文或全部 JSON 有效值采用时为 `artifact_flow`。`summary_bytes` 和 `summary_chars` 均记录
+实际匹配内容的字节数和字符数。
+
+`compaction_candidates` 保存已完成调用的压缩候选；`pending_adoptions` 保存等待确认采用压缩结果的请求。
+两类状态的容量和 TTL 各自配置，均在启动时校验为正值：
+
+```toml
+[semantic_retention.l0_llm_call.context_compact]
+max_open_requests_per_scope = 10
+
+[semantic_retention.l0_llm_call.context_compact.compaction_candidates]
+max_entries_per_scope = 2
+ttl = "30m"
+
+[semantic_retention.l0_llm_call.context_compact.pending_adoptions]
+max_entries_per_scope = 2
+ttl = "1m"
+```
+
+压缩候选匹配时按待采用项的请求开始时间检查有效期。有效待采用项可保留其开始时尚未过期的压缩候选，
+保留窗口受待采用项的 TTL 及压缩候选容量约束。待采用项达到容量上限时按准备顺序释放最早项的待匹配证据。
+压缩候选达到容量上限时，回收没有有效等待依赖的最早候选；全部候选均被等待项依赖时，拒绝新候选并记录容量诊断。
+新候选丢失可能影响已有待采用项的来源唯一性时，该待采用项保持未确认。
+尚未完成的请求由 `max_open_requests_per_scope` 限制；请求被淘汰后，其有效待采用证据仍按待采用项的容量和 TTL 保留。
+
+待采用项的截止时间为请求开始时间加 `pending_adoptions.ttl`，按墙钟时间判定，达到截止时间后停止参与确认。
+迟到的压缩候选须满足 `candidate.response_end <= adoption.start`，并在待采用项的等待期限内参与匹配。
+采集事件延迟超过等待期限时，待采用项到期。
+
+候选集合变化或轨迹事实到达时，重新检查业务时序、轨迹资格和来源唯一性。
+证据不足、来源存在歧义或匹配预算耗尽时，采用请求保持未确认。
+历史快照超过预算时报告诊断并跳过该份历史证据；匹配工作量超限时记录对应诊断。
+
+`max_fingerprint_positions` 默认 `16`，必须为正整数。在部分摘要匹配中，它同时限制每个指纹保留的
+来源位置数，以及每个摘要承载项允许核验的候选命中次数。完整摘要的精确采用不消耗滚动指纹核验预算。
+尚未找到合格匹配而耗尽预算时，本次匹配保持未确认并记录工作量超限诊断。
 
 ## 治理配置
 

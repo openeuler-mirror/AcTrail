@@ -6,6 +6,9 @@
 ├── [x] README.zh-CN.md # 项目介绍（中文）
 ├── [x] docs/ # 产品与开发文档
 │   ├── [x] README.md # 文档导航
+│   ├── [x] comparison/ # 技术方案对比与项目价值
+│   │   ├── [x] agent-governance.md # Agent治理能力对比表
+│   │   └── [x] agent-observation.md # Agent观测能力对比表
 │   ├── [x] architecture/ # 架构文档
 │   │   ├── [x] README.md # 架构阅读入口
 │   │   ├── [/] c4-graphs.md # 架构图索引
@@ -28,6 +31,7 @@
 │   │   └── [x] components/ # 组件设计
 │   │       ├── [x] alert-proxy.md # 告警代理设计
 │   │       ├── [x] assets/ # 组件图资源
+│   │       ├── [x] checkpoint.md # 文件与上下文快照的配置分层、生命周期、调度与历史展示
 │   │       ├── [x] core-runtime.md # 核心运行时设计
 │   │       ├── [x] ebpf-event-abi.md # 内核事件接口设计
 │   │       ├── [x] ebpf-event-transport.md # 内核事件传输设计
@@ -41,7 +45,8 @@
 │   │       ├── [x] process-identity-runtime.md # 进程身份设计
 │   │       ├── [x] resource-profiling/ # 资源观测组件文档
 │   │       │   ├── [x] configuration.md # 资源配置使用说明
-│   │       │   └── [x] design.md # 资源观测设计
+│   │       │   ├── [x] design.md # 资源观测设计
+│   │       │   └── [x] storage.md # 资源样本存储设计
 │   │       ├── [x] streaming-parser.md # 流式解析设计
 │   │       ├── [x] tls-sync-runtime.md # TLS 同步采集设计
 │   │       ├── [x] web-frontend/ # 前端设计
@@ -50,8 +55,9 @@
 │   │       │   ├── [x] controls-and-layout.md # 控件与布局设计
 │   │       │   ├── [x] controls/ # 控件交互设计
 │   │       │   │   └── [x] navigation-workspace.md # 导航与工作区设计
-│   │       │   └── [x] runtime-and-delivery.md # 前端运行与交付设计
-│   │       └── [x] web-runtime.md # Web 服务设计
+│   │       │   ├── [x] runtime-and-delivery.md # 前端运行与交付设计
+│   │       │   └── [x] timeline.md # 时间线加载、窗口缓存、总览索引与调用编号
+│   │       └── [x] web-runtime.md # Web 服务组件职责、请求路径与详细参考索引
 │   ├── [x] concepts/ # 产品概念
 │   │   ├── [x] capabilities.md # 产品能力概览
 │   │   ├── [x] collection-observation-checklist.md # 采集与观测清单
@@ -69,6 +75,7 @@
 │   │   └── [x] quickstart.md # 首次运行指南
 │   ├── [x] operations/ # 运维操作指南
 │   │   ├── [x] README.md # 操作导航
+│   │   ├── [x] checkpoint.md # 配置、启动与回滚操作，支持 Btrfs、AgentNS 和 Xiaoo 后端
 │   │   ├── [x] daemon/ # 守护进程操作
 │   │   │   ├── [x] configure.md # 配置操作
 │   │   │   ├── [x] inspect-traces.md # 观测记录查询与导出
@@ -77,7 +84,8 @@
 │   │   │   ├── [x] choose-a-mode.md # 部署模式选择
 │   │   │   ├── [x] container.md # 容器观测部署
 │   │   │   ├── [x] execution-isolation.md # 执行隔离部署
-│   │   │   └── [x] host.md # 主机部署
+│   │   │   ├── [x] host.md # 主机部署
+│   │   │   └── [x] virtual-container.md # 虚机容器部署
 │   │   ├── [x] idle-detection.md # 执行停滞检测操作
 │   │   ├── [x] integrations/ # Agent 接入指南
 │   │   │   └── [x] xiaoo-rustls.md # xiaoO 观测接入
@@ -105,6 +113,7 @@
 │   │   │   ├── [x] llm-request.md # 模型请求数据参考
 │   │   │   ├── [x] sandbox-alert.md # 沙箱告警数据参考
 │   │   │   └── [x] sandbox-observation.md # 沙箱观测数据参考
+│   │   ├── [x] checkpoint-backend.md # checkpoint backend 动态库接口与 Btrfs、AgentNS 实现说明
 │   │   ├── [x] platform-support.md # 平台支持范围
 │   │   ├── [x] plugin-api/ # 插件接口参考
 │   │   │   ├── [x] README.md # 接口导航
@@ -113,9 +122,13 @@
 │   │   │   ├── [x] observation-consumer.md # 观测消费接口参考
 │   │   │   └── [x] wasm-core-module.md # WASM 模块接口参考
 │   │   └── [x] protocols/ # 通信协议参考
-│   │       └── [x] alert-proxy.md # 告警代理协议参考
+│   │       ├── [x] alert-proxy.md # 告警代理协议参考
+│   │       ├── [x] grey-decision-service.md # 外部安全裁决服务的 HTTP 请求、响应和历史字段约定
+│   │       └── [x] web-api.md # Web 查询、配置编辑与插件 catalog 接口约定
 │   └── [x] specifications/ # 实现行为要求
 │       ├── [x] README.md # 规范导航
+│       ├── [/] checkpoint/ # 文件恢复要求
+│       │   └── [/] save-and-restore.md # 保存与恢复要求
 │       ├── [x] export/ # 动作与交付要求
 │       │   ├── [x] action-delivery.md # 语义动作交付要求
 │       │   └── [x] file-io-terminal-actions.md # 文件读写终态要求
@@ -144,10 +157,10 @@
 │   │       └── [x] README.md # 策略使用说明
 │   ├── [x] execution-isolation/ # 执行隔离部署文档
 │   │   └── [x] README.md # 部署指南
-│   └── [x] virtual-container/ # 虚拟容器部署文档
+│   └── [x] virtual-container/ # 虚机容器部署文档
 │       ├── [x] README.md # 部署指南
 │       ├── [x] guest/ # Guest 环境文档
-│       │   └── [x] OPENEULER.md # openEuler 部署指南
+│       │   └── [x] OPENEULER.md # openEuler Guest 镜像
 │       ├── [x] host-collector/ # Collector 部署文档
 │       │   └── [x] README.md # 部署指南
 │       ├── [x] vsock-egress/ # VSOCK 出境文档
@@ -234,22 +247,23 @@
 │               └── [x] README.zh.md # 示例说明
 ├── [x] tests/ # 测试文档
 │   ├── [x] README.md # 测试导航
-│   ├── [x] plugins/ # 插件测试文档
-│   │   ├── [x] dynamic-builtin/ # 内置插件动态加载
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] lifecycle/ # 插件生命周期
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] otel-jsonl/ # OTEL JSON 导出
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] persistent-load/ # 插件持久加载
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] wasm-component-control-graylist/ # 组件灰名单决策
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] wasm-component-control-hostcalls/ # 组件宿主接口
-│   │   │   └── [x] README.md # 测试指南
-│   │   └── [x] wasm-observation/ # Wasm 观测插件
-│   │       └── [x] README.md # 测试指南
-│   └── [x] v2/ # 回归测试文档
+│   ├── [x] integration/ # 集成测试文档
+│   │   └── [x] plugins/ # 插件测试文档
+│   │       ├── [x] dynamic-builtin/ # 内置插件动态加载
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] lifecycle/ # 插件生命周期
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] otel-jsonl/ # OTEL JSON 导出
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] persistent-load/ # 插件持久加载
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] wasm-component-control-graylist/ # 组件灰名单决策
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] wasm-component-control-hostcalls/ # 组件宿主接口
+│   │       │   └── [x] README.md # 测试指南
+│   │       └── [x] wasm-observation/ # Wasm 观测插件
+│   │           └── [x] README.md # 测试指南
+│   └── [x] e2e/ # 端到端测试文档
 │       ├── [x] README.md # 测试约定
 │       ├── [x] common/ # 公共测试文档
 │       │   ├── [x] llm-http-proxy/ # 模型代理服务
@@ -335,11 +349,11 @@
 │           │   └── [x] README.zh.md # 测试指南
 │           ├── [x] tool_frequent_failure_alert/ # 工具频繁失败告警
 │           │   └── [x] README.zh.md # 测试指南
-│           ├── [x] virtual_container/ # 虚拟容器观测
+│           ├── [x] virtual_container/ # 虚机容器观测
 │           │   ├── [x] README.zh.md # 测试指南
 │           │   └── [x] v2/ # v2 测例说明
 │           │       └── [x] README.zh.md # 测试指南
-│           ├── [x] virtual_container_xiaoo_concurrency/ # 虚拟容器并发观测
+│           ├── [x] virtual_container_xiaoo_concurrency/ # 虚机容器并发观测
 │           │   ├── [x] README.zh.md # 测试指南
 │           │   └── [x] v2/ # v2 测例说明
 │           │       └── [x] README.zh.md # 测试指南

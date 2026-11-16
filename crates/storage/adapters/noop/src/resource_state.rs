@@ -3,9 +3,9 @@ use std::time::SystemTime;
 
 use model_core::container::ContainerRuntime;
 use model_core::ids::TraceId;
-use resource_profiling::model::external_cgroup::ExternalBindingStaleReason;
-use resource_profiling::model::external_cgroup::ExternalBindingState;
-use resource_profiling::model::external_cgroup::ExternalCgroupBinding;
+use resource_profiling::model::cgroup_v2_binding::CgroupV2Binding;
+use resource_profiling::model::cgroup_v2_binding::CgroupV2BindingStaleReason;
+use resource_profiling::model::cgroup_v2_binding::CgroupV2BindingState;
 use resource_profiling::model::resource_scope::ResourceScopeLifecycleState;
 use resource_profiling::model::resource_scope::TraceResourceScope;
 use storage_core::StorageError;
@@ -14,7 +14,7 @@ use storage_core::StorageError;
 struct ControlRecords {
     traces: BTreeSet<TraceId>,
     scopes: BTreeMap<TraceId, TraceResourceScope>,
-    bindings: BTreeMap<TraceId, ExternalCgroupBinding>,
+    bindings: BTreeMap<TraceId, CgroupV2Binding>,
     v1: BTreeMap<TraceId, resource_profiling::model::cgroup_v1_binding::CgroupV1Binding>,
 }
 
@@ -60,7 +60,11 @@ impl ResourceState {
         self.write().v1.insert(binding.trace_id, binding);
         Ok(())
     }
-    pub(super) fn stale_v1(&mut self, id: TraceId, reason: &str) -> Result<(), StorageError> {
+    pub(super) fn mark_v1_binding_stale(
+        &mut self,
+        id: TraceId,
+        reason: &str,
+    ) -> Result<(), StorageError> {
         let binding = self
             .write()
             .v1
@@ -124,10 +128,10 @@ impl ResourceState {
     pub fn scopes(&self) -> Vec<TraceResourceScope> {
         self.records.scopes.values().cloned().collect()
     }
-    pub fn binding(&self, id: TraceId) -> Option<ExternalCgroupBinding> {
+    pub fn binding(&self, id: TraceId) -> Option<CgroupV2Binding> {
         self.records.bindings.get(&id).cloned()
     }
-    pub fn live_bindings(&self) -> Vec<ExternalCgroupBinding> {
+    pub fn live_bindings(&self) -> Vec<CgroupV2Binding> {
         self.records
             .bindings
             .values()
@@ -168,16 +172,16 @@ impl ResourceState {
         Ok(())
     }
 
-    pub fn create_binding(&mut self, binding: ExternalCgroupBinding) -> Result<(), StorageError> {
+    pub fn create_binding(&mut self, binding: CgroupV2Binding) -> Result<(), StorageError> {
         let valid = !matches!(binding.runtime, ContainerRuntime::Unknown)
             && match binding.lifecycle_state {
-                ExternalBindingState::Active => {
+                CgroupV2BindingState::Active => {
                     binding.stale_reason.is_none() && binding.closed_at.is_none()
                 }
-                ExternalBindingState::Stale => {
+                CgroupV2BindingState::Stale => {
                     binding.stale_reason.is_some() && binding.closed_at.is_none()
                 }
-                ExternalBindingState::Closed => binding.closed_at.is_some(),
+                CgroupV2BindingState::Closed => binding.closed_at.is_some(),
             };
         if !valid {
             return Err(Self::error());
@@ -193,11 +197,11 @@ impl ResourceState {
         Ok(())
     }
 
-    fn active(&mut self, id: TraceId) -> Result<&mut ExternalCgroupBinding, StorageError> {
+    fn active(&mut self, id: TraceId) -> Result<&mut CgroupV2Binding, StorageError> {
         self.write()
             .bindings
             .get_mut(&id)
-            .filter(|b| b.lifecycle_state == ExternalBindingState::Active)
+            .filter(|b| b.lifecycle_state == CgroupV2BindingState::Active)
             .ok_or_else(Self::error)
     }
 
@@ -222,16 +226,16 @@ impl ResourceState {
     pub fn stale(
         &mut self,
         id: TraceId,
-        reason: ExternalBindingStaleReason,
+        reason: CgroupV2BindingStaleReason,
         time: SystemTime,
     ) -> Result<(), StorageError> {
         if self.records.bindings.get(&id).is_some_and(|b| {
-            b.lifecycle_state == ExternalBindingState::Stale && b.stale_reason == Some(reason)
+            b.lifecycle_state == CgroupV2BindingState::Stale && b.stale_reason == Some(reason)
         }) {
             return Ok(());
         }
         let binding = self.active(id)?;
-        binding.lifecycle_state = ExternalBindingState::Stale;
+        binding.lifecycle_state = CgroupV2BindingState::Stale;
         binding.stale_reason = Some(reason);
         binding.updated_at = time;
         Ok(())
@@ -251,8 +255,8 @@ impl ResourceState {
 
     pub fn close(&mut self, id: TraceId, time: SystemTime) -> Result<(), StorageError> {
         let binding = self.write().bindings.get_mut(&id).ok_or_else(Self::error)?;
-        if binding.lifecycle_state != ExternalBindingState::Closed {
-            binding.lifecycle_state = ExternalBindingState::Closed;
+        if binding.lifecycle_state != CgroupV2BindingState::Closed {
+            binding.lifecycle_state = CgroupV2BindingState::Closed;
             binding.closed_at = Some(time);
             binding.updated_at = time;
         }

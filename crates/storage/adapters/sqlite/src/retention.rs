@@ -326,13 +326,13 @@ impl RetentionStore for SqliteStorage {
             .map_err(|error| RetentionError::new("delete_memberships", error.to_string()))?;
         transaction
             .execute(
-                "DELETE FROM trace_cgroup_v1_bindings WHERE trace_id=?1",
+                "DELETE FROM trace_external_cgroup_v1_bindings WHERE trace_id=?1",
                 params![trace_id.get()],
             )
             .map_err(|error| RetentionError::new("delete_cgroup_v1_binding", error.to_string()))?;
         transaction
             .execute(
-                "DELETE FROM trace_external_cgroup_bindings WHERE trace_id = ?1",
+                "DELETE FROM trace_external_cgroup_v2_bindings WHERE trace_id = ?1",
                 params![trace_id.get()],
             )
             .map_err(|error| {

@@ -49,12 +49,15 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
                 let write_result = ObservedRecordRecorder::new(self.storage).persist_batch(batch);
                 transaction
                     .commit_or_rollback(write_result, |error| error)
-                    .map(|_| ())
+                    .map(|commit| commit.into_delivery())
             }
             Err(error) => Err(error),
         };
         let mut delivery = DeliveryReport::default();
-        delivery.record(DeliveryFailureKind::Storage, persist_result);
+        match persist_result {
+            Ok(report) => delivery.extend(report),
+            Err(error) => delivery.record(DeliveryFailureKind::Storage, Err(error)),
+        }
         if let Some(export_batch) = export_batch {
             delivery.extend(
                 crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
@@ -93,16 +96,17 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
                         }
                     };
                     (
-                        transaction
-                            .commit_or_rollback(write_result, |error| error)
-                            .map(|_| ()),
+                        transaction.commit_or_rollback(write_result, |error| error),
                         semantic_flush_elapsed,
                     )
                 }
                 Err(error) => (Err(error), None),
             };
         let mut delivery = DeliveryReport::default();
-        delivery.record(DeliveryFailureKind::Storage, persist_result);
+        match persist_result {
+            Ok(report) => delivery.extend(report),
+            Err(error) => delivery.record(DeliveryFailureKind::Storage, Err(error)),
+        }
         if self.export_runtime.has_semantic_consumers() {
             delivery.extend(
                 crate::RecordingWriter::new(self.storage).export_semantic_action_batches(

@@ -1,4 +1,5 @@
 import { formatOffset } from '../waterfall/model.js';
+import { CommandHierarchy } from './model/command-hierarchy.js';
 
 export const FLAME_BAR_HEIGHT = 24;
 export const FLAME_DEPTH_PITCH = 28;
@@ -17,7 +18,7 @@ export function buildFlameTrackFrame(track, viewport, pixelWidth) {
 
   const viewportEnd = startMs + spanMs;
   for (const lane of activityLanes(track?.activities)) {
-    const first = lowerBound(lane.ends, startMs);
+    const first = lowerBound(lane.maxEnds, startMs);
     const last = upperBound(lane.starts, viewportEnd);
     for (let position = first; position < last; position += 1) {
       const activity = lane.activities[position];
@@ -104,16 +105,24 @@ function activityLanes(activities) {
     }
     activitiesByDepth.get(depth).push(activity);
   }
+  // Array identity owns the layout snapshot; replacing it rebuilds this index.
   const lanes = [...activitiesByDepth]
     .sort(([left], [right]) => left - right)
-    .map(([, laneActivities]) => ({
-      activities: laneActivities,
-      starts: Float64Array.from(
-        laneActivities,
-        (activity) => Number(activity.startOffsetMs) || 0,
-      ),
-      ends: Float64Array.from(laneActivities, flameActivityEndMs),
-    }));
+    .map(([, laneActivities]) => {
+      let maxEnd = Number.NEGATIVE_INFINITY;
+      return {
+        activities: laneActivities,
+        starts: Float64Array.from(
+          laneActivities,
+          (activity) => Number(activity.startOffsetMs) || 0,
+        ),
+        // Prefix maxima stay ordered when a lane contains overlapping intervals.
+        maxEnds: Float64Array.from(laneActivities, (activity) => {
+          maxEnd = Math.max(maxEnd, flameActivityEndMs(activity));
+          return maxEnd;
+        }),
+      };
+    });
   activityIndexes.set(activities, lanes);
   return lanes;
 }
@@ -172,10 +181,17 @@ export function flameActivityTitle(activity, t) {
   }
   return [
     activity.label,
-    activity.target,
+    activity.target !== activity.label ? activity.target : '',
+    activity.commandHierarchy?.parentId
+      ? t('commandHierarchy.parent', {
+        label: activity.commandHierarchy.parentLabel ?? activity.commandHierarchy.parentId,
+      }) : '',
+    CommandHierarchy.relationshipText(activity.commandHierarchy, t),
     activity.kind === 'llm.tool_call' || activity.kind === 'llm.tool_result' ? activity.statusLabel : '',
     t('canvasTitle.startAt', { offset: formatOffset(activity.startOffsetMs) }),
-    activity.live
+    activity.endUnknown
+      ? t('canvasTitle.endUnknown')
+      : activity.live
       ? t('canvasTitle.running')
       : t('canvasTitle.duration', { duration: formatOffset(activity.durMs ?? 0) }),
     activity.backgroundKind ? t('canvasTitle.background', { kind: activity.backgroundKind }) : '',

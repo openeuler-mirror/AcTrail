@@ -6,7 +6,7 @@ use control_contract::reply::ControlError;
 use model_core::{ids::TraceId, process::HostProcessCoordinates};
 use process_identity::ProcessIdentityManager;
 use resource_profiling::model::{
-    cgroup_v1_binding::CgroupV1Binding, external_cgroup::ExternalCgroupBinding,
+    cgroup_v1_binding::CgroupV1Binding, cgroup_v2_binding::CgroupV2Binding,
     resource_scope::TraceResourceScope,
 };
 use resource_profiling::{
@@ -63,13 +63,13 @@ impl ResourceProfilingAdapter {
             )
             .map_err(Self::error)
     }
-    pub(in crate::services) fn admit_external_container(
+    pub(in crate::services) fn admit_binding(
         &mut self,
         entry: &TraceEntry,
         coordinates: &HostProcessCoordinates,
     ) -> Result<(), ControlError> {
         self.inner
-            .admit_external_container(
+            .admit_binding(
                 &WorkloadTargetAdapter::target(entry),
                 &Self::coordinates(coordinates)?,
             )
@@ -103,26 +103,26 @@ impl ResourceProfilingAdapter {
             .poll_finalizations(&WorkloadTargetAdapter::new(traces, Some(identities)))
             .map_err(Self::error)
     }
-    pub(in crate::services) fn poll_external_finalizations(
+    pub(in crate::services) fn poll_v2_binding_finalizations(
         &mut self,
         traces: &TraceRuntime,
         identities: &ProcessIdentityManager,
         storage: &mut dyn StorageBackend,
     ) -> Result<Vec<TraceId>, ControlError> {
         self.inner
-            .poll_external_finalizations(
+            .poll_v2_binding_finalizations(
                 &WorkloadTargetAdapter::new(traces, Some(identities)),
                 &mut ScopePersistenceAdapter { storage },
             )
             .map_err(Self::error)
     }
-    pub(in crate::services) fn poll_v1_finalizations(
+    pub(in crate::services) fn poll_v1_binding_finalizations(
         &mut self,
         traces: &TraceRuntime,
         identities: &ProcessIdentityManager,
         storage: &mut dyn StorageBackend,
     ) -> Vec<TraceId> {
-        self.inner.poll_v1_finalizations(
+        self.inner.poll_v1_binding_finalizations(
             &WorkloadTargetAdapter::new(traces, Some(identities)),
             &mut ScopePersistenceAdapter { storage },
         )
@@ -134,14 +134,11 @@ impl ResourceProfilingAdapter {
     pub(in crate::services) fn finish_finalization(&mut self, id: TraceId, remove: bool) {
         self.inner.finish_finalization(id, remove)
     }
-    pub(in crate::services) fn finish_external_finalization(&mut self, id: TraceId) {
-        self.inner.finish_external_finalization(id)
+    pub(in crate::services) fn finish_v2_binding_finalization(&mut self, id: TraceId) {
+        self.inner.finish_v2_binding_finalization(id)
     }
-    pub(in crate::services) fn external_binding(
-        &self,
-        id: TraceId,
-    ) -> Option<ExternalCgroupBinding> {
-        self.inner.external_binding(id)
+    pub(in crate::services) fn v2_binding(&self, id: TraceId) -> Option<CgroupV2Binding> {
+        self.inner.v2_binding(id)
     }
     pub(in crate::services) fn resource_barrier_ready(&self, id: TraceId) -> bool {
         self.inner.resource_barrier_ready(id)
@@ -152,8 +149,8 @@ impl ResourceProfilingAdapter {
     pub(in crate::services) fn has_pending_barrier(&self, id: TraceId) -> bool {
         self.inner.has_pending_barrier(id)
     }
-    pub(in crate::services) fn external_barrier_ready(&self, id: TraceId) -> bool {
-        self.inner.external_barrier_ready(id)
+    pub(in crate::services) fn binding_barrier_ready(&self, id: TraceId) -> bool {
+        self.inner.binding_barrier_ready(id)
     }
     pub(in crate::services) fn force_pending_finalizations_due(&mut self) {
         self.inner.force_pending_finalizations_due()
@@ -161,17 +158,17 @@ impl ResourceProfilingAdapter {
     pub(in crate::services) fn poll_timeout(&self) -> Option<std::time::Duration> {
         self.inner.poll_timeout()
     }
-    pub(in crate::services) fn has_pending_v1_finalizations(&self) -> bool {
-        self.inner.has_pending_v1_finalizations()
+    pub(in crate::services) fn has_pending_v1_binding_finalizations(&self) -> bool {
+        self.inner.has_pending_v1_binding_finalizations()
     }
     pub(in crate::services) fn v1_binding(&self, id: TraceId) -> Option<CgroupV1Binding> {
         self.inner.v1_binding(id)
     }
-    pub(in crate::services) fn activate_v1(&mut self, id: TraceId) {
-        self.inner.activate_v1(id)
+    pub(in crate::services) fn activate_v1_binding(&mut self, id: TraceId) {
+        self.inner.activate_v1_binding(id)
     }
-    pub(in crate::services) fn finish_v1_finalization(&mut self, id: TraceId) {
-        self.inner.finish_v1_finalization(id)
+    pub(in crate::services) fn finish_v1_binding_finalization(&mut self, id: TraceId) {
+        self.inner.finish_v1_binding_finalization(id)
     }
     pub(in crate::services) fn drain_host_due(&mut self) {
         self.inner.drain_host_due()

@@ -4,6 +4,7 @@ import { compactMeta, compactRows, kindClass, shortTime } from './common';
 const GROUP_KIND = 'action.group';
 const SAME_KIND_RULE = 'same-kind';
 const NON_GROUPABLE_KINDS = new Set([
+  'agent.context_compaction',
   'llm.call',
   'llm.request',
   'llm.response',
