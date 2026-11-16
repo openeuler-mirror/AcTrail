@@ -153,7 +153,6 @@
     │   │       │   │   │   └── [x] struct CgroupV2BindingHandle # 按记录打开的容器 cgroup 目录句柄。
     │   │       │   │   ├── [x] host_binding_environment.rs # 真实 boot identity 和绑定错误分类。
     │   │       │   │   ├── [x] process_verifier.rs # 绑定前后验证期望的进程代际。
-    │   │       │   │   └── [x] tests.rs # 绑定实现的身份与目录绑定测试。
     │   │       │   ├── [x] manager.rs # 本机全部 v2 绑定的恢复、接入、核验、失效和最终采样。
     │   │       │   │   ├── [x] enum CgroupV2BindingAdmission # 绑定成功或允许的接入降级结果。
     │   │       │   │   ├── [x] enum CgroupV2BindingRead # 计数、失效或可重试读取失败。
@@ -184,120 +183,6 @@
     │   │           ├── [x] payload.rs # 绑定最终样本字段映射。
     │   │           └── [x] sampling.rs # 实现批量采样接口，处理绑定及恢复目标，逐目标隔离失败。
     │   └── [x] mod.rs # 声明模块并 re-export。
-    │   ├── [ ] hybrid/ # 跨 cgroup v1/v2 的资源采集。
-    │   │   └── [ ] hybrid_backend.rs # TODO：组合 v1/v2 指标能力的 Hybrid 采集后端。
-    │   ├── [x] mod.rs # 声明模块并 re-export。
-    │   ├── [x] v1/ # 只读绑定已有 cpuacct/memory 分组；两个 controller 边界独立保存。
-    │   │   ├── [x] binding/ # 发现并固定 v1 双 controller 目录，核验进程代际与成员关系。
-    │   │   │   ├── [x] directory.rs # 固定目录句柄，核验文件系统类型，以受限相对路径读取计数。
-    │   │   │   │   ├── [x] struct OpenHow # openat2 的打开标志与路径解析约束。
-    │   │   │   │   └── [x] struct V1Directory # 固定目录句柄，核验文件系统类型，以受限相对路径读取计数。
-    │   │   │   ├── [x] discovery.rs # 按 mountinfo 发现 controller 层级并解析目标成员路径。
-    │   │   │   │   ├── [x] struct V1Discovery # 按 mountinfo 发现 controller 层级并解析目标成员路径。
-    │   │   │   │   └── [x] struct V1Mount # controller 挂载点与可见层级根路径。
-    │   │   │   ├── [x] mod.rs # 声明模块并 re-export。
-    │   │   │   └── [x] handle.rs # 绑定和重开双 controller 边界，核验进程代际、成员与目录身份。
-    │   │   │       └── [x] struct CgroupV1BindingHandle # 绑定和重开双 controller 边界，核验进程代际、成员与目录身份。
-    │   │   ├── [x] sampler.rs # v1 计数、CPU 差分基线与样本字段映射。
-    │   │   │   └── [x] struct CgroupV1BindingSampler # v1 计数、CPU 差分基线与样本字段映射。
-    │   │   ├── [x] config/ # 配置 v1 绑定重试与层级根接入许可。
-    │   │   │   ├── [x] cgroup_v1_config.rs # 绑定尝试次数、层级根接入许可、默认值与校验。
-    │   │   │   │   └── [x] struct CgroupV1Config # 绑定尝试次数、层级根接入许可、默认值与校验。
-    │   │   │   └── [x] mod.rs # 声明模块并 re-export。
-    │   │   ├── [x] mod.rs # 声明模块并 re-export。
-    │   │   ├── [x] persistence.rs # v1 只读绑定：恢复、持久化失效与恢复 trace 收尾。
-    │   │   │   ├── [x] struct CgroupV1BindingRecovery # 绑定、权威根身份与终止状态。
-    │   │   │   └── [x] trait CgroupV1BindingPersistence # 恢复绑定、持久化失效与恢复 trace 收尾。
-    │   │   └── [x] runtime.rs # 接入、恢复、逐目标采样、最终样本输出与绑定关闭。
-    │   │       ├── [x] struct CgroupV1BindingManager # 接入、恢复、逐目标采样、最终样本输出与绑定关闭。
-    │   │       └── [x] struct CgroupV1BindingSession # 绑定句柄、准入状态和等待确认的失效状态。
-    │   └── [x] v2/ # v2 配置、采样、准入、恢复与最终化的完整边界。
-    │       ├── [x] cgroup_counter_source.rs # 读取同一目录对象的计数和子树 PID。
-    │       │   └── [x] trait CgroupCounterSource # 读取同一目录对象的计数和子树 PID。
-    │       ├── [x] cgroup_v2_backend.rs # 持有来源句柄、CPU 基线和独立 RSS 读取器。
-    │       │   └── [x] struct CgroupV2Backend # 持有来源句柄、CPU 基线和独立 RSS 读取器。
-    │       ├── [x] cgroup_v2_backend_factory.rs # 消费 v2 配置，装配 v2 managed/external 组件。
-    │       │   ├── [x] struct CgroupAvailability # 区分能力缺失和必须报错的配置、结构故障。
-    │       │   ├── [x] struct CgroupSamplerFactory # 向已绑定来源注入 RSS 读取配置并构造采样后端。
-    │       │   └── [x] struct CgroupV2BackendFactory # 消费 v2 配置，装配 v2 managed/external 组件。
-    │       ├── [x] cgroup_workload_sample.rs # 主计数、CPU 差分和可选 RSS 的独立有效性。
-    │       │   └── [x] struct CgroupWorkloadSample # 主计数、CPU 差分和可选 RSS 的独立有效性。
-    │       ├── [x] config/ # 组合 v2 受管范围、外部范围及可选 RSS 配置。
-    │       │   ├── [x] cgroup_v2_config.rs # 委托 managed/external/process_rss 各自解析。
-    │       │   │   ├── [x] struct CgroupV2Config # 委托 managed/external/process_rss 各自解析。
-    │       │   │   └── [x] struct RawConfig # 接收本模块配置的反序列化输入。
-    │       │   └── [x] mod.rs # 声明模块并 re-export。
-    │       ├── [x] external/ # 只读绑定已有容器 cgroup，维护核验、失效与最终采样。
-    │       │   ├── [x] binding/ # 解析容器范围并固定目录身份，防止成员或路径变化造成误绑定。
-    │       │   │   ├── [x] container_cgroup_identity.rs # 解析完整容器身份及 host cgroup 边界。
-    │       │   │   │   └── [x] struct ContainerCgroupIdentity # 解析完整容器身份及 host cgroup 边界。
-    │       │   │   ├── [x] container_cgroup_resolver.rs # 使用 openat2 在已知层级下绑定或重开目录。
-    │       │   │   │   ├── [x] struct ContainerCgroupResolver # 使用 openat2 在已知层级下绑定或重开目录。
-    │       │   │   │   └── [x] struct OpenHow # openat2 系统调用参数。
-    │       │   │   ├── [x] error.rs # 身份、成员变动和目录访问错误。
-    │       │   │   │   └── [x] enum CgroupV2BindingError # 身份、成员变动和目录访问错误。
-    │       │   │   ├── [x] handle.rs # 绑定目录句柄和成员核验能力。
-    │       │   │   │   ├── [x] struct CgroupDirectoryIdentity # 目录 device/inode 身份。
-    │       │   │   │   └── [x] struct CgroupV2BindingHandle # 绑定目录句柄和成员核验能力。
-    │       │   │   ├── [x] host_binding_environment.rs # 真实 boot identity 和绑定错误分类。
-    │       │   │   │   └── [x] struct HostBindingEnvironment # 真实 boot identity 和绑定错误分类。
-    │       │   │   ├── [x] mod.rs # 声明模块并 re-export。
-    │       │   │   ├── [x] process_verifier.rs # 绑定前后验证期望的进程代际。
-    │       │   │   │   └── [x] struct ProcfsProcessVerifier # 绑定前后验证期望的进程代际。
-    │       │   │   └── [x] tests.rs # 绑定实现的身份与目录绑定测试。
-    │       │   ├── [x] config/ # 定义外部范围接入策略、重试和局部失败阈值。
-    │       │   │   ├── [x] binding_config.rs # disabled、prefer、require。
-    │       │   │   │   ├── [x] enum CgroupV2BindingPolicy # disabled、prefer、require。
-    │       │   │   │   └── [x] struct CgroupV2BindingConfig # 接入策略、失败阈值、绑定重试上限及校验。
-    │       │   │   └── [x] mod.rs # 声明模块并 re-export。
-    │       │   ├── [x] manager.rs # 只读接入、恢复、核验、失效和最终采样。
-    │       │   │   ├── [x] enum CgroupV2BindingAdmission # 绑定成功或允许的接入降级结果。
-    │       │   │   ├── [x] enum CgroupV2BindingRead # 计数、失效或可重试读取失败。
-    │       │   │   ├── [x] struct CgroupV2BindingSession # 准备接入的绑定与采样后端。
-    │       │   │   ├── [x] struct CgroupV2BindingFinalRead # 持久化绑定事实、最终计数和局部读取错误。
-    │       │   │   └── [x] struct CgroupV2BindingManager # 只读接入、恢复、核验、失效和最终采样。
-    │       │   ├── [x] persistence.rs # 恢复、成功/失败计数、失效和恢复 trace 收尾。
-    │       │   │   ├── [x] struct CgroupV2BindingRecovery # 持久化绑定、根身份和终止状态。
-    │       │   │   └── [x] trait CgroupV2BindingPersistence # 恢复、成功/失败计数、失效和恢复 trace 收尾。
-    │       │   └── [x] mod.rs # 声明模块并 re-export。
-    │       ├── [x] managed/ # 创建、恢复和清理由 AcTrail 管理的 trace cgroup。
-    │       │   ├── [x] config/ # 配置受管根路径、恢复扫描预算及最终化等待期限。
-    │       │   │   ├── [x] managed_v2_scope_config.rs # 根路径、扫描上限、最终化等待期限、默认值和校验。
-    │       │   │   │   └── [x] struct ManagedV2ScopeConfig # 根路径、扫描上限、最终化等待期限、默认值和校验。
-    │       │   │   └── [x] mod.rs # 声明模块并 re-export。
-    │       │   ├── [x] managed_scope_manager.rs # 创建、激活、恢复和清理自建范围，拥有范围及计数句柄。
-    │       │   │   ├── [x] enum ManagedScopeAdmission # 托管绑定或允许的接入降级结果。
-    │       │   │   └── [x] struct ManagedScopeManager # 创建、激活、恢复和清理自建范围，拥有范围及计数句柄。
-    │       │   ├── [x] managed_scope_persistence.rs # 准备恢复记录、持久化丢失范围的最终状态。
-    │       │   │   ├── [x] struct ManagedRecoveryRecord # 已持久化范围及权威根身份。
-    │       │   │   └── [x] trait ManagedScopePersistence # 准备恢复记录、持久化丢失范围的最终状态。
-    │       │   ├── [x] mod.rs # 声明模块并 re-export。
-    │       │   └── [x] scope_recovery.rs # 对照范围登记与内核目录，分类恢复和清理候选。
-    │       │       └── [x] struct ResourceScopeRecovery # 对照范围登记与内核目录，分类恢复和清理候选。
-    │       ├── [x] mod.rs # 声明模块并 re-export。
-    │       ├── [x] process_rss/ # 在已绑定 cgroup 子树内核验进程代际并汇总可选 RSS。
-    │       │   ├── [x] cgroup_process_rss_reader.rs # 仅按绑定 cgroup 子树读取 RSS，核验 PID 代际和成员范围。
-    │       │   │   ├── [x] struct CgroupProcessRss # RSS 总量、候选进程数和采样进程数。
-    │       │   │   └── [x] struct CgroupProcessRssReader # 仅按绑定 cgroup 子树读取 RSS，核验 PID 代际和成员范围。
-    │       │   ├── [x] config/ # 控制 cgroup 样本中的额外进程 RSS 读取。
-    │       │   │   ├── [x] cgroup_process_rss_config.rs # 本分支 RSS 开关、默认值和校验。
-    │       │   │   │   └── [x] struct CgroupProcessRssConfig # 本分支 RSS 开关、默认值和校验。
-    │       │   │   └── [x] mod.rs # 声明模块并 re-export。
-    │       │   └── [x] mod.rs # 声明模块并 re-export。
-    │       └── [x] runtime/ # 编排 v2 准入、周期采样、最终样本和资源完成屏障。
-    │           ├── [x] cgroup_sampling.rs # managed 计数及覆盖范围映射。
-    │           ├── [x] cgroup_v2_sampling_backend.rs # 拥有 cgroup 准入、恢复、最终化状态和完成屏障。
-    │           │   └── [x] struct CgroupV2SamplingBackend # 拥有 cgroup 准入、恢复、最终化状态和完成屏障。
-    │           ├── [x] completion.rs # managed/external 最终样本与范围清理结果。
-    │           │   ├── [x] enum CgroupV2BindingSampleOutcome # 已采样、绑定失效或局部读取失败。
-    │           │   ├── [x] struct CgroupV2BindingFinalization # external 最终样本。
-    │           │   ├── [x] struct ResourceFinalizationDraft # managed 最终样本及范围清理超时结果。
-    │           │   └── [x] struct ResourceFinalizationPoll # 待清理范围与 managed 最终样本批次。
-    │           ├── [x] binding_sampling.rs # external 计数、绑定失效与局部读取失败。
-    │           ├── [x] lifecycle.rs # 准入、最终样本输出、范围清理与控制状态持久化。
-    │           ├── [x] mod.rs # 声明模块并 re-export。
-    │           ├── [x] payload.rs # cgroup 计数到资源事件字段映射。
-    │           └── [x] sampling.rs # 实现批量采样接口，处理 managed/external 及恢复目标，逐目标隔离失败。
     ├── [x] config/ # 配置工作负载采集周期，并将后端参数交所属分支解析。
     │   ├── [x] mod.rs # 声明模块并 re-export。
     │   ├── [x] workload_backend_mode.rs # auto、procfs、cgroup、noop。

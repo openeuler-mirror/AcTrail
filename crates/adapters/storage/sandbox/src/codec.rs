@@ -394,86 +394,9 @@ impl<'a> PayloadCursor<'a> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use sandbox_evidence_store::sandbox_observation::GuestBootId;
-
-    const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-    fn snapshot() -> WorkloadCgroupResourceSnapshot {
-        WorkloadCgroupResourceSnapshot {
-            guest_boot_id: GuestBootId::new([0x11; 16]),
-            sampled_at_ms: 42,
-            workload_id: WorkloadCgroupId::from_bytes([0x22; 32]),
-            representative_root: ProcessMarker {
-                pid: 7,
-                start_time_ticks: 8,
-                executable_name: [0; 16],
-            },
-            monitored_root_count: 1,
-            runtime: SandboxContainerRuntime::Containerd,
-            container_id: Some(NormalizedContainerId::from_lower_hex(ID).unwrap()),
-            counters: WorkloadCgroupCounters {
-                memory_current_bytes: 100,
-                memory_peak_bytes: Some(200),
-                cpu_usage_usec: Some(300),
-                ..WorkloadCgroupCounters::default()
-            },
-        }
-    }
-
-    #[test]
-    fn workload_cgroup_kind_round_trips_through_storage_codec() {
-        let (kind, payload) = ObservationCodec::encode(&Observation::WorkloadCgroup(snapshot()));
-        assert_eq!(kind, WORKLOAD_CGROUP_KIND);
-        assert_eq!(payload.len(), 320);
-        let decoded = ObservationCodec::decode(kind, &payload).unwrap();
-        assert_eq!(decoded, Observation::WorkloadCgroup(snapshot()));
-    }
-
-    #[test]
-    fn workload_cgroup_storage_decode_rejects_unknown_kind() {
-        let (_, payload) = ObservationCodec::encode(&Observation::WorkloadCgroup(snapshot()));
-        assert!(ObservationCodec::decode(9, &payload).is_err());
-    }
-}
+#[path = "../../../../../tests/unit/crates/adapters/storage/sandbox/codec/tests.rs"]
+mod tests;
 
 #[cfg(test)]
-mod pressure_tests {
-    use super::*;
-
-    fn pressure() -> GuestPressureSnapshot {
-        GuestPressureSnapshot {
-            guest_boot_id: GuestBootId::new([3; 16]),
-            sampled_at_ms: 9_876,
-            memory_some: PsiAverages {
-                avg10_millipercent: 30_000,
-                avg60_millipercent: 15_500,
-                avg300_millipercent: 1_000,
-            },
-            memory_full: PsiAverages {
-                avg10_millipercent: 0,
-                avg60_millipercent: 123_456,
-                avg300_millipercent: 7,
-            },
-        }
-    }
-
-    #[test]
-    fn pressure_observation_round_trips() {
-        let observation = Observation::GuestPressure(pressure());
-        let (kind, bytes) = ObservationCodec::encode(&observation);
-        assert_eq!(kind, GUEST_PRESSURE_KIND);
-        assert_eq!(bytes.len(), 48);
-        let decoded = ObservationCodec::decode(kind, &bytes).expect("decode pressure");
-        assert_eq!(decoded, observation);
-    }
-
-    #[test]
-    fn pressure_decode_rejects_trailing_bytes() {
-        let observation = Observation::GuestPressure(pressure());
-        let (kind, mut bytes) = ObservationCodec::encode(&observation);
-        bytes.push(0);
-        assert!(ObservationCodec::decode(kind, &bytes).is_err());
-    }
-}
+#[path = "../../../../../tests/unit/crates/adapters/storage/sandbox/codec/pressure_tests.rs"]
+mod pressure_tests;

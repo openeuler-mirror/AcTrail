@@ -230,7 +230,10 @@ impl AgentNsBackend {
             let pending = PendingRestore {
                 request: new_request()?,
                 event,
-                last_event: *connection.events.last().expect("the target is a saved event"),
+                last_event: *connection
+                    .events
+                    .last()
+                    .expect("the target is a saved event"),
                 accepted: false,
             };
             let call =
@@ -242,10 +245,7 @@ impl AgentNsBackend {
         })();
         match result {
             Ok(()) => Ok(invalidated),
-            Err(error) => Err(RestoreFailure {
-                error,
-                invalidated,
-            }),
+            Err(error) => Err(RestoreFailure { error, invalidated }),
         }
     }
 

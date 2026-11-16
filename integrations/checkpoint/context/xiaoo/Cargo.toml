@@ -18,4 +18,4 @@ socket2 = "0.6"
 
 [[example]]
 name = "xiaoo_checkpoint_e2e"
-path = "tests/driver.rs"
+path = "../../../../tests/integration/checkpoint/context/xiaoo/driver.rs"

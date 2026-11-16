@@ -84,4 +84,4 @@ deploy/virtual-container/host/run-v2-tests.sh \
 V2 case 先在 base VM 中验证 Guest 服务、只读接口、身份和权限边界，再在 data VM
 中验证 TLS-only、eBPF-only 和 combo。data 配置使用带 BTF 的内核、至少两个 vCPU，
 只在 data Profile 中启用 Kata debug console。详细矩阵和排障见
-[V2 测试文档](../../../tests/v2/regression/virtual_container/v2/README.zh.md)。
+[V2 测试文档](../../../tests/e2e/regression/virtual_container/v2/README.zh.md)。

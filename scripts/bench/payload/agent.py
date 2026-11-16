@@ -70,7 +70,7 @@ class AgentWorkload:
         templates = self.work_dir / "templates"
         templates.mkdir()
         self._write_scenario(templates)
-        server = self.repo_root / "tests/v2/common/test_suites/local_maas_server/server.py"
+        server = self.repo_root / "tests/e2e/common/test_suites/local_maas_server/server.py"
         if not server.is_file():
             raise RuntimeError(f"local MaaS server is missing: {server}")
         self._port = self._free_port()

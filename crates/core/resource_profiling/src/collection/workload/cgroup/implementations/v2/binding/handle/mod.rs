@@ -4,6 +4,7 @@ mod error;
 mod handle;
 mod process_verifier;
 #[cfg(test)]
+#[path = "../../../../../../../../../../../tests/unit/crates/core/resource_profiling/collection/workload/cgroup/implementations/v2/binding/handle/tests.rs"]
 mod tests;
 pub use container_cgroup_identity::ContainerCgroupIdentity;
 pub use container_cgroup_resolver::ContainerCgroupResolver;

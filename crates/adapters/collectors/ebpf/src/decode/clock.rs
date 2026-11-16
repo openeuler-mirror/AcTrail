@@ -65,21 +65,5 @@ pub(crate) fn wall_from_ktime(ktime_ns: u64) -> SystemTime {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zero_ktime_clamps_to_anchor() {
-        let clock = KernelClock::capture();
-        let wall = clock.wall_from_ktime(0);
-        assert!(wall >= SystemTime::UNIX_EPOCH);
-    }
-
-    #[test]
-    fn ktime_order_is_preserved() {
-        let clock = KernelClock::capture();
-        let earlier = clock.wall_from_ktime(1_000);
-        let later = clock.wall_from_ktime(2_000);
-        assert!(earlier <= later);
-    }
-}
+#[path = "../../../../../../tests/unit/crates/adapters/collectors/ebpf/decode/clock/tests.rs"]
+mod tests;

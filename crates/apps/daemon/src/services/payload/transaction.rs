@@ -34,14 +34,14 @@ use crate::services::application_protocol::{
     COLLECTOR_NAME as APPLICATION_PROTOCOL_COLLECTOR_NAME,
 };
 use crate::services::attach::StorageAttachService;
-use crate::services::diagnostic_logging;
 use crate::services::attach::WatchedTraces;
+use crate::services::diagnostic_logging;
 use crate::services::live::next_diagnostic_id_from_seed;
-use crate::services::tls_sync::TlsSyncService;
 use crate::services::payload_gate::{
     PayloadBodyRetention, PayloadBodyRetentionDecision, PayloadBodyRetentionGate,
 };
 use crate::services::semantic_actions::LiveTraceRecordLookup;
+use crate::services::tls_sync::TlsSyncService;
 use crate::services::workload_diagnostics::{PayloadTransactionPhase, WorkloadDiagnostics};
 
 use super::policy::{

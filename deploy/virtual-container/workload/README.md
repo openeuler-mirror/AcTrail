@@ -91,7 +91,7 @@ OpenCode 模型目录；每次验收将这些只读 bootstrap 缓存复制到隔
 ```bash
 ./deploy/virtual-container/guest/prepare-guest-bundle.sh
 ./deploy/virtual-container/workload/prepare-bundle.sh
-./tests/v2/regression/virtual_container/test-prepare-workload-bundle.sh
+./tests/e2e/regression/virtual_container/test-prepare-workload-bundle.sh
 ```
 
 `prepare-bundle.sh` 会校验 guest manifest、重写 workload socket/probe 路径、用真实
@@ -162,5 +162,5 @@ VMM 上均可正常返回。该值只接受 `0..60` 的整数，生产 profile �
 Pod UID 与 sandbox 退出通知。本模块不维护 Kubernetes 部署资产。
 
 矩阵、证据、手动复现和日志说明集中在
-[V2 测试文档](../../../tests/v2/regression/virtual_container/v2/README.zh.md)，本页只维护
+[V2 测试文档](../../../tests/e2e/regression/virtual_container/v2/README.zh.md)，本页只维护
 workload 接口与打包约束。

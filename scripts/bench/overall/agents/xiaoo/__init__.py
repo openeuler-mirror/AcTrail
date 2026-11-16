@@ -11,7 +11,7 @@ DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_TOOLS = "file_read,glob,grep"
 DEFAULT_PROMPT = (
     "只读分析任务：请用 file_read/glob/grep 分析 "
-    "/home/yzh/projects/AcTrail/tests/v2/common 的结构，"
+    "/home/yzh/projects/AcTrail/tests/e2e/common 的结构，"
     "然后输出一份总结。禁止修改任何文件。"
 )
 def build_command_with_binary(

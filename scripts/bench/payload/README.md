@@ -132,7 +132,7 @@ fork 不为每个子进程启动 shell 或解释器。exec 包含父任务和子
 
 读写文件在计时前准备并进入 page cache；不清空主机缓存，不调用 fsync，因此衡量的是热缓存下系统调用及采集处理的成本，不是磁盘持久化吞吐。每次负载使用独立目录、相同字节内容和参数。文件准备不属于 trace。
 
-真实 agent 的提示、工具命令、正文大小和终止标记放在 [maas/agent.json](maas/agent.json)。本地 MaaS 复用仓库的 `tests/v2/common/test_suites/local_maas_server/server.py`；每种 TPOT 使用独立的本地服务实例，每次 agent 运行前重置回放，并创建独立 agent 配置和工具目录。没有远程模型调用，也不使用 HTTP 客户端脚本替代 agent。验收检查成功请求数、工具输出文件内容和最终响应标记。
+真实 agent 的提示、工具命令、正文大小和终止标记放在 [maas/agent.json](maas/agent.json)。本地 MaaS 复用仓库的 `tests/e2e/common/test_suites/local_maas_server/server.py`；每种 TPOT 使用独立的本地服务实例，每次 agent 运行前重置回放，并创建独立 agent 配置和工具目录。没有远程模型调用，也不使用 HTTP 客户端脚本替代 agent。验收检查成功请求数、工具输出文件内容和最终响应标记。
 
 OpenCode 使用显式 `--dir` 和单元内预先初始化的空 Git 仓库，工具执行与快照以该单元为项目范围。每个 TPOT 的 XDG 数据、配置和缓存目录独立于用户环境，并在 0/P/C 的预热与正式测量之间复用。每次测量启动新 agent 进程。显式 provider 配置指向本地 MaaS，禁用项目配置读取、外部插件、模型目录更新、自动更新与自动生成会话标题；HTTPS 使用本地 CA。两种 agent 使用同一工具剧本，各自的系统提示、工具 schema、内部状态维护和进程行为仍有差异。
 

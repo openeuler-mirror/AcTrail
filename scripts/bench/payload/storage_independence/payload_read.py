@@ -11,8 +11,8 @@ from pathlib import Path
 
 from scripts.bench.payload.agent import AgentWorkload
 from scripts.bench.payload.storage_delivery.environment import DeliveryEnvironment
-from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.core import TestOutput
+from tests.e2e.common.actrail_runtime import ActrailRuntime
+from tests.e2e.common.core import TestOutput
 
 
 ROOT = Path(__file__).resolve().parents[4]

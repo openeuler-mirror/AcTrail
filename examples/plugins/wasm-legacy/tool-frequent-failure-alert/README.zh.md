@@ -197,7 +197,7 @@ cp target/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm .
 
 ```bash
 sudo -E python3.11 \
-  tests/v2/regression/tool_frequent_failure_alert/run_e2e.py
+  tests/e2e/regression/tool_frequent_failure_alert/run_e2e.py
 ```
 
 真实 Agent 轮只选择具备工具能力的 `opencode` 或 `codex`。它必须在同一 trace

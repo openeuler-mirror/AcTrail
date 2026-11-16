@@ -264,7 +264,7 @@ root host PID 读取根 workload cgroup，得到 `container.id` 和可选
 
 V2 case 通过公共 Python Kata 生命周期管理器验证接口、TLS/eBPF 和双 VM xiaoO；
 低层 Shell 仅保留部署契约。完整转测入口和手动步骤见
-[`../../tests/v2/regression/virtual_container/README.zh.md`](../../tests/v2/regression/virtual_container/README.zh.md)。
+[`../../tests/e2e/regression/virtual_container/README.zh.md`](../../tests/e2e/regression/virtual_container/README.zh.md)。
 openEuler guest 的制作和复测步骤见
 [`guest/OPENEULER.md`](guest/OPENEULER.md)，workload 接口命令见
 [`workload/README.md`](workload/README.md)。
@@ -355,7 +355,7 @@ host/prepare-artifacts.py 部署与回归共用的部署包生成入口：编排
 host/v2_artifacts_support/store.py 部署包目录的加锁、备份恢复、进程引用检查、
                         current 链接切换和旧产物清理。
 host/v2_artifacts_support/manifest.py 部署包 manifest 格式与校验；V2 runner 通过
-                        tests/v2/common/kata_runtime 复用，部署代码不依赖 tests。
+                        tests/e2e/common/kata_runtime 复用，部署代码不依赖 tests。
 host/run-v2-tests.sh    读取本机 profile，一条命令运行两个虚机容器 V2 cases。
 host/cni-netns.sh       用 CNI 配置为一台虚拟机创建或删除网络命名空间（单节点参考实现）。
 host/connect_proxy.py   只放行指定域名和端口的 HTTP CONNECT 代理，供 workload 访问外网。
@@ -381,7 +381,7 @@ workload/README.md       guest `/dev` socket 源、固定 GID、安全边界和�
 ```
 
 测试脚本和 Kata runner 统一位于
-[`../../tests/v2/regression/virtual_container/`](../../tests/v2/regression/virtual_container)，
+[`../../tests/e2e/regression/virtual_container/`](../../tests/e2e/regression/virtual_container)，
 由 V2 runner 汇总，不作为部署资产打入 guest 或 workload。PID namespace 断言工具
 也位于该目录，仅在 namespace 测试时额外挂载。runner 的 container ID 只作为
 `ctr` 创建、exec 和定向清理句柄，不参与授权，也不作为测试通过判据。

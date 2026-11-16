@@ -105,7 +105,7 @@ cargo build --release \
 测试需要 `tmux`、Python 3、支持 checkpoint socket 的 Xiaoo，以及可用的 DeepSeek 凭证。默认从 `~/.config/xiaoo` 读取凭证文件位置，可通过 `--secrets-dir` 指定其他目录。
 
 ```bash
-python3 integrations/checkpoint/context/xiaoo/tests/run_e2e.py \
+python3 tests/integration/checkpoint/context/xiaoo/run_e2e.py \
   --xiaoo /absolute/path/to/xiaoo
 ```
 
@@ -115,9 +115,9 @@ python3 integrations/checkpoint/context/xiaoo/tests/run_e2e.py \
 
 测试结束后清理临时配置、凭证副本、TUI 会话和本次消息导出文件。
 
-通过 daemon、TLS-sync 和 Btrfs 验证组合保存与恢复，运行[组合端到端脚本](../../../../tests/v2/regression/checkpoint_composite/run_e2e.py)：
+通过 daemon、TLS-sync 和 Btrfs 验证组合保存与恢复，运行[组合端到端脚本](../../../../tests/e2e/regression/checkpoint_composite/run_e2e.py)：
 
 ```bash
 XIAOO_BINARY=/absolute/path/to/xiaoo \
-  python3.11 tests/v2/regression/checkpoint_composite/run_e2e.py
+  python3.11 tests/e2e/regression/checkpoint_composite/run_e2e.py
 ```

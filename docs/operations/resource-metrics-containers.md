@@ -64,7 +64,7 @@ degraded health, followed by final sampling and idempotent binding closure.
 
 ```bash
 cargo build --release -p daemon -p ctl -p view
-python3 tests/v2/regression/resource_metrics_container/run_e2e.py --bin-dir target/release --image YOUR_LOCAL_IMAGE
+python3 tests/e2e/regression/resource_metrics_container/run_e2e.py --bin-dir target/release --image YOUR_LOCAL_IMAGE
 ```
 
 The standalone acceptance runner uses a local Docker image with `/bin/sh` and

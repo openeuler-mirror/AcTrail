@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.kata_runtime import shim_binary
+from tests.e2e.common.kata_runtime.environment import (
+    absolute_path,
+    bounded_environment_int,
+    optional_absolute_path,
+    positive_environment_int,
+)
+from tests.e2e.common.kata_runtime.image import PullPolicy
+from tests.e2e.regression.virtual_container.v2.config import SUPPORTED_BACKENDS
+
+from .constants import CASE_CONSTANTS
+
+
+@dataclass(frozen=True)
+class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
+    backend: str
+    runtime_config: Path | None
+    ctr_runtime: str
+    image: str
+    image_pull_policy: PullPolicy
+    image_archive: Path | None
+    workload_bundle: Path
+    capability_bundle: Path
+    xiaoo_binary: Path | None
+    opencode_free_model: str | None
+    runtime_timeout_seconds: int
+    ready_timeout_seconds: int
+    overlap_timeout_seconds: int
+    settle_seconds: int
+    workload_uid: int
+    workload_gid: int
+    artifact_manifest: Path | None
+
+    @classmethod
+    def from_environment(
+        cls,
+        inputs: TestCaseInputs,
+    ) -> VirtualContainerXiaooConcurrencyConfig:
+        common = CommonTestConfig.from_environment(
+            inputs,
+            "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY",
+        )
+        prefix = "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_"
+        backend = os.environ.get(
+            f"{prefix}BACKEND",
+            os.environ.get("BACKEND", CASE_CONSTANTS.backend),
+        )
+        if backend not in SUPPORTED_BACKENDS:
+            raise ValueError(f"unsupported Kata backend: {backend}")
+        backend_env = backend.upper().replace("-", "_")
+        runtime_config = optional_absolute_path(
+            os.environ.get(f"{prefix}RUNTIME_CONFIG")
+            or os.environ.get("RUNTIME_CONFIG_PATH")
+            or os.environ.get(
+                f"VIRTUAL_CONTAINER_E2E_{backend_env}_DATA_CONFIG"
+            ),
+            f"{prefix}RUNTIME_CONFIG",
+        )
+        xiaoo_binary = optional_absolute_path(
+            os.environ.get(f"{prefix}XIAOO_BINARY")
+            or os.environ.get("XIAOO_E2E_BINARY"),
+            f"{prefix}XIAOO_BINARY",
+        )
+        opencode_free_model = os.environ.get(
+            f"{prefix}OPENCODE_FREE_MODEL",
+            "",
+        ).strip()
+        if opencode_free_model and not (
+            opencode_free_model.startswith("opencode/")
+            and opencode_free_model.endswith("-free")
+        ):
+            raise ValueError(
+                f"{prefix}OPENCODE_FREE_MODEL must use an "
+                "opencode/*-free model"
+            )
+        if opencode_free_model and backend != "stratovirt":
+            raise ValueError(
+                "OpenCode free-model VSOCK smoke currently requires stratovirt"
+            )
+
+        pull_value = os.environ.get(
+            f"{prefix}IMAGE_PULL_POLICY",
+            os.environ.get("VIRTUAL_CONTAINER_E2E_IMAGE_PULL_POLICY", CASE_CONSTANTS.image_pull_policy),
+        )
+        try:
+            pull_policy = PullPolicy(pull_value)
+        except ValueError as error:
+            raise ValueError(
+                f"{prefix}IMAGE_PULL_POLICY must be never, missing or always"
+            ) from error
+
+        repo = inputs.repo.resolve()
+        ctr_runtime = os.environ.get(
+            f"{prefix}CTR_RUNTIME",
+            os.environ.get("CTR_RUNTIME", CASE_CONSTANTS.ctr_runtime),
+        )
+        shim_binary(ctr_runtime)
+        return cls(
+            **common.as_kwargs(),
+            backend=backend,
+            runtime_config=runtime_config,
+            ctr_runtime=ctr_runtime,
+            image=os.environ.get(
+                f"{prefix}IMAGE",
+                os.environ.get(
+                    "VIRTUAL_CONTAINER_E2E_IMAGE",
+                    CASE_CONSTANTS.image,
+                ),
+            ),
+            image_pull_policy=pull_policy,
+            image_archive=optional_absolute_path(
+                os.environ.get(f"{prefix}IMAGE_ARCHIVE")
+                or os.environ.get("VIRTUAL_CONTAINER_E2E_IMAGE_ARCHIVE"),
+                f"{prefix}IMAGE_ARCHIVE",
+            ),
+            workload_bundle=absolute_path(
+                os.environ.get(
+                    f"{prefix}WORKLOAD_BUNDLE",
+                    os.environ.get(
+                        "WORKLOAD_BUNDLE_DIR",
+                        str(repo / CASE_CONSTANTS.workload_bundle_path),
+                    ),
+                ),
+                f"{prefix}WORKLOAD_BUNDLE",
+            ),
+            capability_bundle=absolute_path(
+                os.environ.get(
+                    "CAPABILITY_BUNDLE_DIR",
+                    str(repo / CASE_CONSTANTS.capability_bundle_path),
+                ),
+                "CAPABILITY_BUNDLE_DIR",
+            ),
+            xiaoo_binary=xiaoo_binary,
+            opencode_free_model=opencode_free_model or None,
+            runtime_timeout_seconds=positive_environment_int(
+                f"{prefix}RUNTIME_TIMEOUT_SECONDS",
+                str(CASE_CONSTANTS.runtime_timeout_seconds),
+            ),
+            ready_timeout_seconds=positive_environment_int(
+                f"{prefix}READY_TIMEOUT_SECONDS",
+                str(CASE_CONSTANTS.ready_timeout_seconds),
+            ),
+            overlap_timeout_seconds=positive_environment_int(
+                f"{prefix}OVERLAP_TIMEOUT_SECONDS",
+                str(CASE_CONSTANTS.overlap_timeout_seconds),
+            ),
+            settle_seconds=bounded_environment_int(
+                f"{prefix}SETTLE_SECONDS",
+                str(CASE_CONSTANTS.settle_seconds),
+                minimum=0,
+                maximum=300,
+            ),
+            workload_uid=bounded_environment_int(
+                f"{prefix}WORKLOAD_UID",
+                str(CASE_CONSTANTS.workload_uid),
+                minimum=0,
+                maximum=2147483647,
+            ),
+            workload_gid=bounded_environment_int(
+                f"{prefix}WORKLOAD_GID",
+                str(CASE_CONSTANTS.workload_gid),
+                minimum=0,
+                maximum=2147483647,
+            ),
+            artifact_manifest=optional_absolute_path(
+                os.environ.get(f"{prefix}ARTIFACT_MANIFEST")
+                or os.environ.get("VIRTUAL_CONTAINER_E2E_ARTIFACT_MANIFEST"),
+                f"{prefix}ARTIFACT_MANIFEST",
+            ),
+        )

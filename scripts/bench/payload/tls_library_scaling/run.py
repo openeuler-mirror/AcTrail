@@ -19,8 +19,8 @@ from scripts.bench.payload.runtime import CollectionRuntime
 from scripts.bench.payload.tls_library.run import LibraryResponseServer
 from scripts.bench.payload.tls_library_scaling.evidence import SampleEvidence
 from scripts.bench.payload.tls_library_scaling.summary import LibraryScalingSummary
-from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.core import TestOutput
+from tests.e2e.common.actrail_runtime import ActrailRuntime
+from tests.e2e.common.core import TestOutput
 
 
 class LibraryScaling:
