@@ -12,16 +12,6 @@ class HostConstants:
     HOST_REPO_ROOT: Path = field(
         default_factory=lambda: Path(__file__).resolve().parents[4]
     )
-    BUNDLE_SUBDIRECTORY: str = ".actrail-guest-bundle"
-    BUNDLE_SYSROOT: str = "/"
-    BUNDLE_TARGET_GLIBC: str = ""
-    BUILD_PROFILE: str = "release"
-    ACTRAIL_BUILD: int = 1
-    COPY_OPENSSL: int = 1
-    EBPF_TRANSPORT: str = "auto"
-    BUNDLE_OPENSSL: str = ""
-    BUNDLE_MAX_SYMLINK_DEPTH: int = 40
-    CARGO_TARGET_SUBDIRECTORY: str = "target"
     BACKEND: str = "stratovirt"
     RUNTIME_CONFIG_PATH: str = ""
     CGROUP_ROOT: str = "/sys/fs/cgroup"

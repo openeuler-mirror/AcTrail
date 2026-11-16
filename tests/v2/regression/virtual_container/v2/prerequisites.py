@@ -268,5 +268,5 @@ def _deployment_failure(reason: str) -> TestResult:
         TestStatus.FAILED,
         reason
         + "; rerun deploy/virtual-container/host/"
-        "prepare-v2-test-artifacts.py",
+        "prepare-artifacts.py",
     )

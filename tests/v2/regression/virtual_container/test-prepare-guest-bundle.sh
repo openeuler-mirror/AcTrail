@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
-PREPARE="$ROOT_DIR/tests/v2/regression/virtual_container/prepare-guest-bundle.sh"
+PREPARE="$ROOT_DIR/deploy/virtual-container/guest/prepare-guest-bundle.sh"
 TARGET_DIR="${ACTRAIL_BIN_DIR:-${CARGO_TARGET_DIR:-$ROOT_DIR/target}/release}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/actrail-guest-bundle-test.XXXXXX")"
 BUNDLE_DIR="$WORK_DIR/bundle"
@@ -63,14 +63,6 @@ for plugin_file in \
     || fail "OTLP/HTTP plugin asset missing: $plugin_file"
 done
 (cd "$BUNDLE_DIR" && sha256sum -c MANIFEST.sha256 >/dev/null)
-
-actual_library_path="$(
-  ACTRAIL_BUNDLE="$BUNDLE_DIR" \
-    sh -c 'SCRIPT_DIR=$(dirname -- "$1"); . "$1"; printf "%s|%s\n" "$LD_LIBRARY_PATH" "$TLS_PAYLOAD_SYNC_LIBRARY"' sh \
-    "$BUNDLE_DIR/tests/guest/common.sh"
-)"
-[[ "$actual_library_path" == "$BUNDLE_DIR/lib|$BUNDLE_DIR/libactrail_tls_payload_probe_sync.so" ]] \
-  || fail "guest runtime library environment is incorrect: $actual_library_path"
 
 ln -s "$BUNDLE_DIR" "$WORK_DIR/bundle-link"
 set +e

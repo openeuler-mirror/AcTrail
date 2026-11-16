@@ -1,5 +1,6 @@
 //! Shared domain nouns and stable value models.
 
+pub mod agent_type;
 pub mod binary_identity;
 pub mod capability;
 pub mod container;

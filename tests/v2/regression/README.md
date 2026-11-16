@@ -35,7 +35,7 @@ actrailctl --config "$WORK/actraild.conf" init -f \
 sudo -E python3.11 tests/v2/regression/test_all.py
 ```
 
-运行默认虚拟容器测例：
+运行默认虚机容器测例：
 
 ```bash
 sudo -E python3.11 tests/v2/regression/test_all.py \
@@ -79,7 +79,7 @@ profile 必须由 Cloud Hypervisor backend 且带 `--xiaoo` 的 artifact prepare
 显式运行 `execution_isolation_stratovirt` 或 `execution_isolation_firecracker` 时，
 分别使用对应 backend 且带 Guest observer 的 Kata artifact，具体契约见各自 README。
 
-虚拟容器首次部署应优先使用
+虚机容器首次部署应优先使用
 `deploy/virtual-container/host/run-v2-tests.sh`。`local/kata/` 是 checkout-local 的
 Git 忽略资产：必须先在最终 checkout 拉取目标分支，再从同一目录运行 artifact
 preparer。新 worktree 不会继承旧 profile；默认 profile 缺失时该包装脚本会在 sudo

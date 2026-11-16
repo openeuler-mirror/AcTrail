@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[5]
-CONFIGURATOR = REPO / "deploy/virtual-container/host/prepare-stratovirt-config.py"
+CONFIGURATOR = REPO / "deploy/virtual-container/host/prepare-kata-config.py"
 
 
 class VmmConfigPreparerTest(unittest.TestCase):

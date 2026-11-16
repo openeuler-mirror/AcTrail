@@ -13,13 +13,17 @@ ACTRAIL_HOST_PATH="$ACTRAIL_HOST_PATH:/usr/local/sbin:/usr/sbin:/sbin:/bin"
 sudo -E /usr/bin/env \
   "PATH=$ACTRAIL_HOST_PATH" \
   /usr/bin/python3.11 \
-  deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  deploy/virtual-container/host/prepare-artifacts.py \
   --backend stratovirt \
   --data-kernel /absolute/path/to/bootable-debug-kernel \
+  --base-image-source /opt/kata/share/kata-containers/kata-containers.img \
+  --data-image-source /opt/kata/share/kata-containers/kata-containers.img \
   --with-sandbox-observer \
   --xiaoo /absolute/path/to/xiaoo \
   --write-profile "$PWD/local/kata/v2-test-profile-stratovirt.json"
 ```
+
+这里显式使用 Kata 自带的 Guest 镜像 `kata-containers.img`，与之前不传镜像参数时相同；openEuler Guest 镜像尚未在本用例上验证。
 
 只有准备器打印 `ACTRAIL_V2_ARTIFACTS_READY` 后才能运行 case。准备失败时 profile
 不会更新；继续使用旧 profile 只会产生 release checksum mismatch。
@@ -60,7 +64,7 @@ Cloud Hypervisor 或 Firecracker 的 Unix socket 规则。
 ## 准备
 
 先在目标 Linux/KVM 主机上从同一 checkout 刷新 StratoVirt 产物；`--xiaoo` 必须指向
-要演示的真实 xiaoO。快速运行第一步的 `prepare-v2-test-artifacts.py` 命令会生成
+要演示的真实 xiaoO。快速运行第一步的 `prepare-artifacts.py` 命令会生成
 内容寻址 artifact 和本机 profile。
 
 ## 直接运行公共 `test_all.py`（仅调试）

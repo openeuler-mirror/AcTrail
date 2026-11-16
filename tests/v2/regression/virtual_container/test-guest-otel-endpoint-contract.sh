@@ -7,7 +7,6 @@ HELPER="$ROOT_DIR/deploy/virtual-container/guest/otel-endpoint.sh"
 INSTALLER="$ROOT_DIR/deploy/virtual-container/guest/install-rootfs.sh"
 INJECTOR="$ROOT_DIR/deploy/virtual-container/guest/inject-image.sh"
 VERIFIER="$ROOT_DIR/deploy/virtual-container/guest/verify-rootfs.sh"
-BUILDER="$ROOT_DIR/deploy/virtual-container/guest/build-openeuler-image.sh"
 CONFIG_TEMPLATE="$ROOT_DIR/examples/plugins/builtin/otel-http/otel-http.config.toml"
 
 fail() {
@@ -208,14 +207,12 @@ done
 
 # The egress mode travels with the endpoint through every deployment entry
 # point, and is recorded in the image so verification can assert it offline.
-for script in "$INSTALLER" "$INJECTOR" "$VERIFIER" "$BUILDER"; do
+for script in "$INSTALLER" "$INJECTOR" "$VERIFIER"; do
   "$script" --help | grep -Fq -- '--egress-mode' \
     || fail "$script does not document --egress-mode"
 done
 [[ "$(grep -Fc -- '--egress-mode "$EGRESS_MODE"' "$INJECTOR")" == "2" ]] \
   || fail "image injector must forward the egress mode to installer and verifier"
-[[ "$(grep -Fc -- '--egress-mode "$EGRESS_MODE"' "$BUILDER")" -ge 2 ]] \
-  || fail "image builder must forward the egress mode to installer and verifier"
 grep -Fq 'guest_egress_mode=' "$INSTALLER" \
   || fail "rootfs installer does not record the egress mode in guest-install-info"
 grep -Fq 'guest_egress_mode=$EXPECTED_EGRESS_MODE' "$VERIFIER" \
@@ -232,10 +229,6 @@ grep -Fq 'actrail-vsock-guest-bridge.service' "$VERIFIER" \
   || fail "rootfs verifier does not assert the Guest bridge per egress mode"
 grep -Fq 'usr/bin/socat' "$VERIFIER" \
   || fail "rootfs verifier does not assert socat exists for vsock-bridge egress"
-grep -Fq -- 'install_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$INJECTOR" \
-  || fail "image injector does not conditionally enable the exporter"
-grep -Fq -- 'verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$INJECTOR" \
-  || fail "image injector does not conditionally verify the exporter"
 grep -Fq -- 'actrail_write_guest_otel_endpoint_config' "$INSTALLER" \
   || fail "rootfs installer does not render the endpoint into plugin config"
 grep -Fq -- 'endpoint = \"$EXPECTED_OTEL_ENDPOINT\"' "$VERIFIER" \

@@ -13,6 +13,12 @@ pub mod agent {
     pub const IDENTITY_STATUS: &str = "agent.identity.status";
     pub const IDENTITY_STATUS_OBSERVED_MARKER: &str = "agent.identity.status=observed";
     pub const PERFORMED_ACTION_SEQUENCE: &str = "agent.performed_action.sequence";
+    /// Agent product resolved from the observed executable. An inference, not
+    /// an observation: always read together with [`TYPE_SOURCE`].
+    pub const TYPE: &str = "actrail.agent.type";
+    /// How [`TYPE`] was resolved: `known_product` for a match against the
+    /// known agent products, `executable` for the program-name fallback.
+    pub const TYPE_SOURCE: &str = "actrail.agent.type.source";
 }
 
 pub mod agent_exit {

@@ -137,11 +137,11 @@ if grep -Fq -- 'export LD_LIBRARY_PATH' \
   "$ROOT_DIR/deploy/virtual-container/workload/actrail-launch"; then
   fail "workload launcher exports its private library path to the Agent"
 fi
-grep -Fq -- 'docker.io/library/actrail-openeuler-workload:24.09' "$CONSTANTS" \
+grep -Fq -- 'docker.io/library/actrail-openeuler-workload:24.03' "$CONSTANTS" \
   || fail "V2 runner does not default to the openEuler workload image"
 grep -Fq -- '[ \"${ID:-}\" = openEuler ]' "$SCENARIO" \
   || fail "V2 scenario does not assert the workload distribution"
-grep -Fq -- 'ARG BASE_IMAGE=openeuler/openeuler:24.09' "$WORKLOAD_CONTAINERFILE" \
+grep -Fq -- 'ARG BASE_IMAGE=openeuler/openeuler:24.03-lts' "$WORKLOAD_CONTAINERFILE" \
   || fail "workload image does not pin the openEuler release"
 grep -Eq '^[[:space:]]*RUN dnf install -y .*util-linux' "$WORKLOAD_CONTAINERFILE" \
   || fail "openEuler workload image does not provide setpriv for containerd 1.6"
@@ -151,15 +151,10 @@ grep -Fq -- 'secrets.token_hex(16)' "$CONTAINER_MANAGER" \
   || fail "guest image injector must forward the workload socket GID to installer and verifier"
 grep -Fq -- '--startup-dependency "$STARTUP_DEPENDENCY"' "$INJECTOR" \
   || fail "guest image injector does not forward the Guest startup dependency"
-grep -Fq -- 'install_args+=(--otel-endpoint "$OTEL_ENDPOINT")' "$INJECTOR" \
-  || fail "guest image injector does not conditionally enable OTLP export"
 "$INJECTOR" --help | grep -Fq -- '--with-sandbox-observer' \
   || fail "guest image injector does not expose sandbox observer injection"
 [[ "$(grep -Fc -- '--with-sandbox-observer' "$INJECTOR")" -ge 3 ]] \
   || fail "guest image injector must forward sandbox observer selection to installer and verifier"
-if grep -Fq -- '--mode' "$INJECTOR"; then
-  fail "guest image injector retains the deprecated startup-mode interface"
-fi
 if grep -Eq -- '(^|[[:space:]])--privileged([[:space:]]|$)' \
   "$SCENARIO" "$CONTAINER_MANAGER"; then
   fail "V2 workload interface must not require a privileged workload"

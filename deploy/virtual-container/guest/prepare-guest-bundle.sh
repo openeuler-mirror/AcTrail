@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build and assemble the files mounted into a Kata guest for validation.
+# Assemble the AcTrail guest bundle: release binaries, their private library
+# closure and the otel-http plugin assets. inject-image.sh installs it into the
+# Guest image; the V2 data cases also mount it read-only for its openssl client.
 set -euo pipefail
 
 fail() {
@@ -7,14 +9,20 @@ fail() {
   exit 1
 }
 
-command -v python3 >/dev/null 2>&1 || fail "missing command: python3"
-HOST_DEFAULTS="$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/constants.py")"
-eval "$HOST_DEFAULTS"
-unset HOST_DEFAULTS
-ROOT_DIR="${ACTRAIL_REPO_ROOT:-$HOST_REPO_ROOT}"
-BUNDLE_DIR="${BUNDLE_DIR:-$ROOT_DIR/$BUNDLE_SUBDIRECTORY}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/../../.." && pwd)}"
+BUNDLE_DIR="${BUNDLE_DIR:-$ROOT_DIR/.actrail-guest-bundle}"
+BUNDLE_SYSROOT="${BUNDLE_SYSROOT:-/}"
+BUNDLE_TARGET_GLIBC="${BUNDLE_TARGET_GLIBC:-}"
+BUNDLE_OPENSSL="${BUNDLE_OPENSSL:-}"
+BUNDLE_MAX_SYMLINK_DEPTH="${BUNDLE_MAX_SYMLINK_DEPTH:-40}"
+BUILD_PROFILE="${BUILD_PROFILE:-release}"
+CARGO_TARGET_SUBDIRECTORY="${CARGO_TARGET_SUBDIRECTORY:-target}"
+ACTRAIL_BUILD="${ACTRAIL_BUILD:-1}"
+COPY_OPENSSL="${COPY_OPENSSL:-1}"
+EBPF_TRANSPORT="${EBPF_TRANSPORT:-auto}"
 
-for command_name in find install mktemp python3 readelf readlink realpath sha256sum; do
+for command_name in find install mktemp readelf readlink realpath sha256sum; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name"
 done
 
@@ -280,8 +288,7 @@ trap cleanup_staging EXIT
 BUNDLE_DIR="$STAGING_DIR"
 install -d \
   "$BUNDLE_DIR/lib" \
-  "$BUNDLE_DIR/plugins/otel-http" \
-  "$BUNDLE_DIR/tests/guest"
+  "$BUNDLE_DIR/plugins/otel-http"
 install -m 0755 "$TARGET_DIR/actraild" "$BUNDLE_DIR/actraild"
 install -m 0755 "$TARGET_DIR/actrailctl" "$BUNDLE_DIR/actrailctl"
 install -m 0755 "$TARGET_DIR/actrail-sb" "$BUNDLE_DIR/actrail-sb"
@@ -301,18 +308,6 @@ for artifact in "${ELF_INPUTS[@]}"; do
   validate_elf "$artifact" "$TARGET_MACHINE" "bundle artifact"
 done
 
-python3 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/constants.py" \
-  --output "$BUNDLE_DIR/tests/guest/runtime-defaults.sh"
-install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/common.sh" \
-  "$BUNDLE_DIR/tests/guest/common.sh"
-install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/precheck.sh" \
-  "$BUNDLE_DIR/tests/guest/precheck.sh"
-install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/tls-only.sh" \
-  "$BUNDLE_DIR/tests/guest/tls-only.sh"
-install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/ebpf-only.sh" \
-  "$BUNDLE_DIR/tests/guest/ebpf-only.sh"
-install -m 0755 "$ROOT_DIR/tests/v2/regression/virtual_container/guest/combo.sh" \
-  "$BUNDLE_DIR/tests/guest/combo.sh"
 for plugin_file in \
   otel-http.plugin.toml \
   otel-http.config.toml \
@@ -378,26 +373,6 @@ default = default_sect
 
 [default_sect]
 activate = 1
-EOF
-
-for name in tls-only ebpf-only combo; do
-  LD_LIBRARY_PATH="$BUNDLE_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$BUNDLE_DIR/actrailctl" --config "$BUNDLE_DIR/guest-$name.conf" init -f \
-      --patch "$ROOT_DIR/tests/v2/regression/virtual_container/guest/$name/patch_config.toml"
-done
-
-cat >"$BUNDLE_DIR/RUNBOOK.txt" <<'EOF'
-Run inside a Kata guest/container:
-  /actrail/tests/guest/precheck.sh
-  /actrail/tests/guest/tls-only.sh
-  /actrail/tests/guest/ebpf-only.sh
-  /actrail/tests/guest/combo.sh
-
-Expected success markers:
-  GUEST_PRECHECK_OK
-  TLS_ONLY_OK
-  EBPF_ONLY_OK
-  COMBO_OK
 EOF
 
 cat >"$BUNDLE_DIR/BUNDLE-INFO" <<EOF

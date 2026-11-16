@@ -5,9 +5,10 @@ set -euo pipefail
 
 ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
 INSTALLER="$ROOT_DIR/deploy/virtual-container/host/install-kata-3.32.sh"
-CONFIGURATOR="$ROOT_DIR/deploy/virtual-container/host/prepare-stratovirt-config.py"
-PREPARER="$ROOT_DIR/deploy/virtual-container/host/prepare-v2-test-artifacts.py"
+CONFIGURATOR="$ROOT_DIR/deploy/virtual-container/host/prepare-kata-config.py"
+PREPARER="$ROOT_DIR/deploy/virtual-container/host/prepare-artifacts.py"
 PREPARER_MODULE="$ROOT_DIR/deploy/virtual-container/host/v2_artifacts.py"
+STORE_MODULE="$ROOT_DIR/deploy/virtual-container/host/v2_artifacts_support/store.py"
 V2_RUNNER="$ROOT_DIR/deploy/virtual-container/host/run-v2-tests.sh"
 BUILDER="$ROOT_DIR/deploy/virtual-container/guest/build-openeuler-image.sh"
 DEPLOY_README="$ROOT_DIR/deploy/virtual-container/README.md"
@@ -37,7 +38,7 @@ import sys
 
 source = Path(sys.argv[1]).read_text(encoding="utf-8")
 release = source.find("bash scripts/install-release.sh")
-prepare = source.find("prepare-v2-test-artifacts.py")
+prepare = source.find("prepare-artifacts.py")
 if release < 0 or prepare < 0 or release > prepare:
     raise SystemExit(1)
 PY
@@ -110,7 +111,7 @@ grep -Fq 'sbin/init' "$BUILDER" \
   || fail "openEuler guest builder does not extract the 3.32 agent"
 grep -Fq 'artifact_cache=hit' "$PREPARER_MODULE" \
   || fail "V2 artifact preparer does not expose cache hits"
-grep -Fq 'os.replace(staging, final)' "$PREPARER_MODULE" \
+grep -Fq 'os.replace(staging, final)' "$STORE_MODULE" \
   || fail "V2 artifact preparer does not atomically publish staging"
 grep -Fq -- '--case virtual_container_xiaoo_concurrency' "$V2_RUNNER" \
   || fail "V2 one-command runner does not select both virtual-container cases"

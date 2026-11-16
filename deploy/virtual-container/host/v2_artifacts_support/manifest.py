@@ -1,0 +1,740 @@
+"""Validate a published content-addressed virtual-container artifact."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+from .checksums import sha256_file
+from .containerd_image import firecracker_workload_reference
+from .model import RELEASE_FILES
+from .runtime_config import (
+    REQUIRED_EBPF_KERNEL_CONFIG,
+    discover_kernel_config,
+    load_hypervisor_table,
+    missing_kernel_config_entries,
+)
+
+
+_MANIFEST_LINE = re.compile(r"^([0-9a-fA-F]{64})[ \t]+(.+)$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_EGRESS_MODES = {"network", "vsock-bridge"}
+_FIRECRACKER_XIAOO_PATH = "/opt/actrail-execution/xiaoo-real"
+# Release files copied into the guest bundle; the gateway stays on the host.
+GUEST_RELEASE_FILES = {
+    key: filename
+    for key, filename in RELEASE_FILES.items()
+    if filename != "actrail-vsock-gateway"
+}
+
+
+@dataclass(frozen=True)
+class DeploymentArtifacts:
+    """Validated content-addressed inputs for the Kata V2 acceptance tests."""
+
+    manifest: Path
+    cache_key: str
+    source_commit: str
+    backend: str
+    runtime: str
+    egress_mode: str
+    otel_export_enabled: bool
+    sandbox_observer_enabled: bool
+    guest_bundle: Path
+    host_bundle: Path
+    workload_bundle: Path
+    base_image: Path
+    data_image: Path
+    base_config: Path
+    data_config: Path
+    workload_image: str
+    workload_image_archive: Path | None
+    workload_image_archive_sha256: str | None
+    preinstalled_xiaoo_path: str | None
+    preinstalled_xiaoo_sha256: str | None
+    xiaoo: Path | None
+
+    @classmethod
+    def load(
+        cls,
+        manifest: Path,
+        *,
+        bin_dir: Path,
+        expected_backend: str,
+        expected_runtime: str,
+        require_xiaoo: bool = False,
+        require_preinstalled_xiaoo: bool = False,
+        require_sandbox_observer: bool = False,
+    ) -> DeploymentArtifacts:
+        if not manifest.is_absolute():
+            raise ValueError(f"artifact manifest path must be absolute: {manifest}")
+        try:
+            manifest = manifest.resolve(strict=True)
+        except OSError as error:
+            raise RuntimeError(f"artifact manifest is missing: {manifest}") from error
+        if not manifest.is_file():
+            raise RuntimeError(f"artifact manifest is not a file: {manifest}")
+        root = manifest.parent.resolve()
+        document = _read_json_object(manifest, "artifact manifest")
+        if document.get("format") != 2:
+            raise RuntimeError("artifact manifest format must be 2")
+
+        cache_key = _required_sha256(document, "cache_key")
+        if root.name != cache_key:
+            raise RuntimeError(
+                "artifact digest directory does not match manifest cache_key: "
+                f"directory={root.name} cache_key={cache_key}"
+            )
+        source_commit = _required_string(document, "source_commit")
+        backend = _required_string(document, "backend")
+        runtime = _required_string(document, "runtime")
+        egress_mode_value = document.get("egress_mode", "network")
+        if not isinstance(egress_mode_value, str) or not egress_mode_value:
+            raise RuntimeError("artifact manifest egress_mode must be a string")
+        egress_mode = egress_mode_value
+        if egress_mode not in _EGRESS_MODES:
+            raise RuntimeError(
+                "artifact manifest egress_mode must be network or vsock-bridge"
+            )
+        otel_export_enabled = document.get("otel_export_enabled", True)
+        if not isinstance(otel_export_enabled, bool):
+            raise RuntimeError("artifact manifest otel_export_enabled must be boolean")
+        if egress_mode == "vsock-bridge" and not otel_export_enabled:
+            raise RuntimeError(
+                "artifact manifest cannot select vsock-bridge without OTLP export"
+            )
+        sandbox_observer_enabled = document.get(
+            "sandbox_observer_enabled",
+            False,
+        )
+        if not isinstance(sandbox_observer_enabled, bool):
+            raise RuntimeError(
+                "artifact manifest sandbox_observer_enabled must be boolean"
+            )
+        if require_sandbox_observer and not sandbox_observer_enabled:
+            raise RuntimeError(
+                "artifact does not contain the Guest system sandbox observer"
+            )
+        if backend != expected_backend:
+            raise RuntimeError(
+                "artifact backend mismatch: "
+                f"expected={expected_backend} actual={backend}"
+            )
+        if runtime != expected_runtime:
+            raise RuntimeError(
+                "artifact runtime mismatch: "
+                f"expected={expected_runtime} actual={runtime}"
+            )
+
+        release = _required_object(document, "release")
+        for digest_name, filename in RELEASE_FILES.items():
+            expected = _required_sha256(release, digest_name)
+            verify_file_digest(
+                bin_dir / filename,
+                expected,
+                f"current release {filename}",
+            )
+
+        guest = _required_object(document, "guest_bundle")
+        guest_bundle = _artifact_path(
+            root,
+            _required_string(guest, "path"),
+            kind="directory",
+        )
+        guest_manifest = guest_bundle / "MANIFEST.sha256"
+        verify_file_digest(
+            guest_manifest,
+            _required_sha256(guest, "manifest_sha256"),
+            "guest bundle manifest",
+        )
+        verify_directory_manifest(guest_bundle, guest_manifest)
+        for digest_name, filename in GUEST_RELEASE_FILES.items():
+            verify_file_digest(
+                guest_bundle / filename,
+                _required_sha256(release, digest_name),
+                f"guest bundle {filename}",
+            )
+        guest_sb = guest_bundle / "actrail-sb"
+        if not guest_sb.stat().st_mode & 0o111:
+            raise RuntimeError(f"Guest actrail-sb is not executable: {guest_sb}")
+
+        host = _required_object(document, "host_bundle")
+        host_bundle = _artifact_path(
+            root,
+            _required_string(host, "path"),
+            kind="directory",
+        )
+        host_manifest = host_bundle / "MANIFEST.sha256"
+        verify_file_digest(
+            host_manifest,
+            _required_sha256(host, "manifest_sha256"),
+            "host bundle manifest",
+        )
+        verify_directory_manifest(host_bundle, host_manifest)
+        gateway = host_bundle / "actrail-vsock-gateway"
+        gateway_sha256 = _required_sha256(host, "gateway_sha256")
+        verify_file_digest(gateway, gateway_sha256, "host bundle gateway")
+        if gateway_sha256 != _required_sha256(
+            release,
+            "actrail_vsock_gateway_sha256",
+        ):
+            raise RuntimeError(
+                "host bundle gateway does not match the current release"
+            )
+        if not gateway.stat().st_mode & 0o111:
+            raise RuntimeError(f"host bundle gateway is not executable: {gateway}")
+        plugin_directory = host_bundle / "sandbox-resource-alert"
+        for field, name in (
+            (
+                "sandbox_resource_alert_manifest_sha256",
+                "sandbox-resource-alert.plugin.toml",
+            ),
+            (
+                "sandbox_resource_alert_config_sha256",
+                "sandbox-resource-alert.config.json",
+            ),
+            (
+                "sandbox_resource_alert_schema_sha256",
+                "sandbox-resource-alert.config.v1.schema.json",
+            ),
+        ):
+            verify_file_digest(
+                plugin_directory / name,
+                _required_sha256(host, field),
+                f"host bundle sandbox resource alert {name}",
+            )
+
+        workload = _required_object(document, "workload_bundle")
+        workload_bundle = _artifact_path(
+            root,
+            _required_string(workload, "path"),
+            kind="directory",
+        )
+        workload_manifest = workload_bundle / "MANIFEST.sha256"
+        verify_file_digest(
+            workload_manifest,
+            _required_sha256(workload, "manifest_sha256"),
+            "workload bundle manifest",
+        )
+        verify_directory_manifest(workload_bundle, workload_manifest)
+        workload_actrailctl = workload_bundle / "bin/actrailctl"
+        workload_actrailctl_sha256 = _required_sha256(
+            workload,
+            "actrailctl_sha256",
+        )
+        verify_file_digest(
+            workload_actrailctl,
+            workload_actrailctl_sha256,
+            "workload bundle actrailctl",
+        )
+        if workload_actrailctl_sha256 != _required_sha256(
+            release,
+            "actrailctl_sha256",
+        ):
+            raise RuntimeError(
+                "workload bundle actrailctl does not match the current release"
+            )
+
+        images = _required_object(document, "images")
+        base_image = _artifact_path(
+            root,
+            _required_string(images, "base"),
+            kind="file",
+        )
+        data_image = _artifact_path(
+            root,
+            _required_string(images, "data"),
+            kind="file",
+        )
+        configs = _required_object(document, "runtime_configs")
+        base_config = _artifact_path(
+            root,
+            _required_string(configs, "base"),
+            kind="file",
+        )
+        data_config = _artifact_path(
+            root,
+            _required_string(configs, "data"),
+            kind="file",
+        )
+        integrity = _required_object(document, "integrity")
+        for config in (base_config, data_config):
+            relative = config.relative_to(root).as_posix()
+            verify_file_digest(
+                config,
+                _required_sha256(integrity, relative),
+                f"runtime config {relative}",
+            )
+        inputs = _required_object(document, "inputs")
+        if inputs.get("format") != 1:
+            raise RuntimeError("artifact manifest inputs format must be 1")
+        input_files = _required_object(inputs, "files")
+        input_paths = _required_object(inputs, "paths")
+        runtime_input_names = [
+            "hypervisor",
+            "base_kernel",
+            "data_kernel",
+        ]
+        if backend != "firecracker":
+            runtime_input_names.append("virtiofsd")
+        else:
+            runtime_input_names.append("jailer")
+        if sandbox_observer_enabled:
+            runtime_input_names.append("data_kernel_config")
+        runtime_inputs = {
+            name: _verified_external_input(input_files, input_paths, name)
+            for name in runtime_input_names
+        }
+        if sandbox_observer_enabled:
+            data_kernel_config = runtime_inputs["data_kernel_config"]
+            discovered_config = discover_kernel_config(
+                runtime_inputs["data_kernel"]
+            )
+            if (
+                discovered_config is None
+                or discovered_config.resolve() != data_kernel_config
+            ):
+                raise RuntimeError(
+                    "artifact data_kernel_config does not match the data "
+                    f"kernel: kernel={runtime_inputs['data_kernel']} "
+                    f"config={data_kernel_config}"
+                )
+            try:
+                configured_lines = data_kernel_config.read_text(
+                    encoding="utf-8"
+                ).splitlines()
+            except OSError as error:
+                raise RuntimeError(
+                    "cannot read artifact data kernel config "
+                    f"{data_kernel_config}: {error}"
+                ) from error
+            missing = missing_kernel_config_entries(
+                configured_lines,
+                REQUIRED_EBPF_KERNEL_CONFIG,
+            )
+            if missing:
+                raise RuntimeError(
+                    "artifact sandbox observer data kernel config is missing "
+                    f"required eBPF capabilities: {', '.join(missing)}"
+                )
+        _verify_runtime_config_assets(
+            base_config,
+            backend=backend,
+            profile="base",
+            expected_image=base_image,
+            expected_hypervisor=runtime_inputs["hypervisor"],
+            expected_kernel=runtime_inputs["base_kernel"],
+            expected_virtiofsd=runtime_inputs.get("virtiofsd"),
+            expected_jailer=runtime_inputs.get("jailer"),
+        )
+        _verify_runtime_config_assets(
+            data_config,
+            backend=backend,
+            profile="data",
+            expected_image=data_image,
+            expected_hypervisor=runtime_inputs["hypervisor"],
+            expected_kernel=runtime_inputs["data_kernel"],
+            expected_virtiofsd=runtime_inputs.get("virtiofsd"),
+            expected_jailer=runtime_inputs.get("jailer"),
+        )
+
+        workload_image_document = _required_object(document, "workload_image")
+        workload_image = _required_string(workload_image_document, "reference")
+        archive_value = workload_image_document.get("archive")
+        archive_sha256_value = workload_image_document.get("archive_sha256")
+        if (archive_value is None) != (archive_sha256_value is None):
+            raise RuntimeError(
+                "artifact workload image archive path and digest must be declared "
+                "together"
+            )
+        workload_image_archive = None
+        workload_image_archive_sha256 = None
+        if archive_value is not None:
+            workload_image_archive = _artifact_path(
+                root,
+                _required_string(workload_image_document, "archive"),
+                kind="file",
+            )
+            workload_image_archive_sha256 = _required_sha256(
+                workload_image_document,
+                "archive_sha256",
+            )
+            verify_file_digest(
+                workload_image_archive,
+                workload_image_archive_sha256,
+                "workload image archive",
+            )
+
+        preinstalled_path_value = workload_image_document.get(
+            "preinstalled_xiaoo_path"
+        )
+        preinstalled_sha256_value = workload_image_document.get(
+            "preinstalled_xiaoo_sha256"
+        )
+        if (preinstalled_path_value is None) != (
+            preinstalled_sha256_value is None
+        ):
+            raise RuntimeError(
+                "artifact preinstalled xiaoO path and digest must be declared "
+                "together"
+            )
+        preinstalled_xiaoo_path = None
+        preinstalled_xiaoo_sha256 = None
+        if preinstalled_path_value is not None:
+            preinstalled_xiaoo_path = _required_string(
+                workload_image_document,
+                "preinstalled_xiaoo_path",
+            )
+            preinstalled_xiaoo_sha256 = _required_sha256(
+                workload_image_document,
+                "preinstalled_xiaoo_sha256",
+            )
+            if backend != "firecracker":
+                raise RuntimeError(
+                    "preinstalled xiaoO workload metadata is only valid for "
+                    "Firecracker artifacts"
+                )
+            if preinstalled_xiaoo_path != _FIRECRACKER_XIAOO_PATH:
+                raise RuntimeError(
+                    "artifact preinstalled xiaoO path must be "
+                    f"{_FIRECRACKER_XIAOO_PATH}"
+                )
+            if workload_image_archive is None:
+                raise RuntimeError(
+                    "artifact preinstalled xiaoO requires a workload image archive"
+                )
+            expected_workload_image = firecracker_workload_reference(cache_key)
+            if workload_image != expected_workload_image:
+                raise RuntimeError(
+                    "artifact preinstalled xiaoO workload image reference does "
+                    "not match its cache_key: "
+                    f"expected={expected_workload_image} actual={workload_image}"
+                )
+            _required_sha256(input_files, "workload_image_archive")
+
+        xiaoo_document = document.get("xiaoo")
+        xiaoo = None
+        xiaoo_sha256 = None
+        if xiaoo_document is not None:
+            xiaoo_object = _object(xiaoo_document, "xiaoo")
+            xiaoo = _artifact_path(
+                root,
+                _required_string(xiaoo_object, "path"),
+                kind="file",
+            )
+            xiaoo_sha256 = _required_sha256(xiaoo_object, "sha256")
+            verify_file_digest(
+                xiaoo,
+                xiaoo_sha256,
+                "xiaoO executable",
+            )
+            if not xiaoo.stat().st_mode & 0o111:
+                raise RuntimeError(f"xiaoO artifact is not executable: {xiaoo}")
+        if require_xiaoo and xiaoo is None:
+            raise RuntimeError(
+                "artifact manifest does not contain the xiaoO executable"
+            )
+        if preinstalled_xiaoo_sha256 is not None:
+            if xiaoo_sha256 is None:
+                raise RuntimeError(
+                    "artifact preinstalled xiaoO has no matching xiaoO executable"
+                )
+            if preinstalled_xiaoo_sha256 != xiaoo_sha256:
+                raise RuntimeError(
+                    "artifact preinstalled xiaoO digest does not match the "
+                    "xiaoO executable"
+                )
+            input_xiaoo_sha256 = _required_sha256(input_files, "xiaoo")
+            if preinstalled_xiaoo_sha256 != input_xiaoo_sha256:
+                raise RuntimeError(
+                    "artifact preinstalled xiaoO digest does not match the "
+                    "hashed xiaoO input"
+                )
+        if require_preinstalled_xiaoo and preinstalled_xiaoo_path is None:
+            raise RuntimeError(
+                "artifact manifest does not contain a preinstalled xiaoO "
+                "workload image"
+            )
+
+        return cls(
+            manifest=manifest,
+            cache_key=cache_key,
+            source_commit=source_commit,
+            backend=backend,
+            runtime=runtime,
+            egress_mode=egress_mode,
+            otel_export_enabled=otel_export_enabled,
+            sandbox_observer_enabled=sandbox_observer_enabled,
+            guest_bundle=guest_bundle,
+            host_bundle=host_bundle,
+            workload_bundle=workload_bundle,
+            base_image=base_image,
+            data_image=data_image,
+            base_config=base_config,
+            data_config=data_config,
+            workload_image=workload_image,
+            workload_image_archive=workload_image_archive,
+            workload_image_archive_sha256=workload_image_archive_sha256,
+            preinstalled_xiaoo_path=preinstalled_xiaoo_path,
+            preinstalled_xiaoo_sha256=preinstalled_xiaoo_sha256,
+            xiaoo=xiaoo,
+        )
+
+
+def verify_directory_manifest(directory: Path, manifest: Path) -> str:
+    try:
+        content = manifest.read_bytes()
+        lines = content.decode("utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        raise RuntimeError(
+            f"cannot read artifact manifest {manifest}: {error}"
+        ) from error
+    if not lines:
+        raise RuntimeError(f"artifact manifest is empty: {manifest}")
+    root = directory.resolve()
+    for line_number, line in enumerate(lines, start=1):
+        match = _MANIFEST_LINE.fullmatch(line)
+        if match is None:
+            raise RuntimeError(
+                f"invalid artifact manifest line {line_number}: {manifest}"
+            )
+        expected, raw_path = match.groups()
+        raw_path = raw_path.removeprefix("*")
+        relative = PurePosixPath(raw_path)
+        if relative.parts[:1] == (".",):
+            relative = PurePosixPath(*relative.parts[1:])
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise RuntimeError(
+                f"unsafe artifact path on line {line_number}: {raw_path}"
+            )
+        candidate = directory.joinpath(*relative.parts)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as error:
+            raise RuntimeError(
+                f"artifact listed by manifest is missing: {candidate}"
+            ) from error
+        if root != resolved and root not in resolved.parents:
+            raise RuntimeError(f"artifact path escapes bundle: {candidate}")
+        if not resolved.is_file():
+            raise RuntimeError(f"artifact path is not a file: {candidate}")
+        actual = sha256_file(resolved)
+        if actual.lower() != expected.lower():
+            raise RuntimeError(
+                f"artifact checksum mismatch: {candidate} "
+                f"expected={expected} actual={actual}"
+            )
+    return hashlib.sha256(content).hexdigest()
+
+
+def _read_json_object(path: Path, name: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"cannot read {name} {path}: {error}") from error
+    return _object(value, name)
+
+
+def _object(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{name} must be a JSON object")
+    return value
+
+
+def _required_object(document: dict[str, Any], name: str) -> dict[str, Any]:
+    if name not in document:
+        raise RuntimeError(f"artifact manifest is missing object: {name}")
+    return _object(document[name], name)
+
+
+def _required_string(document: dict[str, Any], name: str) -> str:
+    value = document.get(name)
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"artifact manifest field {name} must be a string")
+    return value
+
+
+def _required_sha256(document: dict[str, Any], name: str) -> str:
+    value = _required_string(document, name).lower()
+    if _SHA256.fullmatch(value) is None:
+        raise RuntimeError(
+            f"artifact manifest field {name} must be a SHA-256 digest"
+        )
+    return value
+
+
+def _artifact_path(root: Path, raw_path: str, *, kind: str) -> Path:
+    relative = PurePosixPath(raw_path)
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise RuntimeError(f"unsafe artifact path: {raw_path}")
+    candidate = root.joinpath(*relative.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(f"artifact path is missing: {candidate}") from error
+    if resolved != root and root not in resolved.parents:
+        raise RuntimeError(f"unsafe artifact path escapes digest directory: {raw_path}")
+    if kind == "file" and not resolved.is_file():
+        raise RuntimeError(f"artifact path is not a file: {resolved}")
+    if kind == "directory" and not resolved.is_dir():
+        raise RuntimeError(f"artifact path is not a directory: {resolved}")
+    return resolved
+
+
+def verify_file_digest(path: Path, expected: str, label: str) -> None:
+    if not path.is_file():
+        raise RuntimeError(f"{label} is missing: {path}")
+    actual = sha256_file(path)
+    if actual != expected:
+        raise RuntimeError(
+            f"{label} checksum mismatch: expected={expected} actual={actual}"
+        )
+
+
+def _verify_runtime_config_assets(
+    config: Path,
+    *,
+    backend: str,
+    profile: str,
+    expected_image: Path,
+    expected_hypervisor: Path,
+    expected_kernel: Path,
+    expected_virtiofsd: Path | None,
+    expected_jailer: Path | None,
+) -> None:
+    try:
+        settings = load_hypervisor_table(config, backend)
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(f"cannot read runtime config {config}: {error}") from error
+    image = _absolute_runtime_path(config, settings, "image")
+    if image != expected_image.resolve():
+        raise RuntimeError(
+            f"runtime config {config} does not reference its manifest image: "
+            f"configured={image} expected={expected_image}"
+        )
+    hypervisor = _absolute_runtime_path(config, settings, "path")
+    kernel = _absolute_runtime_path(config, settings, "kernel")
+    _verify_expected_runtime_path(config, "path", hypervisor, expected_hypervisor)
+    _verify_executable(hypervisor, "runtime hypervisor")
+    _verify_expected_runtime_path(
+        config,
+        f"{profile} kernel",
+        kernel,
+        expected_kernel,
+    )
+    if expected_virtiofsd is not None:
+        virtiofsd = _absolute_runtime_path(
+            config,
+            settings,
+            "virtio_fs_daemon",
+        )
+        _verify_expected_runtime_path(
+            config,
+            "virtio_fs_daemon",
+            virtiofsd,
+            expected_virtiofsd,
+        )
+        _verify_executable(virtiofsd, "runtime virtiofsd")
+    if expected_jailer is not None:
+        jailer = _absolute_runtime_path(config, settings, "jailer_path")
+        _verify_expected_runtime_path(
+            config,
+            "jailer_path",
+            jailer,
+            expected_jailer,
+        )
+        _verify_executable(jailer, "runtime Firecracker jailer")
+        valid_jailer_paths = _absolute_runtime_path_list(
+            config,
+            settings,
+            "valid_jailer_paths",
+        )
+        if valid_jailer_paths != [expected_jailer.resolve()]:
+            raise RuntimeError(
+                f"runtime config {config} does not restrict valid_jailer_paths "
+                "to its manifest jailer: "
+                f"configured={valid_jailer_paths} "
+                f"expected={[expected_jailer.resolve()]}"
+            )
+
+
+def _verified_external_input(
+    input_files: dict[str, Any],
+    input_paths: dict[str, Any],
+    name: str,
+) -> Path:
+    expected = _required_sha256(input_files, name)
+    path = Path(_required_string(input_paths, name)).expanduser()
+    if not path.is_absolute():
+        raise RuntimeError(f"artifact input path must be absolute: {name}={path}")
+    verify_file_digest(path, expected, f"runtime input {name}")
+    return path.resolve()
+
+
+def _verify_expected_runtime_path(
+    config: Path,
+    name: str,
+    configured: Path,
+    expected: Path,
+) -> None:
+    if configured != expected:
+        raise RuntimeError(
+            f"runtime config {config} does not reference manifest input {name}: "
+            f"configured={configured} expected={expected}"
+        )
+
+
+def _absolute_runtime_path(
+    config: Path,
+    settings: dict[str, Any],
+    name: str,
+) -> Path:
+    raw_path = settings.get(name)
+    if not isinstance(raw_path, str) or not raw_path:
+        raise RuntimeError(
+            f"runtime config does not define {name} in its hypervisor section: "
+            f"{config}"
+        )
+    path = Path(raw_path)
+    if not path.is_absolute():
+        raise RuntimeError(
+            f"runtime config {config} defines a non-absolute {name}: {raw_path}"
+        )
+    return path.resolve(strict=False)
+
+
+def _absolute_runtime_path_list(
+    config: Path,
+    settings: dict[str, Any],
+    name: str,
+) -> list[Path]:
+    raw_paths = settings.get(name)
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise RuntimeError(
+            f"runtime config does not define a non-empty {name} list in its "
+            f"hypervisor section: {config}"
+        )
+    paths: list[Path] = []
+    for raw_path in raw_paths:
+        if not isinstance(raw_path, str) or not raw_path:
+            raise RuntimeError(
+                f"runtime config {config} defines an invalid {name} entry: "
+                f"{raw_path!r}"
+            )
+        path = Path(raw_path)
+        if not path.is_absolute():
+            raise RuntimeError(
+                f"runtime config {config} defines a non-absolute {name} entry: "
+                f"{raw_path}"
+            )
+        paths.append(path.resolve(strict=False))
+    return paths
+
+
+def _verify_executable(path: Path, label: str) -> None:
+    if not path.stat().st_mode & 0o111:
+        raise RuntimeError(f"{label} is not executable: {path}")

@@ -1,5 +1,6 @@
 //! Semantic action builders shared by live projectors.
 
+use model_core::agent_type::AgentType;
 use model_core::event::{DomainEvent, EventPayload};
 use model_core::ids::TraceId;
 use model_core::process::ProcessIdentity;
@@ -157,6 +158,17 @@ pub(super) fn agent_identity_action(
             attrs::process::EXECUTABLE.to_string(),
             executable.to_string(),
         );
+        // The executable is the observation, the product is the conclusion
+        // drawn from it. Export both, and name which one the product came
+        // from, so a consumer can tell a product match from a fallback
+        // instead of re-deriving the product from the path itself.
+        if let Some(agent_type) = AgentType::from_executable(executable) {
+            attributes.insert(attrs::agent::TYPE.to_string(), agent_type.name);
+            attributes.insert(
+                attrs::agent::TYPE_SOURCE.to_string(),
+                agent_type.source.as_str().to_string(),
+            );
+        }
     }
     let evidence = request
         .evidence

@@ -8,9 +8,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from tests.v2.common.kata_runtime import runtime_path, sha256_file
-
+from .checksums import sha256_file
 from .model import RELEASE_FILES, PreparationInputs
+from .runtime_config import runtime_path
 
 
 def build_input_document(inputs: PreparationInputs) -> dict[str, Any]:
@@ -49,6 +49,7 @@ def build_input_document(inputs: PreparationInputs) -> dict[str, Any]:
         "runtime": inputs.runtime,
         "otel_endpoint": inputs.otel_endpoint,
         "egress_mode": inputs.egress_mode,
+        "otel_attribute_mode": inputs.otel_attribute_mode,
         "socket_gid": inputs.socket_gid,
         "data_vcpus": inputs.data_vcpus,
         "sandbox_observer": inputs.sandbox_observer,
@@ -78,36 +79,48 @@ def infer_runtime_path(config: Path, backend: str, key: str) -> Path:
         raise ValueError(f"cannot read runtime config {config}: {error}") from error
 
 
+# Files whose content ends up in an artifact: the guest, host and workload
+# bundles, the files injected into the Guest images, the Kata configs and the
+# manifest/profile writers. Documentation and the builders of the separately
+# supplied source Guest image and workload image are not artifact inputs.
+_TOOL_INPUT_ROOTS = (
+    "deploy/virtual-container/guest",
+    "deploy/virtual-container/workload",
+    "deploy/virtual-container/vsock-egress/guest-bridge.sh",
+    "deploy/virtual-container/vsock-egress/systemd/actrail-vsock-guest-bridge.service",
+    "deploy/virtual-container/host/argparse_types.py",
+    "deploy/virtual-container/host/prepare-kata-config.py",
+    "deploy/virtual-container/host/prepare-artifacts.py",
+    "deploy/virtual-container/host/v2_artifacts.py",
+    "deploy/virtual-container/host/v2_artifacts_support",
+    "examples/plugins/builtin/otel-http",
+    "examples/plugins/builtin/sandbox-resource-alert",
+)
+_NOT_TOOL_INPUTS = frozenset(
+    {
+        "deploy/virtual-container/guest/build-openeuler-image.sh",
+        "deploy/virtual-container/workload/Containerfile.openEuler",
+    }
+)
+
+
 def default_tool_inputs(repo: Path) -> tuple[Path, ...]:
-    roots = (
-        repo / "deploy/virtual-container/guest",
-        repo / "deploy/virtual-container/workload",
-        repo / "deploy/virtual-container/host/argparse_types.py",
-        repo / "deploy/virtual-container/host/prepare-stratovirt-config.py",
-        repo / "deploy/virtual-container/host/prepare-v2-test-artifacts.py",
-        repo / "deploy/virtual-container/host/v2_artifacts.py",
-        repo / "deploy/virtual-container/host/v2_artifacts_support",
-        repo / "tests/v2/common/kata_runtime/image.py",
-        repo
-        / "tests/v2/regression/virtual_container/prepare-guest-bundle.sh",
-        repo / "tests/v2/regression/virtual_container/guest",
-        repo / "tests/v2/common/execution_isolation/kata",
-        repo / "tests/v2/regression/execution_isolation_cloud_hypervisor",
-        repo / "tests/v2/regression/execution_isolation_firecracker",
-        repo / "tests/v2/regression/execution_isolation_stratovirt",
-    )
     files: list[Path] = []
-    for root in roots:
+    for relative in _TOOL_INPUT_ROOTS:
+        root = repo / relative
         if root.is_file():
-            files.append(root)
+            candidates = [root]
         elif root.is_dir():
-            files.extend(
-                path
-                for path in root.rglob("*")
-                if path.is_file()
-                and "__pycache__" not in path.parts
-                and path.suffix != ".pyc"
-            )
+            candidates = [path for path in root.rglob("*") if path.is_file()]
+        else:
+            continue
+        files.extend(
+            path
+            for path in candidates
+            if path.suffix not in {".md", ".pyc"}
+            and "__pycache__" not in path.parts
+            and path.relative_to(repo).as_posix() not in _NOT_TOOL_INPUTS
+        )
     return tuple(files)
 
 

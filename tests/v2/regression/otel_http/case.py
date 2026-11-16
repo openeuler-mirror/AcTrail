@@ -34,6 +34,8 @@ class OtelHttpCase(TestCase):
         "agent.identity.status",
         "agent.identity.source",
         "agent.identity.evidence_action_id",
+        "actrail.agent.type",
+        "actrail.agent.type.source",
         "llm.request.trajectory_id",
         "llm.request.trajectory_inference_version",
     }
@@ -136,7 +138,8 @@ class OtelHttpCase(TestCase):
             )
             results["agent-identity-correlation"] = TestResult(
                 TestStatus.PASSED,
-                f"agent.identity binds {identity_binary} to OTLP traceId",
+                f"agent.identity binds {identity_binary} and its resolved "
+                "agent type to OTLP traceId",
             )
 
             self._environment.configure_buffered_export(
@@ -319,7 +322,23 @@ class OtelHttpCase(TestCase):
             )
         if not self._attribute(identity, "actrail.process.id"):
             raise AssertionError("agent.identity has no process identity")
+        self._require_agent_type(identity, agent_binary)
         return executable
+
+    def _require_agent_type(self, identity: dict[str, Any], agent_binary: Path) -> None:
+        """The span must name the agent product, not only the binary it ran."""
+        agent_type = self._attribute(identity, "actrail.agent.type")
+        if agent_type != agent_binary.name:
+            raise AssertionError(
+                f"agent.identity resolved agent type {agent_type!r}, "
+                f"expected {agent_binary.name!r}"
+            )
+        source = self._attribute(identity, "actrail.agent.type.source")
+        if source != "known_product":
+            raise AssertionError(
+                f"agent type of a known product resolved from {source!r}, "
+                "expected 'known_product'"
+            )
 
     def _wait_for_terminal_trace(self, trace_id: int) -> None:
         last_state = "<missing>"

@@ -43,7 +43,7 @@ assert_file_not_contains() {
 }
 
 mkdir -- "$TEST_BIN"
-ln -s -- "$POC_DIR/fake-socat.py" "$TEST_BIN/socat"
+ln -s -- "$ROOT_DIR/tests/v2/regression/virtual_container/fake-socat.py" "$TEST_BIN/socat"
 export PATH="$TEST_BIN:/usr/bin:/bin"
 export FAKE_SOCAT_ARGS_LOG="$ARGS_LOG"
 

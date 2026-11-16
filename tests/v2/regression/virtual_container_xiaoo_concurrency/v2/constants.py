@@ -14,11 +14,7 @@ class VirtualContainerXiaooConcurrencyConstants:
     settle_seconds: int = 5
     workload_uid: int = 1000
     workload_gid: int = 39000
-    image: str = 'docker.io/library/actrail-openeuler-workload:24.09'
-    bind_host: str = '127.0.0.1'
-    allow_port: int = 443
-    proxy_relay_join_timeout_seconds: int = 1
-    proxy_connect_timeout_seconds: int = 15
+    image: str = 'docker.io/library/actrail-openeuler-workload:24.03'
     start_opencode_egress_poll_seconds: float = 0.2
     validate_trace_poll_seconds: float = 0.5
     wait_for_paths_poll_seconds: float = 0.05
@@ -34,8 +30,6 @@ class VirtualContainerXiaooConcurrencyConstants:
     dual_vm_instances: tuple[str, ...] = ("a", "b")
     opencode_guest_proxy_port: int = 14080
     opencode_vsock_port: int = 43181
-    proxy_max_header_bytes: int = 16 * 1024
-    proxy_receive_bytes: int = 65536
     vm_hold_seconds: int = 600
     guest_ready_attempts: int = 180
     guest_ready_poll_seconds: float = 0.5

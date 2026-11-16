@@ -1,5 +1,16 @@
 """Shared lifecycle support for Kata-based V2 regression cases."""
 
+import sys
+from pathlib import Path
+
+# The artifact format and the Kata config readers belong to the deployment
+# tools; the regression runner imports them from there.
+_DEPLOY_HOST_TOOLS = str(
+    Path(__file__).resolve().parents[4] / "deploy/virtual-container/host"
+)
+if _DEPLOY_HOST_TOOLS not in sys.path:
+    sys.path.append(_DEPLOY_HOST_TOOLS)
+
 from .artifacts import (
     CompositeArtifactRequirement,
     DeploymentArtifacts,

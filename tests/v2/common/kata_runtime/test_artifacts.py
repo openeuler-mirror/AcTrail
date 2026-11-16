@@ -71,7 +71,7 @@ class DeploymentArtifactsTest(unittest.TestCase):
 
         self.assertEqual(resolved.manifest, manifest.resolve())
         self.assertEqual(resolved.backend, "stratovirt")
-        self.assertEqual(resolved.workload_image, "example.test/workload:24.09")
+        self.assertEqual(resolved.workload_image, "example.test/workload:24.03")
         self.assertEqual(resolved.xiaoo, (manifest.parent / "xiaoo").resolve())
 
     def test_loads_matching_cloud_hypervisor_artifact(self) -> None:
@@ -642,7 +642,7 @@ def _deployment_fixture(
             "configuration-base.toml": _sha256(base_config),
             "configuration-data.toml": _sha256(data_config),
         },
-        "workload_image": {"reference": "example.test/workload:24.09"},
+        "workload_image": {"reference": "example.test/workload:24.03"},
         "inputs": {
             "format": 1,
             "files": {

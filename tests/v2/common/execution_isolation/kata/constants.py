@@ -16,7 +16,7 @@ class ExecutionIsolationConstants:
     root_discovery_settle_seconds: int = 3
     workload_uid: int = 1000
     workload_gid: int = 39000
-    image: str = 'docker.io/library/actrail-openeuler-workload:24.09'
+    image: str = 'docker.io/library/actrail-openeuler-workload:24.03'
     complete_workload_terminate_grace_seconds: int = 5
     stop_processes_grace_seconds: int = 3
     start_vm_gateway_and_connect_grace_seconds: int = 3

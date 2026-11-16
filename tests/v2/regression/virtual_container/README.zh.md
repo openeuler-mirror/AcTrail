@@ -1,6 +1,6 @@
-# 虚拟容器回归测试
+# 虚机容器回归测试
 
-本功能验证 AcTrail 在 Kata 虚拟容器中的两条关键链路：
+本功能验证 AcTrail 在 Kata 虚机容器中的两条关键链路：
 
 - guest-root `actraild` 与非 root openEuler workload 的接口、权限和身份边界；
 - guest 内 TLS 明文与 eBPF 数据的采集、落库和 viewer 查询。
@@ -32,7 +32,7 @@ contracts 通过后确认 `/dev/kvm` 或 Kata backend 外部能力不可用时�
 然后继续完整 Kata runtime 验收。可显式设置 scope 为 `contracts` 或 `all` 覆盖自动选择。
 
 首次部署必须先把目标分支拉到最终 checkout，并在该 checkout 中完成 release 构建和
-`prepare-v2-test-artifacts.py`。`local/kata/` 是 Git 忽略的 checkout-local 资产；
+`prepare-artifacts.py`。`local/kata/` 是 Git 忽略的 checkout-local 资产；
 新 worktree 不会继承旧目录的 profile、manifest 或 bundle，也不应复制旧 profile 来
 绕过准备。完整首次部署命令见
 [`deploy/virtual-container/README.md`](../../../../deploy/virtual-container/README.md)。

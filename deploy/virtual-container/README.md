@@ -1,6 +1,8 @@
-# AcTrail 虚拟容器(Kata)支持范围与部署说明
+# AcTrail 虚机容器（Kata）开发与回归参考
 
-虚拟容器(Kata Containers)的 sandbox 是一台带独立内核的轻量 VM:宿主 eBPF
+> 部署或测试人员请直接按 [虚机容器部署](../../docs/operations/deployment/virtual-container.md) 操作（StratoVirt 或 Cloud Hypervisor）。本页面向开发者，说明支持范围、V2 回归环境准备、架构层级和已知限制。
+
+虚机容器(Kata Containers)的 sandbox 是一台带独立内核的轻量 VM:宿主 eBPF
 探不进 guest,观测必须发生在 guest 内部。目标部署形态是 **guest 内以系统服务
 运行 actraild + workload 容器接入 actrailctl/TLS probe**。默认数据写入 Guest 本地
 SQLite，可通过随 V2 镜像安装的 `actrailviewer` 调试；需要跨 sandbox 保留或集中观测时，
@@ -18,84 +20,44 @@ SQLite，可通过随 V2 镜像安装的 `actrailviewer` 调试；需要跨 sand
 `http://192.0.2.10:4318/v1/traces`。Guest 内的 `127.0.0.1` 指向 Guest 自己，不是
 宿主机；`network` 模式会拒绝 loopback、`0.0.0.0`、占位符、query/fragment 和非
 `/v1/traces` 路径。`vsock-bridge` 必须与 `--otel-endpoint` 一起使用。
+`--otel-attribute-mode` 选择写入 Guest 的 otel-http `attribute_mode`：默认
+`metadata-only`；`full` 还会外送命令行、模型名、token 数和消息预览等属性，必须与
+`--otel-endpoint` 一起使用，并参与部署包摘要。
+
+`--collector-traces-file`、`--cni-config` 只写进 V2 回归 profile，不参与部署包摘要：
+前者让回归断言本次运行的 span 到达 Host Collector，后者让 `network` 模式的回归 VM
+经 `host/cni-netns.sh` 获得网卡。两者都要求 `--otel-endpoint`。
 
 仓库的 [`host-collector/`](host-collector) 提供受控开发/验收环境使用的主机侧
 Collector。其 `OTELCOL_OTLP_HTTP_ENDPOINT` 是主机监听地址，而传入 Guest 的 URL
 必须使用 Guest 实际可达的主机地址。明文 HTTP 只适合隔离测试网络，生产环境仍需
 HTTPS/mTLS、认证、证书轮换和持久化后端。
 
-## 测试资产的一键准备与运行
+## V2 回归测试环境准备
 
-### openEuler + VSOCK 一键入口
+### 部署与部署包缓存
 
-目标 openEuler Host 已安装匹配架构的 Kata 3.32、containerd，并准备好 clean Guest
-源镜像、带 BTF/eBPF 的**可引导** data kernel 和 xiaoO 后，可从最终 checkout 用一个
-入口完成宿主依赖、release、workload 镜像、VSOCK bridge、内容寻址 artifact、Profile
-和可选验收：
-
-```bash
-sudo -E deploy/virtual-container/host/deploy-openeuler-vsock.sh \
-  --base-image-source /path/to/openeuler-24.03-kata.image \
-  --data-kernel /path/to/bootable-btf-vmlinuz \
-  --xiaoo /path/to/xiaoo \
-  --run-tests
-```
-
-`--data-kernel` 必须是 VMM 可直接引导的 kernel（x86 上通常是 `bzImage`/`vmlinuz`），
-不能把仅供调试符号/BTF 分析的未压缩 `vmlinux` 当作启动内核。用 `file` 应能看到
-`Linux kernel ... boot executable bzImage`；V2 仍会在 Guest 启动后验证实际 eBPF/BTF
-能力。
-
-这里的“一键”是**从已冻结的基础资产开始，自动构建并植入 AcTrail**，不是从空白
-openEuler 主机联网下载所有架构资产：
-
-| 项目 | 脚本是否自动处理 | 版本/来源要求 |
-|---|---|---|
-| AcTrail Guest 内容 | 是 | 从当前 checkout 构建 release；复制 clean Guest 源镜像后，自动植入 `actraild`、`actrailctl`、`actrailviewer`、TLS probe、配置、systemd unit、OTEL plugin 和所选 VSOCK/network 出境配置 |
-| 产物 Guest 镜像 | 是 | 分别生成内容寻址的 `guest-base.img` 和 `guest-data.img`；`--base-image-source`/`--data-image-source` 原文件只读，绝不原地修改 |
-| workload 容器镜像 | 是 | 默认以 `openEuler 24.03 LTS` 构建并导入 containerd；联网环境可拉取基础镜像，离线环境须预先导入基础镜像或用 `--workload-base-image` 指向内网仓库 |
-| Kata、VMM 及其配置 | 否 | 须线下安装与宿主 CPU 架构一致的 Kata **3.32.0** 组合；脚本会校验 `/opt/kata/VERSION`、shim、runtime 和所选 backend 配置，但不会替换它们 |
-| clean Guest 源镜像 | 否 | 须线下提供与 CPU 架构、Kata agent/runtime 及目标 openEuler 版本匹配的可引导镜像；镜像内还须有 systemd、kata-agent，VSOCK 模式须有 `socat` |
-| data kernel | 否 | 须线下提供同架构、VMM 可引导且具备目标 BTF/eBPF 能力的 kernel；不能只按文件名推断兼容性 |
-| xiaoO | 否 | 仅 `--run-tests` 的双 Agent 并发用例必需，须提供同架构可执行文件；不跑测试时可省略 |
-| Host Collector | 否 | VSOCK bridge 只负责转发，正式外送前仍须单独启动与协议匹配的 Collector |
-
-因此离线交付时应先按一个明确组合冻结并校验 `宿主 OS + CPU 架构 + Kata/VMM +
-Guest OS 镜像 + Guest kernel + xiaoO（若验收）`，再运行本脚本。不能把 x86_64 的
-Guest/kernel/xiaoO 给 ARM64 使用，也不能因为都叫 openEuler 24.03 就默认其
-Kata agent、glibc、内核能力一定兼容。脚本会检查能机械判断的版本、架构与 ELF/Guest
-安装条件，最终兼容性由 `--run-tests` 的 Guest 启动和 V2 数据面验收确认。
+宿主依赖、Kata、openEuler Guest 镜像、workload 镜像、部署包和 Collector 按
+[虚机容器部署](../../docs/operations/deployment/virtual-container.md) 准备；回归环境在此基础上按下文执行。
 
 缓存键包含当前 AcTrail release/bundle、源 Guest 镜像、kernel、Kata 配置、backend、
-OTEL/VSOCK 选择及相关注入工具的摘要；其中任一项改变都会生成新的 artifact，而不会
+OTEL/VSOCK 选择、属性模式及相关注入工具的摘要；其中任一项改变都会生成新的 artifact，而不会
 继续复用旧植入镜像。workload 镜像缓存单独由 containerd/podman 和 OCI archive 管理。
 
-脚本默认选择 StratoVirt、openEuler 24.03 workload 和
-`http://127.0.0.1:14318/v1/traces` VSOCK 出境。它会：
+prepare 会先校验匹配的 artifact：有效就复用，缺失或无效就重新制作并替换同一摘要目录。
+替换失败会恢复原目录；正在被进程使用或无法确认使用状态的目标不会强行覆盖。
+不指定 `--activate` 时（回归入口的默认方式）只维护本次产物，不删除其他历史目录。
+指定 `--activate` 时（部署文档使用），在本次产物与 workload 就绪后
+更新 `local/kata/current/<backend>-<network|vsock>` 链接，清理未使用的旧产物，保留所有当前链接、
+输入源文件、`local/kata/v2-test-profile*.json` 及运行进程引用的产物；使用状态无法确认时保留并记录原因。
+此时默认不写 `local/kata/v2-test-profile.json`，需要时显式传 `--write-profile`，
+因此部署不会改掉回归使用的 profile。
 
-- 用 `dnf` 幂等安装 `podman`/`socat`，启动 containerd，发布不覆盖 `/usr/bin` 的
-  `containerd-shim-kata332-v2` runtime alias；
-- 安装并启动对应 VMM 的 Host VSOCK bridge；
-- 按本页规定运行 `scripts/install-release.sh`；
-- 首次构建 openEuler workload OCI archive，后续优先复用 containerd/podman 镜像；
-- 调用标准 preparer 生成或命中 `local/kata/artifacts/<digest>`，写入本 checkout 的
-  `local/kata/v2-test-profile.json`；
-- 仅在传入 `--run-tests` 时执行两项公共 V2 用例，测试 sandbox 结束后仍会清理，
-  不把运行中的 VM/container 当缓存。
+base 与 data 的源镜像相同（内容摘要一致）时只注入一张 `guest.img`，两份 runtime config
+共用它；Guest 以只读方式挂载 rootfs。源镜像不同时分别生成 `guest-base.img` 和
+`guest-data.img`。
 
-输入未变时，输出会显示 `workload_image_cache=hit`、
-`workload_archive_cache=hit` 或 `artifact_cache=hit`。传
-`--rebuild-workload` 才强制重建 workload；传 `--skip-workload-build` 则要求镜像已在
-containerd。可先追加 `--dry-run` 检查所有将执行的命令。
-
-该入口不下载架构绑定的 Kata/Guest/kernel/xiaoO 资产，也不生成签名发布镜像或
-Kubernetes RuntimeClass。VSOCK Host bridge 的目的端仍是 Host
-`127.0.0.1:4318`；正式运行前需按
-[`host-collector/README.md`](host-collector/README.md) 启动 Collector，否则 Guest
-exporter 会按既有策略重试。Cloud Hypervisor 使用 `--backend cloud-hypervisor`；
-网络出境使用 `--egress-mode network --otel-endpoint <Guest 可达 URL>`。
-
-### 首次部署：先固定最终 checkout
+### 回归环境：先固定最终 checkout
 
 先把要验收的代码拉到最终部署目录，并从该目录完成后续所有命令：
 
@@ -135,59 +97,33 @@ StratoVirt 使用默认 backend：
 
 ```bash
 sudo -E env "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --base-config-source /path/to/configuration-base-source.toml \
     --data-config-source /path/to/configuration-data-source.toml \
+    --base-image-source /path/to/openeuler-24.03-guest.image \
+    --data-image-source /path/to/openeuler-24.03-guest.image \
     --xiaoo /path/to/xiaoo
 ```
 
 Cloud Hypervisor 使用 Kata 3.32 的 `configuration-clh.toml`，并为 data Profile
-提供带 BTF/eBPF 的 guest kernel。准备器会为三种 backend 的复制后 guest image 和
-ext4 rootfs 扩展 128 MiB，为 AcTrail bundle 与运行数据保留空间，不修改 source image：
+提供带 BTF/eBPF 的 guest kernel。准备器会为复制后的 guest image 和 ext4 rootfs
+扩展 128 MiB，为 AcTrail bundle 与运行数据保留空间，不修改 source image：
 
 ```bash
 sudo -E env "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --backend cloud-hypervisor \
     --base-config-source /path/to/configuration-clh.toml \
     --data-config-source /path/to/configuration-clh.toml \
+    --base-image-source /path/to/openeuler-24.03-guest.image \
+    --data-image-source /path/to/openeuler-24.03-guest.image \
     --data-kernel /path/to/vmlinux-debug.container \
     --xiaoo /path/to/xiaoo
 ```
 
-Firecracker 不提供 Kata virtiofs 共享目录，因此准备阶段必须提供 containerd
-`ctr images export` 生成的单平台 combined Docker/OCI archive。该 archive 必须保留
-`manifest.json`（不要使用 `--skip-manifest-json`）、content-addressed `LayerSources`，且
-layer 必须是未压缩 OCI tar；旧式 `<layer-id>/layer.tar` 的 `docker save` archive 不在
-当前支持范围内。例如先从 containerd 导出当前宿主平台的基础 workload image：
-
-```bash
-sudo ctr -n default images export \
-  --platform "linux/$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')" \
-  /absolute/path/to/workload.docker.tar \
-  docker.io/library/actrail-openeuler-workload:24.09
-```
-
-准备器会校验基础镜像引用、平台和 layer/diffID，再追加一个固定哈希的 `xiaoo` layer，
-并生成只供该 artifact 使用的新 image reference。运行时只通过 `ctr exec` 传输小型脚本
-与配置，不再传输整个 xiaoO 二进制：
-
-```bash
-sudo -E env "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
-    --backend firecracker \
-    --data-kernel /path/to/vmlinux-debug.container \
-    --with-sandbox-observer \
-    --xiaoo /path/to/xiaoo \
-    --workload-image-archive /path/to/workload.docker.tar
-```
-
-这里的 devmapper 是当前 Kata 3.32 Firecracker 路径用来把 workload rootfs 提供为块设备
-的 containerd snapshotter，不是 Firecracker VMM 本身的硬性依赖。当前配置没有
-virtiofs，所以不能直接换成 overlayfs；Cloud Hypervisor 与 StratoVirt 则通过 virtiofs
-共享 workload 文件。
-
-将 `/path/to/...` 替换为当前机器上的实际绝对路径。
+将 `/path/to/...` 替换为当前机器上的实际绝对路径。`--base-image-source` 和
+`--data-image-source` 必须提供，传 `guest/build-openeuler-image.sh` 构建的 openEuler
+Guest 镜像（见部署文档 3.5）；prepare 不会从 Kata 配置推断镜像。
 
 上面的命令默认生成本地 SQLite/Viewer 调试镜像，不需要 Collector。若要实时外送，
 追加 `--otel-endpoint "$GUEST_OTEL_ENDPOINT"`。endpoint 必须与 Guest 出境模式匹配：
@@ -213,8 +149,9 @@ root 权限完成 loop mount 和 containerd 操作；发布完成后会依据 `S
 部署用户。因此无论 checkout 位于哪个目录，这些 checkout-local 文件都应属于发起
 `sudo` 的部署用户。
 
-输入摘要不变时直接命中缓存。release、bundle 或 config 发生错配时，V2 会在启动 VM
-前失败，不会等到 socket/pidfd 阶段才暴露旧镜像问题。运行两个完整用例：
+输入摘要不变且产物有效时命中缓存；再次 prepare 会自动重建缺失或校验失败的产物。
+直接运行 V2 时，release、bundle 或 config 的错配仍会在启动 VM 前失败，测试加载器
+不会隐式重建。运行两个完整用例：
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh --color never
@@ -225,7 +162,7 @@ guest 制作和 workload image 构建仍分别由本目录对应工具负责。
 
 ## 部署形态与层级
 
-普通 VM 与 Kata 虚拟容器共享同一套 **guest 内采集数据面**,但不是同一个产品
+普通 VM 与 Kata 虚机容器共享同一套 **guest 内采集数据面**,但不是同一个产品
 部署形态。Kata 在实现上包含一台轻量 VM,在控制面上再叠加 containerd/CRI、
 shim-v2、kata-agent 和容器镜像语义;它不会自动覆盖普通 VM 的 systemd 安装、
 云平台生命周期、持久磁盘和实例身份等运维契约。
@@ -245,7 +182,7 @@ L0  虚拟化基础设施     KVM + StratoVirt/Cloud Hypervisor + guest kernel/v
 这里的 `L0-L3` 是架构层,不是支持成熟度等级。L2A、L2B、L2C 是并行部署适配分支,
 不是从普通容器逐级升级到 Kata:
 
-| 维度 | 普通 VM(L2B) | Kata 虚拟容器(L2C) |
+| 维度 | 普通 VM(L2B) | Kata 虚机容器(L2C) |
 |---|---|---|
 | 对外管理单位 | 长生命周期 VM | Pod/container sandbox |
 | 控制入口 | 云平台/libvirt/直接 VMM + SSH/systemd | Kubernetes/CRI/containerd + Kata |
@@ -273,24 +210,15 @@ systemd、内核能力、OTEL 和 shutdown flush。只有需要对外承诺“Ac
 
 ## OS 与架构适配矩阵
 
-宿主 OS、guest OS、CPU 架构和 runtime/VMM 是四个独立维度。宿主 OS 通过不代表
-同系列 guest 已支持,同一 VMM 在 x86_64 通过也不代表 aarch64 通过。
-仓库归档的既有验证记录覆盖 openEuler x86_64 和 ARM64 的 host、guest rootfs
-image、containerd/ctr、Kata 3.32 与 StratoVirt 组合。相应历史运行覆盖了二进制
-兼容性、guest 服务生命周期、workload 访问与身份以及 TLS/eBPF 数据采集。签名镜像、
+宿主 OS、guest OS、CPU 架构和 runtime/VMM 是四个独立维度。当前目标是宿主机、
+Guest 和 workload 均为 openEuler 24.03，CPU 架构为 x86_64 和 aarch64，runtime 为
+Kata 3.32.0，VMM 为 StratoVirt 2.4.0 和 Kata 自带的 Cloud Hypervisor。宿主 OS 通过
+不代表其他 guest 已支持，同一 VMM 在 x86_64 通过也不代表 aarch64 通过。签名镜像、
 打包交付、升级回滚、Kubernetes RuntimeClass 和生产生命周期故障矩阵仍未完成。
-
-| OS/guest 组合 | 已归档验证范围（非当前提交证据） | 仍需补齐 |
-|---|---|---|
-| Ubuntu | x86_64 Ubuntu 宿主 + Ubuntu guest 的 StratoVirt/Cloud Hypervisor 数据能力 e2e；候选 rootfs image 的 guest-root daemon/workload 接口双 VMM 验证 | aarch64、正式 guest image 与生命周期 |
-| openEuler | x86_64 24.03 host/guest；ARM64 24.09 host + 24.03 guest 已分别用 24.09 workload/StratoVirt 和 24.03 workload/VSOCK bridge 双 VMM 完成接口及 TLS/eBPF/network 数据矩阵 | 签名镜像、打包交付、升级/回滚、生产 Collector 互操作与 Kubernetes 生命周期矩阵 |
 
 每个环境组合都要分别检查 ABI/动态库、guest 内核 BTF/tracefs/BPF、服务启动、
 workload 接口、eBPF/TLS 数据以及 shutdown/异常退出生命周期。系统差异只放在部署
 脚本和配置中，不分叉共享采集核心。
-
-ARM64 Kata 的声明仅限下方实测的 openEuler/Kata/StratoVirt 精确组合，不能由普通
-容器证据或 x86_64 结果外推到其他 VMM、发行版和版本。
 
 ## 能力状态
 
@@ -332,25 +260,18 @@ root host PID 读取根 workload cgroup，得到 `container.id` 和可选
 只输出实际存在的 resource 属性。这个数据归属底座不等于完整 Kubernetes 支持：
 真实 CRI/K8s e2e、runtime metadata 注入和多容器 Pod 逐容器归属仍未完成。
 
-## 历史验证范围与当前分支要求
-
-| 环境组合 | 历史验证范围 |
-|---|---|
-| Ubuntu x86_64 host + Ubuntu guest，StratoVirt / Cloud Hypervisor | Kata 启动、TLS/eBPF 单项与组合采集、guest-root 服务、非 root workload 接口、权限和身份 |
-| openEuler 24.03 LTS-SP1 x86_64 host + openEuler 24.03 guest，containerd 2.3.3、Kata 3.32.0、StratoVirt 2.4.0 | 二进制和动态库兼容、rootfs 构建与注入、服务启停、workload 接口与身份、无 BTF 降级、BTF 内核 TLS/eBPF 采集 |
-| openEuler 24.09 ARM64 host/cgroup v1 + openEuler 24.03 guest + openEuler 24.09 workload，containerd 1.6.22、Kata 3.32.0、StratoVirt 2.4.0 | preflight；verify/deny/launch/namespace；TLS-only、eBPF-only、combo；非 root GID 39000、root PID namespace 查询、双向 TLS 明文和非零 eBPF 事件；两台独立 Kata VM 各运行一个 xiaoO 的并发、trace 与生命周期隔离 |
-| openEuler 24.09 ARM64 host/cgroup v1 + openEuler 24.03 guest/workload，containerd 1.6.22、Kata 3.32.0、StratoVirt 2.4.0 / Cloud Hypervisor 51.1 | 无 CNI 下经 VSOCK 到 Host loopback Collector；双 VMM 分别通过 verify/deny/launch/namespace、TLS-only、eBPF-only、combo，并在 sandbox 清理后无本轮 shim/VMM/bridge 泄漏 |
+## 验收要求
 
 V2 case 通过公共 Python Kata 生命周期管理器验证接口、TLS/eBPF 和双 VM xiaoO；
-低层 Shell 仅保留部署契约与 guest fixture。完整转测入口和手动步骤见
+低层 Shell 仅保留部署契约。完整转测入口和手动步骤见
 [`../../tests/v2/regression/virtual_container/README.zh.md`](../../tests/v2/regression/virtual_container/README.zh.md)。
 openEuler guest 的制作和复测步骤见
 [`guest/OPENEULER.md`](guest/OPENEULER.md)，workload 接口命令见
 [`workload/README.md`](workload/README.md)。
 
-本表整理既有部署验证范围，不作为当前提交的完成证据，也不自动扩展到其他发行版、
-版本或架构。当前分支只有在运行记录同时包含提交号、冻结版本、VM 数、耗时、第二次
-缓存命中以及 task/container/shim/VMM 无泄漏结果时，才可重新声明“已验收”。
+验收结论不自动扩展到其他发行版、版本或架构。当前分支只有在运行记录同时包含提交号、
+冻结版本、VM 数、耗时、第二次缓存命中以及 task/container/shim/VMM 无泄漏结果时，
+才可声明“已验收”。
 
 ## 已知限制
 
@@ -385,8 +306,8 @@ openEuler guest 的制作和复测步骤见
 - **新拓扑的本地数据检查已完成**：guest-root 测试已自动断言 BTF/eBPF
   启用、非零事件和 TLS payload 内容，namespace fixture 已比较 daemon 返回的 root
   PID namespace 与 workload 的 `/proc/self/ns/pid`。
-  尚未完成的是 `container.id` 的 OTLP Collector 端断言、异常 sandbox shutdown
-  flush 和 Cloud Hypervisor 上的 openEuler guest 交叉复验。
+  尚未完成的是 `container.id` 的 OTLP Collector 端断言和异常 sandbox shutdown
+  flush。
 - **采集与权限**：Guest 使用默认 eBPF 采集，关闭 enforcement。workload launcher
   显式选择 `--seccomp-notify disabled`。启用 AcTrail seccomp user-notify 需验证
   对应 Kata/runtime 版本的兼容性和进程退出行为。
@@ -413,38 +334,42 @@ guest/operator.conf     Guest 部署设置，安装时由 actrailctl init 与产
 guest/otel-http-startup.toml 仅在传入 endpoint 时追加的 otel-http 启动片段。
 guest/actraild.service  guest-root systemd unit 模板(候选 rootfs image 已真实启动验收)
 guest/systemd/required/...  required 启动依赖:kata-agent 强依赖 actraild ready。
+                        prepare-artifacts.py 不使用，只能直接调用 inject-image.sh 选择。
 guest/otel-endpoint.sh   校验 Guest 可达 endpoint 并原子渲染 otel-http 配置。
 guest/install-rootfs.sh  向离线/已挂载 rootfs 安装最小 guest 服务,校验 checksum、
                         架构、GLIBC、空间和可选 Collector endpoint，并 enable unit。
 guest/verify-rootfs.sh   离线检查本地/外送安装布局、注入后的 endpoint 和启动依赖契约。
-guest/Containerfile.openEuler  固定 openEuler guest image 和 24.09 Kata guest
-                        kernel 的隔离构建依赖。
-guest/build-openeuler-image.sh 使用 dnf installroot 和 mkfs.ext4 -d 构建无需
-                        privileged 容器的 openEuler systemd 候选镜像。
-guest/build-openeuler-kata-kernel.sh 从精确 openEuler 24.09 Kata SRPM 构建只增加
-                        CONFIG_VIRTIO_FS 的 ARM64 候选内核并记录来源。该脚本仅用于
-                        ARM64 接口矩阵和无 BTF 降级验证，不产出数据面所需的 BTF
-                        内核；x86_64 不需要它，两个架构的数据面都用 Kata 官方
-                        vmlinux-debug.container。
+guest/build-openeuler-image.sh 在 openEuler 24.03 上用 dnf installroot 和
+                        mkfs.ext4 -d 构建干净的 openEuler Guest 镜像（systemd、socat
+                        和 Kata 3.32 initrd 中的 agent），不含 AcTrail，无需特权。
 host/install-kata-3.32.sh 按 uname -m 校验官方 arm64 或 amd64 归档，并将 Kata
                         3.32.0 并行安装到版本化 /opt 前缀，通过 /usr/local 激活且
                         保留发行版 3.2 RPM。
-host/prepare-stratovirt-config.py 从官方 Kata 3.32 配置生成指向候选 guest 内核、
-                        镜像、virtiofsd 和所选 StratoVirt/Cloud Hypervisor 的配置；
-                        文件名为兼容既有调用保留。
-host/prepare-v2-test-artifacts.py 编排 bundle、双 guest image 注入、Guest 出境模式、
+host/prepare-kata-config.py 从官方 Kata 3.32 配置生成指向候选 guest 内核、
+                        镜像、virtiofsd 和所选 StratoVirt/Cloud Hypervisor 的配置。
+host/prepare-artifacts.py 部署与回归共用的部署包生成入口：编排 bundle、guest
+                        image 注入（base/data 同源时共用一张）、Guest 出境模式、
                         runtime config、manifest 和 format 2 本机 profile，按输入摘要
-                        缓存并原子发布。
-host/run-v2-tests.sh    读取本机 profile，一条命令运行两个虚拟容器 V2 cases。
-guest/inject-image.sh    只复制并修改输出镜像,不改原始 Kata image；支持 ext4 直盘或
+                        校验复用；缺失或无效时重建、备份替换并在失败时恢复；可选更新
+                        current 链接并清理未使用的旧产物。
+host/v2_artifacts_support/store.py 部署包目录的加锁、备份恢复、进程引用检查、
+                        current 链接切换和旧产物清理。
+host/v2_artifacts_support/manifest.py 部署包 manifest 格式与校验；V2 runner 通过
+                        tests/v2/common/kata_runtime 复用，部署代码不依赖 tests。
+host/run-v2-tests.sh    读取本机 profile，一条命令运行两个虚机容器 V2 cases。
+host/cni-netns.sh       用 CNI 配置为一台虚拟机创建或删除网络命名空间（单节点参考实现）。
+host/connect_proxy.py   只放行指定域名和端口的 HTTP CONNECT 代理，供 workload 访问外网。
+guest/prepare-guest-bundle.sh 汇集 release 二进制、私有动态库闭包和 otel-http
+                        插件，生成带 MANIFEST.sha256 的 guest bundle。
+guest/inject-image.sh    复制源 Guest 镜像并注入 AcTrail，不改源镜像；支持 ext4 直盘或
                         第一个分区,并贯通 workload socket GID、OTLP endpoint 与
                         network/VSOCK bridge 出境模式。
 host-collector/          主机侧受限 Collector 验收部署；不是生产遥测后端。
-guest/OPENEULER.md       openEuler Kata guest 的无特权构建主路径、可选副本注入、必要
-                        agent-policy 资产、配置要求和复测步骤。
+guest/OPENEULER.md       openEuler Guest 镜像的构建内容、参数、必要 agent-policy
+                        资产和注意事项。
 workload/prepare-bundle.sh  从已验证 guest bundle 生成不含 daemon/viewer 的最小
                         workload 工具包,重写路径、解析配置并原子发布。
-workload/Containerfile.openEuler  构建 openEuler 24.09 workload rootfs，并为
+workload/Containerfile.openEuler  构建 openEuler 24.03 workload rootfs，并为
                         containerd 1.6 的非 root fallback 提供 setpriv。
 workload/actrail-init    由显式 `/bin/sh` 执行的 Kata workload PID 1 supervisor,
                         负责启动并回收 launch wrapper。
@@ -455,7 +380,7 @@ workload/verify-interface.sh  校验 manifest、最小权限、socket 模式/GID
 workload/README.md       guest `/dev` socket 源、固定 GID、安全边界和运行命令。
 ```
 
-测试脚本、Kata runner 和 guest 测试夹具统一位于
+测试脚本和 Kata runner 统一位于
 [`../../tests/v2/regression/virtual_container/`](../../tests/v2/regression/virtual_container)，
 由 V2 runner 汇总，不作为部署资产打入 guest 或 workload。PID namespace 断言工具
 也位于该目录，仅在 namespace 测试时额外挂载。runner 的 container ID 只作为

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal allow-listed HTTP CONNECT proxy for the Kata OpenCode smoke."""
+"""Minimal allow-listed HTTP CONNECT proxy for Kata workload egress."""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ import sys
 import threading
 from pathlib import Path
 
-from constants import CASE_CONSTANTS
-
-
-MAX_HEADER_BYTES = CASE_CONSTANTS.proxy_max_header_bytes
+MAX_HEADER_BYTES = 16 * 1024
+RECEIVE_BYTES = 65536
+CONNECT_TIMEOUT_SECONDS = 15
+RELAY_JOIN_TIMEOUT_SECONDS = 1
 
 
 class ConnectProxy(socketserver.ThreadingTCPServer):
@@ -53,7 +53,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
                 self.server.record(f"connect_proxy_denied={host}:{port}")
                 self.request.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
                 return
-            upstream = socket.create_connection((host, port), timeout=CASE_CONSTANTS.proxy_connect_timeout_seconds)
+            upstream = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_SECONDS)
         except (OSError, ValueError):
             self._send_bad_gateway()
             return
@@ -94,7 +94,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
         def copy(source: socket.socket, target: socket.socket) -> None:
             while True:
                 try:
-                    content = source.recv(CASE_CONSTANTS.proxy_receive_bytes)
+                    content = source.recv(RECEIVE_BYTES)
                     if not content:
                         break
                     target.sendall(content)
@@ -112,7 +112,7 @@ class ConnectHandler(socketserver.BaseRequestHandler):
         )
         request_to_upstream.start()
         copy(upstream, self.request)
-        request_to_upstream.join(timeout=CASE_CONSTANTS.proxy_relay_join_timeout_seconds)
+        request_to_upstream.join(timeout=RELAY_JOIN_TIMEOUT_SECONDS)
 
     def _send_bad_gateway(self) -> None:
         try:
@@ -123,16 +123,16 @@ class ConnectHandler(socketserver.BaseRequestHandler):
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
-    result.add_argument("--bind-host", default=CASE_CONSTANTS.bind_host)
+    result.add_argument("--bind-host", default="127.0.0.1")
     result.add_argument("--bind-port", type=int, required=True)
     result.add_argument(
         "--allow-host",
         action="append",
         dest="allowed_hosts",
-        default=None,
+        required=True,
         help="HTTPS host to allow; may be repeated",
     )
-    result.add_argument("--allow-port", type=int, default=CASE_CONSTANTS.allow_port)
+    result.add_argument("--allow-port", type=int, default=443)
     result.add_argument("--log-path", type=Path)
     return result
 
@@ -143,10 +143,7 @@ def main() -> int:
         raise SystemExit("--bind-port must be between 1 and 65535")
     if not 1 <= arguments.allow_port <= 65535:
         raise SystemExit("--allow-port must be between 1 and 65535")
-    allowed_hosts = tuple(
-        arguments.allowed_hosts
-        or ("opencode.ai", "models.opencode.ai")
-    )
+    allowed_hosts = tuple(arguments.allowed_hosts)
     with ConnectProxy(
         (arguments.bind_host, arguments.bind_port),
         allowed_hosts,

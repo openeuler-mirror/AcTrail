@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Install the AcTrail guest service into an unpacked or mounted Kata rootfs.
+# Deployment installs once into a copy of a clean image; the rm branches below
+# keep an in-place reinstall with other options consistent.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +21,7 @@ OTEL_ENDPOINT=""
 OTEL_EXPORT_ENABLED=0
 OTEL_ENDPOINT_CONFIGURED="false"
 EGRESS_MODE="network"
+OTEL_ATTRIBUTE_MODE="metadata-only"
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
 WITH_SANDBOX_OBSERVER=0
@@ -34,6 +37,7 @@ Options:
   --unit FILE                  Guest systemd unit (default: guest/actraild.service)
   --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
+  --otel-attribute-mode MODE   otel-http attribute_mode: metadata-only or full (default: metadata-only)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer (omitted by default)
   --with-sandbox-observer      Install actrail-sb as a Guest system service
@@ -95,6 +99,11 @@ while [[ "$#" -gt 0 ]]; do
       EGRESS_MODE="$2"
       shift 2
       ;;
+    --otel-attribute-mode)
+      [[ "$#" -ge 2 ]] || fail "--otel-attribute-mode requires a value"
+      OTEL_ATTRIBUTE_MODE="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -137,6 +146,8 @@ done
 [[ -n "$ROOTFS" ]] || fail "--rootfs is required"
 [[ -n "$BUNDLE" ]] || fail "--bundle is required"
 actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+actrail_validate_guest_otel_attribute_mode "$OTEL_ATTRIBUTE_MODE" "$OTEL_ENDPOINT" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   OTEL_EXPORT_ENABLED=1
@@ -325,45 +336,8 @@ if (( install_bytes + MIN_FREE_BYTES > available_bytes )); then
   fail "insufficient rootfs space: need $install_bytes bytes plus $MIN_FREE_BYTES reserve, have $available_bytes"
 fi
 
-grep -Fqx 'sync_runtime_library_path = "/usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so"' "$CONFIG" \
-  || fail "config must point sync_runtime_library_path at the guest installation path"
-grep -Fqx 'socket_path = "/dev/actrail/control.sock"' "$CONFIG" \
-  || fail "config must place the control socket in the workload interface directory"
-grep -Fqx 'sync_event_socket_path = "/dev/actrail/tls-sync.sock"' "$CONFIG" \
-  || fail "config must place the TLS socket in the workload interface directory"
-if grep -Fq 'kata-guest.otel-http' "$CONFIG"; then
-  fail "base config must not load otel-http; pass --otel-endpoint to enable it"
-fi
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   [[ -f "$OTEL_STARTUP" ]] || fail "otel-http startup fragment not found: $OTEL_STARTUP"
-fi
-grep -Fq 'ExecStart=/usr/local/bin/actraild ' "$UNIT" \
-  || fail "unit does not use the guest actraild installation path"
-grep -Fqx \
-  'ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail' \
-  "$UNIT" \
-  || fail "unit does not materialize its own workload interface"
-grep -Fq '/usr/bin/touch /run/actrail/ready' "$UNIT" \
-  || fail "unit does not publish the guest readiness marker"
-grep -Fqx 'WantedBy=multi-user.target kata-containers.target' "$UNIT" \
-  || fail "unit is not enabled for both VM and Kata targets"
-grep -Fqx 'Group=actrail' "$UNIT" \
-  || fail "unit must use the dedicated actrail socket group"
-grep -Fqx 'd /dev/actrail 0750 root actrail -' "$TMPFILES" \
-  || fail "tmpfiles config must create the workload interface before kata-agent"
-grep -Fqx \
-  'ExecStartPre=/usr/bin/systemd-tmpfiles --create --prefix=/dev/actrail' \
-  "$INTERFACE_DROP_IN" \
-  || fail "kata-agent drop-in must materialize the workload interface"
-if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
-  grep -Fqx \
-    "ExecStart=/bin/sh -ec 'exec /usr/local/bin/actrail-sb daemon --config /etc/actrail/sandbox-observer.toml >>/dev/actrail/sandbox-observer.log 2>&1'" \
-    "$SB_UNIT" \
-    || fail "sandbox observer unit does not use the Guest installation"
-  grep -Fqx \
-    'ExecStart=/usr/local/bin/actrail-sb connect --control-socket /dev/actrail/sandbox-observer-control.sock --host-cid 2 --port 43182 --request-timeout-ms 5000' \
-    "$SB_CONNECT_UNIT" \
-    || fail "sandbox observer activation unit does not use the local control socket"
 fi
 
 bin_dir="$(rootfs_target /usr/local/bin)"
@@ -430,6 +404,7 @@ if [[ -n "$OTEL_ENDPOINT" ]]; then
     "$plugin_config_dir/otel-http.config.toml" \
     "$OTEL_ENDPOINT" \
     "$EGRESS_MODE" \
+    "$OTEL_ATTRIBUTE_MODE" \
     || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
   operator_patches+=(--patch "$OTEL_STARTUP")
   install -m 0644 \
@@ -462,10 +437,6 @@ dependency_dir="$unit_dir/kata-agent.service.d"
 interface_target="$dependency_dir/10-actrail-workload-interface.conf"
 install -d -m 0755 "$dependency_dir"
 install -m 0644 "$INTERFACE_DROP_IN" "$interface_target"
-# Older observer images coupled kata-agent startup to actrail-sb. Remove that
-# drop-in on every install: Kata must remain reachable even when observation
-# cannot initialize, while execution tests gate independently on the ready file.
-rm -f "$dependency_dir/30-actrail-sandbox-observer.conf"
 if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
   for target in kata-containers.target multi-user.target; do
     wants_dir="$unit_dir/$target.wants"

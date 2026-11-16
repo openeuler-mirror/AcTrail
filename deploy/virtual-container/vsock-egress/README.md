@@ -1,5 +1,7 @@
 # Kata Guest 无网络 OTLP 出境（VSOCK bridge）
 
+> 完整部署步骤以 [虚机容器部署](../../../docs/operations/deployment/virtual-container.md) 为准；本页说明该组件的原理、参数和边界。
+
 Kata Guest 只有在 CNI/Kubernetes 为 sandbox 配好网络时才有 `eth0` 和路由。没有
 CNI 时（例如 `ctr run` 直接起 sandbox），Guest 内只有 `lo`，`actraild` 的
 OTLP/HTTP 发不出去。
@@ -22,8 +24,8 @@ bridge 只复制字节，不解析 OTLP、不终止 TLS、不缓存、不重放�
 这里的“OTLP 出境”只描述传输路径，不扩大数据授权。只有显式传入
 `--otel-endpoint` 才会安装并加载 `otel-http`；其配置默认使用
 `attribute_mode = "metadata-only"`，因此只发送 semantic action/trace 的
-结构化元数据，不发送命令行和 HTTP/LLM 内容属性。可信 Collector 场景可在镜像内的
-`/etc/actrail/plugins/otel-http/otel-http.config.toml` 显式改成 `full`；这会允许
+结构化元数据，不发送命令行和 HTTP/LLM 内容属性。可信 Collector 场景可在生成部署包时
+传入 `--otel-attribute-mode full`；这会允许
 semantic action 内容属性出境，但不会把 SQLite 中的原始 `payload_segments` 字节
 自动编码进 OTLP span。
 
@@ -47,11 +49,8 @@ semantic action 内容属性出境，但不会把 SQLite 中的原始 `payload_s
 - **StratoVirt**：真 vhost-vsock，Host 节点级 `AF_VSOCK` listener；
 - **Cloud Hypervisor**：hybrid vsock，Host 按 sandbox 使用 `<clh.sock>_43180` UDS，
   bridge 由 reconcile 自动随 sandbox 起停；
-- Guest 镜像两条构建路径均已端到端验证：openEuler 24.03
-  （`build-openeuler-image.sh`）与 Ubuntu noble（`inject-image.sh`）。
-- ARM64 openEuler 24.09 Host 上，openEuler 24.03 Guest/workload 已分别通过
-  StratoVirt 2.4.0 和 Cloud Hypervisor 51.1 的完整 interface/data 矩阵；Cloud
-  Hypervisor sandbox 清理后无对应 bridge 残留。
+- Guest 镜像由 `guest/build-openeuler-image.sh` 构建（openEuler 24.03），
+  prepare 通过 `guest/inject-image.sh` 向副本注入 AcTrail 和出境配置。
 - x86_64 openEuler 24.03（LTS-SP1）Host 上，Cloud Hypervisor 51.1 同样通过完整
   interface/data 矩阵；两个并发 sandbox 各自持有独立 bridge 实例，全部销毁后既无
   `actrail-vsock-host-cloud-hypervisor@` 实例也无 `clh.sock_43180` 残留。
@@ -63,8 +62,7 @@ bridge 的 `POST /v1/traces` 到达 Host Collector 并返回 200。
 
 - Host 加载 `vhost_vsock`（StratoVirt 必需）；
 - Host 安装 `socat >= 1.7.4`，构建时启用 `VSOCK-CONNECT`/`VSOCK-LISTEN`；
-- Guest 基础镜像内含 `socat`（openEuler/Ubuntu 的构建脚本已包含，见
-  `guest/build-openeuler-image.sh` 的包列表）；
+- Guest 镜像内含 `socat`（见 `guest/build-openeuler-image.sh` 的包列表）；
 - Host Collector 监听 `127.0.0.1:4318`。容器化 Collector 需使用 host 网络。
 
 专用 VSOCK 端口默认 `43180`。脚本拒绝 `1-1026`，避开 Kata agent 通信、日志和调试
@@ -74,14 +72,14 @@ bridge 的 `POST /v1/traces` 到达 Host Collector 并返回 200。
 
 Guest bridge 不需要手工安装。构建或注入镜像时选择模式即可：
 
-V2 虚拟容器验收优先走标准 artifact 准备器，它会同时注入 base/data 两张镜像、生成
+V2 虚机容器验收优先走标准 artifact 准备器，它会注入 Guest 镜像（base/data 同源时共用一张）、生成
 runtime config 和本机 profile：
 
 ```bash
 OPEN_EULER_2403_IMAGE=/path/to/openeuler-24.03-kata.image
 
 sudo -E env "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --backend cloud-hypervisor \
     --otel-endpoint http://127.0.0.1:14318/v1/traces \
     --egress-mode vsock-bridge \
@@ -94,8 +92,7 @@ sudo -E env "PATH=$PATH" \
     --xiaoo /path/to/xiaoo
 ```
 
-上例只把这一次验收的 Guest 与 workload 显式固定为 openEuler 24.03，并未改变通用默认
-或禁止其他镜像。StratoVirt 可省略 `--backend`，并换成对应的 base/data source config；
+上例显式固定 Guest 与 workload 为 openEuler 24.03。StratoVirt 可省略 `--backend`，并换成对应的 base/data source config；
 同样传入这三个显式镜像参数即可验证相同组合。模式会写入内容寻址输入和
 `manifest.json`；同一 source image 的 `network` 与 `vsock-bridge` 产物不会错误命中
 同一个缓存。
@@ -103,18 +100,16 @@ sudo -E env "PATH=$PATH" \
 下面两个低层工具用于独立制作或调试单张镜像：
 
 ```bash
-# 从零构建 openEuler Guest 镜像
+# 构建干净的 openEuler Guest 镜像（不含 AcTrail）
 guest/build-openeuler-image.sh \
   --rootfs /var/tmp/oe-rootfs \
-  --output-image /var/lib/actrail/actrail-guest.image \
+  --output-image /opt/actrail-images/openeuler-24.03-guest.image \
   --kata-initrd /opt/kata/share/kata-containers/kata-containers-initrd.img \
-  --bundle /var/lib/actrail/guest-bundle \
-  --otel-endpoint http://127.0.0.1:14318/v1/traces \
-  --egress-mode vsock-bridge
+  --expected-agent-version 3.32.0
 
-# 或者向已有镜像注入
+# 向该镜像的副本注入 AcTrail（prepare 内部同样调用它）
 guest/inject-image.sh \
-  --source-image base.image \
+  --source-image /opt/actrail-images/openeuler-24.03-guest.image \
   --output-image actrail-guest.image \
   --bundle /var/lib/actrail/guest-bundle \
   --otel-endpoint http://127.0.0.1:14318/v1/traces \
@@ -137,23 +132,12 @@ guest/inject-image.sh \
 
 ## Host 侧安装
 
-```bash
-sudo modprobe vhost_vsock
-sudo install -D -m 0755 host-bridge.sh \
-  /usr/local/libexec/actrail-vsock-egress/host-bridge.sh
-sudo install -D -m 0755 ch-reconcile.sh \
-  /usr/local/libexec/actrail-vsock-egress/ch-reconcile.sh
-sudo install -D -m 0644 -t /etc/systemd/system systemd/*.service systemd/*.path
-sudo systemctl daemon-reload
-```
+安装与启用步骤（含 Collector 端口覆盖配置）见
+[虚机容器部署 5.1](../../../docs/operations/deployment/virtual-container.md#51-安装宿主机转发服务)。本节只说明两种后端的转发机制。
 
 ### StratoVirt
 
-一个节点级 listener 服务全部 sandbox：
-
-```bash
-sudo systemctl enable --now actrail-vsock-host-stratovirt.service
-```
+一个节点级 listener 服务全部 sandbox：`actrail-vsock-host-stratovirt.service` 常驻监听 `AF_VSOCK` 端口 43180。
 
 ### Cloud Hypervisor
 
@@ -161,11 +145,7 @@ hybrid vsock 的 Host 端点是 `<VM base UDS>_<port>`，而 base UDS 位于 Kat
 和删除的 per-sandbox 目录 `/run/vc/vm/<sandbox>/clh.sock`，所以不能用单一常驻
 listener，也无法为尚不存在的 sandbox 预先配置。
 
-启用 reconcile，它会随 sandbox 出现/消失自动起停 bridge：
-
-```bash
-sudo systemctl enable --now actrail-vsock-host-cloud-hypervisor-reconcile.path
-```
+因此启用的是 `actrail-vsock-host-cloud-hypervisor-reconcile.path`，它随 sandbox 出现/消失自动起停 bridge。
 
 `.path` unit 监视 `/run/vc/vm`，触发 `ch-reconcile.sh`：为每个暴露 `clh.sock` 的
 sandbox 启动 `actrail-vsock-host-cloud-hypervisor@<sandbox>.service`，并停止 sandbox

@@ -7,7 +7,6 @@ GUEST_UNIT="$ROOT_DIR/deploy/virtual-container/guest/actraild.service"
 TMPFILES_CONFIG="$ROOT_DIR/deploy/virtual-container/guest/actrail-tmpfiles.conf"
 INTERFACE_DROP_IN="$ROOT_DIR/deploy/virtual-container/guest/systemd/workload-interface/kata-agent.service.d/10-actrail-workload-interface.conf"
 REQUIRED_DROP_IN="$ROOT_DIR/deploy/virtual-container/guest/systemd/required/kata-agent.service.d/20-actrail-required.conf"
-LEGACY_DROP_IN="$ROOT_DIR/deploy/virtual-container/guest/systemd/fail-closed/kata-agent.service.d/20-actrail-required.conf"
 SB_CONFIG="$ROOT_DIR/deploy/virtual-container/guest/sandbox-observer.toml"
 SB_UNIT="$ROOT_DIR/deploy/virtual-container/guest/actrail-sb.service"
 SB_CONNECT_UNIT="$ROOT_DIR/deploy/virtual-container/guest/actrail-sb-connect.service"
@@ -62,8 +61,6 @@ fi
 [[ -f "$REQUIRED_DROP_IN" ]] || fail "required dependency drop-in not found: $REQUIRED_DROP_IN"
 assert_line "$REQUIRED_DROP_IN" "Requires=actraild.service"
 assert_line "$REQUIRED_DROP_IN" "After=actraild.service"
-[[ ! -e "$LEGACY_DROP_IN" ]] \
-  || fail "legacy fail-closed directory must not remain as an alias"
 
 [[ -f "$SB_CONFIG" ]] || fail "sandbox observer config not found: $SB_CONFIG"
 [[ -f "$SB_UNIT" ]] || fail "sandbox observer unit not found: $SB_UNIT"

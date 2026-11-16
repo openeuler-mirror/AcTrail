@@ -2,7 +2,7 @@
 
 ## Quick Run
 
-完成一次与当前 release 一致的虚拟容器部署准备后，在仓库根目录执行：
+完成一次与当前 release 一致的虚机容器部署准备后，在仓库根目录执行：
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
@@ -10,7 +10,7 @@ deploy/virtual-container/host/run-v2-tests.sh \
   --color never
 ```
 
-`run-v2-tests.sh` 是虚拟容器 V2 的宿主验收入口。它定位仓库和公共
+`run-v2-tests.sh` 是虚机容器 V2 的宿主验收入口。它定位仓库和公共
 `test_all.py`，读取机器本地的 `local/kata/v2-test-profile.json`；当前用户不是 root
 时只申请一次 sudo，并保留调用用户的 Cargo、Rustup 和 PATH。脚本先执行
 `release_install`，再校验内容寻址 artifact manifest，最后运行部署契约、Kata
@@ -67,6 +67,7 @@ CTR_RUNTIME="io.containerd.kata332.v2"
 BACKEND="${BACKEND:-stratovirt}"
 BASE_CONFIG_SOURCE="/path/to/configuration-base-source.toml"
 DATA_CONFIG_SOURCE="/path/to/configuration-data-source.toml"
+GUEST_IMAGE_SOURCE="/path/to/openeuler-24.03-guest.image"  # guest/build-openeuler-image.sh 的输出
 XIAOO_BIN="/path/to/xiaoo"
 ```
 
@@ -103,6 +104,11 @@ export VIRTUAL_CONTAINER_E2E_COLLECTOR_TIMEOUT_SECONDS=30
 设置后 data 矩阵会新增 `collector_egress` 结果：只统计本次 data VM 启动之后产生的
 span，超时未出现即失败；artifact 未带 `--otel-endpoint` 时也判失败。
 
+也可以让 prepare 把这些设置写进 `local/kata/v2-test-profile.json`，之后每次回归都自动
+断言外送，不需要再 export：给 `prepare-artifacts.py` 追加
+`--collector-traces-file /var/lib/actrail/otelcol/actrail-traces.json`；`network` 模式再追加
+`--cni-config /etc/actrail-cni-test/net.json`（profile 会同时记录 `host/cni-netns.sh`）。
+
 `network` 模式还要求测试 VM 有网卡。`ctr run` 起的 sandbox 默认没有网络，因此用例
 支持在启动每个 VM 前先准备一个网络命名空间，再以 `ctr run --with-ns network:<path>`
 加入，顺序与 Kubernetes CRI 一致：
@@ -117,7 +123,7 @@ sudo tee /etc/actrail-cni-test/net.json >/dev/null <<'JSON'
 JSON
 
 export ACTRAIL_TEST_CNI_CONFIG=/etc/actrail-cni-test/net.json
-export VIRTUAL_CONTAINER_E2E_NETWORK_NAMESPACE_HELPER="$PWD/tests/v2/regression/virtual_container/cni-netns.sh"
+export VIRTUAL_CONTAINER_E2E_NETWORK_NAMESPACE_HELPER="$PWD/deploy/virtual-container/host/cni-netns.sh"
 GUEST_EGRESS_MODE="network"
 GUEST_OTEL_ENDPOINT="http://10.89.77.1:4318/v1/traces"
 ```
@@ -139,6 +145,7 @@ test -c /dev/kvm
 sudo test -r /dev/kvm
 sudo test -w /dev/kvm
 test -f "$BASE_CONFIG_SOURCE"
+test -f "$GUEST_IMAGE_SOURCE"
 test -f "$DATA_CONFIG_SOURCE"
 command -v ctr
 command -v kata-runtime
@@ -178,7 +185,7 @@ artifact；manifest 会记录 `actraild`、`actrailctl`、`actrailviewer` 和 TL
 的 SHA-256。release 后续发生变化时，旧 artifact 会在启动 VM 前以
 `checksum mismatch` 明确失败。
 
-### 步骤3：准备虚拟容器测试产物
+### 步骤3：准备虚机容器测试产物
 
 #### 手动指令
 
@@ -187,22 +194,26 @@ artifact；manifest 会记录 `actraild`、`actrailctl`、`actrailviewer` 和 TL
 ```bash
 sudo -E env \
   "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --backend "$BACKEND" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
     --data-config-source "$DATA_CONFIG_SOURCE" \
+    --base-image-source "$GUEST_IMAGE_SOURCE" \
+    --data-image-source "$GUEST_IMAGE_SOURCE" \
     --xiaoo "$XIAOO_BIN"
 ```
 
-只准备基础虚拟容器 case：
+只准备基础虚机容器 case：
 
 ```bash
 sudo -E env \
   "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --backend "$BACKEND" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
-    --data-config-source "$DATA_CONFIG_SOURCE"
+    --data-config-source "$DATA_CONFIG_SOURCE" \
+    --base-image-source "$GUEST_IMAGE_SOURCE" \
+    --data-image-source "$GUEST_IMAGE_SOURCE"
 ```
 
 containerd 中没有 workload image 时，可以使用离线 archive：
@@ -210,10 +221,12 @@ containerd 中没有 workload image 时，可以使用离线 archive：
 ```bash
 sudo -E env \
   "PATH=$PATH" \
-  python3 deploy/virtual-container/host/prepare-v2-test-artifacts.py \
+  python3 deploy/virtual-container/host/prepare-artifacts.py \
     --backend "$BACKEND" \
     --base-config-source "$BASE_CONFIG_SOURCE" \
     --data-config-source "$DATA_CONFIG_SOURCE" \
+    --base-image-source "$GUEST_IMAGE_SOURCE" \
+    --data-image-source "$GUEST_IMAGE_SOURCE" \
     --workload-image-archive /path/to/workload-image.tar \
     --image-pull-policy missing \
     --xiaoo "$XIAOO_BIN"
@@ -235,8 +248,7 @@ sudo -E env \
 ```text
 local/kata/artifacts/<digest>/
 ├── manifest.json
-├── guest-base.img
-├── guest-data.img
+├── guest.img                # base/data 源镜像相同时共用；不同时为 guest-base.img 和 guest-data.img
 ├── configuration-base.toml
 ├── configuration-data.toml
 ├── guest-bundle/
@@ -271,8 +283,7 @@ PY
 ARTIFACT_DIR="$(dirname "$ARTIFACT_MANIFEST")"
 
 sudo python3 -m json.tool "$ARTIFACT_MANIFEST"
-sudo test -f "$ARTIFACT_DIR/guest-base.img"
-sudo test -f "$ARTIFACT_DIR/guest-data.img"
+sudo ls "$ARTIFACT_DIR"/guest*.img  # base/data 同源时只有 guest.img
 sudo test -f "$ARTIFACT_DIR/configuration-base.toml"
 sudo test -f "$ARTIFACT_DIR/configuration-data.toml"
 ```
@@ -436,7 +447,7 @@ ownership label，再删除本轮 task/container，并等待删除前绑定的 s
 - viewer JSON 失败：检查 debug console 的 Bash prompt/ANSI 控制码；
 - regression lock 等待：已有另一轮 `test_all.py` 正在运行。
 
-### 步骤10：运行全部虚拟容器 V2 用例
+### 步骤10：运行全部虚机容器 V2 用例
 
 #### 手动指令
 
