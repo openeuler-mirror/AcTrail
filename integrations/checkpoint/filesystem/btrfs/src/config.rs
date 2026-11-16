@@ -1,3 +1,5 @@
+//! Parses daemon-owned Btrfs runtime settings and resource limits.
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

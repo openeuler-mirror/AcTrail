@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use abi_stable::library::lib_header_from_path;
-use abi_stable::std_types::RVec;
+use abi_stable::std_types::{ROption, RVec};
 use actrail_ckpt_fs_agentns::AgentNsBackend;
 use checkpoint::{
     BackendConfig, BackendError, BackendErrorKind, CheckpointModuleRef,
@@ -367,7 +367,8 @@ fn the_library_exports_the_checkpoint_module() {
         .init_root_module::<CheckpointModuleRef>()
         .unwrap();
     let mut backend = module.create()(BackendConfig {
-        json: setup.config.as_str().into(),
+        runtime_json: setup.config.as_str().into(),
+        trace_config_path: ROption::RNone,
     })
     .unwrap();
     backend.connect(&context(vec![host_scope("/")])).unwrap();

@@ -513,6 +513,7 @@ name = "checkpoint"
 version = "0.9.0"
 dependencies = [
  "abi_stable",
+ "serde",
 ]
 
 [[package]]
@@ -701,6 +702,7 @@ name = "control_contract"
 version = "0.9.0"
 dependencies = [
  "agent_lifecycle_contract",
+ "checkpoint",
  "model_core",
  "plugin_system",
  "serde",

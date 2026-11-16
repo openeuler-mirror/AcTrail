@@ -84,7 +84,7 @@ pub struct OperatorConfig {
     pub provider_rule_set: Option<ProviderRuleSetConfig>,
     /// SQLite file of the checkpoint catalog; unset when checkpoints are disabled.
     pub checkpoint_catalog_path: Option<PathBuf>,
-    /// The checkpoint integrations a Trace is composed of, in call order.
+    /// Available checkpoint integrations loaded at daemon startup.
     pub checkpoint_backends: Vec<CheckpointBackendConfig>,
     pub checkpoint_runtime: CheckpointRuntimeConfig,
     pub access_control: AccessControlConfig,
@@ -101,7 +101,7 @@ pub struct CheckpointBackendConfig {
     pub name: String,
     /// The integration's dynamic library.
     pub library: PathBuf,
-    /// The integration's own configuration file.
+    /// The integration's daemon-owned runtime configuration file.
     pub config: PathBuf,
 }
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use control_contract::checkpoint::{
-    CheckpointAction, CheckpointFilterMode, CheckpointReply, CheckpointView,
+    BackendInstanceConfig, CheckpointAction, CheckpointFilterMode, CheckpointReply, CheckpointView,
     LaunchCheckpointConfig, LaunchCheckpointScope, OperationView,
 };
 use model_core::ids::TraceId;
@@ -133,6 +133,8 @@ impl CheckpointArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LaunchFile {
+    backends: Vec<BackendInstanceConfig>,
+    #[serde(default)]
     scopes: Vec<ScopeEntry>,
 }
 
@@ -179,7 +181,10 @@ pub(crate) fn load_launch_config(path: &Path) -> Result<LaunchCheckpointConfig, 
             })
         })
         .collect::<Result<_, _>>()?;
-    Ok(LaunchCheckpointConfig { scopes })
+    Ok(LaunchCheckpointConfig {
+        backends: file.backends,
+        scopes,
+    })
 }
 
 pub(crate) fn format_reply(reply: &CheckpointReply) -> String {

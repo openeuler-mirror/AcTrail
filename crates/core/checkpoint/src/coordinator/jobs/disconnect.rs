@@ -50,6 +50,9 @@ pub(crate) fn run(
         }
         unreleased
     };
+    // Context release uses the Agent's RPC server, including after a failed restore.
+    // Keep the response holds until all backend cleanup has finished.
+    restore::resume_processes(shared, context)?;
     let failure = disconnect_backend(shared, context);
     shared.record_result(
         context,

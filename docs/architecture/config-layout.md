@@ -368,9 +368,35 @@
 | `provider.rules_enabled` | `bool` | `false` | 否 | provider | 启用模型服务方规则文件；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L114) |
 | `provider.rules_path` | `string` | `"/etc/actrail/provider-rules.conf"` | 否 | provider | 规则文件路径；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L115) |
 | `provider.unknown_provider_label` | `string` | `"unknown"` | 否 | provider | 未识别模型服务方的标签；[声明](../../crates/core/config/src/daemon/operator/document/app.rs#L116) |
-| `checkpoint.enabled` | `bool` | `false` | 否 | checkpoint | 启用 checkpoint；要求 `semantic_retention.projection_enabled` 与 `semantic_retention.l0_llm_call.enabled`；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L14) |
+| `checkpoint.enabled` | `bool` | `false` | 否 | checkpoint | AcTrail operator 配置中的 daemon 服务开关。每次 launch 通过 `--checkpoint <文件>` 启用该 Trace 的快照。要求 `semantic_retention.projection_enabled` 与 `semantic_retention.l0_llm_call.enabled` 为 true。[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L14) |
 | `checkpoint.catalog_path` | `string` | `"/var/lib/actrail/checkpoint.db"` | 否 | checkpoint | checkpoint 记录库的 SQLite 文件，绝对路径；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L15) |
-| `checkpoint.backends` | `array` | `[]` | 否 | checkpoint | 组成 Trace 的 backend，按调用顺序排列；每项有 `name`、动态库 `library` 和配置文件 `config`，后两者为绝对路径；[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs#L16) |
+| `checkpoint.backends` | `array` | `[]` | 否 | checkpoint | AcTrail operator 配置中的后端实现列表，daemon 启动时加载。每个 Trace 使用其 launch checkpoint 配置选中的实现创建实例。[选择规则](../../crates/core/checkpoint/src/factory.rs) |
+| `checkpoint.backends[].name` | `string` | 无 | 每项必填 | checkpoint | 后端实现的唯一注册名称，由用户指定。launch 的 `backends[].name` 引用此名称。[声明](../../crates/core/config/src/daemon/operator/document/checkpoint.rs) |
+| `checkpoint.backends[].library` | `string` | 无 | 每项必填 | checkpoint | 后端动态库的绝对路径，决定使用 Btrfs、AgentNS 或 Xiaoo 等具体实现。Filesystem 或 Context 类型由库导出。[加载入口](../../crates/core/checkpoint/src/backends/dynamic.rs) |
+| `checkpoint.backends[].config` | `string` | 无 | 每项必填 | checkpoint / backend | 后端运行配置 JSON 文件的绝对路径。daemon 启动时读取并固定原文，文件不可读使启动失败。对应 backend 在创建 Trace 实例时解析并校验格式。[加载入口](../../crates/core/checkpoint/src/backends/dynamic.rs) |
+| `backends` | `array` | 无 | 是，至少一项 | checkpoint / ctl | `launch --checkpoint` 指定的独立 TOML 中，本次 Trace 使用的后端列表。保存按此顺序调用，恢复先调用 Filesystem，再调用 Context，同类内保持此顺序。[配置示例](../operations/checkpoint.md) |
+| `backends[].name` | `string` | 无 | 每项必填 | checkpoint / ctl | 引用 daemon 的 `checkpoint.backends[].name`，在本次 launch 配置中唯一。[选择规则](../../crates/core/checkpoint/src/factory.rs) |
+| `backends[].config` | `string` | 无 | 由后端决定 | checkpoint / backend | 本次 Trace 的私有配置文件绝对路径。ctl 和 daemon 传递路径，由对应 backend 在创建实例时读取、解析和校验。Btrfs 和 AgentNS 省略，Xiaoo 必填并在文件中提供 endpoint。[ABI 契约](../../crates/contracts/checkpoint/src/types.rs) |
+| `scopes` | `array` | `[]` | 选择 Filesystem 后端时必填 | checkpoint / ctl | `launch --checkpoint` 指定的独立 TOML 文件中的目录列表。每个选中的 Filesystem 后端须有对应 scope。仅选择 Context 后端时可省略。[声明](../../crates/apps/ctl/src/checkpoint.rs) |
+| `scopes[].id` | `string` | 无 | 每项必填 | checkpoint / ctl | launch 配置中的 scope 名称，须非空且在该文件中唯一。[校验](../../crates/core/checkpoint/src/scope.rs) |
+| `scopes[].root` | `string` | 无 | 每项必填 | checkpoint / ctl | launch 配置中受保护目录的绝对路径。ctl 解析为实际目录，各后端检查目录是否符合其要求。[解析](../../crates/apps/ctl/src/checkpoint.rs) |
+| `scopes[].backend_instance` | `string` | 无 | 每项必填 | checkpoint / ctl | 引用本次 launch 的 `backends[].name`，必须指向 Filesystem 后端。[选择校验](../../crates/core/checkpoint/src/factory.rs) |
+| `scopes[].exclude` | `string[]` | `[]` | 否 | checkpoint / ctl | launch 配置中的排除路径。相对路径以 `root` 为基准。Btrfs 后端不支持排除路径。[解析](../../crates/apps/ctl/src/checkpoint.rs) |
+| `btrfs_path` | `string` | 无 | 是 | checkpoint / Btrfs 运行配置 | Btrfs 工具的绝对路径，由 daemon 的 `checkpoint.backends[].config` 指定的 JSON 提供。[声明](../../integrations/checkpoint/filesystem/btrfs/src/config.rs) |
+| `findmnt_path` | `string` | 无 | 是 | checkpoint / Btrfs 运行配置 | findmnt 工具的绝对路径。[声明](../../integrations/checkpoint/filesystem/btrfs/src/config.rs) |
+| `copy_path` | `string` | `"/usr/bin/cp"` | 否 | checkpoint / Btrfs 运行配置 | 恢复文件使用的 cp 工具绝对路径。[声明](../../integrations/checkpoint/filesystem/btrfs/src/config.rs) |
+| `copy_batch_max_bytes` | `uint` | `65536` | 否 | checkpoint / Btrfs 运行配置 | 每次复制的源路径参数预算，单位字节，须大于 0。[声明](../../integrations/checkpoint/filesystem/btrfs/src/config.rs) |
+| `snapshot_root` | `string` | 无 | 是 | checkpoint / Btrfs 运行配置 | 保存快照及协调锁的根目录绝对路径，须与受保护子卷位于同一 Btrfs 文件系统。[声明](../../integrations/checkpoint/filesystem/btrfs/src/config.rs) |
+| `allowed_workspace_roots` | `string[]` | 无 | 是，至少一项 | checkpoint / Btrfs 运行配置 | backend 接受的工作目录范围，须为绝对路径。本次保存目标由 launch 的 `scopes[].root` 指定。[声明](../../integrations/checkpoint/filesystem/btrfs/src/config.rs) |
+| `library_path` | `string` | 无 | 是 | checkpoint / AgentNS 运行配置 | 与运行中的 RNS 内核模块配套的 librns.so 绝对路径，由 daemon 的 `checkpoint.backends[].config` 指定的 JSON 提供。[声明](../../integrations/checkpoint/filesystem/agentns/src/config.rs) |
+| `area_root` | `string` | 无 | 是 | checkpoint / AgentNS 运行配置 | RNS 会话目录的根路径，须为绝对路径。backend 在此目录下为每个 Trace 建立会话目录。[声明](../../integrations/checkpoint/filesystem/agentns/src/config.rs) |
+| `extra_excluded_paths` | `string[]` | `[]` | 否 | checkpoint / AgentNS 运行配置 | 统一附加排除的绝对路径。backend 合并 area_root 和本次 scope 的排除路径后建立会话。[声明](../../integrations/checkpoint/filesystem/agentns/src/config.rs) |
+| `endpoint` | `string` | 无 | 是 | checkpoint / Xiaoo Trace 配置 | Trace 私有 JSON 的目标 Unix socket 绝对路径，由本次 launch 的 `backends[].config` 指定文件。Xiaoo backend 创建实例时自行读取。并行任务使用各自的 socket。[声明](../../integrations/checkpoint/context/xiaoo/src/config.rs) |
+| `request_timeout_ms` | `uint64` | `5000` | 否 | checkpoint / Xiaoo 运行配置 | 由 daemon 的 `checkpoint.backends[].config` 指定的 JSON 提供。一次 RPC 的连接、写入和读取共用超时，单位为毫秒，须大于 0。[声明](../../integrations/checkpoint/context/xiaoo/src/config.rs) |
+| `max_response_bytes` | `uint` | `65536` | 否 | checkpoint / Xiaoo 运行配置 | 单条响应含换行符的最大字节数，须大于 0。[声明](../../integrations/checkpoint/context/xiaoo/src/config.rs) |
+| `restore_mode` | `string` | `"promise_mode"` | 否 | checkpoint / Xiaoo 运行配置 | 恢复模式。`promise_mode` 接受已排队或已保存的快照，`ensure_safe_mode` 要求快照已保存。[声明](../../integrations/checkpoint/context/xiaoo/src/config.rs) |
+| `checkpoint.enabled` | `bool` | 由 Xiaoo 定义 | 使用 Xiaoo 上下文后端时设为 true | Xiaoo 服务端 | Xiaoo 自身 TOML 中的 checkpoint 开关。该文件由 Xiaoo 的 `--config` 指定，与 AcTrail operator 配置分别加载。[配置示例](../../integrations/checkpoint/context/xiaoo/README.md) |
+| `checkpoint.unix_socket.endpoint` | `string` | 由 Xiaoo 定义 | 使用 Xiaoo 上下文后端时显式设置 | Xiaoo 服务端 | Xiaoo 自身 TOML 中的监听 socket 绝对路径，须与 AcTrail Xiaoo 后端 JSON 的 `endpoint` 相同。[配置示例](../../integrations/checkpoint/context/xiaoo/README.md) |
 | `checkpoint.runtime.busy_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | daemon 和 Web 的 checkpoint 只读连接等待 SQLite 写锁的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L111) |
 | `checkpoint.runtime.stop_timeout_ms` | `uint64` | `5000` | 否 | checkpoint | 恢复前等待一批进程线程组暂停的预算，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L112) |
 | `checkpoint.runtime.stop_poll_interval_ms` | `uint64` | `10` | 否 | checkpoint | 检查线程组暂停状态的间隔，毫秒，必须为正；[声明](../../crates/core/config/src/daemon/operator.rs#L113) |

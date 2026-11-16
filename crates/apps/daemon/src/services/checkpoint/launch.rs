@@ -59,6 +59,7 @@ pub(crate) fn launch_request(
             host_mount_namespace: owner.host_mount_namespace,
         },
         trace_process,
+        backends: config.backends,
         scopes: config
             .scopes
             .into_iter()

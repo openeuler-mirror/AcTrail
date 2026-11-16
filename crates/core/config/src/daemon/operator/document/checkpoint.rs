@@ -1,3 +1,5 @@
+//! Daemon checkpoint settings and the backend implementations available to launches.
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +9,7 @@ use crate::daemon::operator::{CheckpointBackendConfig, CheckpointRuntimeConfig};
 use super::require_positive_u64;
 
 /// `[checkpoint]`. `catalog_path` is the SQLite file of the checkpoint catalog; `backends` lists
-/// the integrations a Trace is composed of, in call order.
+/// the integrations available to launch configurations.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CheckpointDocument {

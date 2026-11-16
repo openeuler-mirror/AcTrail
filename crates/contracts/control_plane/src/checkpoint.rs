@@ -3,9 +3,12 @@
 use model_core::ids::{RequestId, TraceId};
 use serde::{Deserialize, Serialize};
 
-/// Scopes protected for one launch, read by ctl from the `--checkpoint` file.
+pub use checkpoint::BackendInstanceConfig;
+
+/// Backend selections and scopes for one launch, read from the `--checkpoint` file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchCheckpointConfig {
+    pub backends: Vec<BackendInstanceConfig>,
     pub scopes: Vec<LaunchCheckpointScope>,
 }
 

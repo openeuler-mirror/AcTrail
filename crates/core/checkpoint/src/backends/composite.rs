@@ -1,33 +1,38 @@
 //! One backend made of the integrations that take part in a Trace. Each child has its own scopes;
-//! a composite snapshot is one snapshot of every child, and failing on one child fails it as a
-//! whole. Children run in order, and a child that fails stops the calls to those after it.
+//! a composite snapshot is one snapshot of every child. Saves follow configuration order;
+//! restores run filesystems before context RPC. A child failure stops the remaining calls.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use abi_stable::std_types::{RResult, RVec};
 use checkpoint::{
-    BackendError, CheckpointBackend, RestorableCheckpointBackend, RestoreFailure, SnapshotContext,
-    SnapshotId,
+    BackendError, BackendKind, CheckpointBackend, RestoreFailure, SnapshotContext, SnapshotId,
 };
 
 use crate::scope::BackendGroup;
 
 pub(crate) struct Child {
     name: String,
+    kind: BackendKind,
     backend: CheckpointBackend,
     scopes: BTreeSet<String>,
+    /// Context RPC connects once the Agent has started and can serve requests.
+    pending_context: Option<SnapshotContext>,
 }
 
 impl Child {
     /// A child without a group works on no scopes.
     pub(crate) fn new(
         name: &str,
+        kind: BackendKind,
         group: Option<&BackendGroup>,
         backend: CheckpointBackend,
     ) -> Self {
         Self {
             name: name.to_string(),
+            kind,
             backend,
+            pending_context: None,
             scopes: group
                 .iter()
                 .flat_map(|group| &group.scopes)
@@ -53,6 +58,10 @@ impl Child {
                 .collect(),
             ..context.clone()
         };
+        if self.kind == BackendKind::Context {
+            self.pending_context = Some(own);
+            return Ok(());
+        }
         self.backend
             .connect(&own)
             .into_result()
@@ -64,6 +73,18 @@ impl Child {
             .snapshot()
             .into_result()
             .map_err(|error| self.named(error))
+    }
+
+    fn connect_context(&mut self) -> Result<bool, BackendError> {
+        let Some(context) = self.pending_context.as_ref() else {
+            return Ok(false);
+        };
+        self.backend
+            .connect(context)
+            .into_result()
+            .map_err(|error| self.named(error))?;
+        self.pending_context = None;
+        Ok(true)
     }
 
     fn restore(&mut self, id: &SnapshotId) -> Result<RVec<SnapshotId>, RestoreFailure> {
@@ -107,6 +128,24 @@ impl CompositeBackend {
         }
     }
 
+    pub(crate) fn has_context(&self) -> bool {
+        self.children
+            .iter()
+            .any(|child| child.kind == BackendKind::Context)
+    }
+
+    /// The first running boundary initializes context capture; a later boundary can save it.
+    pub(crate) fn connect_context(&mut self) -> RResult<bool, BackendError> {
+        let mut connected = false;
+        for child in &mut self.children {
+            match child.connect_context() {
+                Ok(new) => connected |= new,
+                Err(error) => return RResult::RErr(error),
+            }
+        }
+        RResult::ROk(connected)
+    }
+
     fn connect_children(&mut self, context: &SnapshotContext) -> Result<(), BackendError> {
         for index in 0..self.children.len() {
             if let Err(error) = self.children[index].connect(context) {
@@ -123,6 +162,7 @@ impl CompositeBackend {
     /// The child snapshots are of no use without the others, so a failure deletes them again; a
     /// delete that fails only leaves space behind until disconnect.
     fn take_snapshot(&mut self) -> Result<SnapshotId, BackendError> {
+        self.connect_context().into_result()?;
         let mut taken = Vec::with_capacity(self.children.len());
         for index in 0..self.children.len() {
             match self.children[index].snapshot() {
@@ -141,7 +181,11 @@ impl CompositeBackend {
         Ok(snapshot_id(id))
     }
 
-    fn roll_back(&mut self, id: &SnapshotId) -> Result<RVec<SnapshotId>, RestoreFailure> {
+    fn roll_back(
+        &mut self,
+        id: &SnapshotId,
+        kind: BackendKind,
+    ) -> Result<RVec<SnapshotId>, RestoreFailure> {
         let parts = self
             .snapshots
             .get(&parse_id(id)?)
@@ -149,6 +193,9 @@ impl CompositeBackend {
             .ok_or_else(|| unknown_snapshot(id))?;
         let mut invalidated = BTreeSet::new();
         for (index, child_id) in parts {
+            if self.children[index].kind != kind {
+                continue;
+            }
             let (lost, failure) = match self.children[index].restore(&child_id) {
                 Ok(lost) => (lost, None),
                 Err(failure) => (failure.invalidated, Some(failure.error)),
@@ -207,24 +254,49 @@ impl CompositeBackend {
     }
 }
 
-impl RestorableCheckpointBackend for CompositeBackend {
-    fn connect(&mut self, context: &SnapshotContext) -> RResult<(), BackendError> {
+impl CompositeBackend {
+    pub(crate) fn connect(&mut self, context: &SnapshotContext) -> RResult<(), BackendError> {
         self.connect_children(context).into()
     }
 
-    fn snapshot(&mut self) -> RResult<SnapshotId, BackendError> {
+    pub(crate) fn snapshot(&mut self) -> RResult<SnapshotId, BackendError> {
         self.take_snapshot().into()
     }
 
-    fn restore(&mut self, snapshot_id: &SnapshotId) -> RResult<RVec<SnapshotId>, RestoreFailure> {
-        self.roll_back(snapshot_id).into()
+    /// Files restore while processes are stopped. Context RPC runs after the caller resumes
+    /// those processes, with any LLM response still held by the coordinator.
+    pub(crate) fn restore(
+        &mut self,
+        snapshot_id: &SnapshotId,
+        resume_processes: impl FnOnce() -> Result<(), BackendError>,
+    ) -> RResult<RVec<SnapshotId>, RestoreFailure> {
+        let mut invalidated = match self.roll_back(snapshot_id, BackendKind::Filesystem) {
+            Ok(invalidated) => invalidated,
+            Err(failure) => return RResult::RErr(failure),
+        };
+        if self.has_context() {
+            if let Err(error) = resume_processes() {
+                return RResult::RErr(RestoreFailure { error, invalidated });
+            }
+            match self.roll_back(snapshot_id, BackendKind::Context) {
+                Ok(lost) => invalidated.extend(lost),
+                Err(failure) => {
+                    invalidated.extend(failure.invalidated);
+                    return RResult::RErr(RestoreFailure {
+                        error: failure.error,
+                        invalidated,
+                    });
+                }
+            }
+        }
+        RResult::ROk(invalidated)
     }
 
-    fn delete(&mut self, snapshot_id: &SnapshotId) -> RResult<(), BackendError> {
+    pub(crate) fn delete(&mut self, snapshot_id: &SnapshotId) -> RResult<(), BackendError> {
         self.remove(snapshot_id).into()
     }
 
-    fn disconnect(&mut self) -> RResult<(), BackendError> {
+    pub(crate) fn disconnect(&mut self) -> RResult<(), BackendError> {
         self.disconnect_children().into()
     }
 }

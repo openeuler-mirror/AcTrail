@@ -90,8 +90,10 @@ class CheckpointE2E:
             for name in ("llm_secrets.json", ".llm_secrets.json.key"):
                 shutil.copyfile(self.args.secrets_dir / name, root / name)
                 os.chmod(root / name, 0o600)
-            integration_config = root / "integration.json"
-            integration_config.write_text(json.dumps({"endpoint": str(endpoint)}))
+            runtime_config = root / "runtime.json"
+            runtime_config.write_text("{}")
+            trace_config = root / "trace.json"
+            trace_config.write_text(json.dumps({"endpoint": str(endpoint)}))
             command = shlex.join([str(self.args.xiaoo), "--config", str(config)])
             try:
                 self.tmux("new-session", "-d", "-s", self.name, "-x", "160", "-y", "50", "-c", str(workspace), command)
@@ -99,7 +101,7 @@ class CheckpointE2E:
                 self.wait(lambda: endpoint.exists(), "checkpoint socket startup")
                 self.wait(lambda: "Enter 发送" in self.pane(), "agent ready")
                 self.driver = subprocess.Popen(
-                    [str(self.args.driver), str(self.args.library), str(integration_config)],
+                    [str(self.args.driver), str(self.args.library), str(runtime_config), str(trace_config)],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
                 )
                 self.success("connect", trace_id=self.name)

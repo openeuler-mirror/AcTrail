@@ -10,13 +10,21 @@ use crate::model::{
     OperationOutcome, Phase, SnapshotContext, Trigger,
 };
 
-/// Every LLM request boundary of a running context gets its own save; the boundary ticket
-/// completes afterwards so its TLS response can be released.
+/// The first boundary connects pending context backends. Later boundaries each get a save;
+/// their ticket completes afterwards so the TLS response can be released.
 pub(crate) fn run_boundary(
     shared: &Shared,
     context: &SnapshotContext,
     boundary: &Boundary,
 ) -> Result<(), CoordinatorError> {
+    // Context capture activates in the Agent loop after init returns. Release this first
+    // boundary so the Agent can publish its context before the next combined save.
+    if shared
+        .call(context, |backend| backend.connect_context())
+        .map_err(|error| CoordinatorError::new("connect_failed", error.message.into_string()))?
+    {
+        return Ok(());
+    }
     let operation = shared.catalog().create_operation(&NewOperation {
         trace_id: context.trace_id,
         kind: OperationKind::Save,

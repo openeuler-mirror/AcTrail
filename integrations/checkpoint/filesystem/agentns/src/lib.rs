@@ -42,7 +42,14 @@ fn module() -> CheckpointModuleRef {
 
 #[sabi_extern_fn]
 fn create(config: BackendConfig) -> RResult<CheckpointBackend, BackendError> {
-    AgentNsBackend::new(&config.json)
+    // Trace identity and exclusions come from connect; launch cannot replace runtime settings.
+    if config.trace_config_path.is_some() {
+        return RResult::RErr(backend_error(
+            "invalid_config",
+            "AgentNS Trace configuration uses scopes and TraceProcess",
+        ));
+    }
+    AgentNsBackend::new(&config.runtime_json)
         .map(|backend| RestorableCheckpointBackend_TO::from_value(backend, TD_Opaque))
         .into()
 }

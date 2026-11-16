@@ -6,6 +6,7 @@ use std::{
 };
 
 use abi_stable::library::lib_header_from_path;
+use abi_stable::std_types::ROption;
 use checkpoint::{
     BackendConfig, BackendError, BackendErrorKind, CheckpointBackend, CheckpointModuleRef,
     SnapshotContext, SnapshotId, TraceProcess,
@@ -108,16 +109,17 @@ impl Driver {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
+    if args.len() != 4 {
         return Err(
-            "usage: xiaoo_checkpoint_e2e <compiled-library> <integration-config.json>".into(),
+            "usage: xiaoo_checkpoint_e2e <compiled-library> <runtime-config.json> <trace-config.json>".into(),
         );
     }
     // The caller supplies the freshly built, trusted integration library.
     let header = lib_header_from_path(Path::new(&args[1]))?;
     let module = header.init_root_module::<CheckpointModuleRef>()?;
     let config = BackendConfig {
-        json: std::fs::read_to_string(&args[2])?.into(),
+        runtime_json: std::fs::read_to_string(&args[2])?.into(),
+        trace_config_path: ROption::RSome(args[3].as_str().into()),
     };
     let backend = (module.create())(config)
         .into_result()

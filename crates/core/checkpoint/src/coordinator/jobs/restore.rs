@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use checkpoint::SnapshotId;
+use checkpoint::{BackendError, BackendErrorKind, SnapshotId};
 
 use super::records::PendingRecord;
 use crate::coordinator::scheduler::Held;
@@ -62,15 +62,43 @@ pub(crate) fn run(
     );
 
     let target = SnapshotId(checkpoint.snapshot_id.into());
-    let (outcome, failure, invalidated) =
-        match shared.call(context, |backend| backend.restore(&target)) {
-            Ok(invalidated) => (OperationOutcome::Succeeded, None, invalidated),
-            Err(failure) => (
-                OperationOutcome::Failed,
-                Some(Failure::from(failure.error)),
-                failure.invalidated,
+    let mut resumed_for_context = false;
+    let (outcome, mut failure, invalidated) = match shared.call(context, |backend| {
+        backend.restore(&target, || {
+            resumed_for_context = true;
+            resume_processes(shared, context).map_err(|error| {
+                BackendError::new(BackendErrorKind::OperationFailed, error.to_string())
+            })?;
+            Ok(())
+        })
+    }) {
+        Ok(invalidated) => (OperationOutcome::Succeeded, None, invalidated),
+        Err(failure) => (
+            OperationOutcome::Failed,
+            Some(Failure::from(failure.error)),
+            failure.invalidated,
+        ),
+    };
+    // A context RPC failure retains the same stopped-process behavior as a file restore
+    // failure. The boundary holds stay owned by this Trace throughout both phases.
+    if failure.is_some() && resumed_for_context {
+        match shared.processes().pause(&trace) {
+            Ok(processes) => shared.hold(
+                context,
+                Held {
+                    processes,
+                    boundaries: Vec::new(),
+                },
             ),
-        };
+            Err(error) => {
+                let previous = failure.take().expect("restore failed");
+                failure = Some(Failure::new(
+                    "pause_failed",
+                    format!("{}; {}", previous.message, error.message),
+                ));
+            }
+        }
+    }
     let invalidated: Vec<Vec<u8>> = invalidated.into_iter().map(|id| id.0.to_vec()).collect();
     let succeeded = failure.is_none();
     finish(shared, context, operation, outcome, failure, invalidated)?;
@@ -130,6 +158,15 @@ pub(crate) fn resume(
     shared: &Shared,
     context: &SnapshotContext,
 ) -> Result<Vec<Hold>, CoordinatorError> {
+    resume_processes(shared, context)?;
+    Ok(shared.take_held(context).boundaries)
+}
+
+/// Context RPC needs the Agent running while its LLM response remains held.
+pub(super) fn resume_processes(
+    shared: &Shared,
+    context: &SnapshotContext,
+) -> Result<(), CoordinatorError> {
     let processes = shared
         .traces()
         .get(context)
@@ -143,5 +180,12 @@ pub(crate) fn resume(
             .resume(&processes)
             .map_err(|error| CoordinatorError::new("resume_failed", error.message))?;
     }
-    Ok(shared.take_held(context).boundaries)
+    if let Some(held) = shared
+        .traces()
+        .get_mut(context)
+        .and_then(|state| state.held.as_mut())
+    {
+        held.processes.clear();
+    }
+    Ok(())
 }
