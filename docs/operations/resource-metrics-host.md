@@ -117,7 +117,7 @@ startup; configure a new database path before starting the current binaries.
 
 ```bash
 cargo build --release -p daemon -p ctl -p view -p web
-sudo -E python3 tests/v2/regression/test_all.py --no-profile --case resource_metrics_cgroup
+sudo -E python3 tests/e2e/regression/test_all.py --no-profile --case resource_metrics_cgroup
 ```
 
 The privileged cgroup v2 regression

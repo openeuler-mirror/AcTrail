@@ -957,12 +957,12 @@ test ! -e "$MARKER"
 
 ## 11. 自动化真实 Agent 回归与完成口径
 
-仓库提供与本指南核心路径对应的[真实 Xiaoo 动态命令策略回归](../../../../tests/v2/regression/command_policy_xiaoo/README.zh.md)。它使用真实 Xiaoo、真实 Bash tool、真实 `execve`/seccomp notification、SQLite 审计和 Web 告警，不用 shell 脚本伪造 agent 或治理事件。
+仓库提供与本指南核心路径对应的[真实 Xiaoo 动态命令策略回归](../../../../tests/e2e/regression/command_policy_xiaoo/README.zh.md)。它使用真实 Xiaoo、真实 Bash tool、真实 `execve`/seccomp notification、SQLite 审计和 Web 告警，不用 shell 脚本伪造 agent 或治理事件。
 
 从仓库根目录运行：
 
 ```bash
-sudo -E python3.11 tests/v2/regression/test_all.py \
+sudo -E python3.11 tests/e2e/regression/test_all.py \
   --case command_policy_xiaoo
 ```
 
@@ -970,7 +970,7 @@ sudo -E python3.11 tests/v2/regression/test_all.py \
 
 ```bash
 sudo -E python3.11 \
-  tests/v2/regression/command_policy_xiaoo/run_e2e.py
+  tests/e2e/regression/command_policy_xiaoo/run_e2e.py
 ```
 
 成功结果应覆盖：

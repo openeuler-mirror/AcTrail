@@ -98,4 +98,4 @@ sequenceDiagram
 | 内容 | 链接 |
 | --- | --- |
 | 构建、配置与采集要求 | [插件 README](../../../crates/plugins/grey_forwarding/README.md) |
-| 按敏感读取历史和命令参数拒绝外发的服务示例 | [真实 Xiaoo 端到端用例](../../../tests/v2/regression/grey_proxy_xiaoo/case.py) |
+| 按敏感读取历史和命令参数拒绝外发的服务示例 | [真实 Xiaoo 端到端用例](../../../tests/e2e/regression/grey_proxy_xiaoo/case.py) |

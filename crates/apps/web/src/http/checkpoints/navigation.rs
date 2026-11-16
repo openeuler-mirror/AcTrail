@@ -24,8 +24,12 @@ pub(super) fn render(request: &Request<'_>) -> Result<Response, Failure> {
         return Ok(not_found());
     };
     let storage = storage(request).map_err(Failure::Internal)?;
-    match view::llm_call_of_request(storage.as_ref(), request.trace_id, &boundary.request_action_id)
-        .map_err(Failure::Internal)?
+    match view::llm_call_of_request(
+        storage.as_ref(),
+        request.trace_id,
+        &boundary.request_action_id,
+    )
+    .map_err(Failure::Internal)?
     {
         Some(call) => view::action_tree_path_json(storage.as_ref(), request.trace_id, &call)
             .map(Response::json)
@@ -61,7 +65,8 @@ fn calls(
         let Some(boundary) = operation.boundary.as_ref() else {
             continue;
         };
-        if let Some(call) = view::llm_call_of_request(storage, trace_id, &boundary.request_action_id)?
+        if let Some(call) =
+            view::llm_call_of_request(storage, trace_id, &boundary.request_action_id)?
         {
             calls.insert(operation.operation_id, call);
         }

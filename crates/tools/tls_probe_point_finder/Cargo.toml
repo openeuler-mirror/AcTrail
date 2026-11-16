@@ -17,3 +17,7 @@ gimli = { version = "0.32.3", default-features = false, features = ["read", "std
 model_core = { path = "../../core/model" }
 rustc-demangle = "0.1"
 sha2 = "0.10"
+
+[[test]]
+name = "rustls_symbol_cli"
+path = "../../../tests/integration/tools/tls_probe_point_finder/rustls_symbol_cli.rs"

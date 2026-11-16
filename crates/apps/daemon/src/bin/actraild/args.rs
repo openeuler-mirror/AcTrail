@@ -58,7 +58,11 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<AcTraildComm
 }
 
 #[derive(Clone, Debug, Parser)]
-#[command(name = "actraild", about = "Run and supervise the AcTrail daemon")]
+#[command(
+    name = "actraild",
+    about = "Run and supervise the AcTrail daemon",
+    version = env!("CARGO_PKG_VERSION")
+)]
 struct AcTraildCli {
     #[arg(
         long = "config",

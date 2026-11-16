@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-RUNNER="$ROOT_DIR/tests/v2/regression/test_all.py"
+RUNNER="$ROOT_DIR/tests/e2e/regression/test_all.py"
 requested_selection=0
 profile_selection=default
 list_only=0

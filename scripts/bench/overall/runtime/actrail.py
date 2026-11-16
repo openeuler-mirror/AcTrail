@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from tests.v2.common.actrail_runtime import ActrailRuntime
+from tests.e2e.common.actrail_runtime import ActrailRuntime
 
 from .config_patch import ConfigPatch
 

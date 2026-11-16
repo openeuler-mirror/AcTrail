@@ -43,13 +43,7 @@ pub(crate) fn sync_snapshot_into_live(
         .collect();
     let mut excluded = Vec::new();
     find_preserved_directories(&live, device, &mounts, &mut excluded)?;
-    sync_dir(
-        copy_path,
-        snapshot,
-        &live,
-        &excluded,
-        copy_batch_max_bytes,
-    )?;
+    sync_dir(copy_path, snapshot, &live, &excluded, copy_batch_max_bytes)?;
     restore_metadata_and_links(snapshot, &live, &excluded, &mut BTreeMap::new())
 }
 
@@ -126,12 +120,7 @@ fn sync_dir(
 ) -> Result<(), BackendError> {
     if !contains_exclude(live, nested) {
         remove_entries_absent_from(snapshot, live)?;
-        return copy_into(
-            copy_path,
-            &[snapshot.join(".")],
-            live,
-            copy_batch_max_bytes,
-        );
+        return copy_into(copy_path, &[snapshot.join(".")], live, copy_batch_max_bytes);
     }
     // A preserved subvolume or mount lies below `live`, so walk this level entry by entry.
     for entry in read_dir(live)? {
@@ -179,12 +168,7 @@ fn sync_dir(
     if leaves.is_empty() {
         return Ok(());
     }
-    copy_into(
-        copy_path,
-        &leaves,
-        live,
-        copy_batch_max_bytes,
-    )
+    copy_into(copy_path, &leaves, live, copy_batch_max_bytes)
 }
 
 fn contains_exclude(dir: &Path, nested: &[PathBuf]) -> bool {

@@ -222,7 +222,7 @@ grep endpoint /etc/actrail/plugins/otel-http/otel-http.config.toml
 不需要 VSOCK 设备或 root，使用 fake `socat`/`systemctl` 检查公开命令与 unit 合同：
 
 ```bash
-tests/v2/regression/virtual_container/test-vsock-egress-contract.sh
+tests/e2e/regression/virtual_container/test-vsock-egress-contract.sh
 ```
 
 该脚本就是 V2 回归执行的唯一一份 VSOCK 部署断言；运行时证据写入 V2 runner 分配的

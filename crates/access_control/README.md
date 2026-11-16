@@ -73,7 +73,7 @@ Measure retained file reads, writes and socket sends with a real Xiaoo process
 and freshly generated configuration:
 
 ```bash
-python3 tests/v2/regression/lsm_access_control_xiaoo/performance/retained/run.py run \
+python3 tests/e2e/regression/lsm_access_control_xiaoo/performance/retained/run.py run \
   --order off empty lsm lsm empty off \
   --count 1000 \
   --rounds 5 \
@@ -322,7 +322,7 @@ enforcement; it does not promise continued confinement after daemon termination.
 
 ## Validation
 
-`tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py` runs a real Xiaoo from
+`tests/e2e/regression/lsm_access_control_xiaoo/run_e2e.py` runs a real Xiaoo from
 refreshed defaults across all-LSM, fanotify/seccomp and mixed configurations. It
 verifies OS effects, selected backend audits, first exec, descendants, bpf-copy
 payloads and actual fanotify/seccomp resources. It requires a BPF LSM kernel.
@@ -331,7 +331,7 @@ both `deny_on_error` settings, run:
 
 ```sh
 LSM_ACCESS_CONTROL_XIAOO_E2E_BACKENDS=lsm LSM_ACCESS_CONTROL_XIAOO_E2E_IPV6=1 \
-  python3 tests/v2/regression/lsm_access_control_xiaoo/run_e2e.py --color never
+  python3 tests/e2e/regression/lsm_access_control_xiaoo/run_e2e.py --color never
 ```
 
 Set `LSM_ACCESS_CONTROL_XIAOO_E2E_ALERTS=1` instead of `IPV6=1` to verify

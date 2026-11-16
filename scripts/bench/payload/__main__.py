@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "tests/v2/common/test_suites/local_maas_server"))
+sys.path.insert(0, str(REPO_ROOT / "tests/e2e/common/test_suites/local_maas_server"))
 
 from scripts.bench.payload.benchmark import main  # noqa: E402
 

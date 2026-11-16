@@ -708,5 +708,5 @@ fn capability_requested(capabilities: &[CapabilityRequest], capability: &Capabil
 }
 
 #[cfg(test)]
-#[path = "operator/tests.rs"]
+#[path = "../../../../../tests/unit/crates/core/config/daemon/operator/tests.rs"]
 mod tests;

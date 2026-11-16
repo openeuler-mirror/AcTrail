@@ -77,7 +77,7 @@ scripts/install-release.sh
 
 ## 验证
 
-真实 xiaoO 告警验证见[端到端测试说明](../../../../tests/v2/regression/activity_anomaly/README.zh.md)。
+真实 xiaoO 告警验证见[端到端测试说明](../../../../tests/e2e/regression/activity_anomaly/README.zh.md)。
 
 仓库同时提供可直接运行的长命令示例：
 

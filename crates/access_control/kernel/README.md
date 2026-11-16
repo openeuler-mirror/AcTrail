@@ -61,7 +61,7 @@ Run the daemon and security service outside controlled traces. The service shoul
 
 ## Integration test
 
-See [the real Xiaoo scenario](../../../tests/v2/regression/lsm_grey_xiaoo/README.md) for static decisions, repeated external decisions on one path, read fallback, and service failure cases.
+See [the real Xiaoo scenario](../../../tests/e2e/regression/lsm_grey_xiaoo/README.md) for static decisions, repeated external decisions on one path, read fallback, and service failure cases.
 
 Stop the daemon and detach its BPF programs before unloading:
 

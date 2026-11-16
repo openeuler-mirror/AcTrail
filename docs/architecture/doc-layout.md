@@ -247,22 +247,23 @@
 │               └── [x] README.zh.md # 示例说明
 ├── [x] tests/ # 测试文档
 │   ├── [x] README.md # 测试导航
-│   ├── [x] plugins/ # 插件测试文档
-│   │   ├── [x] dynamic-builtin/ # 内置插件动态加载
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] lifecycle/ # 插件生命周期
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] otel-jsonl/ # OTEL JSON 导出
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] persistent-load/ # 插件持久加载
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] wasm-component-control-graylist/ # 组件灰名单决策
-│   │   │   └── [x] README.md # 测试指南
-│   │   ├── [x] wasm-component-control-hostcalls/ # 组件宿主接口
-│   │   │   └── [x] README.md # 测试指南
-│   │   └── [x] wasm-observation/ # Wasm 观测插件
-│   │       └── [x] README.md # 测试指南
-│   └── [x] v2/ # 回归测试文档
+│   ├── [x] integration/ # 集成测试文档
+│   │   └── [x] plugins/ # 插件测试文档
+│   │       ├── [x] dynamic-builtin/ # 内置插件动态加载
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] lifecycle/ # 插件生命周期
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] otel-jsonl/ # OTEL JSON 导出
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] persistent-load/ # 插件持久加载
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] wasm-component-control-graylist/ # 组件灰名单决策
+│   │       │   └── [x] README.md # 测试指南
+│   │       ├── [x] wasm-component-control-hostcalls/ # 组件宿主接口
+│   │       │   └── [x] README.md # 测试指南
+│   │       └── [x] wasm-observation/ # Wasm 观测插件
+│   │           └── [x] README.md # 测试指南
+│   └── [x] e2e/ # 端到端测试文档
 │       ├── [x] README.md # 测试约定
 │       ├── [x] common/ # 公共测试文档
 │       │   ├── [x] llm-http-proxy/ # 模型代理服务

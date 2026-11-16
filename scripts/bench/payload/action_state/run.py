@@ -10,9 +10,9 @@ from scripts.bench.overall.runtime.config_patch import ConfigPatch
 from scripts.bench.payload.benchmark import ROOT
 from scripts.bench.payload.measurement import CommandMeasurement, DaemonCpu
 from scripts.bench.payload.runtime import CollectionRuntime
-from tests.v2.common.actrail_runtime import ActrailRuntime
-from tests.v2.common.core import TestOutput
-from tests.v2.common.mcp_test_support.probe import McpProbeWorkspace
+from tests.e2e.common.actrail_runtime import ActrailRuntime
+from tests.e2e.common.core import TestOutput
+from tests.e2e.common.mcp_test_support.probe import McpProbeWorkspace
 
 from .workload import McpAgentWorkload
 
