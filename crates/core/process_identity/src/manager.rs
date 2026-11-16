@@ -12,7 +12,7 @@ impl HostProcessLookup {
     }
 }
 
-use crate::{
+use process_identity_contracts::{
     HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessIdentity,
     ProcessObservation, ProcessRecord, ProcessResolutionState,
 };

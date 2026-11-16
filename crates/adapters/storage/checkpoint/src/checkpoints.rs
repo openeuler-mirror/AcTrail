@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use checkpoint_core::model::{
+use checkpoint_core_contracts::model::{
     CheckpointId, CheckpointRecord, Deletion, Failure, FilterMode, NewCheckpoint, OperationId,
     Release,
 };

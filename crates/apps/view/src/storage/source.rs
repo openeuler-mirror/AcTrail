@@ -4,11 +4,12 @@ use config_core::daemon::OperatorConfig;
 use model_core::ids::TraceId;
 use model_core::trace::TraceRecord;
 use semantic_action::{SemanticAction, SemanticActionLink};
+use storage_contracts::StorageConfig;
 use storage_core::{
     PayloadSegmentQuery, SnapshotView, StorageBackend, StorageOpenMode, TraceFilter,
     TraceLeasePurpose,
 };
-use storage_factory::{StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 use crate::command::ViewInvocation;
 

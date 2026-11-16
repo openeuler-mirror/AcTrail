@@ -12,7 +12,7 @@ use control_contract::reply::{
 use control_contract::selector::TraceSelector;
 use model_core::ids::{ProfileName, RequestId};
 use model_core::process::{ProcessIdentity, ProcessRecord};
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 use process_identity::ProcessIdentityReader;
 use sandbox_alert_store::SandboxAlertWritePort;
 use sandbox_evidence_store::SandboxEvidenceWritePort;

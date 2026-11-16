@@ -1,7 +1,8 @@
 use alert_contract::{AlertId, AlertListLimit, AlertView};
 use model_core::ids::TraceId;
+use storage_contracts::StorageConfig;
 use storage_core::{StorageBackend, StorageOpenMode};
-use storage_factory::{StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 use crate::json;
 

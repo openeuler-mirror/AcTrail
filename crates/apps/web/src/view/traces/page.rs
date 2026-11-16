@@ -1,8 +1,8 @@
 //! Numbered trace-list rendering with only the selected page's root processes.
 use super::ProcessDisplayIndex;
 use crate::view::open_storage;
+use storage_contracts::StorageConfig;
 use storage_core::TracePageQuery;
-use storage_factory::StorageConfig;
 
 pub(crate) fn trace_page_json(
     config: &StorageConfig,

@@ -1,3 +1,5 @@
+//! Execute observation batches through the WASM component interface.
+
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -5,9 +7,9 @@ use std::time::Instant;
 use plugin_system::{
     AlertHost, DEFAULT_OBSERVATION_QUEUE_CAPACITY, ObservationBatch, ObservationConsumeReport,
     ObservationConsumer, ObservationEventFamily, PluginHostGrants, PluginHostcallMetricsSource,
-    PluginManifest, PluginRuntimeError, PluginRuntimeKind, PostTraceAnalyzer, PostTraceHost,
-    PostTraceTask,
+    PluginManifest, PluginRuntimeError, PostTraceAnalyzer, PostTraceHost, PostTraceTask,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 use wasmtime::component::{Component, Func};
 
 use crate::component_observation::host::component_linker;

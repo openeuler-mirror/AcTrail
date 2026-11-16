@@ -1,3 +1,5 @@
+//! Observation-consumer and post-trace analysis interfaces.
+
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -11,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     PluginDroppedRecord, PluginHostcallMetricsSource, PluginOperationalMetricsSource,
-    PluginRuntimeError, PluginRuntimeKind,
+    PluginRuntimeError,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 
 pub const DEFAULT_OBSERVATION_QUEUE_CAPACITY: u32 = 4096;
 pub const DEFAULT_OBSERVATION_EVENT_FAMILIES: [ObservationEventFamily; 2] = [

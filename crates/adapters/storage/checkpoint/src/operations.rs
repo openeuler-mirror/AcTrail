@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use checkpoint_core::model::{
+use checkpoint_core_contracts::model::{
     Boundary, CheckpointId, Failure, NewOperation, OperationId, OperationKind, OperationOutcome,
     OperationRecord, Phase, Trigger,
 };

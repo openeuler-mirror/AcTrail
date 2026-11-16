@@ -1,5 +1,7 @@
+//! Render plugin catalog entries, status, and control replies as JSON.
+
 use control_contract::reply::{PluginCommandReply, PluginConfigReply, PluginConfigValidationReply};
-use plugin_system::{PluginHostcallMetrics, PluginInstanceStatus};
+use plugin_system_contracts::{PluginHostcallMetrics, PluginInstanceStatus};
 use serde_json::{Value, json};
 
 use super::catalog::{CatalogPackage, CatalogSnapshot};

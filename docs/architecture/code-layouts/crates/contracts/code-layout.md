@@ -12,7 +12,7 @@
 │   │   └── [x] src/ # 绑定请求和返回句柄
 │   │       └── [x] lib.rs # 定义请求的进程范围及生效绑定
 │   │           ├── [x] struct CoverageGuardRequest # 请求目标进程的采集覆盖保护
-│   │           ├── [x] struct TraceBindingRequest # 携带 trace 及其采集绑定条件
+│   │           ├── [x] struct TraceBindingRequest # 携带 trace、根进程坐标及能力请求
 │   │           └── [x] struct TraceBindingHandle # 表达已建立的 trace 绑定
 │   ├── [x] capability/ # 描述采集器支持范围与能力绑定失败
 │   │   └── [x] src/ # 能力声明模型
@@ -42,6 +42,46 @@
 │           └── [x] segment.rs # 定义原始段与流关闭记录
 │               ├── [x] struct RawPayloadSegment # 保留来源、流标识和采集字节
 │               └── [x] struct RawPayloadStreamClose # 表达采集侧明文流结束
+├── [x] storage/ # 存储后端选择、SQLite 配置和共享保留限额，仅依赖领域模型
+│   └── [x] src/ # 配置定义、解析和默认值
+│       ├── [x] lib.rs # 导出共享配置类型和常量
+│       ├── [x] config.rs # 存储后端选择与配置构造
+│       │   ├── [x] enum StorageBackendKind # 标识 SQLite 或 noop 后端
+│       │   └── [x] enum StorageConfig # 保存所选后端的完整配置
+│       ├── [x] parser.rs # StorageConfig 的文本解析入口与配置项读取
+│       ├── [x] constants.rs # SQLite 默认值、配置键前缀和大小上限
+│       ├── [x] sqlite.rs # SQLite 打开参数和专属配置解析
+│       │   ├── [x] struct SqliteStorageConfig # 保存路径、超时、压缩、布局和保留配置
+│       │   └── [x] enum EventRecordLayout # 选择事件记录的持久化布局
+│       └── [x] payload_retention.rs # 各明文来源的独立保留限额
+│           └── [x] struct PayloadRetentionLimits # 按 TLS、socket 和 stdio 来源提供限额
+├── [x] checkpoint_core/ # 协调器、SQLite catalog 与 Web 共享的记录和能力接口
+│   └── [x] src/ # checkpoint 数据和端口契约
+│       ├── [x] lib.rs # 公开记录模型和能力接口
+│       ├── [x] model.rs # Trace、checkpoint、operation、边界、失败和查询条件
+│       │   ├── [x] struct TraceRecord # 保存所有者、根进程、scope、结束和断开结果
+│       │   ├── [x] struct CheckpointRecord # 保存快照来源、失效和删除状态
+│       │   ├── [x] struct OperationRecord # 保存操作阶段、结果和 LLM 请求边界
+│       │   ├── [x] struct Failure # 保存失败代码和消息
+│       │   ├── [x] struct ContextStatus # 表达当前协调器暂停和工作状态
+│       │   └── [x] struct SnapshotContext # 标识 checkpoint 调用所属的 Trace
+│       └── [x] ports.rs # catalog 读写、独立读取连接和进程暂停恢复接口
+│           ├── [x] trait CheckpointCatalog # 读写记录并提交操作结果
+│           ├── [x] trait CatalogReader # 提供独立连接上的历史查询
+│           └── [x] trait ProcessControl # 暂停和恢复指定 Trace 的进程
+├── [x] plugin_system/ # 插件运行时、控制平面和 UDS 传输共享的数据契约，仅依赖 std 和 serde
+│   └── [x] src/ # 插件用途、运行形式与实例状态定义
+│       ├── [x] lib.rs # 导出共享插件类型
+│       ├── [x] http.rs # 插件和灰度代理共用的 HTTP 端点权限与传输限额
+│       │   └── [x] struct PluginHttpDeclaration # 保存允许访问的 URL、超时和报文大小限制
+│       ├── [x] kind.rs # 插件用途和运行形式及其编码转换
+│       │   ├── [x] enum PluginPurpose # 区分 observation、control 和 codec 等职责
+│       │   └── [x] enum PluginRuntimeKind # 区分内置、WASM 和动态库实例
+│       └── [x] status.rs # 生命周期和运行状态快照
+│           ├── [x] enum PluginLifecycleState # 表达 active、draining、stopped 和 failed 状态
+│           ├── [x] struct PluginHostcallMetrics # 汇总宿主调用指标快照
+│           ├── [x] struct PluginPayloadReadMetrics # 表达 payload 读取计数和延迟
+│           └── [x] struct PluginInstanceStatus # 携带插件身份、状态、授权和指标快照
 ├── [x] control_plane/ # ctl 与 daemon 的进程注册、生命周期上报及插件管理命令
 │   └── [x] src/ # 控制命令、响应和 trace 选择器
 │       ├── [x] command.rs # 定义管理请求及 launch 相关输入
@@ -78,7 +118,18 @@
 │           ├── [x] struct TurnLifecycleEvent # 表达 Agent 轮次变化
 │           ├── [x] struct UserInteractionEvent # 表达用户交互状态变化
 │           └── [x] struct WorkLifecycleEvent # 表达工作单元类型及运行状态
-├── [x] process/ # 进程树读取与遍历契约
+├── [x] process/ # 共享进程身份值、进程树读取与遍历契约
+│   ├── [x] identity/ # 进程身份共享数据，供 model 和身份管理器使用
+│   │   └── [x] src/ # 身份、坐标和解析状态
+│   │       ├── [x] lib.rs # 导出共享身份值
+│   │       └── [x] model.rs # 保存进程身份值及其纯值操作
+│   │           ├── [x] struct NamespaceIdentity # 标识 PID namespace
+│   │           ├── [x] struct ProcessIdentity # 表达稳定的进程数值 ID
+│   │           ├── [x] struct HostProcessCoordinates # 保存宿主 PID、开始时间和线程信息
+│   │           ├── [x] struct NamespaceProcessCoordinates # 保存 namespace 内坐标和进程代际
+│   │           ├── [x] struct ProcessObservation # 携带宿主和 namespace 观测坐标
+│   │           ├── [x] enum ProcessResolutionState # 表达临时、已解析或冲突状态
+│   │           └── [x] struct ProcessRecord # 保存身份、坐标、alias 和解析状态
 │   └── [x] tree_snapshot/ # 捕获进程快照并按指定顺序遍历
 │       └── [x] src/ # 进程快照模型和查询接口
 │           ├── [x] snapshot.rs # 定义树、进程和快照获取入口

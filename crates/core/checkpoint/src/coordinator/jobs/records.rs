@@ -6,10 +6,10 @@ use std::time::SystemTime;
 use model_core::ids::TraceId;
 
 use crate::coordinator::{CoordinatorError, Shared};
-use crate::model::{
+use checkpoint_core_contracts::model::{
     CheckpointId, Disconnected, Failure, OperationId, OperationOutcome, Phase, SnapshotContext,
 };
-use crate::ports::CheckpointCatalog;
+use checkpoint_core_contracts::ports::CheckpointCatalog;
 
 pub(crate) enum PendingRecord {
     Restore {

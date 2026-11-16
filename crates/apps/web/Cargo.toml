@@ -10,9 +10,11 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
+storage_contracts = { path = "../../contracts/storage" }
+checkpoint_core_contracts = { path = "../../contracts/checkpoint_core" }
+plugin_system_contracts = { path = "../../contracts/plugin_system" }
 resource_profiling = { path = "../../core/resource_profiling" }
 alert_contract = { path = "../../contracts/alert" }
-checkpoint_core = { path = "../../core/checkpoint" }
 checkpoint_sqlite = { path = "../../adapters/storage/checkpoint" }
 config_core = { path = "../../core/config" }
 config_export_filter = { path = "../../core/config_export_filter" }

@@ -17,8 +17,9 @@ use provider_label::ProviderClassifier;
 use rule_set_provider::classifier::RuleSetClassifier;
 use rule_set_provider::config::RuleSetAdapterConfig;
 use rule_set_provider::loader::load_rules;
+use storage_contracts::StorageConfig;
 use storage_core::StorageOpenMode;
-use storage_factory::{StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 use crate::profiles::DaemonProfileRegistry;
 use crate::runtime_wiring::DaemonRuntimeWiring;

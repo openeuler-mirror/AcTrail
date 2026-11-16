@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use checkpoint_core::model::{OperationId, OperationRecord};
+use checkpoint_core_contracts::model::{OperationId, OperationRecord};
 use model_core::ids::TraceId;
 use storage_core::{StorageBackend, StorageOpenMode};
 use storage_factory::open_storage_backend;

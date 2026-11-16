@@ -1,3 +1,5 @@
+//! Manage sandbox plugin instances and report their runtime status.
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,9 +7,11 @@ use std::sync::Arc;
 use control_contract::command::PluginLoadCommand;
 use control_contract::reply::{ControlError, PluginConfigReply, PluginConfigValidationReply};
 use plugin_system::{
-    PluginInstanceStatus, PluginLifecycleState, PluginManifest, PluginPurpose, PluginRuntimeKind,
-    PluginSandboxObservationKind, SandboxConsumerStatus, SandboxPluginFacade,
+    PluginManifest, PluginSandboxObservationKind, SandboxConsumerStatus, SandboxPluginFacade,
     SandboxPluginUnregisterResult,
+};
+use plugin_system_contracts::{
+    PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeKind,
 };
 use sandbox_alert_store::SandboxAlertWritePort;
 use sandbox_evidence_store::SandboxEvidenceWritePort;

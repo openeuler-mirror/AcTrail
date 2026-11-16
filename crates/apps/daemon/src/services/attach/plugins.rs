@@ -8,8 +8,10 @@ use control_contract::command::PluginLoadCommand;
 use control_contract::reply::ControlError;
 use export_core::ExportPublishReport;
 use plugin_system::{
-    ControlDecider, PluginCapability, PluginHostGrant, PluginHostGrants, PluginInstanceStatus,
-    PluginLifecycleState, PluginManifest, PluginPurpose, PluginRuntimeKind,
+    ControlDecider, PluginCapability, PluginHostGrant, PluginHostGrants, PluginManifest,
+};
+use plugin_system_contracts::{
+    PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeKind,
 };
 use recording_runtime::{RecordingError, RecordingWriter};
 

@@ -1,3 +1,5 @@
+//! Construct export plugins from manifests and runtime configuration.
+
 use export_core::ExportError;
 use export_otel_http::{
     build_otel_http_observation_consumer_instance_with_subscriptions, parse_otel_http_plugin_config,
@@ -9,7 +11,8 @@ use export_otel_jsonl::{
 use std::sync::Arc;
 
 use plugin_system::{AlertHost, PluginHostGrants, PostTraceHost};
-use plugin_system::{ObservationConsumer, PluginManifest, PluginPurpose, PluginRuntimeKind};
+use plugin_system::{ObservationConsumer, PluginManifest};
+use plugin_system_contracts::{PluginPurpose, PluginRuntimeKind};
 
 pub fn build_observation_consumer_from_manifest(
     instance_id: &str,

@@ -42,7 +42,7 @@ impl StorageAttachService {
     pub(in crate::services) fn new(
         profiles: DaemonProfileRegistry,
         storage: Box<dyn StorageBackend>,
-        storage_config: storage_factory::StorageConfig,
+        storage_config: storage_contracts::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         active_trace_max: u32,
@@ -104,7 +104,7 @@ impl StorageAttachService {
     pub(in crate::services) fn new_with_provider_classifier(
         mut profiles: DaemonProfileRegistry,
         mut storage: Box<dyn StorageBackend>,
-        storage_config: storage_factory::StorageConfig,
+        storage_config: storage_contracts::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         mut payload_config: PayloadConfig,
         active_trace_max: u32,

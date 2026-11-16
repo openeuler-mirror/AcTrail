@@ -3,17 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::semantic_actions::storage_meta::ColdFieldCompression;
-
-pub const SQLITE_STORAGE_CONFIG_PREFIX: &str = "storage_sqlite_";
-pub const SQLITE_DEFAULT_BUSY_TIMEOUT_MS: u64 = 5000;
-pub const SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES: usize = 32 * 1024 * 1024;
-pub const SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES: usize = 8 * 1024 * 1024;
-pub const SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS: usize = 256;
-pub const SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES: usize = 1024 * 1024;
-pub const SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL: i32 = 3;
-pub const SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS: usize = 65_536;
-pub const SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+use crate::PayloadRetentionLimits;
+use crate::constants::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventRecordLayout {
@@ -40,7 +31,7 @@ impl EventRecordLayout {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SqliteStorageConfig {
-    pub payload_retention_limits: Option<storage_core::PayloadRetentionLimits>,
+    pub payload_retention_limits: Option<PayloadRetentionLimits>,
     pub payload_retention_max_cached_traces: usize,
     pub path: PathBuf,
     pub busy_timeout_ms: u64,
@@ -55,18 +46,10 @@ pub struct SqliteStorageConfig {
 }
 
 impl SqliteStorageConfig {
-    pub fn cold_field_compression(&self) -> ColdFieldCompression {
-        ColdFieldCompression {
-            zstd_level: self.cold_field_zstd_level,
-            compression_min_bytes: self.cold_field_compression_min_bytes,
-        }
-    }
-
     pub fn parse_entries(
         entries: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, String> {
         let values = ConfigValues::new(entries)?;
-        let default_compression = ColdFieldCompression::DEFAULT;
         Ok(Self {
             payload_retention_limits: None,
             payload_retention_max_cached_traces: 0,
@@ -74,10 +57,10 @@ impl SqliteStorageConfig {
             busy_timeout_ms: values.required_positive_u64("busy_timeout_ms")?,
             cold_field_compression_min_bytes: values
                 .optional_usize("cold_field_compression_min_bytes")?
-                .unwrap_or(default_compression.compression_min_bytes),
+                .unwrap_or(SQLITE_DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES),
             cold_field_zstd_level: values
                 .optional_i32("cold_field_zstd_level")?
-                .unwrap_or(default_compression.zstd_level),
+                .unwrap_or(SQLITE_DEFAULT_COLD_FIELD_ZSTD_LEVEL),
             event_payload_dictionary_cache_bytes: values
                 .optional_usize("event_payload_dictionary_cache_bytes")?
                 .unwrap_or(SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES),
@@ -103,21 +86,20 @@ impl SqliteStorageConfig {
                 .unwrap_or(SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES),
             event_record_block_zstd_level: values
                 .optional_i32("event_record_block_zstd_level")?
-                .map(validate_zstd_level)
+                .map(ConfigValues::validate_zstd_level)
                 .transpose()?
                 .unwrap_or(SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL),
         })
     }
 
     pub fn direct_path(path: impl AsRef<Path>) -> Self {
-        let default_compression = ColdFieldCompression::DEFAULT;
         Self {
             path: path.as_ref().to_path_buf(),
             payload_retention_limits: None,
             payload_retention_max_cached_traces: 0,
             busy_timeout_ms: SQLITE_DEFAULT_BUSY_TIMEOUT_MS,
-            cold_field_compression_min_bytes: default_compression.compression_min_bytes,
-            cold_field_zstd_level: default_compression.zstd_level,
+            cold_field_compression_min_bytes: SQLITE_DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES,
+            cold_field_zstd_level: SQLITE_DEFAULT_COLD_FIELD_ZSTD_LEVEL,
             event_payload_dictionary_cache_bytes:
                 SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
             event_path_dictionary_cache_bytes: SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
@@ -138,7 +120,7 @@ impl ConfigValues {
     fn new(entries: impl IntoIterator<Item = (String, String)>) -> Result<Self, String> {
         let mut values = BTreeMap::new();
         for (key, value) in entries {
-            reject_unknown_key(&key)?;
+            Self::reject_unknown_key(&key)?;
             if values.insert(key.clone(), value).is_some() {
                 return Err(format!(
                     "duplicate config key {SQLITE_STORAGE_CONFIG_PREFIX}{key}"
@@ -225,30 +207,32 @@ impl ConfigValues {
     }
 }
 
-fn reject_unknown_key(key: &str) -> Result<(), String> {
-    match key {
-        "path"
-        | "busy_timeout_ms"
-        | "cold_field_compression_min_bytes"
-        | "cold_field_zstd_level"
-        | "event_payload_dictionary_cache_bytes"
-        | "event_path_dictionary_cache_bytes"
-        | "event_record_layout"
-        | "event_record_block_max_events"
-        | "event_record_block_max_uncompressed_bytes"
-        | "event_record_block_zstd_level" => Ok(()),
-        _ => Err(format!(
-            "unknown config key {SQLITE_STORAGE_CONFIG_PREFIX}{key}"
-        )),
+impl ConfigValues {
+    fn reject_unknown_key(key: &str) -> Result<(), String> {
+        match key {
+            "path"
+            | "busy_timeout_ms"
+            | "cold_field_compression_min_bytes"
+            | "cold_field_zstd_level"
+            | "event_payload_dictionary_cache_bytes"
+            | "event_path_dictionary_cache_bytes"
+            | "event_record_layout"
+            | "event_record_block_max_events"
+            | "event_record_block_max_uncompressed_bytes"
+            | "event_record_block_zstd_level" => Ok(()),
+            _ => Err(format!(
+                "unknown config key {SQLITE_STORAGE_CONFIG_PREFIX}{key}"
+            )),
+        }
     }
-}
 
-fn validate_zstd_level(level: i32) -> Result<i32, String> {
-    if (-7..=22).contains(&level) {
-        Ok(level)
-    } else {
-        Err(format!(
-            "invalid {SQLITE_STORAGE_CONFIG_PREFIX}event_record_block_zstd_level: expected -7..=22"
-        ))
+    fn validate_zstd_level(level: i32) -> Result<i32, String> {
+        if (-7..=22).contains(&level) {
+            Ok(level)
+        } else {
+            Err(format!(
+                "invalid {SQLITE_STORAGE_CONFIG_PREFIX}event_record_block_zstd_level: expected -7..=22"
+            ))
+        }
     }
 }

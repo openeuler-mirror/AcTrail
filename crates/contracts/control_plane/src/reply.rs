@@ -11,7 +11,7 @@ use model_core::capability::Capability;
 use model_core::ids::{ProfileName, TraceId, TraceName};
 use model_core::process::NamespaceIdentity;
 use model_core::trace::{TlsEventToken, TraceHealth, TraceLifecycleState};
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceListItem {

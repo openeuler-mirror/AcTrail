@@ -1,6 +1,6 @@
 //! Terminal output for daemon plugin commands.
 
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 
 pub(super) struct PluginOutput;
 

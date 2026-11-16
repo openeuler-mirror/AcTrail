@@ -1,9 +1,10 @@
+//! Manage observation subscriptions and plugin lifecycle status.
+
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use plugin_system::{
-    ObservationConsumer, PluginInstanceStatus, PluginLifecycleState, PostTraceTask,
-};
+use plugin_system::{ObservationConsumer, PostTraceTask};
+use plugin_system_contracts::{PluginInstanceStatus, PluginLifecycleState};
 
 use crate::ExportError;
 

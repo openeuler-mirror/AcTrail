@@ -47,11 +47,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use model_core::ids::{RequestId, TraceId};
 use model_core::payload::PayloadSegmentId;
+use storage_contracts::StorageConfig;
 use storage_core::{
     PayloadSegmentQuery, SemanticActionChildPageQuery, SnapshotView, StorageBackend,
     StorageOpenMode, TraceLeasePurpose,
 };
-use storage_factory::{StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 use crate::json;
 

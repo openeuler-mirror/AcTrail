@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use serde_json::Value;
+use storage_contracts::StorageConfig;
 use storage_core::SemanticActionChildPageQuery;
-use storage_factory::StorageConfig;
 
 use crate::json;
 

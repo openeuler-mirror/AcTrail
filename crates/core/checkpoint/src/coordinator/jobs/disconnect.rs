@@ -6,7 +6,9 @@ use std::time::SystemTime;
 use super::records::PendingRecord;
 use super::restore;
 use crate::coordinator::{CoordinatorError, Hold, Shared};
-use crate::model::{CheckpointRecord, Deletion, Disconnected, Failure, Release, SnapshotContext};
+use checkpoint_core_contracts::model::{
+    CheckpointRecord, Deletion, Disconnected, Failure, Release, SnapshotContext,
+};
 
 /// Runs after the work queued before it, so checkpoints that work created are deleted as well.
 /// Disconnecting frees every snapshot, so it also settles releases that failed earlier, including
@@ -93,5 +95,5 @@ fn disconnect_backend(shared: &Shared, context: &SnapshotContext) -> Option<Fail
     let mut backend = shared.take_backend(context);
     let error = backend.disconnect().into_result().err()?;
     shared.keep_for_retry(context, backend);
-    Some(error.into())
+    Some(Shared::backend_failure(error))
 }

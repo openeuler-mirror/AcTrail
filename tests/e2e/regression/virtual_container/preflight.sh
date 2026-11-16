@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 虚拟容器测试环境预检：验收机必须通过必要能力门禁。
+# Check required host capabilities for virtual-container tests.
 set -u
 
 . "$(dirname -- "${BASH_SOURCE[0]}")/runtime-backend.sh" || exit 1
@@ -17,7 +17,7 @@ case "$BACKEND" in
 esac
 
 pass=0; fail=0
-check() { # $1 描述, $2 命令
+check() { # $1 description, $2 command
   if eval "$2" >/dev/null 2>&1; then
     echo "PASS: $1"; pass=$((pass+1))
   else
@@ -64,7 +64,7 @@ check_host_cgroup() {
   local -a missing=()
 
   if [[ -f "$CGROUP_ROOT/cgroup.controllers" ]]; then
-    echo "PASS: 宿主 cgroup v2"
+    echo "PASS: Host cgroup v2"
     pass=$((pass+1))
     return
   fi
@@ -73,10 +73,10 @@ check_host_cgroup() {
     [[ -d "$CGROUP_ROOT/$controller" ]] || missing+=("$controller")
   done
   if [[ "${#missing[@]}" -eq 0 ]]; then
-    echo "PASS: 宿主 cgroup v1 必要控制器"
+    echo "PASS: Required host cgroup v1 controllers"
     pass=$((pass+1))
   else
-    echo "FAIL: 宿主 cgroup v1/v2（缺少 v1 控制器: ${missing[*]}）"
+    echo "FAIL: Host cgroup v1/v2 (missing v1 controllers: ${missing[*]})"
     fail=$((fail+1))
   fi
 }
@@ -103,38 +103,38 @@ check_runtime_shim_version_match() {
 
 echo "== AcTrail virtual-container preflight =="
 echo "containerd_runtime=$CTR_RUNTIME"
-check "/dev/kvm 存在且可读写"            'test -r /dev/kvm -a -w /dev/kvm'
+check "/dev/kvm exists and is readable and writable"            'test -r /dev/kvm -a -w /dev/kvm'
 case "$(uname -m)" in
-  x86_64) check "x86 CPU 虚拟化标志"       'grep -Eq "vmx|svm" /proc/cpuinfo' ;;
-  aarch64) check "ARM64 KVM 设备"          'test -c /dev/kvm -a -d /sys/module/kvm' ;;
-  *) check "受支持的虚拟化架构"            'false' ;;
+  x86_64) check "x86 CPU virtualization flags"       'grep -Eq "vmx|svm" /proc/cpuinfo' ;;
+  aarch64) check "ARM64 KVM device"          'test -c /dev/kvm -a -d /sys/module/kvm' ;;
+  *) check "Supported virtualization architecture"            'false' ;;
 esac
-check "containerd daemon 可连接"         'command -v ctr && ctr version'
-check "kata-runtime 诊断工具可用"       'command -v kata-runtime'
-check "Kata shim-v2 可用 ($KATA_SHIM_BINARY)" \
+check "containerd daemon is reachable"         'command -v ctr && ctr version'
+check "kata-runtime diagnostics are available"       'command -v kata-runtime'
+check "Kata shim-v2 is available ($KATA_SHIM_BINARY)" \
   "command -v '$KATA_SHIM_BINARY'"
-check "Kata runtime/shim 版本一致"       'check_runtime_shim_version_match'
-check "Kata runtime 配置校验器可用"     'test -x "$RUNTIME_CONFIG_VALIDATOR"'
+check "Kata runtime and shim versions match"       'check_runtime_shim_version_match'
+check "Kata runtime config validator is available"     'test -x "$RUNTIME_CONFIG_VALIDATOR"'
 case "$BACKEND" in
   stratovirt)
-    check "StratoVirt 可用"              'command -v stratovirt'
+    check "StratoVirt is available"              'command -v stratovirt'
     check_runtime_config stratovirt
     ;;
   cloud-hypervisor)
-    check "Cloud Hypervisor 可用"        'command -v cloud-hypervisor'
+    check "Cloud Hypervisor is available"        'command -v cloud-hypervisor'
     check_runtime_config cloud-hypervisor
     ;;
   all)
-    check "StratoVirt 可用"              'command -v stratovirt'
+    check "StratoVirt is available"              'command -v stratovirt'
     check_runtime_config stratovirt
-    check "Cloud Hypervisor 可用"        'command -v cloud-hypervisor'
+    check "Cloud Hypervisor is available"        'command -v cloud-hypervisor'
     check_runtime_config cloud-hypervisor
     ;;
 esac
 check_host_cgroup
 
 echo
-echo "== 版本冻结记录(写入验收报告)=="
+echo "== Version snapshot for the acceptance report=="
 version_commands=(
   "ctr version"
   "kata-runtime version"
@@ -147,7 +147,7 @@ case "$BACKEND" in
 esac
 version_commands+=("uname -rm")
 for c in "${version_commands[@]}"; do
-  echo "-- $c"; eval "$c" 2>/dev/null | head -3 || echo "(不可用)"
+  echo "-- $c"; eval "$c" 2>/dev/null | head -3 || echo "(unavailable)"
 done
 
 echo

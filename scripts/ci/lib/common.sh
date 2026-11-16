@@ -1,9 +1,28 @@
 #!/usr/bin/env bash
-# CI 公共工具：依赖检查、控制台格式和失败原因提取。
+# CI helpers for dependency checks, console output, and failure details.
 
 export LC_ALL=C
 
-# 检查调用方列出的命令，输出所有缺失项并返回失败。
+# Use ANSI 16 colors on terminals; NO_COLOR disables and CLICOLOR_FORCE enables color.
+ci_log() {
+    local level="$1" color
+    shift
+    case "$level" in
+        PASS) color=92 ;;
+        FAIL) color=91 ;;
+        SKIP|WARN) color=93 ;;
+        *) color=96 ;;
+    esac
+    if [[ -z "${NO_COLOR:-}" ]] &&
+       { [[ "${CLICOLOR_FORCE:-0}" != 0 ]] ||
+         [[ -t 2 && -n "${TERM:-}" && "$TERM" != dumb ]]; }; then
+        printf '\033[%sm[%s]\033[0m %s\n' "$color" "$level" "$*" >&2
+    else
+        printf '[%s] %s\n' "$level" "$*" >&2
+    fi
+}
+
+# Report all missing commands and return failure if any are missing.
 check_dependency() {
     local tool missing=0
     for tool in "$@"; do
@@ -26,9 +45,9 @@ ci_section() {
 ci_result() {
     local step="$1" code="$2"
     if (( code == 0 )); then
-        printf '  [PASS] %s\n' "$step" >&2
+        ci_log PASS "$step"
     else
-        printf '  [FAIL] %s (exit %s)\n' "$step" "$code" >&2
+        ci_log FAIL "$step (exit $code)"
     fi
 }
 
@@ -39,7 +58,7 @@ print_indented() {
     done
 }
 
-# 优先取首条 FAIL 行并去掉标记，否则取首个非空行。
+# Return the first FAIL line without its prefix, or the first nonempty line.
 extract_reason() {
     local line stripped first_nonempty=''
     while IFS= read -r line || [[ -n "$line" ]]; do

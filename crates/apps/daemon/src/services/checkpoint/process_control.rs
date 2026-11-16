@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use checkpoint_core::model::TraceRecord;
-use checkpoint_core::ports::{PausedProcess, ProcessControl, ProcessControlError};
+use checkpoint_core_contracts::model::TraceRecord;
+use checkpoint_core_contracts::ports::{PausedProcess, ProcessControl, ProcessControlError};
 use ebpf_collector::procfs::ProcfsIdentityReader;
 use model_core::ids::TraceId;
 use model_core::process::ProcessRecord;

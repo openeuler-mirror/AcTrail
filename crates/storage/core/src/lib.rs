@@ -5,7 +5,6 @@ mod backend;
 pub use action_content::{ActionContentSource, HttpContentPage, HttpContentQuery};
 mod error;
 mod idle;
-mod payload_retention;
 mod recent_actions;
 mod timeline;
 pub use recent_actions::RecentActionsQuery;
@@ -29,7 +28,7 @@ pub use backend::{
     StorageBackend, StorageOpenMode, TlsFlowDiagnostic,
 };
 pub use error::StorageError;
-pub use payload_retention::PayloadRetentionLimits;
+pub use storage_contracts::PayloadRetentionLimits;
 pub use store_read_contract::filters::TraceFilter;
 pub use store_read_contract::payloads::{PayloadRowLimit, PayloadSegmentQuery};
 pub use store_retention_contract::cleanup::RetentionCandidate;

@@ -20,14 +20,17 @@ use std::time::SystemTime;
 
 use crate::backends::composite::CompositeBackend;
 use abi_stable::std_types::RResult;
+use checkpoint::{BackendError, BackendErrorKind};
 use model_core::ids::TraceId;
 
 pub use self::commands::LaunchRequest;
 pub use self::events::BoundaryAction;
 use self::scheduler::TraceState;
 use crate::factory::CheckpointFactory;
-use crate::model::{CheckpointId, OperationId, SnapshotContext};
-use crate::ports::{CatalogError, CatalogReader, CheckpointCatalog, ProcessControl};
+use checkpoint_core_contracts::model::{CheckpointId, Failure, OperationId, SnapshotContext};
+use checkpoint_core_contracts::ports::{
+    CatalogError, CatalogReader, CheckpointCatalog, ProcessControl,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorError {
@@ -170,4 +173,17 @@ fn unknown_checkpoint(checkpoint_id: CheckpointId) -> CoordinatorError {
         "unknown_checkpoint",
         format!("{checkpoint_id} is not a checkpoint of this Trace"),
     )
+}
+
+impl Shared {
+    /// Convert backend failures to catalog records at the runtime boundary.
+    pub(super) fn backend_failure(error: BackendError) -> Failure {
+        let code = match error.kind {
+            BackendErrorKind::InvalidConfiguration => "invalid_configuration",
+            BackendErrorKind::InvalidSnapshot => "invalid_snapshot",
+            BackendErrorKind::Unavailable => "unavailable",
+            BackendErrorKind::OperationFailed => "operation_failed",
+        };
+        Failure::new(code, error.message.into_string())
+    }
 }

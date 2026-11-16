@@ -14,8 +14,9 @@ use control_contract::reply::{
 use model_core::ids::RequestId;
 use plugin_system::{
     CommandPolicyDecision, FilePolicyDecision, NetworkPolicyDecision, PluginHostGrant,
-    PluginHostGrants, PluginInstanceStatus,
+    PluginHostGrants,
 };
+use plugin_system_contracts::PluginInstanceStatus;
 use serde::Deserialize;
 use uds_control_client::{UdsControlClient, UdsSocketTransport};
 

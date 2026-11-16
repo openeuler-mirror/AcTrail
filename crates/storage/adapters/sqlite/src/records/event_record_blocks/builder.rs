@@ -4,7 +4,7 @@ use model_core::event::DomainEvent;
 use rusqlite::{OptionalExtension, params};
 use store_write_contract::WriteError;
 
-use crate::config::{EventRecordLayout, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES};
+use storage_contracts::{EventRecordLayout, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES};
 
 use super::codec::{CODEC_VERSION, KIND_COUNT, compress_block, encode_event, encode_kind_counts};
 

@@ -10,7 +10,7 @@ use resource_profiling::model::cgroup_v2_binding::{CgroupV2Binding, HostBootId};
 fn binding_failure_rolls_back_trace_processes_and_memberships_then_retry_commits() {
     let temp = tempfile::tempdir().unwrap();
     let mut storage = storage_factory::open_storage_backend(
-        &storage_factory::StorageConfig::sqlite_path(temp.path().join("admission.sqlite")),
+        &storage_contracts::StorageConfig::sqlite_path(temp.path().join("admission.sqlite")),
         storage_core::StorageOpenMode::ReadWrite,
     )
     .unwrap();
