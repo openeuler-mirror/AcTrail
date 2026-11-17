@@ -34,6 +34,7 @@ flowchart TB
 
 | 组件 | 职责 | 持有的状态 |
 | --- | --- | --- |
+| 共享记录与能力接口 | 定义协调器、SQLite catalog 和 Web 共用的记录及能力接口 | 无运行状态 |
 | checkpoint 协调 | 计算有效 scope，连接 backend，并按 Trace 调度保存、恢复和释放。根据操作结果更新历史、处理失败并决定边界放行。历史查询使用只读连接 | 每个 Trace 的执行队列、待执行的恢复、当前 operation、组合 backend，恢复失败后保持的暂停进程和等待放行的边界 |
 | LLM 边界接入 | 按 TLS 连接放行已处理的出站事件。被关注 Trace 的 LLM 请求交给 checkpoint 协调，完成后继续放行 | 每条 TLS 连接已处理与已放行的序号，等待 checkpoint 处理的 LLM 请求 |
 | 进程控制 | 恢复前暂停 Trace 的 Agent 及受控子进程，之后只继续由 checkpoint 暂停的进程 | 由 checkpoint 暂停的进程和执行结果 |
@@ -413,6 +414,7 @@ daemon 异常退出时，backend 遗留的快照由运维清理。
 
 | 组件 | 模块与布局 |
 | --- | --- |
+| 共享记录与能力接口 | [`crates/contracts/checkpoint_core`](../code-layouts/crates/contracts/code-layout.md) |
 | checkpoint 协调 | [`crates/core/checkpoint`](../code-layouts/crates/core/checkpoint/code-layout.md) |
 | factory、组合 backend | [`crates/core/checkpoint`](../code-layouts/crates/core/checkpoint/code-layout.md) 的 `factory.rs`、`backends/` |
 | backend ABI 契约 | [`crates/contracts/checkpoint`](../code-layouts/crates/contracts/code-layout.md) |

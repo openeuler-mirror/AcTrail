@@ -1,8 +1,8 @@
 //! Bounded semantic timeline and inexpensive trace metadata.
 
 use model_core::ids::TraceId;
+use storage_contracts::StorageConfig;
 use storage_core::TimelineQuery;
-use storage_factory::StorageConfig;
 
 use super::{actions::ContextCompactDisplay, open_storage, traces::ProcessDisplayIndex};
 use crate::json;

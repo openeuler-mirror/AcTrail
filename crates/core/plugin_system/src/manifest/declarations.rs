@@ -1,3 +1,5 @@
+//! Plugin manifest structure and role-specific configuration declarations.
+
 use std::collections::BTreeMap;
 
 use alert_contract::AlertSeverity;
@@ -5,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     PluginCapability, PluginHostcallLimits, PluginObservationDelivery, PluginPostTraceTrigger,
-    PluginPurpose, PluginRuntimeKind,
 };
 use crate::ObservationEventFamily;
+use plugin_system_contracts::{PluginHttpDeclaration, PluginPurpose, PluginRuntimeKind};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,17 +45,6 @@ pub struct PluginHostDeclaration {
     #[serde(default)]
     pub capabilities: Vec<PluginCapability>,
     pub http: Option<PluginHttpDeclaration>,
-}
-
-/// Permitted HTTP URLs and transport resource limits.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginHttpDeclaration {
-    pub allowed_urls: Vec<String>,
-    pub timeout_ms: u64,
-    pub finish_reserve_ms: Option<u64>,
-    pub request_max_bytes: u32,
-    pub response_max_bytes: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

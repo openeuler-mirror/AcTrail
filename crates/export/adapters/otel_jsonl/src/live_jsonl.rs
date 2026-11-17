@@ -7,8 +7,9 @@ use export_core::{
 };
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PluginDroppedRecord, PluginRuntimeError, PluginRuntimeKind,
+    PluginDroppedRecord, PluginRuntimeError,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 
 use crate::OtelJsonlExporterConfig;
 use crate::exporter::ExporterSink;

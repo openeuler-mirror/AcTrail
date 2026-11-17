@@ -1,3 +1,5 @@
+//! SQLite storage encoding metadata and compression configuration conversion.
+
 use crate::semantic_actions::codebook;
 
 pub(in crate::semantic_actions) const SCHEMA_VERSION: i32 = codebook::CURRENT_SCHEMA_VERSION;
@@ -15,8 +17,8 @@ pub struct ColdFieldCompression {
 
 impl ColdFieldCompression {
     pub const DEFAULT: Self = Self {
-        zstd_level: 3,
-        compression_min_bytes: 64,
+        zstd_level: storage_contracts::SQLITE_DEFAULT_COLD_FIELD_ZSTD_LEVEL,
+        compression_min_bytes: storage_contracts::SQLITE_DEFAULT_COLD_FIELD_COMPRESSION_MIN_BYTES,
     };
 }
 
@@ -43,3 +45,12 @@ pub(in crate::semantic_actions) const CURRENT: StorageMeta = StorageMeta {
         compact_zstd: ENCODING_COMPACT_ZSTD,
     },
 };
+
+impl From<&storage_contracts::SqliteStorageConfig> for ColdFieldCompression {
+    fn from(config: &storage_contracts::SqliteStorageConfig) -> Self {
+        Self {
+            zstd_level: config.cold_field_zstd_level,
+            compression_min_bytes: config.cold_field_compression_min_bytes,
+        }
+    }
+}

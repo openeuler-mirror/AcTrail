@@ -7,9 +7,10 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use control_contract::reply::ControlError;
 use plugin_system::{
     ControlDecider, ControlDecisionBudget, ControlDecisionRequest, ControlDecisionResponse,
-    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, PluginInstanceStatus,
-    PluginLifecycleState, PluginPurpose, PluginRuntimeError, RuntimePluginConfig,
+    PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, PluginRuntimeError,
+    RuntimePluginConfig,
 };
+use plugin_system_contracts::{PluginInstanceStatus, PluginLifecycleState, PluginPurpose};
 
 #[derive(Clone)]
 pub(in crate::services) struct ControlPluginRuntime {

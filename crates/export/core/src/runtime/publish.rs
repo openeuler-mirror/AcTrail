@@ -1,11 +1,12 @@
+//! Publish observations and collect subscriber status snapshots.
+
 use model_core::ids::TraceId;
 use model_core::trace::TraceRecord;
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
 use std::time::Duration;
 
-use plugin_system::{
-    ObservationConsumer, PayloadReference, PluginInstanceStatus, PluginRuntimeError, PostTraceTask,
-};
+use plugin_system::{ObservationConsumer, PayloadReference, PluginRuntimeError, PostTraceTask};
+use plugin_system_contracts::PluginInstanceStatus;
 
 use crate::ExportError;
 

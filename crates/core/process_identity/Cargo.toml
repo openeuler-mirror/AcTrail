@@ -5,4 +5,4 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+process_identity_contracts = { path = "../../contracts/process/identity" }

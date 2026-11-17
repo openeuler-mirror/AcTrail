@@ -3,10 +3,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use checkpoint_core::model::{
+use checkpoint_core_contracts::model::{
     CheckpointRecord, FilterMode, OperationId, OperationRecord, TraceRecord,
 };
-use checkpoint_core::ports::{CatalogError, CatalogReader};
+use checkpoint_core_contracts::ports::{CatalogError, CatalogReader};
 use model_core::ids::TraceId;
 use rusqlite::{Connection, OpenFlags};
 

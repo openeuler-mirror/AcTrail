@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config_core::daemon::{DEFAULT_OPERATOR_CONFIG_PATH, OperatorConfig, WebAlertsConfig};
-use storage_factory::StorageConfig;
+use storage_contracts::StorageConfig;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebConfig {

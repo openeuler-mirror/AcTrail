@@ -1,10 +1,10 @@
 | 配置项 | 类型 | 默认值 | 必填 | 所属模块 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `host.http.allowed_urls` | `string[]` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 插件 manifest 配置。授予 `http.request` 要求配置该列表。HTTP 或 HTTPS 完整地址精确匹配，禁用代理和重定向。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.timeout_ms` | `uint64` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | HTTP 请求时长上限，单位为毫秒且必须大于 0。授权和管理命令中还受调用剩余时间扣除收尾预留后的限制。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.finish_reserve_ms` | `uint64` | `30` | 否 | plugin_system / plugin_wasm_runtime | 为插件处理 HTTP 结果和返回预留的毫秒数。0 关闭预留。调用剩余时间不大于预留时，不发送请求并返回错误。没有调用截止时间时不扣除。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.request_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 请求正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.response_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 响应正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
+| `host.http.allowed_urls` | `string[]` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 插件 manifest 配置。授予 `http.request` 要求配置该列表。HTTP 或 HTTPS 完整地址精确匹配，禁用代理和重定向。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.timeout_ms` | `uint64` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | HTTP 请求时长上限，单位为毫秒且必须大于 0。授权和管理命令中还受调用剩余时间扣除收尾预留后的限制。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.finish_reserve_ms` | `uint64` | `30` | 否 | plugin_system / plugin_wasm_runtime | 为插件处理 HTTP 结果和返回预留的毫秒数。0 关闭预留。调用剩余时间不大于预留时，不发送请求并返回错误。没有调用截止时间时不扣除。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.request_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 请求正文字节数上限，必须大于 0。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.response_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 响应正文字节数上限，必须大于 0。[声明](../../crates/contracts/plugin_system/src/http.rs) |
 | `control.socket_path` | `string` | `"/run/actrail/control.sock"` | 否 | control | Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L11) |
 | `control.socket_mode_octal` | `string` | `"660"` | 否 | control | Unix socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L12) |
 | `control.pending_connection_max` | `uint32` | `256` | 否 | control | 同时跟踪的 control 连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |

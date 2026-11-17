@@ -3,7 +3,7 @@
 use checkpoint::SnapshotId;
 
 use crate::coordinator::{CoordinatorError, Shared};
-use crate::model::{CheckpointId, Failure, SnapshotContext};
+use checkpoint_core_contracts::model::{CheckpointId, SnapshotContext};
 
 pub(crate) fn run(
     shared: &Shared,
@@ -15,7 +15,7 @@ pub(crate) fn run(
     let failure = shared
         .call(context, |backend| backend.delete(&snapshot))
         .err()
-        .map(Failure::from);
+        .map(Shared::backend_failure);
     Ok(shared
         .catalog()
         .record_release(context.trace_id, checkpoint_id, failure.as_ref())?)

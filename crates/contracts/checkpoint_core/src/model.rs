@@ -3,7 +3,6 @@
 use std::fmt;
 use std::time::SystemTime;
 
-use checkpoint::{BackendError, BackendErrorKind};
 use model_core::ids::TraceId;
 use serde::{Deserialize, Serialize};
 
@@ -126,18 +125,6 @@ impl Failure {
             code: code.into(),
             message: message.into(),
         }
-    }
-}
-
-impl From<BackendError> for Failure {
-    fn from(error: BackendError) -> Self {
-        let code = match error.kind {
-            BackendErrorKind::InvalidConfiguration => "invalid_configuration",
-            BackendErrorKind::InvalidSnapshot => "invalid_snapshot",
-            BackendErrorKind::Unavailable => "unavailable",
-            BackendErrorKind::OperationFailed => "operation_failed",
-        };
-        Self::new(code, error.message.into_string())
     }
 }
 

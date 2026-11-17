@@ -6,5 +6,4 @@ license = "MulanPSL-2.0"
 
 [dependencies]
 collector_capability = { path = "../capability" }
-config_core = { path = "../../../core/config" }
 model_core = { path = "../../../core/model" }

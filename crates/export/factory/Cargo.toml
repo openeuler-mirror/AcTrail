@@ -5,6 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+plugin_system_contracts = { path = "../../contracts/plugin_system" }
 export_core = { path = "../core" }
 export_otel_http = { path = "../adapters/otel_http" }
 export_otel_jsonl = { path = "../adapters/otel_jsonl" }

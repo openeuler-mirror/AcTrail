@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-# TODO: 确定模块公开接口与依赖边界规则后实现检查。
+# TODO: Implement checks after defining public interface and dependency rules.
 set -euo pipefail

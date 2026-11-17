@@ -1,3 +1,5 @@
+//! Track an observation subscriber's resources, counters, and lifecycle.
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender, TrySendError, sync_channel};
@@ -20,8 +22,10 @@ use super::{
 };
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
-    PluginOperationalMetricsSource, PluginPurpose, PluginRuntimeKind, PostTraceTask,
+    PluginHostcallMetricsSource, PluginOperationalMetricsSource, PostTraceTask,
+};
+use plugin_system_contracts::{
+    PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeKind,
 };
 
 pub(super) struct ObservationConsumerSlot {

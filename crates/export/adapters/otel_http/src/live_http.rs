@@ -17,8 +17,9 @@ use export_core::{
 use plugin_system::{
     DEFAULT_OBSERVATION_EVENT_FAMILIES, ObservationBatch, ObservationConsumeReport,
     ObservationConsumer, ObservationEventFamily, PluginDroppedRecord, PluginOperationalMetrics,
-    PluginOperationalMetricsSource, PluginRuntimeError, PluginRuntimeKind,
+    PluginOperationalMetricsSource, PluginRuntimeError,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 use semantic_action::{
     SemanticActionKind,
     attr_keys::{agent, llm_request, process, process_parent},

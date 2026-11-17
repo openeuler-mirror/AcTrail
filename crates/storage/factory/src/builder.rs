@@ -1,3 +1,5 @@
+//! Open the selected storage implementation with the shared configuration.
+
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -5,7 +7,7 @@ use std::time::Duration;
 use sqlite_storage::SqliteStorage;
 use storage_core::{StorageBackend, StorageError, StorageOpenMode};
 
-use crate::StorageConfig;
+use storage_contracts::StorageConfig;
 
 pub fn open_storage_backend(
     config: &StorageConfig,
@@ -18,7 +20,7 @@ pub fn open_storage_backend(
             SqliteStorage::open_with_options(
                 &config.path,
                 Some(Duration::from_millis(config.busy_timeout_ms)),
-                config.cold_field_compression(),
+                sqlite_storage::ColdFieldCompression::from(config),
                 config.event_payload_dictionary_cache_bytes,
                 config.event_path_dictionary_cache_bytes,
                 config.event_record_layout,

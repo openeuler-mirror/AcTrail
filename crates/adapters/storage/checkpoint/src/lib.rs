@@ -12,11 +12,11 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-use checkpoint_core::model::{
+use checkpoint_core_contracts::model::{
     Boundary, CheckpointId, CheckpointRecord, Disconnected, Failure, NewCheckpoint, NewOperation,
     OperationId, OperationKind, OperationOutcome, OperationRecord, TraceRecord,
 };
-use checkpoint_core::ports::{CatalogError, CheckpointCatalog};
+use checkpoint_core_contracts::ports::{CatalogError, CheckpointCatalog};
 use model_core::ids::TraceId;
 use rusqlite::Connection;
 

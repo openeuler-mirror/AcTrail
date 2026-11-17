@@ -1,6 +1,6 @@
 //! Explicit, bounded reads of durable agent stall episodes.
+use storage_contracts::StorageConfig;
 use storage_core::IdleQuery;
-use storage_factory::StorageConfig;
 
 use super::open_storage;
 use crate::json;

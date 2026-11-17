@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use checkpoint::SnapshotId;
 
 use crate::coordinator::{CoordinatorError, Shared};
-use crate::model::{
+use checkpoint_core_contracts::model::{
     Boundary, CheckpointId, NewCheckpoint, NewOperation, OperationId, OperationKind,
     OperationOutcome, Phase, SnapshotContext, Trigger,
 };
@@ -52,7 +52,7 @@ pub(crate) fn run(
                 operation,
                 SystemTime::now(),
                 OperationOutcome::Failed,
-                Some(&error.into()),
+                Some(&Shared::backend_failure(error)),
                 None,
             )?;
             return Ok(None);

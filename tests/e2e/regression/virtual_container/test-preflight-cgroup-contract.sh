@@ -38,20 +38,20 @@ done
 touch "$V2_ROOT/cgroup.controllers"
 
 run_preflight "$V1_ROOT" "$WORK_DIR/v1.out"
-grep -Fq "PASS: 宿主 cgroup v1 必要控制器" "$WORK_DIR/v1.out" || {
+grep -Fq "PASS: Required host cgroup v1 controllers" "$WORK_DIR/v1.out" || {
   cat "$WORK_DIR/v1.out" >&2
   fail "complete cgroup v1 hierarchy was not accepted"
 }
 
 run_preflight "$V2_ROOT" "$WORK_DIR/v2.out"
-grep -Fq "PASS: 宿主 cgroup v2" "$WORK_DIR/v2.out" || {
+grep -Fq "PASS: Host cgroup v2" "$WORK_DIR/v2.out" || {
   cat "$WORK_DIR/v2.out" >&2
   fail "cgroup v2 hierarchy was not accepted"
 }
 
 mkdir -p "$INVALID_ROOT/memory"
 run_preflight "$INVALID_ROOT" "$WORK_DIR/invalid.out"
-grep -Fq "FAIL: 宿主 cgroup v1/v2" "$WORK_DIR/invalid.out" || {
+grep -Fq "FAIL: Host cgroup v1/v2" "$WORK_DIR/invalid.out" || {
   cat "$WORK_DIR/invalid.out" >&2
   fail "incomplete cgroup hierarchy did not fail closed"
 }

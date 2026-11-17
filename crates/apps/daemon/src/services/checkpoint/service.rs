@@ -6,12 +6,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use checkpoint_core::model::{Boundary, SnapshotContext};
-use checkpoint_core::ports::ProcessControlError;
 use checkpoint_core::{
     BackendEntry, BoundaryAction, CheckpointCoordinator, CheckpointFactory, CompletedJob,
     CoordinatorError, LaunchRequest,
 };
+use checkpoint_core_contracts::model::{Boundary, SnapshotContext};
+use checkpoint_core_contracts::ports::ProcessControlError;
 use checkpoint_sqlite::{CheckpointSqliteCatalog, CheckpointSqliteReader};
 use config_core::daemon::{CheckpointBackendConfig, CheckpointRuntimeConfig};
 use control_contract::reply::{ControlError, ControlReply, TrackAddReply};
@@ -303,6 +303,6 @@ pub(super) fn coordinator_error(error: CoordinatorError) -> ControlError {
     ControlError::new(error.code, error.message)
 }
 
-fn catalog_error(error: checkpoint_core::ports::CatalogError) -> ControlError {
+fn catalog_error(error: checkpoint_core_contracts::ports::CatalogError) -> ControlError {
     ControlError::new("checkpoint_catalog", error.message)
 }

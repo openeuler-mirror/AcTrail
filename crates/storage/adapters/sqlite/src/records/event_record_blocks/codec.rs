@@ -4,13 +4,13 @@ use model_core::event::{DomainEvent, EventEnvelope};
 use model_core::ids::{EventId, TraceId};
 use model_core::process::ProcessIdentity;
 
-use crate::config::{
-    SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
-};
 use crate::records::{
     BlockKind, EventMeta, PayloadBlock, decode_event_kind, decode_event_payload,
     decode_policy_record, decode_time, encode_event_kind, encode_event_payload,
     encode_policy_record, encode_time, restore_shared_path,
+};
+use storage_contracts::{
+    SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
 };
 
 pub(super) const CODEC_VERSION: i64 = 3;

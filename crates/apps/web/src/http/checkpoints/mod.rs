@@ -7,7 +7,7 @@ mod navigation;
 use std::path::Path;
 use std::time::Duration;
 
-use checkpoint_core::model::{OperationId, OperationRecord};
+use checkpoint_core_contracts::model::{OperationId, OperationRecord};
 use checkpoint_sqlite::CheckpointSqliteReader;
 use config_core::daemon::WebCheckpointsConfig;
 use model_core::ids::TraceId;
@@ -145,6 +145,6 @@ impl Request<'_> {
     }
 }
 
-fn catalog_error(error: checkpoint_core::ports::CatalogError) -> Failure {
+fn catalog_error(error: checkpoint_core_contracts::ports::CatalogError) -> Failure {
     Failure::Internal(format!("read checkpoint catalog: {}", error.message))
 }

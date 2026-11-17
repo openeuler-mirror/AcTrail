@@ -5,8 +5,9 @@ use semantic_action::{SemanticAction, SemanticActionKind, SemanticActionStatus};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use storage_contracts::StorageConfig;
 use storage_core::{RecentActionsQuery, StorageBackend, StorageOpenMode};
-use storage_factory::{StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 pub(crate) struct HistoryReader {
     storage: Box<dyn StorageBackend>,

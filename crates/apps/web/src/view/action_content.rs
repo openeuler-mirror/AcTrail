@@ -1,7 +1,7 @@
 //! On-demand action content routing and HTTP body pages.
 use model_core::ids::TraceId;
+use storage_contracts::StorageConfig;
 use storage_core::{ActionContentSource, HttpContentQuery};
-use storage_factory::StorageConfig;
 
 pub(crate) struct ActionContentView;
 

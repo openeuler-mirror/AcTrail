@@ -10,9 +10,9 @@
     ├── [x] manifest/ # 解析插件用途、运行形式、订阅和资源声明。
     │   ├── [x] declarations.rs # 定义 manifest 文档结构及分角色配置。
     │   │   └── [x] struct PluginManifest # 聚合插件元数据、runtime、host、role 和输出声明。
-    │   └── [x] types.rs # 定义插件用途、运行机制和交付模式。
-    │       ├── [x] enum PluginPurpose # 区分 observation、control 和 codec 等职责。
-    │       └── [x] enum PluginRuntimeKind # 区分内置和 WASM 等实例运行形式。
+    │   └── [x] types.rs # 定义插件能力、交付模式和 post-trace 触发条件。
+    │       ├── [x] enum PluginCapability # 表达插件请求的宿主能力。
+    │       └── [x] enum PluginObservationDelivery # 区分尽力交付和 trace 一致交付。
     ├── [x] grants/ # 解析并校验宿主能力及规则作用域授权。
     │   └── [x] model.rs # 表示可调用 host 能力和受限策略写权限。
     │       └── [x] struct PluginHostGrants # 保存经授权的 hostcall 能力与作用域。
@@ -37,6 +37,9 @@
     │   └── [x] worker.rs # 驱动单消费者批次处理，隔离队列压力和使用方失败。
     ├── [x] runtime.rs # 内置实例与实例 ID 的基础值。
     │   └── [x] struct PluginInstanceId # 标识一次已加载插件实例，用于规则 ownership 和状态查询。
-    ├── [x] status.rs # 插件生命周期、hostcall 和运行统计的查询表示。
+    ├── [x] status.rs # 提供运行指标来源，使用 plugin_system_contracts 的宿主调用指标快照。
+    │   ├── [x] trait PluginHostcallMetricsSource # 读取宿主调用指标快照。
+    │   ├── [x] trait PluginOperationalMetricsSource # 读取插件运行指标快照。
+    │   └── [x] struct PluginOperationalMetrics # 汇总队列、丢弃、错误和插件自定义指标。
     └── [x] diagnostics.rs # 插件调用错误和被丢弃记录的诊断表示。
 ```

@@ -14,6 +14,7 @@ Modes:
 
 Options:
   --package-manager dnf|apt-get   Override package manager detection.
+  --skip-musl-deps                Prepare host dependencies without musl.
   --skip-frontend-deps            Skip Node.js/npm and actrailweb npm dependencies.
   -h, --help                      Show this help.
 
@@ -40,8 +41,8 @@ Default frontend packages:
   dnf:     nodejs npm
   apt-get: nodejs npm
 
-Rust is checked, not installed. Install Rust/Cargo with a toolchain that satisfies
-the workspace rust-version in Cargo.toml before running cargo build --release.
+In dnf install mode, prepare the openEuler repository, install Cargo when missing,
+and upgrade binutils. Rust must satisfy the workspace rust-version in Cargo.toml.
 EOF
 }
 
@@ -59,15 +60,24 @@ bool_enabled() {
 }
 
 run() {
-  printf '+'
-  printf ' %q' "$@"
-  printf '\n'
-  "$@"
+  local label="$1" output code
+  shift
+  ci_log INFO "Starting: $label"
+  if output="$("$@" 2>&1)"; then
+    ci_log PASS "Completed: $label"
+  else
+    code=$?
+    ci_log FAIL "$label (exit $code)"
+    printf '%s\n' "$output" >&2
+    return "$code"
+  fi
 }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
+source "$script_dir/ci/lib/common.sh"
 
+skip_musl=0
 mode=prompt
 package_manager="${ACTRAIL_PACKAGE_MANAGER:-auto}"
 frontend_npm_ci="${ACTRAIL_FRONTEND_NPM_CI:-1}"
@@ -88,6 +98,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || fail "--package-manager requires dnf or apt-get"
       package_manager="$2"
       shift 2
+      ;;
+    --skip-musl-deps)
+      skip_musl=1
+      shift
       ;;
     --skip-frontend-deps)
       frontend_npm_ci=0
@@ -126,6 +140,13 @@ detect_package_manager() {
 }
 
 package_list() {
+  if (( skip_musl )); then
+    case "$1" in
+      dnf) printf '%s\n' "${ACTRAIL_DNF_PACKAGES:-clang llvm elfutils-devel zlib-devel pkgconf openssl-devel}" ;;
+      apt-get) printf '%s\n' "${ACTRAIL_APT_PACKAGES:-clang llvm libelf-dev zlib1g-dev pkg-config libssl-dev}" ;;
+    esac
+    return
+  fi
   case "$1" in
     dnf)
       printf '%s\n' "${ACTRAIL_DNF_PACKAGES:-clang llvm elfutils-devel zlib-devel pkgconf openssl-devel musl-gcc musl-devel}"
@@ -208,23 +229,23 @@ install_packages() {
 
   case "$manager" in
     dnf)
-      command=("${prefix[@]}" dnf install)
+      command=("${prefix[@]}" dnf -q install)
       if bool_enabled "$assume_yes"; then
         command+=(-y)
       fi
       command+=("${packages[@]}")
-      run "${command[@]}"
+      run "System package installation ($package_source)" "${command[@]}"
       ;;
     apt-get)
       if bool_enabled "${ACTRAIL_APT_UPDATE:-1}"; then
-        run "${prefix[@]}" apt-get update
+        run 'APT package metadata update' "${prefix[@]}" apt-get -q update || return $?
       fi
-      command=("${prefix[@]}" apt-get install)
+      command=("${prefix[@]}" apt-get -q install)
       if bool_enabled "$assume_yes"; then
         command+=(-y)
       fi
       command+=("${packages[@]}")
-      run "${command[@]}"
+      run "System package installation ($package_source)" "${command[@]}"
       ;;
     *)
       fail "internal error: unsupported package manager '$manager'"
@@ -411,7 +432,9 @@ check_all() {
 
   check_packages "$manager" || ok=1
   check_rust || ok=1
-  check_musl_runtime_builder || ok=1
+  if (( ! skip_musl )); then
+    check_musl_runtime_builder || ok=1
+  fi
   if bool_enabled "$frontend_npm_ci"; then
     check_frontend || ok=1
   fi
@@ -440,13 +463,13 @@ install_frontend_deps() {
   fi
   [[ -f "$frontend_dir/package-lock.json" ]] ||
     fail "missing $frontend_dir/package-lock.json"
-  run npm ci --prefix "$frontend_dir"
+  run 'Frontend dependency installation' npm ci --loglevel=error --no-fund --no-audit --prefix "$frontend_dir"
 }
 
 install_deps() {
   local manager="$1"
   if ! check_packages "$manager" >/dev/null 2>&1; then
-    install_packages "$manager"
+    install_packages "$manager" || return $?
   fi
   if bool_enabled "$frontend_npm_ci"; then
     install_frontend_deps "$manager"
@@ -454,6 +477,40 @@ install_deps() {
 }
 
 manager="$(detect_package_manager)"
+if [[ "$mode" == install && "$manager" == dnf ]]; then
+# Configure the openEuler repository and install build tools.
+repo_file=/etc/yum.repos.d/openEuler.repo
+repo_name=openEuler-24.03LTSSP3
+if ! grep -q 'openEuler-24.03-LTS-SP3' "$repo_file" 2>/dev/null; then
+    sudo tee -a "$repo_file" >/dev/null <<'EOF'
+
+[openEuler-24.03LTSSP3]
+name=openEuler-24.03LTSSP3
+baseurl=https://repo.huaweicloud.com/openeuler/openEuler-24.03-LTS-SP3/everything/$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://repo.huaweicloud.com/openeuler/openEuler-24.03-LTS-SP3/everything/$basearch/RPM-GPG-KEY-openEuler
+EOF
+fi
+dnf_command=(sudo dnf -q --disablerepo='*' "--enablerepo=$repo_name")
+if ! command -v cargo >/dev/null 2>&1; then
+    for attempt in 1 2 3; do
+        if run 'Rust build tool installation' "${dnf_command[@]}" install -y cargo rustfmt openssl-devel; then
+            break
+        fi
+        (( attempt < 3 )) || exit 1
+        if (( attempt == 2 )); then
+            run 'DNF cache cleanup' sudo dnf -q clean all
+        fi
+        run 'DNF package metadata update' "${dnf_command[@]}" makecache
+    done
+fi
+run 'Binutils upgrade' "${dnf_command[@]}" upgrade -y binutils
+rpm -q binutils glibc
+cargo --version
+rustc --version
+ld --version
+fi
 printf 'AcTrail build dependency check using %s\n' "$manager"
 
 if check_all "$manager"; then
@@ -469,7 +526,14 @@ if [[ "$mode" == prompt ]]; then
   confirm_install
 fi
 
-install_deps "$manager"
+if ! install_deps "$manager"; then
+  skip_musl=1
+  install_deps "$manager"
+fi
+if (( ! skip_musl )) && ! check_musl_runtime_builder; then
+  skip_musl=1
+  echo '[SKIP] musl build dependencies unavailable' >&2
+fi
 
 printf 'Rechecking AcTrail build dependencies\n'
 check_all "$manager" || fail "AcTrail build dependencies are still missing"

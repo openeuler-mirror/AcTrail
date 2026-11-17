@@ -55,7 +55,7 @@ use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 use process_identity::ProcessIdentityError;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
@@ -94,7 +94,7 @@ pub(crate) struct StorageAttachService {
     pub(super) host_id: Option<String>,
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
-    pub(super) storage_config: storage_factory::StorageConfig,
+    pub(super) storage_config: storage_contracts::StorageConfig,
     pub(super) process_registry: ProcessIdentityManager,
     pub(super) process_id_block_size: u64,
     pub(super) collector: EbpfCollector,
@@ -425,7 +425,6 @@ impl StorageAttachService {
                 root_identity: bootstrap.root_identity,
                 root_observation: bootstrap.root_observation.clone(),
                 root_namespace_pid: command.root.namespace_pid,
-                profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
             };
             let bind_result = if command.launch_mode {

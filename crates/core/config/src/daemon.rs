@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use storage_factory::StorageConfig;
+use storage_contracts::StorageConfig;
 
 #[path = "daemon/access_control/config.rs"]
 mod access_control;
