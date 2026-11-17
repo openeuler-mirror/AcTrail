@@ -29,6 +29,7 @@ fn test_config(
         endpoint,
         allow_insecure: true,
         queue_capacity: 16,
+        terminal_action_limits: export_core::TerminalActionLimits::default(),
         batch_max_spans: 1,
         batch_timeout_ms: 60_000,
         connect_timeout_ms: 1_000,

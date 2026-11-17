@@ -522,24 +522,26 @@ impl StorageAttachService {
         }
 
         let mut tool_name_updates = Vec::new();
-        for action in batch.updated_actions_mut() {
-            if action.kind != SemanticActionKind::CommandInvocation {
+        for update in batch.as_record_batch().updates() {
+            if update.kind != SemanticActionKind::CommandInvocation
+                || !matches!(
+                    update.change,
+                    semantic_action::SemanticActionChange::Lifecycle { .. }
+                )
+            {
                 continue;
             }
-            let Some(tool_name) = command_to_tool_name.get(&action.action_id) else {
+            let Some(tool_name) = command_to_tool_name
+                .get(&update.action_id)
+                .or_else(|| pending_tool_names.get(&update.action_id))
+            else {
                 continue;
             };
-            if action.attributes.get(attrs::command::TOOL_NAME) == Some(tool_name) {
-                continue;
-            }
-            action
-                .attributes
-                .insert(attrs::command::TOOL_NAME.to_string(), tool_name.clone());
             tool_name_updates.push(semantic_action::SemanticActionUpdate {
-                action_id: action.action_id.clone(),
-                trace_id: action.trace_id,
-                kind: action.kind,
-                process: action.process,
+                action_id: update.action_id.clone(),
+                trace_id: update.trace_id,
+                kind: update.kind,
+                process: update.process,
                 change: semantic_action::SemanticActionChange::CommandToolName {
                     tool_name: tool_name.clone(),
                 },

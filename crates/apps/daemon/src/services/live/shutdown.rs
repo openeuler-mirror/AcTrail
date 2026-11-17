@@ -121,6 +121,7 @@ impl StorageAttachService {
             self.export_runtime.plugin_statuses().len(),
             shutdown_started_at,
         );
+        self.recording.clear_deliveries();
         let export_result = if export_budget.is_zero() {
             Err(shutdown_deadline_exhausted(ShutdownDrainStage::Export))
         } else {
@@ -448,6 +449,7 @@ impl StorageAttachService {
             self.agent_executions.finish_trace(trace_id);
             self.application_protocol.forget_trace(trace_id);
             self.semantic_actions.forget_trace(trace_id);
+            self.recording.forget_trace(trace_id);
             self.socket_payload_gate.forget_trace(trace_id);
             self.finalized_terminal_traces.insert(trace_id);
             self.pending_terminal_finalizations.remove(&trace_id);

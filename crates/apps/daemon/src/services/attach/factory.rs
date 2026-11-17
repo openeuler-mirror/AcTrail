@@ -342,6 +342,24 @@ impl StorageAttachService {
             enforcement,
             control_plugins,
             plugin_configs: Default::default(),
+            recording: recording_runtime::RecordingRuntime::new(
+                recording_runtime::CommandDeliveryLimits::new(
+                    semantic_retention
+                        .command_delivery
+                        .max_pending_commands_per_trace as usize,
+                    semantic_retention.command_delivery.max_pending_commands as usize,
+                    usize::try_from(semantic_retention.command_delivery.max_accounted_bytes)
+                        .map_err(|_| {
+                            control_contract::reply::ControlError::new(
+                                "command_delivery_config",
+                                "command delivery byte limit exceeds addressable memory",
+                            )
+                        })?,
+                )
+                .map_err(|error| {
+                    control_contract::reply::ControlError::new(error.stage, error.message)
+                })?,
+            ),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,
                 process_seccomp_config.pending_max_entries,

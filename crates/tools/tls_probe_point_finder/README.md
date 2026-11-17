@@ -105,6 +105,15 @@ The verified read entry is VA `0x28673b0`, file offset `0x265f3b0`; the write en
 
 The related-entry detector and this pair are independent candidates with sibling paths `tls/boringssl/x86_64/static-pattern` and `tls/boringssl/x86_64/read-write-pair-19-40`. Selection accepts identical complete read/write closures and rejects conflicting closures in both Single and All resolution modes. Their shared read pattern uses the existing scan cache; registration adds only the 40-byte write pattern for the verified build. BoringSSL marker checks run after both entries match uniquely. GNU BuildID identifies the linked runtime build; packaged clients may share it, and a modified ELF may retain it. Conflict detection remains required after the build check. The related-entry detector retains its existing offsets and search window.
 
+The BoringSSL x86_64 `read-write-pair-19-53` candidate supports native Claude 2.1.325 with GNU BuildID `d72a729b5627657c0649e49ae9d771fec0783039`. Pattern registration and matching require this BuildID. Selection requires a unique match for each executable entry pattern and the presence of BoringSSL identity markers:
+
+- `SSL_read`, 19 bytes: `55 48 89 e5 41 57 41 56 53 50 48 83 bf 98 00 00 00 00 74`
+- `SSL_write`, 53 bytes: `55 48 89 e5 41 57 41 56 41 55 41 54 53 48 83 ec 18 41 89 d7 49 89 f6 48 89 fb 64 48 8b 04 25 28 00 00 00 48 89 45 d0 48 8b 47 30 c7 80 c4 00 00 00 00 00 00 00`
+
+For this build, the read entry is VA `0x331e810`, file offset `0x311d810`; the write entry is VA `0x331e660`, file offset `0x311d660`. The write entry precedes the read entry by `0x1b0`. Its signature includes stack canary handling and clearing the SSL record's error state. The capture ABI uses `rdi` for `SSL*`, `rsi` for the plaintext buffer, `edx` for the signed requested length, and positive `eax` for the completed byte count. The read body copies and consumes the internal plaintext buffer. Both callers obtain the connection from their TLS wrapper's `+0xb0` field.
+
+The candidate path is `tls/boringssl/x86_64/read-write-pair-19-53`. It uses complete-closure conflict selection, reuses read-pattern scan results, and registers the 53-byte write pattern for this BuildID. `--match-limit` controls the reported matches. Build the finder and daemon from the same checkout, then restart the daemon to refresh its TLS plan cache.
+
 Rustls stripped x86_64 probing uses these documented entry patterns:
 
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 27 bytes: `55 41 57 41 56 41 55 41 54 53 48 83 ec 28 49 89 d6 48 89 f3 4c 8b a7 08 03 00 00`

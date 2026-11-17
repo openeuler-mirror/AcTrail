@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use export_core::SemanticActionKindSelection;
+use export_core::{SemanticActionKindSelection, TerminalActionLimits};
 
 pub const OTEL_HTTP_ROUTE_KIND: &str = "otel-http";
 
@@ -19,6 +19,7 @@ pub struct OtelHttpExporterConfig {
     /// Explicit acknowledgement that a plaintext HTTP endpoint is acceptable.
     pub allow_insecure: bool,
     pub queue_capacity: u32,
+    pub terminal_action_limits: TerminalActionLimits,
     /// Spans buffered into one POST body before sending.
     pub batch_max_spans: u32,
     /// Maximum partial-batch age before the delivery worker flushes it.
@@ -199,6 +200,7 @@ impl OtelHttpExporterConfig {
                 .transpose()?
                 .unwrap_or(false),
             queue_capacity: values.required_positive_u32("queue_capacity")?,
+            terminal_action_limits: values.terminal_action_limits()?,
             batch_max_spans: values.required_positive_u32("batch_max_spans")?,
             batch_timeout_ms: values.required_positive_u32("batch_timeout_ms")?,
             connect_timeout_ms: values.required_positive_u32("connect_timeout_ms")?,
@@ -480,6 +482,38 @@ struct OtelHttpConfigValues {
 }
 
 impl OtelHttpConfigValues {
+    fn terminal_action_limits(&self) -> Result<TerminalActionLimits, String> {
+        let defaults = TerminalActionLimits::default();
+        TerminalActionLimits::new(
+            self.optional_positive_usize(
+                "terminal_action_max_entries_per_trace",
+                defaults.max_entries_per_trace(),
+            )?,
+            self.optional_positive_usize("terminal_action_max_entries", defaults.max_entries())?,
+            self.optional_positive_usize(
+                "terminal_action_max_key_bytes",
+                defaults.max_key_bytes(),
+            )?,
+        )
+        .map_err(|error| format!("invalid {}: {}", self.section_name, error.message))
+    }
+
+    fn optional_positive_usize(&self, key: &str, default: usize) -> Result<usize, String> {
+        let Some(value) = self.values.get(key) else {
+            return Ok(default);
+        };
+        let value = value
+            .parse::<usize>()
+            .map_err(|error| format!("invalid {}.{key}: {error}", self.section_name))?;
+        if value == 0 {
+            return Err(format!(
+                "invalid {}.{key}: value must be positive",
+                self.section_name
+            ));
+        }
+        Ok(value)
+    }
+
     fn from_entries(section_name: &str, entries: Vec<(String, String)>) -> Result<Self, String> {
         let mut values = BTreeMap::new();
         for (key, value) in entries {
@@ -529,6 +563,9 @@ fn reject_unknown_key(section_name: &str, key: &str) -> Result<(), String> {
         "endpoint"
         | "allow_insecure"
         | "queue_capacity"
+        | "terminal_action_max_entries_per_trace"
+        | "terminal_action_max_entries"
+        | "terminal_action_max_key_bytes"
         | "batch_max_spans"
         | "batch_timeout_ms"
         | "connect_timeout_ms"

@@ -123,6 +123,11 @@ impl SemanticActionBatch {
 
     pub fn has_live_export_records(&self) -> bool {
         self.action_views().any(super::export::action_exportable)
+            || self
+                .updates
+                .iter()
+                .any(|update| update.kind == semantic_action::SemanticActionKind::CommandInvocation)
+            || !self.links.is_empty()
     }
 
     pub(super) fn take_persistence_links(&mut self) -> Vec<SemanticActionLink> {

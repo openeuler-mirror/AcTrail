@@ -2,9 +2,23 @@
 
 > 本文指导插件管理员将获准出境的观测 span 实时发送到指定 OTLP/HTTP Collector。
 
-`otel-http` 是编译进 `actraild` 的内置异步观测插件，通过 OTLP/HTTP 实时发送 span。
+`otel-http` 是编译进 `actraild` 的内置观测插件，通过 OTLP/HTTP 异步发送 span。
 插件包只提供 manifest、默认配置和 schema；安装后仍须显式加载。它不需要
 host grant。
+
+## 终态去重容量
+
+每个插件实例独立记住已入队的终态 action ID。同一 ID 和状态重复出现时跳过，终态状态冲突时拒收并计数；Trace 最终通知到达后释放该 Trace，卸载时释放全部账本。
+
+| 配置项 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `terminal_action_max_entries_per_trace` | `65536` | 单 Trace 的终态身份条目上限 |
+| `terminal_action_max_entries` | `262144` | 实例全部 Trace 的终态身份条目上限 |
+| `terminal_action_max_key_bytes` | `33554432` | 保存的 action ID 的 UTF-8 字节总上限 |
+
+三项必须为正整数，单 Trace 上限不得大于全局上限。字节上限按 ID 内容计账，容器开销由条目数约束。满额时保留已有身份并拒收新身份，产生 `RuntimeDropped`；原因分别为 `terminal_action_per_trace_capacity`、`terminal_action_global_capacity`、`terminal_action_key_byte_capacity`。调整限额后更新或重新加载实例。
+
+`otel_http.dropped_spans` 是同步拒收与异步交付损失的合计，包含终态冲突。`otel_http.inline_dropped_spans` 统计同步拒收；`otel_http.worker_dropped_spans` 统计异步交付损失，包含关闭期限内未确认的记录。`otel_http.finish_reported_drops` 表示关闭时交由宿主计数的记录数。宿主状态中的 `dropped_records` 显示合并后的总丢失量。
 
 ## 准备配置
 

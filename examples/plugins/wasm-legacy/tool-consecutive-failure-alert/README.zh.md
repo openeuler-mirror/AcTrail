@@ -2,15 +2,15 @@
 
 类别：WIT component 观测消费者。
 
-这个示例实现按 trace 维护每个工具的连续失败状态，当同一工具连续失败次数超过配置阈值时生成告警。插件订阅 `semantic-action` 事件族，通过宿主导出时统一注入的 `process.id` 属性把 `CommandInvocation` 与对应的 `ProcessExit` 精确关联，按 `(trace_id, 工具名)` 二元组独立维护计数器。
+这个示例实现按 trace 维护每个工具的连续失败状态，当同一工具连续失败次数达到配置阈值时生成告警。插件订阅 `semantic-action` 事件族，通过宿主导出时统一注入的 `process.id` 属性把 `CommandInvocation` 与对应的 `ProcessExit` 精确关联，按 `(trace_id, 工具名)` 二元组独立维护计数器。
 
 核心特性：
 
 - 按 `(trace_id, tool_name)` 独立计数，不同 trace、不同工具互不影响
 - 同一工具成功调用后计数器立即归零
 - 告警触发后不重置计数器（持续告警直到成功或 trace 结束）
-- 冷却时间控制，避免告警风暴
-- TTL 状态回收，防止内存泄漏
+- 同一工具的告警提交受冷却时间控制
+- TTL 到期后回收 trace 状态
 - 支持工具过滤（monitored\_tools / ignored\_tools）
 
 文件：
@@ -46,16 +46,34 @@ TraceAlertToken 校验 → payload JSON Schema 校验 → SQLite 存储
 | `status = "success"`                               | 成功 |
 | `status = "unknown"`（宿主对退出码 0 不上报 exit_code） | 默认视为成功（可由配置关闭） |
 
-`CommandInvocation` 只登记工具名/命令行，不直接判定成败；`ProcessExit` 通过宿主注入的 `process.id` 属性精确关联到对应命令（若该属性缺失，则按 trace 内到达顺序 FIFO 兜底）。
+`CommandInvocation` 的 `completeness=partial` 初始快照用于登记工具名和命令行，终态快照跳过登记。
+`ProcessExit` 通过宿主注入的 `process.id` 关联命令并判定成败；缺少该属性时，按 trace 内命令到达顺序 FIFO 关联。
 
 #### 重新编译：
 
 ```bash
-rustup target add wasm32-wasip2
+rustup target add --toolchain 1.98.1 wasm32-wasip2
 cd examples/plugins/wasm-legacy/tool-consecutive-failure-alert
-cargo build --target wasm32-wasip2 --release
-cp target/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm .
+unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
+REBUILD_DIR="$(mktemp -d /tmp/actrail-consecutive-wasm.XXXXXX)"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/a"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/b"
+cmp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm" "$REBUILD_DIR/b/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm"
+cp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm" .
+rm -r "$REBUILD_DIR"
 ```
+
+构建工具链：Rust `1.98.1`（`48a229cea`）、Cargo `1.98.1`（`797e8a9bc`）、
+LLVM `22.1.8`。构建命令使用本目录的 `Cargo.lock`，通过 `cmp` 比较两个独立
+target 目录的输出。
+
+| 构建输入 | Git 对象 |
+| --- | --- |
+| `src/lib.rs` blob | `1b32cbadf8afc1f4b9d1b7aae0683e21298b5d39` |
+| `Cargo.lock` blob | `50fe811cef53b82278609f804d8c538e30aba960` |
+| WIT tree | `126f2d22c83707cd5afca9a685fa41eefa94ec3e` |
+
+仓库中的 WASM 产物大小为 137091 字节。
 
 ### 插件侧：运行时参数
 

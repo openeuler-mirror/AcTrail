@@ -6,49 +6,45 @@ use crate::probe_detector::detector::tls::boringssl::common::{
 use crate::probe_detector::detector::tls::boringssl::x86_64::static_pattern::X86_64BoringSslStaticPatternProbeDetector;
 use crate::{BinaryIdentityTypeCode, ToolError, ToolResult};
 
-use super::ReadWritePair1940ProbeDetectorConfig;
+use super::BuildVerifiedReadWritePairDetectorConfig;
+use super::specifications::{SPECIFICATIONS, VerifiedReadWritePairSpec};
 
-const VERIFIED_BUILD_ID: &str = "588d7307f333293c728b74df19b7323c20736899";
-
-const READ_PATTERN: &[u8] = &[
-    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x50, 0x48, 0x83, 0xbf, 0x98, 0x00, 0x00,
-    0x00, 0x00, 0x74,
-];
-const WRITE_PATTERN: &[u8] = &[
-    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec,
-    0x18, 0x41, 0x89, 0xd7, 0x49, 0x89, 0xf6, 0x48, 0x89, 0xfb, 0x48, 0x8b, 0x47, 0x30, 0xc7, 0x80,
-    0xc4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
-pub(crate) struct ReadWritePair1940ProbeDetector {
+pub(crate) struct BuildVerifiedReadWritePairDetector {
+    specification: &'static VerifiedReadWritePairSpec,
     match_limit: usize,
 }
 
-impl ReadWritePair1940ProbeDetector {
-    pub(crate) fn try_new(
-        config: ReadWritePair1940ProbeDetectorConfig,
-    ) -> Result<Self, DetectorConfigError> {
+impl BuildVerifiedReadWritePairDetector {
+    pub(crate) fn try_from_specifications(
+        config: BuildVerifiedReadWritePairDetectorConfig,
+    ) -> Result<[Self; 2], DetectorConfigError> {
         config.validate()?;
-        Ok(Self {
+        Ok(SPECIFICATIONS.each_ref().map(|specification| Self {
+            specification,
             match_limit: config.match_limit,
-        })
+        }))
+    }
+
+    pub(crate) fn detector_id(&self) -> &'static str {
+        self.specification.detector_id
     }
 
     pub(crate) fn register_executable_patterns(&self, image: &ElfImage) {
-        if !Self::matches_build(image) {
+        if !self.matches_build(image) {
             return;
         }
-        image.register_pattern_scan(READ_PATTERN);
-        image.register_pattern_scan(WRITE_PATTERN);
+        image.register_pattern_scan(self.specification.read_pattern);
+        image.register_pattern_scan(self.specification.write_pattern);
     }
 
     pub(crate) fn detect(&self, image: &ElfImage) -> ToolResult<Option<StaticPatternDetection>> {
-        if !Self::matches_build(image) {
+        if !self.matches_build(image) {
             return Ok(None);
         }
-        let read_matches = StaticPatternSupport::find_all_executable(image, READ_PATTERN)?;
+        let spec = self.specification;
+        let read_matches = StaticPatternSupport::find_all_executable(image, spec.read_pattern)?;
         let read = StaticPatternSupport::require_single(&read_matches, "SSL_read")?;
-        let write_matches = StaticPatternSupport::find_all_executable(image, WRITE_PATTERN)?;
+        let write_matches = StaticPatternSupport::find_all_executable(image, spec.write_pattern)?;
         let write = StaticPatternSupport::require_single(&write_matches, "SSL_write")?;
         if !X86_64BoringSslStaticPatternProbeDetector::has_identity(image) {
             return Err(ToolError::new("BoringSSL identity markers were not found"));
@@ -58,17 +54,17 @@ impl ReadWritePair1940ProbeDetector {
             matches: vec![
                 StaticPatternSupport::pattern_matches(
                     image,
-                    "x86_64-boringssl-ssl-read-entry-19",
+                    spec.read_pattern_id,
                     "SSL_read",
-                    READ_PATTERN,
+                    spec.read_pattern,
                     &read_matches,
                     self.match_limit,
                 )?,
                 StaticPatternSupport::pattern_matches(
                     image,
-                    "x86_64-boringssl-ssl-write-entry-40",
+                    spec.write_pattern_id,
                     "SSL_write",
-                    WRITE_PATTERN,
+                    spec.write_pattern,
                     &write_matches,
                     self.match_limit,
                 )?,
@@ -80,9 +76,9 @@ impl ReadWritePair1940ProbeDetector {
         }))
     }
 
-    fn matches_build(image: &ElfImage) -> bool {
+    fn matches_build(&self, image: &ElfImage) -> bool {
         let identity = image.identity();
         identity.identity_type_code == BinaryIdentityTypeCode::GnuBuildId
-            && identity.identity == VERIFIED_BUILD_ID
+            && identity.identity == self.specification.build_id
     }
 }

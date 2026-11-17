@@ -3,6 +3,12 @@
 mod contract;
 mod delivery;
 mod runtime;
+mod terminal;
+
+pub use terminal::{
+    TerminalActionCapacity, TerminalActionDelivery, TerminalActionGate, TerminalActionLimits,
+    TerminalActionRejection,
+};
 
 pub use plugin_system::{PayloadReference, PayloadReferenceMetadata};
 

@@ -23,6 +23,7 @@ class CommandPolicyXiaooConstants:
     llm_reasoning_effort: str = 'off'
     no_proxy_hosts: str = '127.0.0.1,localhost'
     max_turns: int = 3
+    audit_enabled: bool = True
     loopback_host: str = '127.0.0.1'
 
 

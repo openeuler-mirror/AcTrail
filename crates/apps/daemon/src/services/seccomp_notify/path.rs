@@ -14,6 +14,43 @@ pub(crate) struct TraceePath {
     root_path: PathBuf,
 }
 
+#[derive(Debug)]
+pub(crate) enum TraceePathError {
+    Observer(io::Error),
+    Lookup(io::Error),
+}
+
+impl TraceePathError {
+    pub(crate) fn native_lookup_errno(&self) -> Option<i32> {
+        match self {
+            Self::Lookup(error) => error
+                .raw_os_error()
+                .filter(|errno| matches!(*errno, libc::ENOENT | libc::ENOTDIR)),
+            Self::Observer(_) => None,
+        }
+    }
+
+    fn into_io_error(self) -> io::Error {
+        match self {
+            Self::Observer(error) | Self::Lookup(error) => error,
+        }
+    }
+}
+
+impl From<io::Error> for TraceePathError {
+    fn from(error: io::Error) -> Self {
+        Self::Observer(error)
+    }
+}
+
+impl std::fmt::Display for TraceePathError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Observer(error) | Self::Lookup(error) => error.fmt(formatter),
+        }
+    }
+}
+
 #[repr(C)]
 struct OpenHow {
     flags: u64,
@@ -41,17 +78,19 @@ impl TraceePath {
         requested: &str,
         dirfd: Option<i32>,
         empty_path: bool,
-    ) -> io::Result<PathBuf> {
+    ) -> Result<PathBuf, TraceePathError> {
         if empty_path {
-            return self.proc_link(&format!(
-                "fd/{}",
-                dirfd.ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "empty executable path requires dirfd",
-                    )
-                })?
-            ));
+            return self
+                .proc_link(&format!(
+                    "fd/{}",
+                    dirfd.ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "empty executable path requires dirfd",
+                        )
+                    })?
+                ))
+                .map_err(TraceePathError::from);
         }
         if let Some(path) = self.outside_relative(requested, dirfd, false)? {
             return Ok(path);
@@ -64,15 +103,19 @@ impl TraceePath {
         requested: &str,
         dirfd: Option<i32>,
     ) -> io::Result<PathBuf> {
-        if let Some(path) = self.outside_relative(requested, dirfd, true)? {
+        if let Some(path) = self
+            .outside_relative(requested, dirfd, true)
+            .map_err(TraceePathError::into_io_error)?
+        {
             return Ok(path);
         }
         let absolute = self.absolute(requested, dirfd)?;
         // mkdir/rmdir act on the final directory entry without following its link.
         match (absolute.parent(), absolute.file_name()) {
-            (Some(parent), Some(name)) => Ok(self.resolve(parent)?.join(name)),
+            (Some(parent), Some(name)) => self.resolve(parent).map(|path| path.join(name)),
             _ => self.resolve(&absolute),
         }
+        .map_err(TraceePathError::into_io_error)
     }
 
     fn absolute(&self, requested: &str, dirfd: Option<i32>) -> io::Result<PathBuf> {
@@ -95,7 +138,7 @@ impl TraceePath {
         requested: &str,
         dirfd: Option<i32>,
         directory_entry: bool,
-    ) -> io::Result<Option<PathBuf>> {
+    ) -> Result<Option<PathBuf>, TraceePathError> {
         let requested = Path::new(requested);
         if requested.is_absolute()
             || requested.as_os_str().is_empty()
@@ -131,7 +174,7 @@ impl TraceePath {
 
     /// A cwd or directory fd can survive chroot outside the new root. Walk from
     /// that actual descriptor; absolute symlinks still restart in the task root.
-    fn walk_from(&self, mut directory: File, path: &Path) -> io::Result<PathBuf> {
+    fn walk_from(&self, mut directory: File, path: &Path) -> Result<PathBuf, TraceePathError> {
         let mut pending = path
             .components()
             .map(|part| part.as_os_str().to_owned())
@@ -158,15 +201,17 @@ impl TraceePath {
                     .custom_flags(libc::O_PATH | libc::O_CLOEXEC)
                     .open(self.proc_task_path(candidate == Path::new("/proc/thread-self"))?)?
             } else {
-                Self::open_at(directory.as_raw_fd(), &part, true)?
+                Self::open_at(directory.as_raw_fd(), &part, true)
+                    .map_err(TraceePathError::Lookup)?
             };
             if next.metadata()?.file_type().is_symlink() {
                 if remaining_links == 0 {
-                    return Err(io::Error::from_raw_os_error(libc::ELOOP));
+                    return Err(io::Error::from_raw_os_error(libc::ELOOP).into());
                 }
                 remaining_links -= 1;
                 if Self::is_proc_magic_link(&candidate) && Self::is_procfs(next.as_raw_fd())? {
-                    directory = Self::open_at(directory.as_raw_fd(), &part, false)?;
+                    directory = Self::open_at(directory.as_raw_fd(), &part, false)
+                        .map_err(TraceePathError::Lookup)?;
                     continue;
                 }
                 let target = std::fs::read_link(
@@ -245,8 +290,8 @@ impl TraceePath {
             .unwrap_or(host_path)
     }
 
-    fn resolve(&self, path: &Path) -> io::Result<PathBuf> {
-        let raw = CString::new(path.as_os_str().as_bytes())?;
+    fn resolve(&self, path: &Path) -> Result<PathBuf, TraceePathError> {
+        let raw = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::from)?;
         let how = OpenHow {
             flags: (libc::O_PATH | libc::O_CLOEXEC) as u64,
             mode: 0,
@@ -275,7 +320,7 @@ impl TraceePath {
             // notification task, including links reached through ordinary aliases.
             return self.walk_from(self.root.try_clone()?, path);
         }
-        Err(error)
+        Err(TraceePathError::Lookup(error))
     }
 
     fn proc_task_path(&self, thread: bool) -> io::Result<PathBuf> {

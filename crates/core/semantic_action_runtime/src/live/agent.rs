@@ -207,12 +207,14 @@ impl AgentProjector {
         if let Some(intent) = self.take_matching_exec_intent(&key, &action) {
             intent.apply_to(&mut action);
         }
-        match action.attributes.get(attrs::process::EXECUTABLE) {
-            Some(executable) => self.remember_executable(key, executable),
-            // The process became an image we cannot name, so the executable
-            // remembered for it no longer describes what it runs.
-            None => {
-                self.process_executables.remove(&key);
+        if action.status == SemanticActionStatus::Success {
+            match action.attributes.get(attrs::process::EXECUTABLE) {
+                Some(executable) => self.remember_executable(key, executable),
+                // The process became an image we cannot name, so the executable
+                // remembered for it no longer describes what it runs.
+                None => {
+                    self.process_executables.remove(&key);
+                }
             }
         }
         vec![action]

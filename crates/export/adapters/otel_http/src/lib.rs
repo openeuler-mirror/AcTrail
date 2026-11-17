@@ -1,8 +1,12 @@
 //! Realtime OTLP/HTTP export adapter. Transport is std sockets, optionally
 //! wrapped in system-OpenSSL TLS (with mutual TLS) for `https://` endpoints.
 
+mod batch;
 mod config;
 mod live_http;
+mod metrics;
+mod sink;
+mod transport;
 
 pub use config::{
     Endpoint, OTEL_HTTP_ROUTE_KIND, OtelAttributeMode, OtelCompression, OtelEncoding,

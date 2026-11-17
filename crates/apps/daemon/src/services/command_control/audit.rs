@@ -75,6 +75,47 @@ pub(crate) struct CommandEnforcementDraft {
     pub(crate) boundary_alert: Option<CommandExecutionBoundaryAlert>,
 }
 
+impl CommandEnforcementDraft {
+    pub(super) fn target_lookup_error(
+        trace_id: TraceId,
+        process: ProcessIdentity,
+        operation: &str,
+        target_pid: u32,
+        requested_path: &str,
+        errno: i32,
+        error: String,
+    ) -> Self {
+        Self {
+            trace_id,
+            observed_at: SystemTime::now(),
+            process,
+            metadata_partial: true,
+            payload: EnforcementPayload {
+                backend: "seccomp-user-notify".to_string(),
+                operation: operation.to_string(),
+                decision: EnforcementDecision::Deny.as_str().to_string(),
+                path: None,
+                rule_id: None,
+                result: "error".to_string(),
+                metadata: BTreeMap::from([
+                    ("scope".to_string(), "trace".to_string()),
+                    ("decision_source".to_string(), "target-lookup".to_string()),
+                    ("errno".to_string(), errno.to_string()),
+                    (
+                        "requested_executable".to_string(),
+                        requested_path.to_string(),
+                    ),
+                    ("command_control_error".to_string(), error),
+                    ("target_pid".to_string(), target_pid.to_string()),
+                    ("path_truncated".to_string(), "false".to_string()),
+                    ("argv_truncated".to_string(), "unknown".to_string()),
+                ]),
+            },
+            boundary_alert: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum CommandDecisionSource {
     Default,

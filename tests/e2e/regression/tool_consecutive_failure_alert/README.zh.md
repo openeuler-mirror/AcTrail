@@ -9,21 +9,23 @@
 - 同一 trace 内同一工具连续失败达到阈值（默认 3）后，`consecutive-failure`
   告警定义被注册且告警落库；
 - 成功命令（外部命令，退出码 0）清零连续失败计数；
-- 超过阈值的持续失败被冷却抑制，不重复告警；
+- 达到阈值后的冷却期内，同一 trace 和工具提交一条告警；
 - `scripts/install-release.sh` 安装出的官方插件包可被发现并从安装目录加载；
-- 机器上存在真实 Agent 时，用统一提示词驱动 Agent 执行三条失败命令并验证
-  告警；没有可用 Agent 时该轮次跳过，不计失败。
+- 真实 Agent 轮用统一提示词驱动 Agent 执行三条失败命令，检查执行证据和告警。
 
 ## 判定语义
 
 - AcTrail 自身产物缺失或不可执行（`actraild`、`actrailctl`、
-  `actrailviewer`、release 安装的插件包）判定为 `FAILED`，不降级为
-  `SKIPPED`；
+  `actrailviewer`、release 安装的插件包）判定为 `FAILED`；
 - 真实 Agent 缺失或不可用（`xiaoo`、`pi`、`opencode`、`claude`、
-  `codex` 均未找到）时，真实 Agent 子项判定为 `SKIPPED`，不影响整体
-  `PASSED`。
+  `codex` 均未找到）时，真实 Agent 子项判定为 `SKIPPED`。
 
 # Quick Run
+
+自动正向轮依次执行三条 `bash -c 'exec ls <path>'`。
+`terminal-command-registration` 核对同一逻辑进程的 bash 阶段终态和 ls 阶段，
+将告警命令证据匹配到三个 `error/complete/exit=2` 的 ls action ID。
+该轮预期连续失败数为 3，生成一条告警。
 
 在仓库根目录以 root 执行：
 
@@ -34,9 +36,8 @@ sudo -E python3.11 tests/e2e/regression/test_all.py \
 
 公共 runner 会先执行 `scripts/install-release.sh`（构建并安装官方插件包），再
 创建隔离工作目录，启动真实 `actraild`，加载插件后依次跑负向、正向、重置、
-冷却、安装包和可选真实 Agent 轮次。冷缓存机器可能长时间停留在 release、
-TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用 CPU，就不是
-测试卡死。
+冷却、安装包和可选真实 Agent 轮次。首次运行包含 release、TLS runtime 和
+WASM 插件构建，编译耗时取决于本机缓存。
 
 只运行该 case 并显示详细过程：
 
@@ -58,16 +59,15 @@ sudo -E python3.11 \
 6. 正向轮：三条失败 `ls`，断言定义注册、恰好一条告警、payload 字段与
    证据（`evidence_action_ids` 唯一且含 `:process.exit` 动作 id）正确。
 7. 重置矩阵：失败-失败-同一工具成功（`ls /etc/hostname`）-失败-失败，
-   断言成功清零后不再告警。
-8. 冷却矩阵：单 trace 连续五条失败命令，断言仍只有一条告警，且存储的
-   `command.invocation` 数量证明额外失败确实发生（冷却抑制重复告警）。
+   断言告警数为 0。
+8. 冷却矩阵：单 trace 连续五条失败命令，断言告警数为 1，并核对存储的
+   `command.invocation` 数量。
 9. 断言仓库实例 `observed_records > 0`。
-10. 安装包轮：临时卸载仓库实例，仅加载安装目录实例跑一轮正向（同一时刻
-    只保留一个实例，避免两个实例对同一批事件各提交一条重复告警），断言
-    安装产物可用；完成后恢复仓库实例。
+10. 安装包轮：卸载仓库实例，加载安装目录实例跑一轮正向，断言安装产物
+    可用；完成后卸载安装目录实例并加载仓库实例。
 11. 真实 Agent 轮（可选）：按顺序选择第一个找到的 agent 二进制
-    （`xiaoo`/`pi`/`opencode`/`claude`/`codex`），不再逐个真实探测；设置
-    `ACTRAIL_TEST_AGENT_PROBE_ALL=1` 可恢复逐候选真实探测。用统一提示词
+    （`xiaoo`/`pi`/`opencode`/`claude`/`codex`）；设置
+    `ACTRAIL_TEST_AGENT_PROBE_ALL=1` 启用逐候选可用性探测。用统一提示词
     驱动选中 agent 执行三条失败命令，最多重试两次。无可用 Agent 或 Agent
     未实际执行失败命令时 `SKIPPED`；Agent 执行了失败命令但无告警落库则
     `FAILED`。
@@ -75,9 +75,9 @@ sudo -E python3.11 \
 
 # 手动测试
 
-以下命令完整复现自动测试，均从仓库根目录、在同一个 root shell 中执行。
-手动测试使用隔离的 `/tmp/actrail-tool-alert-manual` 工作目录，不读取或清理
-系统默认的 `/var/lib/actrail` 数据。
+以下步骤手动运行插件加载、命令执行和告警查询，均在仓库根目录的同一个 root shell 中执行。
+手动测试工作目录为 `/tmp/actrail-tool-alert-manual`，命令通过该目录下的
+`actraild.conf` 操作隔离实例。
 
 ## 步骤1：检查测试前提并构建 release
 
@@ -292,9 +292,8 @@ sqlite3 "$WORK/data/actrail.sqlite" \
 
 ### 预期结果
 
-五次失败仍只有 `1` 条告警（第三次失败触发后，冷却抑制第四、五次失败重复
-告警）；viewer 中 `command.invocation` 数量为 6（bash + 5 条 `ls`），证明额外
-失败确实发生。
+告警数为 `1`：第三次失败触发告警，第四、五次失败位于冷却期。
+viewer 中 `command.invocation` 数量为 6（bash + 5 条 `ls`）。
 
 ## 步骤8：从安装包加载插件并验证
 
@@ -324,9 +323,8 @@ INSTALLED_MARKER="TOOL_ALERT_INSTALLED_$(date +%s%N)"
 
 ### 预期结果
 
-先卸载仓库实例、只保留安装包实例，避免两个实例对同一批事件各提交一条重复
-告警；安装包实例加载成功，该轮 trace 恰好落库一条告警，证明安装产物可用；
-随后恢复仓库实例供真实 Agent 轮使用。
+安装包实例加载成功，该轮 trace 落库一条告警。完成后卸载安装包实例，加载
+仓库实例供真实 Agent 轮使用。
 
 ## 步骤9：真实 Agent 轮（可选）
 
@@ -361,8 +359,8 @@ fi
 有可用 Agent 时（自动回测还额外支持 `xiaoo`、`pi`，且优先使用
 `XIAOO_E2E_BINARY` / `OPENCODE_E2E_BINARY` 等环境变量），Agent 执行三条独立
 失败命令后该 trace 落库一条告警。自动回测最多重试两次：若 Agent 未实际执行
-失败命令（trace 中找不到三条 `ls` 调用），判为 `SKIPPED` 不报错；若执行了
-失败命令但无告警，判为 `FAILED`。统一提示词不依赖 Agent 的具体命令格式。
+失败命令（trace 中找不到三条 `ls` 调用），判为 `SKIPPED`；若执行了失败命令
+但无告警，判为 `FAILED`。
 
 ## 步骤10：清理
 
@@ -380,33 +378,14 @@ rm -rf -- /tmp/actrail-tool-alert-manual
 
 ### 预期结果
 
-两个插件实例卸载成功，daemon 停止，隔离目录被删除；系统默认
-`/var/lib/actrail` 未受影响。
+两个插件实例卸载成功，daemon 停止，隔离目录被删除。
 
-# 覆盖范围与非目标
+# 覆盖范围
 
 本用例覆盖：插件加载与授权、告警定义注册、告警落库与 payload 字段、证据
 唯一性（去重）、成功清零（重置矩阵）、冷却抑制（冷却矩阵）、
 `install-release.sh` 安装包三件套与安装包加载，以及可选的真实 Agent 端到端
 验证。
 
-本用例不覆盖：
-
-- Web 插件管理交互（发现、加载、配置、状态页面），由独立 Web 插件回归负责；
-- 跨 batch 重投去重的注入验证（真实链路不会重投同一动作，以
-  `evidence_action_ids` 唯一性和每轮恰好一条告警覆盖）；
-- 告警风暴、长时冷却参数矩阵或多种阈值组合；
-- 多插件并发、容器隔离等重型场景。
-
-关键设计事实：
-
-- `process.exit` / `agent.exit` 是 export-only 动作，不进入 SQLite，因此
-  回测从告警 payload 的证据断言而非存储断言；
-- 宿主导出时为每个语义动作注入 `process.id`（插件可见、不落库），该注入由
-  `crates/core/plugin_wasm_runtime/src/component_observation/wire.rs` 的单元
-  测试守护；
-- 计数按 `(trace, tool)` 独立维护，同一工具的成功调用清零该工具计数；
-  不同工具的成功不影响当前工具计数（重置矩阵使用 `ls /etc/hostname`
-  验证 `ls` 的计数清零）；
-- 退出码为 0 的成功进程在 `process.exit` 上表现为 `status=unknown` 且无
-  `process.exit_code`，插件默认视为成功（重置矩阵依赖该行为）。
+`process.exit` / `agent.exit` 通过观测出口传给插件，回测通过告警 payload 的
+`evidence_action_ids` 核对退出动作。宿主向插件提供的 `process.id` 为逻辑进程 ID。

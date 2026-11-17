@@ -14,12 +14,17 @@ from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
 
 from .config import OtelHttpConfig
+from .commands import CommandSpanVerification
 from .environment import OtelHttpEnvironment
 
 from .constants import CASE_CONSTANTS
 
 
 class OtelHttpCase(TestCase):
+    _ACTION_KINDS = {
+        "process.exec", "process.exit", "agent.identity", "llm.request",
+        "command.invocation",
+    }
     _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
     _TERMINAL_STATUSES = {"success", "error", "unknown"}
     _METADATA_KEYS = {
@@ -79,13 +84,14 @@ class OtelHttpCase(TestCase):
             )
 
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "agent.identity", "llm.request"}
+                self._ACTION_KINDS
             )
             results["outbound-policy"] = TestResult(
                 TestStatus.PASSED,
-                "explicit process/identity/request allow-list and metadata-only mode accepted",
+                "explicit process/identity/request/command allow-list and metadata-only mode accepted",
             )
 
+            commands = CommandSpanVerification(self._config)
             marker = f"OTEL_HTTP_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
             trace_id = self._launch(marker, xiaoo, xiaoo_environment)
             self._wait_for_terminal_trace(trace_id)
@@ -101,7 +107,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             spans = self._wait_for_marker_spans(
                 marker,
-                {"process.exec", "process.exit", "agent.identity", "llm.request"},
+                self._ACTION_KINDS,
             )
             results["shutdown-tail"] = TestResult(
                 TestStatus.PASSED,
@@ -143,7 +149,7 @@ class OtelHttpCase(TestCase):
             )
 
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "agent.identity", "llm.request"},
+                self._ACTION_KINDS,
                 attribute_mode="full",
             )
             body_marker = f"REQUEST_BODY_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
@@ -162,7 +168,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             full_spans = self._wait_for_marker_spans(
                 full_marker,
-                {"process.exec", "process.exit", "agent.identity", "llm.request"},
+                self._ACTION_KINDS,
             )
             full_counts = self._require_terminal_one_shot(full_spans)
             if full_counts["llm.request"] < 1:
@@ -175,6 +181,22 @@ class OtelHttpCase(TestCase):
                 TestStatus.PASSED,
                 f"full mode exported {exported_bodies} canonical request body/bodies",
             )
+
+            for mode, local_id, received in (
+                ("metadata-only", trace_id, spans),
+                ("full", full_trace_id, full_spans),
+            ):
+                try:
+                    summary = commands.verify(
+                        local_id, mode, received, self._ACTION_KINDS,
+                    )
+                    results[f"command-terminal-{mode}"] = TestResult(
+                        TestStatus.PASSED, summary
+                    )
+                except AssertionError as error:
+                    results[f"command-terminal-{mode}"] = TestResult(
+                        TestStatus.FAILED, str(error)
+                    )
 
             requests = self._require_configured_credential()
             results["request-credential"] = TestResult(
@@ -217,7 +239,9 @@ class OtelHttpCase(TestCase):
         if request_marker is not None:
             prompt = f'The opaque request verification marker is "{request_marker}". '
         prompt += (
-            f'Reply with exactly "{answer_marker}" and nothing else. Do not use tools.'
+            "Use the bash tool exactly once to execute the command "
+            f"`sleep {CASE_CONSTANTS.command_sleep_seconds}`. Do not run other commands. "
+            f'After the tool succeeds reply with exactly "{answer_marker}".'
         )
         result = self._environment.runtime.run(
             [
@@ -232,7 +256,8 @@ class OtelHttpCase(TestCase):
                 xiaoo,
                 "--cli",
                 "run",
-                "--no-tools",
+                "--tools",
+                "bash",
                 "--max-turns",
                 str(CASE_CONSTANTS.max_turns),
                 "--prompt",

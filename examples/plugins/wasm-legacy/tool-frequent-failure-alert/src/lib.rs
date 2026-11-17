@@ -626,12 +626,6 @@ impl TraceState {
         }
     }
 
-    #[cfg(test)]
-    fn observe_llm_response(&mut self, action: &SemanticActionRecord, cap: usize) {
-        let cfg = PluginConfig::default();
-        let _ = self.observe_llm_response_at(action, &cfg, self.last_active_ms, cap);
-    }
-
     fn observe_llm_response_at(
         &mut self,
         action: &SemanticActionRecord,
@@ -783,6 +777,9 @@ impl TraceState {
         cfg: &PluginConfig,
         cap: usize,
     ) {
+        if action.completeness != "partial" {
+            return;
+        }
         let process_id = find_attr(&action.attributes, ATTR_PROCESS_ID).unwrap_or("");
         if !process_id.is_empty() {
             if let Some(existing) = self.commands_by_process.get(process_id) {
@@ -2136,10 +2133,3 @@ export!(Component);
 #[cfg(test)]
 #[path = "../../../../../tests/unit/examples/plugins/wasm-legacy/tool-frequent-failure-alert/tests.rs"]
 mod tests;
-
-impl AlertData {
-    #[cfg(test)]
-    fn total_count_for_test(&self) -> u64 {
-        self.failure_count + self.success_count
-    }
-}

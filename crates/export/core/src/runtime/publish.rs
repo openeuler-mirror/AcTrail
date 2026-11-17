@@ -87,7 +87,10 @@ impl ExportRuntime {
         &mut self,
         instance_id: &str,
     ) -> Result<ObservationConsumerRemoval, ExportError> {
-        self.subscriptions.remove_observation_consumer(instance_id)
+        let removal = self
+            .subscriptions
+            .remove_observation_consumer(instance_id)?;
+        Ok(removal)
     }
 
     pub fn shutdown_observation_consumers(&mut self, timeout: Duration) -> ExportPublishReport {

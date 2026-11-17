@@ -1,5 +1,8 @@
+#[path = "semantic/command_delivery.rs"]
+mod command_delivery;
 #[path = "semantic/compact.rs"]
 mod compact;
+use command_delivery::CommandDeliveryDocument;
 #[path = "semantic/http.rs"]
 mod http;
 use http::{Http1ProtocolDocument, Http2ProtocolDocument};
@@ -20,6 +23,7 @@ use crate::daemon::agent::{
 #[serde(default, deny_unknown_fields)]
 pub(super) struct SemanticRetentionDocument {
     pub projection_enabled: bool,
+    pub command_delivery: CommandDeliveryDocument,
     pub content_owner: String,
     pub l0_llm_call: L0LlmCallDocument,
     pub l0_mcp_call: L0McpCallDocument,
@@ -34,6 +38,7 @@ impl Default for SemanticRetentionDocument {
     fn default() -> Self {
         Self {
             projection_enabled: true,
+            command_delivery: CommandDeliveryDocument::default(),
             content_owner: "highest_consumed".to_string(),
             l0_llm_call: L0LlmCallDocument::default(),
             l0_mcp_call: L0McpCallDocument::default(),
@@ -50,6 +55,7 @@ impl SemanticRetentionDocument {
     pub(super) fn from_config(config: &SemanticRetentionConfig) -> Self {
         Self {
             projection_enabled: config.projection_enabled,
+            command_delivery: CommandDeliveryDocument::from_config(config.command_delivery),
             content_owner: semantic_content_owner_as_str(config.content_owner).to_string(),
             l0_llm_call: L0LlmCallDocument {
                 enabled: config.l0_llm_call.enabled,
@@ -138,6 +144,7 @@ impl SemanticRetentionDocument {
     pub(super) fn to_config(&self) -> Result<SemanticRetentionConfig, String> {
         Ok(SemanticRetentionConfig {
             projection_enabled: self.projection_enabled,
+            command_delivery: self.command_delivery.to_config()?,
             content_owner: parse_value("semantic_retention.content_owner", &self.content_owner)?,
             l0_llm_call: self.l0_llm_call.to_config()?,
             l0_mcp_call: self.l0_mcp_call.to_config()?,

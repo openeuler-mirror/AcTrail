@@ -55,6 +55,18 @@ where
     pub fn finish(&self) -> BestEffortDeliveryFinish {
         self.delivery.finish()
     }
+
+    pub fn prepare(
+        &self,
+        record: SemanticActionExportRecord<'_>,
+    ) -> Result<A::Message, ExportError> {
+        self.delivery.check_health()?;
+        self.adapter.encode(record)
+    }
+
+    pub fn publish_encoded(&self, message: A::Message) -> Result<ExportPublishResult, ExportError> {
+        self.delivery.publish(message)
+    }
 }
 
 impl<A> SemanticActionExportRoute for BestEffortSemanticActionRoute<A>
@@ -69,8 +81,6 @@ where
         &self,
         record: SemanticActionExportRecord<'_>,
     ) -> Result<ExportPublishResult, ExportError> {
-        self.delivery.check_health()?;
-        let message = self.adapter.encode(record)?;
-        self.delivery.publish(message)
+        self.publish_encoded(self.prepare(record)?)
     }
 }
