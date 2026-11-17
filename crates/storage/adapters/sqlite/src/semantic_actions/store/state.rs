@@ -6,9 +6,9 @@ use model_core::ids::TraceId;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use semantic_action::{
     SemanticAction, SemanticActionChange, SemanticActionFinalizationReason, SemanticActionKind,
-    SemanticActionStatus, SemanticActionStoreError, SemanticActionUpdate,
-    SemanticAttributeSupplement, SemanticAttributeSupplementRejection, SemanticCommandKind,
-    SemanticEvidence, SemanticToolResultBinding, attr_keys as attrs,
+    SemanticActionStateAttributes, SemanticActionStatus, SemanticActionStoreError,
+    SemanticActionUpdate, SemanticAttributeSupplement, SemanticAttributeSupplementRejection,
+    SemanticCommandKind, SemanticEvidence, SemanticToolResultBinding, attr_keys as attrs,
 };
 
 use crate::records::encode_time;
@@ -431,19 +431,19 @@ impl<'a> ActionStateWriter<'a> {
         attributes: &mut BTreeMap<String, String>,
     ) -> Result<(), rusqlite::Error> {
         if let Some(code) = row.get::<_, Option<i16>>("command_invocation_kind")? {
-            let value = match code {
-                1 => "agent",
-                2 => "mcp",
-                3 => "command",
+            let kind = match code {
+                1 => SemanticCommandKind::Agent,
+                2 => SemanticCommandKind::Mcp,
+                3 => SemanticCommandKind::Command,
                 _ => return Err(rusqlite::Error::InvalidQuery),
             };
-            attributes.insert(attrs::invocation::KIND.into(), value.into());
+            SemanticActionStateAttributes::new(attributes).command_kind(kind);
         }
         if let Some(value) = row.get::<_, Option<String>>("command_tool_name")? {
-            attributes.insert(attrs::command::TOOL_NAME.into(), value);
+            SemanticActionStateAttributes::new(attributes).command_tool_name(value);
         }
         if let Some(value) = row.get::<_, Option<i32>>("command_exit_code")? {
-            attributes.insert(attrs::command::EXIT_CODE.into(), value.to_string());
+            SemanticActionStateAttributes::new(attributes).command_exit_code(value);
         }
         if let Some(code) = row.get::<_, Option<i16>>("tool_result_binding")? {
             let value = match code {
@@ -480,16 +480,12 @@ impl<'a> ActionStateWriter<'a> {
             );
         }
         if let Some(code) = row.get::<_, Option<i16>>("finalization_reason")? {
-            match code {
-                1 => {
-                    attributes.insert(
-                        attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.into(),
-                        "true".into(),
-                    );
-                }
-                2 => {}
+            let reason = match code {
+                1 => SemanticActionFinalizationReason::TraceClosed,
+                2 => SemanticActionFinalizationReason::CapacityEvicted,
                 _ => return Err(rusqlite::Error::InvalidQuery),
-            }
+            };
+            SemanticActionStateAttributes::new(attributes).finalization_reason(reason);
         }
         Ok(())
     }

@@ -15,6 +15,7 @@ from tests.e2e.common.runner import TestingContextSingleton
 from .environment import OtelJsonlActionFilterEnvironment
 
 from .constants import CASE_CONSTANTS
+from .commands.verification import CommandDeliveryVerification
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class OtelJsonlActionFilterTask:
         self._agent = agent
         self._test_context = test_context
         self._rounds = self._build_rounds()
+        self._commands = CommandDeliveryVerification(environment.config)
 
     @classmethod
     def _build_rounds(cls) -> tuple[FilterRound, ...]:
@@ -157,6 +159,12 @@ class OtelJsonlActionFilterTask:
             set(round_definition.enabled_kinds),
             round_definition.exporter,
         )
+        if "command.invocation" in round_definition.enabled_kinds:
+            self._commands.verify(
+                trace_id,
+                marker,
+                lambda: self._exported_documents(round_definition.exporter),
+            )
         if (
             round_definition.inject_retryable_failure
             and self._environment.json_rpc_injected_failures
@@ -213,6 +221,7 @@ class OtelJsonlActionFilterTask:
                 "--",
                 "bash",
                 "-lc",
+                f'sleep {CASE_CONSTANTS.command_sleep_seconds}; '
                 'cat /etc/hostname >/dev/null; exec "$@"',
                 "actrail-otel-jsonl-filter",
                 *agent_command,

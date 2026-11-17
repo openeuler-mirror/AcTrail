@@ -365,6 +365,9 @@ impl StorageAttachService {
                 .export_runtime
                 .remove_observation_consumer(instance_id)
                 .map_err(|error| ControlError::new(error.code, error.message))?;
+            if !self.export_runtime.has_semantic_consumers() {
+                self.recording.clear_deliveries();
+            }
             self.post_trace_broker.unregister_plugin(instance_id);
             self.persist_export_drop_report(removal.drop_report)?;
             if alert_registered {

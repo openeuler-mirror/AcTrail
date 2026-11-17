@@ -1,5 +1,8 @@
 //! Explicit changes to an action's runtime-owned state.
 
+mod state_attributes;
+pub use state_attributes::SemanticActionStateAttributes;
+
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
@@ -132,4 +135,14 @@ pub enum SemanticCommandKind {
     Agent,
     Mcp,
     Command,
+}
+
+impl SemanticCommandKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Mcp => "mcp",
+            Self::Command => "command",
+        }
+    }
 }

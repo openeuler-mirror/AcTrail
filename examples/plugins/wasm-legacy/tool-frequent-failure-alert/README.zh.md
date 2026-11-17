@@ -3,27 +3,24 @@
 类别：WIT component 观测消费者。
 
 这个示例插件在配置化时间窗口内按 `(trace_id, 工具名)` 聚合工具失败次数与失败率（窗口内
-记录失败类型/退出状态的分布，告警中展示主导类别与明细），超过阈值后通过 `alert-write`
-把告警写入宿主数据库（SQLite），不做任何外部上报。
+记录失败类型/退出状态的分布，告警中展示主导类别与明细），达到阈值后通过 `alert-write`
+把告警写入宿主数据库（SQLite）。
 
-它关注**跨工具或跨失败类型的频繁失败**；同一工具是否连续失败由
-`tool-consecutive-failure-alert` 独立插件处理。
+窗口统计按工具聚合失败次数、失败率和失败类型分布。同一工具的连续失败告警由
+`tool-consecutive-failure-alert` 插件提供。
 
 ## 核心特性
 
 - 窗口聚合：时间窗口、失败次数阈值、失败率阈值、触发模式全部可配置；
 - 工具维度来自 LLM 返回的工具名（`llm.response.tool_calls_json` 的 `function.name`）或
-  MCP 工具名（`mcp.tool.name`），**绝不使用命令行作为聚合键**，避免 opencode 等 agent
-  的 bash 命令造成高基数；
-- 工具执行以 LLM 工具名队列为权威信号：LLM 返回工具后的下一条非嵌套命令即该
-  工具的执行（不要求是 agent 进程的直接子进程，兼容 opencode 等真实进程拓扑），
-  工具进程内部的嵌套命令（如 bash 里的 `ls`/`grep`）通过工具进程标记排除；
+  MCP 工具名（`mcp.tool.name`）；
+- LLM 工具名队列通过参数提示或 FIFO 关联非嵌套工具命令，支持 Agent 后代进程。
+  工具进程标记用于识别并排除内部嵌套命令（如 bash 里的 `ls`/`grep`）；
 - 事件源覆盖工具调用/结果（`mcp.tool_call`）、命令执行与进程退出
   （`command.invocation` + `process.exit`）、策略决策（`enforcement.decision`）；
-- 无法判定成败时不伪造失败：默认跳过，可选提交 `indeterminate-result` 信息级诊断告警；
-- 冷却时间 + 窗口重置 + 宿主去重键（`alert_deduplication_keys`）防止告警风暴与重复落库；
-- 默认脱敏 `category_only`：工具参数与结果明文一律不进入告警，只输出工具名、失败摘要
-  （可脱敏）、错误类别与证据引用。
+- 无法判定成败时默认跳过，可选提交 `indeterminate-result` 信息级诊断告警；
+- 冷却时间、窗口重置和宿主去重键（`alert_deduplication_keys`）控制同键告警提交；
+- 默认脱敏 `category_only` 输出工具名、失败统计、错误类别与证据引用。
 
 ## 文件
 
@@ -58,23 +55,27 @@ daemon 语义动作投影（command.invocation / process.exit / mcp.tool_call /
 1. `command.tool.name`（宿主回填）；
 2. 待匹配的 LLM 工具名（`llm.response.tool_calls_json` 的 `function.name`）：
    - 优先用工具参数提示（如 opencode bash 工具的 `arguments.command`）与命令行的
-     边界匹配，避免 LLM 响应与工具执行之间的 git 等无关进程抢先消耗工具名；
+     边界匹配；
    - 流式响应最终化晚于工具启动时，先暂存未归因命令及退出结果；在
      `attribution_grace_seconds` 内收到工具调用后反向匹配并回放统计；
    - 同一 tool call 的流式更新按调用 ID 去重，待决提示按归因宽限期回收；
-   - 旧提示与当前命令不匹配时，当前命令仍进入延迟缓冲，等待正确响应反向归因；
-   - 无参数提示的工具调用按 trace 内 FIFO 兜底；历史未归因命令不做盲目 FIFO；
+   - 待匹配提示与当前命令不匹配时，命令进入延迟缓冲，等待响应中的工具参数匹配；
+   - 无参数提示的工具调用按 trace 内 FIFO 关联当前命令；历史未归因命令通过参数提示回溯匹配；
    - 嵌套在工具进程内的命令不消耗工具名；
-   - 已 LLM 归因/宿主回填的进程：exec 替换不覆盖首条登记（工具名保持，
-     如 opencode 的 bash 工具 exec 成 ls）；
+   - 已 LLM 归因/宿主回填的进程：exec 替换沿用首条登记的工具名，
+     如 opencode 的 bash 工具 exec 成 ls；
    - 未归因的进程：按最终可执行文件覆盖登记（bash 对 `-c` 末命令 exec 成
      ls 时，失败记到 ls，与连续失败插件行为一致）；
 3. `process.executable` 文件名（仅 `parent_scope=any` 时的原始命令场景）；
 4. 无法归因的命令不统计（`parent_scope=agent_child` 时）。
 
-`command.line` 永远不是聚合键；仅当 `debug_include_command_line=true` 时作为脱敏后的附加字段。
+`command.line` 用于工具参数匹配；命令行调试字段由 `debug_include_command_line`
+和脱敏配置控制。
 
 ### 成败判定
+
+`command.invocation` 的 `completeness=partial` 初始快照用于登记命令，终态快照
+跳过登记。`process.exit` 通过 `process.id` 关联命令并判定成败。
 
 | 事件 | 失败 | 成功 | 无法判定 |
 | --- | --- | --- | --- |
@@ -85,11 +86,28 @@ daemon 语义动作投影（command.invocation / process.exit / mcp.tool_call /
 ## 重新编译
 
 ```bash
-rustup target add wasm32-wasip2
+rustup target add --toolchain 1.98.1 wasm32-wasip2
 cd examples/plugins/wasm-legacy/tool-frequent-failure-alert
-cargo build --target wasm32-wasip2 --release
-cp target/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm .
+unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
+REBUILD_DIR="$(mktemp -d /tmp/actrail-frequent-wasm.XXXXXX)"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/a"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/b"
+cmp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm" "$REBUILD_DIR/b/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm"
+cp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm" .
+rm -r "$REBUILD_DIR"
 ```
+
+构建工具链：Rust `1.98.1`（`48a229cea`）、Cargo `1.98.1`（`797e8a9bc`）、
+LLVM `22.1.8`。构建命令使用本目录的 `Cargo.lock`，通过 `cmp` 比较两个独立
+target 目录的输出。
+
+| 构建输入 | Git 对象 |
+| --- | --- |
+| `src/lib.rs` blob | `a43f33f5116d6e645cdd7b8348410db859a62322` |
+| `Cargo.lock` blob | `f1d85583b814a69e0b38226b265234c3417ca824` |
+| WIT tree | `126f2d22c83707cd5afca9a685fa41eefa94ec3e` |
+
+仓库中的 WASM 产物大小为 421447 字节。
 
 ## 插件配置
 
@@ -173,7 +191,7 @@ cp target/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm .
 
 | 字段 | 含义 |
 | --- | --- |
-| `tool_name` | 工具聚合维度（LLM/MCP 工具名，绝非命令行） |
+| `tool_name` | 工具聚合维度（LLM/MCP 工具名） |
 | `failure_count` / `total_count` / `failure_rate` | 窗口内失败数、调用总数、失败率 |
 | `failure_type` / `exit_status` | 窗口内出现最多的失败类别与退出状态 |
 | `failure_breakdown` | 窗口内 `(failure_type, exit_status)` 分布明细 |
@@ -186,7 +204,7 @@ cp target/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm .
 
 ## 回测覆盖
 
-仓库回测不是单纯执行几条命令，而是明确分为两层：
+回测包含直接命令和真实 Agent 对话两种场景：
 
 | 层次 | 配置 | 启动方式 | 验证重点 |
 | --- | --- | --- | --- |
@@ -200,17 +218,15 @@ sudo -E python3.11 \
   tests/e2e/regression/tool_frequent_failure_alert/run_e2e.py
 ```
 
-真实 Agent 轮只选择具备工具能力的 `opencode` 或 `codex`。它必须在同一 trace
-中同时观察到：
+真实 Agent 轮选择 `opencode` 或 `codex`，在同一 trace 中检查以下记录：
 
 1. Agent 实际执行的三条失败 `ls` 命令；
 2. 至少三条来自 `llm.response.tool_calls_json` 的工具调用；
 3. 一条满足阈值且带命令/退出证据的 `frequent-failure` 告警。
 
-因此该轮是 Agent 与模型的真实对话和工具调用，不是用普通 `bash`/`ls` 替代
-Agent；三次顺序调用还会覆盖重复流式 tool call 去重、旧提示隔离和晚到响应
-回放。机器没有可用 Agent 时该子项为 `SKIPPED`；Agent 已执行工具但没有告警
-时为 `FAILED`，不会被直接命令轮的成功掩盖。
+该轮覆盖顺序工具调用、流式 tool call 去重和延迟响应归因。缺少可用 Agent，或
+无告警且未观测到三条失败命令时，子项结果为 `SKIPPED`；已观测到三条失败命令
+但无告警，或已有告警但失败命令、LLM 工具调用任一不足三条时，结果为 `FAILED`。
 
 完整隔离环境命令、SQL 查询和每轮预期结果见回测目录下的 `README.zh.md`。
 

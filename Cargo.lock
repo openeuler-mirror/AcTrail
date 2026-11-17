@@ -1179,6 +1179,7 @@ dependencies = [
  "export_otel_codec",
  "plugin_system",
  "plugin_system_contracts",
+ "semantic_action",
  "serde_json",
  "toml",
  "ureq",

@@ -1,5 +1,9 @@
 exporter = "file"
 queue_capacity = 1024
+# Terminal delivery identity limits. Capacity rejections emit RuntimeDropped diagnostics.
+terminal_action_max_entries_per_trace = 65536
+terminal_action_max_entries = 262144
+terminal_action_max_key_bytes = 33554432
 
 [file]
 path = "/var/lib/actrail/export/live-spans.otlp.jsonl"

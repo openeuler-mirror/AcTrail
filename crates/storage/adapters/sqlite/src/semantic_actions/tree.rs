@@ -7,15 +7,16 @@ use model_core::process::ProcessIdentity;
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Params, Row, params, params_from_iter};
 use semantic_action::{
-    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStoreError,
+    SemanticAction, SemanticActionKind, SemanticActionLink, SemanticActionStatus,
+    SemanticActionStoreError,
 };
 use storage_core::SemanticActionTraceRevision;
 
 use crate::SqliteStorage;
 use crate::semantic_actions::action_ids::resolve_action_key;
 use crate::semantic_actions::codebook::sqlite::{
-    action_kind_code, action_kind_code_from_str, decode_link_origin, decode_link_role,
-    link_role_code_from_str,
+    action_kind_code, action_kind_code_from_str, action_status_code, decode_link_origin,
+    decode_link_role, link_role_code_from_str,
 };
 use crate::semantic_actions::cold_fields::decode_attributes_from_row_with_prefix;
 use crate::semantic_actions::evidence;
@@ -515,6 +516,7 @@ fn query_observed_agent_process_exec(
              WHERE action.trace_id = ?1
                AND action.kind_code = ?2
                AND action.process_id = ?3
+               AND action_state.status_code = ?4
              ORDER BY action.start_time ASC, ids.action_id ASC
              LIMIT 1"
         ))
@@ -527,6 +529,7 @@ fn query_observed_agent_process_exec(
                 trace_id.get(),
                 action_kind_code(SemanticActionKind::ProcessExec),
                 process.get(),
+                action_status_code(SemanticActionStatus::Success),
             ],
             action_from_row,
         )

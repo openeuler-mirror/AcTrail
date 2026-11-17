@@ -139,6 +139,7 @@ pub(crate) struct StorageAttachService {
     pub(super) control_plugins: ControlPluginRuntime,
     plugin_configs: plugin_config::PluginConfigManager,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
+    pub(super) recording: recording_runtime::RecordingRuntime,
     pub(super) export_runtime: ExportRuntime,
     pub(super) alert_ingress: AlertIngress,
     pub(super) idle_detection: idle_detector::IdleDetector,

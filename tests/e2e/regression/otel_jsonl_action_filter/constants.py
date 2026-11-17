@@ -32,6 +32,8 @@ class OtelJsonlActionFilterConstants:
     max_attempts: int = 3
     retry_backoff_ms: int = 10
     injected_response_delay_seconds: float = 0.75
+    command_sleep_seconds: float = 2.0
+    command_delivery_settle_seconds: float = 0.5
 
 
 CASE_CONSTANTS = OtelJsonlActionFilterConstants()

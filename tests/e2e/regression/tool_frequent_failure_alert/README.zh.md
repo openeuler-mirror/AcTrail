@@ -17,18 +17,17 @@
 - 告警 payload 包含 trace id、工具聚合维度、失败计数、窗口范围与证据
   action id 列表，且默认不包含工具参数明文；
 - `scripts/install-release.sh` 安装出的官方插件包可被发现并从安装目录加载；
-- 机器上存在真实 Agent 时，用统一提示词驱动 Agent 执行三条失败命令并验证
-  告警；没有可用 Agent 时该轮次跳过，不计失败。
+- 真实 Agent 轮用统一提示词驱动 Agent 执行三条失败命令，检查工具调用证据和告警。
 
 ## 判定语义
 
 - AcTrail 自身产物缺失或不可执行（`actraild`、`actrailctl`、
-  `actrailviewer`、release 安装的插件包）判定为 `FAILED`，不降级为
-  `SKIPPED`；
+  `actrailviewer`、release 安装的插件包）判定为 `FAILED`；
 - 真实 Agent 缺失或不可用（`opencode`、`codex` 均未找到）时，真实 Agent
-  子项判定为 `SKIPPED`，不影响整体 `PASSED`；
-- 真实 Agent 执行了三条失败命令但无告警落库，或者告警存在但同一 trace
-  没有采集到至少三条 LLM 工具调用时，判定为 `FAILED`。
+  子项判定为 `SKIPPED`；
+- 真实 Agent 轮无告警且未观测到三条失败命令时，判定为 `SKIPPED`；
+- 已观测到三条失败命令但无告警，或已有告警但失败命令、LLM 工具调用任一
+  不足三条时，判定为 `FAILED`。
 
 ## 回测组成
 
@@ -37,11 +36,15 @@
 | 直接命令回测 | `tool-frequent-failure-alert.e2e.config.json`（`agent_children + any`） | `actrailctl launch -- bash -c ...` | 同一 `ls` 工具三次成功加三次失败后告警并得到 `total_count=6`、`failure_rate=0.5`，低于阈值不告警、冷却只告警一次、payload/证据与安装包 |
 | 真实 Agent 对话回测 | `tool-frequent-failure-alert.agent.e2e.config.json`（`llm_and_mcp + agent_child`） | OpenCode `run` 或 Codex `exec` 与模型真实对话后调用工具 | 三次失败 `ls`、至少三条 `llm.response.tool_calls_json` 工具调用、告警及命令/退出证据 |
 
-第二层不是把 Agent 名称包在普通 shell 外面：自动回测直接启动 Agent CLI，
-由模型根据提示词决定并发起三次工具调用，再从该 trace 的采集动作证明这些
-调用确实来自 LLM 响应。
+真实 Agent 轮启动 Agent CLI 与模型对话，从同一 trace 的 LLM 响应、命令和
+进程退出动作中核对三次工具调用。
 
 # Quick Run
+
+混合正向轮通过 `bash -c 'exec ls <path>'` 执行三条成功命令和三条失败命令。
+`terminal-command-registration` 核对同一逻辑进程的 bash 阶段终态和 ls 阶段，
+告警中的命令证据均属于实际 ls，并包含三个失败 ls 的 action ID。
+该轮预期失败数为 3、总数为 6、失败率为 0.5，生成一条告警。
 
 在仓库根目录以 root 执行：
 
@@ -52,9 +55,8 @@ sudo -E python3.11 tests/e2e/regression/test_all.py \
 
 公共 runner 会先执行 `scripts/install-release.sh`（构建并安装官方插件包），再
 创建隔离工作目录，启动真实 `actraild`，加载插件后依次跑混合正向、低于
-阈值、冷却、安装包和可选真实 Agent 轮次。冷缓存机器可能长时间停留在
-release、TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用
-CPU，就不是测试卡死。
+阈值、冷却、安装包和可选真实 Agent 轮次。首次运行包含 release、TLS runtime
+和 WASM 插件构建，编译耗时取决于本机缓存。
 
 只运行该 case 并显示详细过程：
 
@@ -80,30 +82,26 @@ sudo -E python3.11 \
    证据（`evidence_action_ids` 唯一且同时含 `:command.invocation` 与
    `:process.exit` 动作 id）正确。
 6. 低于阈值轮：同一 trace 只有两条失败 `ls`，断言无告警。
-7. 冷却矩阵：单 trace 连续五条失败命令，断言仍只有一条告警，且存储的
-   `command.invocation` 数量证明额外失败确实发生（冷却抑制重复告警）。
+7. 冷却矩阵：单 trace 连续五条失败命令，断言告警数为 1，并核对存储的
+   `command.invocation` 数量。
 8. 断言仓库实例 `observed_records > 0`。
-9. 安装包轮：临时卸载仓库实例，仅加载安装目录实例跑一轮正向（同一时刻
-    只保留一个实例，避免两个实例对同一批事件各提交一条重复告警），断言
-    安装产物可用；完成后恢复仓库实例。
+9. 安装包轮：卸载仓库实例，加载安装目录实例跑一轮正向，断言安装产物
+   可用；完成后卸载安装目录实例并加载仓库实例。
 10. 真实 Agent 轮（可选）：切换到
     `tool-frequent-failure-alert.agent.e2e.config.json`
     （`tool_scope=llm_and_mcp`、`parent_scope=agent_child`），再探测
     `opencode`/`codex`，用统一提示词驱动其执行三条失败命令，覆盖工具命令/
     退出早于流式 `llm.response` 最终化的延迟归因，以及重复 tool call 去重和
-    旧提示不阻塞后续顺序调用；最多执行两次，以容忍真实 Agent/采集首轮未产生
-    完整退出证据。告警 payload 必须满足 `failure_count=3`、
+    顺序工具调用；最多执行两次。告警 payload 满足 `failure_count=3`、
     `total_count=3`、`failure_rate=1.0`，并至少包含三组命令/退出证据。
-    无可用 Agent 或 Agent 未实际执行失败命令时 `SKIPPED`；
-    Agent 执行了失败命令但无告警，或同一 trace 未采集到至少三条 LLM 工具调用
-    时，判定为 `FAILED`。
+    轮次结果按[判定语义](#判定语义)确定。
 11. 卸载插件、停止 daemon、清理。
 
 # 手动测试
 
-以下命令完整复现自动测试，均从仓库根目录、在同一个 root shell 中执行。
-手动测试使用隔离的 `/tmp/actrail-frequent-alert-manual` 工作目录，不读取或
-清理系统默认的 `/var/lib/actrail` 数据。
+以下步骤手动运行插件加载、命令执行和告警查询，均在仓库根目录的同一个 root shell 中执行。
+手动测试工作目录为 `/tmp/actrail-frequent-alert-manual`，命令通过该目录下的
+`actraild.conf` 操作隔离实例。
 
 ## 步骤1：检查测试前提并构建 release
 
@@ -205,7 +203,7 @@ socket；SQLite 与日志均位于 `/tmp/actrail-frequent-alert-manual`。
 
 > 测试专用配置把 `tool_scope` 设为 `agent_children`、`parent_scope` 设为
 > `any`：无 LLM 的原始命令也能按可执行文件名（如 `ls`）归一到工具维度；
-> 真实 Agent 轮仍优先使用 `llm.response.tool_calls_json` 中的 LLM 工具名
+> 真实 Agent 轮优先使用 `llm.response.tool_calls_json` 中的 LLM 工具名
 > （如 `bash`）。生产默认配置为 `llm_and_mcp` + `agent_child`，只统计
 > LLM/宿主回填的工具执行。
 
@@ -295,9 +293,8 @@ sqlite3 "$WORK/data/actrail.sqlite" \
 
 ### 预期结果
 
-两条失败低于窗口阈值 3，查询结果为 `0`。窗口聚合不依赖“连续”，成功事件
-不清零失败计数（只计入失败率分母），因此本插件的“低于阈值”语义与连续失败
-插件的“成功清零”语义不同。
+两条失败低于窗口阈值 3，查询结果为 `0`。窗口内的成功事件计入调用总数，
+失败率按失败数除以调用总数计算。
 
 ## 步骤6：冷却矩阵（超过阈值的失败不重复告警）
 
@@ -328,9 +325,8 @@ sqlite3 "$WORK/data/actrail.sqlite" \
 
 ### 预期结果
 
-五次失败仍只有 `1` 条告警（第三次失败触发后窗口重置，第四、五次失败处于
-冷却期被抑制）；viewer 中 `command.invocation` 数量为 6（bash + 5 条
-`ls`），证明额外失败确实发生。
+告警数为 `1`：第三次失败触发告警并重置窗口，第四、五次失败位于冷却期。
+viewer 中 `command.invocation` 数量为 6（bash + 5 条 `ls`）。
 
 ## 步骤7：从安装包加载插件并验证
 
@@ -362,10 +358,8 @@ INSTALLED_MARKER="TOOL_FREQUENT_ALERT_INSTALLED_$(date +%s%N)"
 
 ### 预期结果
 
-先卸载仓库实例、只保留安装包实例，避免两个实例对同一批事件各提交一条重复
-告警（宿主 `alert_deduplication_keys` 本身也保证幂等）；安装包实例加载
-成功，该轮 trace 恰好落库一条告警，证明安装产物可用；随后恢复仓库实例供
-真实 Agent 轮使用。
+安装包实例加载成功，该轮 trace 落库一条告警。完成后卸载安装包实例，加载
+仓库实例供真实 Agent 轮使用。
 
 ## 步骤8：真实 Agent 轮（可选）
 
@@ -471,22 +465,19 @@ fi
 
 ### 预期结果
 
-有可用 Agent 时（自动回测选择具备工具能力的 `opencode` 或 `codex`，且优先使用
+有可用 Agent 时（自动回测选择 `opencode` 或 `codex`，且优先使用
 `OPENCODE_E2E_BINARY` / `CODEX_E2E_BINARY` 等环境变量），Agent 执行三条独立
 失败命令后，`AGENT_LS_COUNT >= 3`、`AGENT_TOOL_CALL_COUNT >= 3`，并且该
-trace 恰好落库一条告警。真实 Agent 通过 `llm.response` 的
-告警 payload 必须是 `failure_count=3`、`total_count=3`、
+trace 落库一条告警。告警 payload 为 `failure_count=3`、`total_count=3`、
 `failure_rate=1.0`，证据中至少有三条命令和三条退出动作。自动回测会在最终
 `real-agent` 结果中打印完整的紧凑格式 `payload_json`；隔离数据库会在
-`cleanup` 阶段删除，因此请从该输出查看本轮真实告警内容。
-`tool_calls_json` 返回工具名（如 `bash`），插件优先用工具参数提示匹配、
-流式更新按 tool call ID 去重；队列中的旧提示不匹配当前命令时，当前命令继续
-进入延迟缓冲，等待它自己的响应到达后回放，因此三次顺序调用都能累计。
-无提示时按 FIFO 归一到后续非嵌套命令，聚合键是 LLM 工具名而不是命令行，
-因此不会因为每条 bash 命令不同而产生高基数。自动回测最多执行两次：若 Agent 未实际执行失败
-命令（trace 中找不到三条 `ls` 调用），判为 `SKIPPED` 不报错；若执行了失败
-命令但无告警，或有告警却没有至少三条 LLM 工具调用，判为 `FAILED`。统一
-提示词不依赖 Agent 的具体命令格式。
+`cleanup` 阶段删除，告警内容可从该输出查看。
+
+工具名来自 `llm.response.tool_calls_json`（如 `bash`）。插件优先按工具参数提示
+关联命令，流式更新按 tool call ID 去重；未匹配的命令进入延迟缓冲，收到匹配
+响应后回放统计。无参数提示时，按 FIFO 关联后续非嵌套命令。
+
+自动回测最多执行两次，轮次结果按[判定语义](#判定语义)确定。
 
 ## 步骤9：清理
 
@@ -504,10 +495,9 @@ rm -rf -- /tmp/actrail-frequent-alert-manual
 
 ### 预期结果
 
-两个插件实例卸载成功，daemon 停止，隔离目录被删除；系统默认
-`/var/lib/actrail` 未受影响。
+两个插件实例卸载成功，daemon 停止，隔离目录被删除。
 
-# 覆盖范围与非目标
+# 覆盖范围
 
 本用例覆盖：插件加载与授权、告警定义注册、告警落库与 payload 字段
 （工具名/失败类型/退出状态/失败分布/失败计数/窗口范围/证据列表）、证据唯一性
@@ -517,37 +507,5 @@ rm -rf -- /tmp/actrail-frequent-alert-manual
 加载，以及可选的真实 Agent 端到端验证（真实模型对话、三次工具执行、
 `llm.response.tool_calls_json` 计数、LLM 工具名归并以及告警落库）。
 
-本用例不覆盖：
-
-- Web 插件管理交互（发现、加载、配置、状态页面），由独立 Web 插件回归负责；
-- 跨 batch 重投去重的注入验证（真实链路不会重投同一动作，以
-  `evidence_action_ids` 唯一性和每轮恰好一条告警覆盖）；
-- 失败率阈值（`trigger_mode=rate`）、告警风暴、长时冷却参数矩阵或多种
-  阈值组合；
-- `desensitization.mode=sanitized` 的关键词替换与截断细节未自动化（默认
-  `category_only` 只校验 payload 不含 `summary` 与工具参数明文），手动步骤 4
-  提供了切换配置后的可选验证；
-- MCP 工具（`mcp.tool_call`）与策略决策（`enforcement.decision`）失败聚合
-  的注入验证，真实链路下由对应语义动作驱动；
-- 多插件并发、容器隔离等重型场景。
-
-关键设计事实：
-
-- `process.exit` / `agent.exit` 是 export-only 动作，不进入 SQLite，因此
-  回测从告警 payload 的证据断言而非存储断言；
-- 宿主导出时为每个语义动作注入 `process.id`（插件可见、不落库），该注入由
-  `crates/core/plugin_wasm_runtime/src/component_observation/wire.rs` 的单元
-  测试守护；
-- 聚合键为 `(trace_id, tool_name)`，窗口内记录 `(failure_type, exit_status)`
-  分布（`failure_breakdown`）；成功事件不清零失败计数，只计入失败率分母；
-- 工具维度只取 LLM 工具名 / MCP 工具名 / 可执行文件名，`command.line`
-  永远不是聚合键（Shell 矩阵轮依赖可执行文件名 `ls`，真实 Agent 轮依赖
-  LLM 工具名 `bash`）；
-- 告警触发后窗口重置，冷却期内同聚合键不重复告警；宿主按
-  `(trace_id, alert_definition_id, deduplication_key)` 幂等落库；
-- 退出码为 0 的成功进程在 `process.exit` 上表现为 `status=unknown` 且无
-  `process.exit_code`，插件默认视为成功（混合正向轮通过 `total_count=6` 和
-  `failure_rate=0.5` 端到端验证该行为）；
-- 无法判定成败的事件（如 `status=unknown` 且配置不视为成功）默认跳过，
-  不伪造失败告警；`indeterminate_handling=diagnostic` 时提交
-  `indeterminate-result` 信息级告警。
+`process.exit` / `agent.exit` 通过观测出口传给插件，回测通过告警 payload 的
+`evidence_action_ids` 核对退出动作。宿主向插件提供的 `process.id` 为逻辑进程 ID。

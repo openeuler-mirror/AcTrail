@@ -14,9 +14,8 @@ python3 tests/e2e/regression/test_all.py \
 `actraild`、`actrailweb`、builtin `otel-http` 插件和本地 OTLP/HTTP JSON
 receiver，最后通过 `actrailctl launch` 运行两轮真实 xiaoO 对话。运行前需要确保
 `xiaoo` 位于 `PATH`，或通过 `XIAOO_E2E_BINARY` 指定可执行文件，并且 xiaoO 的
-provider 配置可用。冷缓存机器可能长时间
-停留在 release、TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用
-CPU，就不是测试卡死。
+provider 配置可用。首次运行包含 release、TLS runtime 和 WASM 插件构建，
+编译耗时取决于本机缓存。
 
 只运行该 case 并显示详细过程：
 
@@ -32,16 +31,22 @@ python3 tests/e2e/regression/otel_http/run_e2e.py \
    OTLP/HTTP JSON receiver。
 3. 发现并加载 builtin `otel-http`，检查配置 schema 和官方安全默认值。
 4. 在 daemon 显式启用 canonical request body export；插件先只启用
-   `process.exec`、`process.exit`、`llm.request`，并使用 `metadata-only`。
-5. 运行第一轮真实 xiaoO 对话，触发旧 consumer 的 `finish`，验证三个 action 的
-   终态 one-shot、metadata-only 出境约束以及持久化 trace identity。
-6. 将插件切换为 `full`，运行带唯一 user marker 的第二轮真实 xiaoO 对话。
+   `process.exec`、`process.exit`、`agent.identity`、`llm.request`、
+   `command.invocation`，并使用 `metadata-only`。
+5. 运行第一轮真实 xiaoO 对话，通过 Bash 执行 `sleep 0.5`，触发 consumer 的
+   `finish`，验证终态单次导出、metadata-only 出境约束以及持久化 trace identity。
+6. 将插件切换为 `full`，运行带唯一 user marker 的第二轮真实 xiaoO 对话，同样
+   通过 Bash 执行 `sleep 0.5`。
 7. 再次触发 `finish`，在 receiver 收到的 OTLP JSON 中验证
    `llm.request.canonical_body_json` 是有效 JSON、export state 为 `exported`，且 body
    包含该唯一 marker。
 8. 验证 OTLP `traceId` 是 UUIDv4 格式的 128-bit 标识，并与 SQLite 中持久化的
-   `otel_trace_id` 一致；本机数字 `trace_id` 仍保留为资源属性。
-9. 卸载插件，停止 Web、daemon 和 receiver，清理隔离测试数据。
+   `otel_trace_id` 一致；本机数字 `trace_id` 作为资源属性导出。
+9. 通过 Web commands 列表及逐 action 详情，对照两轮的每条命令与接收 Span：
+   action ID 恰好一次，状态、完整性和起止纳秒一致；Full 包含相同 exit code，
+   metadata-only 遵守脱敏白名单；sleep 成功退出且时长约 0.5 秒。
+10. 验证接收的 action kinds 均在配置的 allow-list 内。
+11. 卸载插件，停止 Web、daemon 和 receiver，清理隔离测试数据。
 
 # 手动测试
 
@@ -291,7 +296,7 @@ jq -e '
 ### 预期结果
 
 catalog 中存在 activation-ready 的 `otel-http`；加载后实例状态为 `active`；schema
-保持安全默认值；本地明文 endpoint 通过显式 `allow_insecure=true` 被接受；仅
+显示配置默认值；本地明文 endpoint 通过显式 `allow_insecure=true` 被接受；仅
 `process.exec`、`process.exit` 被启用；批次上限为 4096、超时为 60 秒。
 
 ## 步骤5：启动真实 trace 并确认没有提前发送
@@ -372,8 +377,7 @@ test "$EARLY_SPANS" -eq 0
 
 真实 xiaoO 对话成功退出并输出 answer marker；输出中恰好出现一个
 `trace trace-N entered Active`；trace 最终为
-`Exited/Clean` 或 `Completed/Clean`；receiver 中该 marker 的 span 数量仍为 0，
-证明未达到批次上限或超时前不会提前发送。
+`Exited/Clean` 或 `Completed/Clean`；receiver 中该 marker 的 span 数量为 0。
 
 ## 步骤6：触发 finish 并验证 OTLP 数据
 
@@ -531,13 +535,9 @@ esac
 插件进入 `stopped`；Web、daemon 和 receiver 均退出；AcTrail 清理命令只操作隔离
 配置，最后删除固定的 `/tmp/actrail-otel-http-manual` 手动测试目录。
 
-# 覆盖范围与非目标
+# 覆盖范围
 
 本用例验证 builtin OTEL/HTTP 的插件发现、配置安全策略、真实 action 输入、批次
-flush、终态 one-shot、metadata-only 出境约束，以及 full 模式 canonical request
-body 在真实 OTLP receiver 边界的导出。它不依赖外部 Collector 或容器，也不替代
-以下专项验收：
-
-- TLS/mTLS 证书分发、轮换和真实 Collector 互操作；
-- WAL、at-least-once 或其他可靠投递语义；
-- 不同部署形态的网络故障和生命周期故障矩阵。
+flush、终态单次导出、metadata-only 出境约束，以及 full 模式 canonical request
+body 在真实 OTLP receiver 边界的导出。运行环境由本机 daemon、Web、真实 xiaoO
+和本地 OTLP/HTTP JSON receiver 组成。

@@ -27,6 +27,8 @@ trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有
 额外副本；启用前应同时评估本地留存、Collector 信任边界和传输安全。正文超过 daemon
 配置的 `request_body_export_max_bytes` 时不会截断发送，而是只导出 `too_large` 状态。
 插件只导出终态 action；同一 action 的 `in_progress` 修订不会形成重复 span。
+去重账本默认限制单 Trace `65536` 条、实例 `262144` 条、ID 字节总量 `33554432`。
+通过 `terminal_action_max_entries_per_trace`、`terminal_action_max_entries`、`terminal_action_max_key_bytes` 配置；满额保留已有身份并拒收新身份，Trace 最终通知和卸载释放状态。容量诊断和计数见[终态去重容量](../../../../docs/operations/plugins/otel-http.md#终态去重容量)。
 
 模型原生工具会形成 `llm.tool_call` / `llm.tool_result` action；逻辑 subagent 工具还会
 形成 `agent.invocation`，调用、结果、trajectory 和子请求关系通过带 role/confidence 的

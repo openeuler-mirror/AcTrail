@@ -12,16 +12,19 @@ use crate::{DeliveryFailureKind, DeliveryReport};
 pub(crate) struct ObservedRecordCommitCoordinator<'a> {
     storage: &'a mut dyn StorageBackend,
     export_runtime: &'a ExportRuntime,
+    recording: &'a mut crate::RecordingRuntime,
 }
 
 impl<'a> ObservedRecordCommitCoordinator<'a> {
     pub(crate) fn new(
         storage: &'a mut dyn StorageBackend,
         export_runtime: &'a ExportRuntime,
+        recording: &'a mut crate::RecordingRuntime,
     ) -> Self {
         Self {
             storage,
             export_runtime,
+            recording,
         }
     }
 
@@ -59,15 +62,14 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
             Err(error) => delivery.record(DeliveryFailureKind::Storage, Err(error)),
         }
         if let Some(export_batch) = export_batch {
-            delivery.extend(
-                crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
-                    self.export_runtime,
-                    traces,
-                    export_batch,
-                    emitted_at,
-                    next_diagnostic_id,
-                ),
-            );
+            delivery.extend(self.recording.export_semantic_action_batches(
+                self.storage,
+                self.export_runtime,
+                traces,
+                export_batch,
+                emitted_at,
+                next_diagnostic_id,
+            ));
         }
         delivery
     }
@@ -108,15 +110,14 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
             Err(error) => delivery.record(DeliveryFailureKind::Storage, Err(error)),
         }
         if self.export_runtime.has_semantic_consumers() {
-            delivery.extend(
-                crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
-                    self.export_runtime,
-                    traces,
-                    export_batch,
-                    emitted_at,
-                    next_diagnostic_id,
-                ),
-            );
+            delivery.extend(self.recording.export_semantic_action_batches(
+                self.storage,
+                self.export_runtime,
+                traces,
+                export_batch,
+                emitted_at,
+                next_diagnostic_id,
+            ));
         }
         if let Some(elapsed) = semantic_flush_elapsed {
             observe_semantic_flush(elapsed);
@@ -134,7 +135,8 @@ impl<'a> ObservedRecordCommitCoordinator<'a> {
         if !self.export_runtime.has_semantic_consumers() {
             return DeliveryReport::default();
         }
-        crate::RecordingWriter::new(self.storage).export_semantic_action_batches(
+        self.recording.export_semantic_action_batches(
+            self.storage,
             self.export_runtime,
             traces,
             batch,
