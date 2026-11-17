@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -38,6 +38,31 @@ pub trait BestEffortSink<T>: Send + 'static {
     fn finish(&mut self) -> Result<u64, String> {
         Ok(u64::default())
     }
+
+    /// Sends what is buffered now and keeps the sink running. Called for a flush
+    /// marker, after every record queued before it has been delivered to the sink.
+    fn flush(&mut self, _deadline: Instant) -> Result<BestEffortFlush, String> {
+        Ok(BestEffortFlush::default())
+    }
+}
+
+/// What one `BestEffortSink::flush` did with the buffered records.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BestEffortFlush {
+    /// Records made durable by the flush.
+    pub durable_records: u64,
+    /// Buffered records the sink gave up on; the sink keeps running.
+    pub dropped_records: u64,
+}
+
+/// One entry of the delivery queue. A flush marker shares the queue with the
+/// records, so the worker reaches it only after the records queued before it.
+enum DeliveryItem<T> {
+    Record(T),
+    Flush {
+        deadline: Instant,
+        done: SyncSender<Result<BestEffortFlush, String>>,
+    },
 }
 
 pub struct BestEffortDelivery<T: Send + 'static> {
@@ -80,7 +105,7 @@ impl BestEffortShutdown {
 }
 
 struct BestEffortDeliveryState<T> {
-    sender: Option<SyncSender<T>>,
+    sender: Option<SyncSender<DeliveryItem<T>>>,
     worker: Option<JoinHandle<()>>,
     finished: bool,
 }
@@ -144,40 +169,35 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
                     if thread_shutdown.expired() {
                         break;
                     }
-                    match sink.idle_timeout() {
+                    let item = match sink.idle_timeout() {
                         Some(timeout) => match receiver.recv_timeout(timeout) {
-                            Ok(message) => match sink.deliver(message) {
-                                Ok(delivered) => {
-                                    thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
-                                }
-                                Err(error) => {
-                                    store_delivery_error(&thread_error, error);
-                                    return;
-                                }
-                            },
-                            Err(RecvTimeoutError::Timeout) => match sink.on_idle() {
-                                Ok(delivered) => {
-                                    thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
-                                }
-                                Err(error) => {
-                                    store_delivery_error(&thread_error, error);
-                                    return;
-                                }
-                            },
+                            Ok(item) => Some(item),
+                            Err(RecvTimeoutError::Timeout) => None,
                             Err(RecvTimeoutError::Disconnected) => break,
                         },
                         None => match receiver.recv() {
-                            Ok(message) => match sink.deliver(message) {
-                                Ok(delivered) => {
-                                    thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
-                                }
-                                Err(error) => {
-                                    store_delivery_error(&thread_error, error);
-                                    return;
-                                }
-                            },
+                            Ok(item) => Some(item),
                             Err(_) => break,
                         },
+                    };
+                    let delivered = match item {
+                        Some(DeliveryItem::Record(message)) => sink.deliver(message),
+                        Some(DeliveryItem::Flush { deadline, done }) => {
+                            let flushed = sink.flush(deadline);
+                            // The requester may have stopped waiting; the flush still counts.
+                            let _ = done.send(flushed.clone());
+                            flushed.map(|flush| flush.durable_records)
+                        }
+                        None => sink.on_idle(),
+                    };
+                    match delivered {
+                        Ok(delivered) => {
+                            thread_durable_records.fetch_add(delivered, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            store_delivery_error(&thread_error, error);
+                            return;
+                        }
                     }
                 }
                 if !thread_shutdown.expired() {
@@ -232,7 +252,7 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
         let Some(sender) = &state.sender else {
             return Err(self.delivery_error("delivery sender is closed"));
         };
-        match sender.try_send(message) {
+        match sender.try_send(DeliveryItem::Record(message)) {
             Ok(()) => {
                 self.accepted_records.fetch_add(1, Ordering::Relaxed);
                 Ok(ExportPublishResult::delivered())
@@ -240,6 +260,33 @@ impl<T: Send + 'static> BestEffortDelivery<T> {
             Err(TrySendError::Full(_)) => Ok(ExportPublishResult::dropped(
                 ExportDeliveryDrop::queue_full(1, self.queue_capacity),
             )),
+            Err(TrySendError::Disconnected(_)) => {
+                self.check_health()?;
+                Err(self.delivery_error("delivery worker disconnected"))
+            }
+        }
+    }
+
+    /// Queues a flush marker behind the records accepted so far. The returned
+    /// receiver yields the sink's result once the worker has reached the marker.
+    /// Never blocks: a full queue is reported as an error.
+    pub fn flush(
+        &self,
+        deadline: Instant,
+    ) -> Result<Receiver<Result<BestEffortFlush, String>>, ExportError> {
+        self.check_health()?;
+        let state = self.state.lock().map_err(|error| {
+            self.delivery_error(format!("delivery state lock poisoned: {error}"))
+        })?;
+        let Some(sender) = &state.sender else {
+            return Err(self.delivery_error("delivery sender is closed"));
+        };
+        let (done, result) = sync_channel(1);
+        match sender.try_send(DeliveryItem::Flush { deadline, done }) {
+            Ok(()) => Ok(result),
+            Err(TrySendError::Full(_)) => {
+                Err(self.delivery_error("delivery queue is full; flush marker not queued"))
+            }
             Err(TrySendError::Disconnected(_)) => {
                 self.check_health()?;
                 Err(self.delivery_error("delivery worker disconnected"))

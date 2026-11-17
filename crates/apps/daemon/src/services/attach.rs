@@ -152,6 +152,8 @@ pub(crate) struct StorageAttachService {
     pub(super) finalized_terminal_traces: BTreeSet<model_core::ids::TraceId>,
     pub(super) pending_terminal_finalizations: BTreeSet<model_core::ids::TraceId>,
     pub(super) terminal_finalization_queued_at: BTreeMap<model_core::ids::TraceId, Instant>,
+    /// Launchers waiting for their trace to settle before they exit.
+    pub(super) exit_settles: crate::services::live::exit_settle::ExitSettles,
     pub(super) finalization_traces_per_cycle: usize,
     pub(super) finalization_poll_interval: Duration,
     pub(super) terminal_settle_delay: Duration,

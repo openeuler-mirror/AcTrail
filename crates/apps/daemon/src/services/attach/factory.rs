@@ -379,6 +379,7 @@ impl StorageAttachService {
             finalized_terminal_traces: Default::default(),
             pending_terminal_finalizations: Default::default(),
             terminal_finalization_queued_at: Default::default(),
+            exit_settles: Default::default(),
             finalization_traces_per_cycle,
             finalization_poll_interval: std::time::Duration::from_millis(
                 trace_finalization.poll_interval_ms,

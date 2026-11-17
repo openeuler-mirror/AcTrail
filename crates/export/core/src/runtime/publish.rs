@@ -3,9 +3,11 @@
 use model_core::ids::TraceId;
 use model_core::trace::TraceRecord;
 use semantic_action::{FileObservationPath, SemanticAction, SemanticActionLink};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use plugin_system::{ObservationConsumer, PayloadReference, PluginRuntimeError, PostTraceTask};
+use plugin_system::{
+    ObservationConsumer, ObservationFlush, PayloadReference, PluginRuntimeError, PostTraceTask,
+};
 use plugin_system_contracts::PluginInstanceStatus;
 
 use crate::ExportError;
@@ -91,6 +93,15 @@ impl ExportRuntime {
             .subscriptions
             .remove_observation_consumer(instance_id)?;
         Ok(removal)
+    }
+
+    /// Asks the consumers to send what they buffered so far and returns one handle
+    /// per consumer that supports it. Does not wait.
+    pub fn flush_observation_consumers(
+        &self,
+        deadline: Instant,
+    ) -> Vec<(String, ObservationFlush)> {
+        self.subscriptions.flush_observation_consumers(deadline)
     }
 
     pub fn shutdown_observation_consumers(&mut self, timeout: Duration) -> ExportPublishReport {

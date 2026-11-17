@@ -37,6 +37,7 @@ pub fn dispatch(
         CtlCommand::TrackRemove { selector } => ControlCommand::TrackRemove(TrackRemoveCommand {
             request_id,
             selector,
+            settle: None,
         }),
         CtlCommand::ListTraces { selector } => ControlCommand::ListTraces(ListTracesCommand {
             request_id,

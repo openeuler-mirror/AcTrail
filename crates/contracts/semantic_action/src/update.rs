@@ -52,9 +52,6 @@ pub enum SemanticActionChange {
     CommandToolName {
         tool_name: String,
     },
-    ToolResultBinding {
-        state: SemanticToolResultBinding,
-    },
     SupplementAttributes {
         supplement: SemanticAttributeSupplement,
     },
@@ -120,14 +117,6 @@ impl SemanticAttributeSupplement {
 pub enum SemanticActionFinalizationReason {
     TraceClosed,
     CapacityEvicted,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SemanticToolResultBinding {
-    MissingId,
-    Unmatched,
-    Bound,
-    Ambiguous,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

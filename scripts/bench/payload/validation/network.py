@@ -220,7 +220,7 @@ class NetworkAcceptance:
                             or calls[0]["function"]["arguments_json"] != {"value": 7}
                             or tool["kind"] != "llm.tool_call" or tool["process"] != action["process"]
                             or tool["attributes"].get("llm.tool_call.response_action_id") != action["action_id"]
-                            or tool["attributes"].get("llm.tool_call.id") != "call-network"
+                            or tool["attributes"].get("llm.tool_call.protocol_id") != "call-network"
                             or tool["attributes"].get("llm.tool_call.name") != "network_tool"):
                         raise RuntimeError(f"{mode}/{provider}: tool identity or arguments mismatch")
                 if attrs.get("llm.response.done") == "true":

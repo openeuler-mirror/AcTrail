@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use export_core::{BestEffortShutdown, BestEffortSink};
+use export_core::{BestEffortFlush, BestEffortShutdown, BestEffortSink};
 
 use crate::batch::{EncodedRecord, PendingBatch};
 use crate::config::{
@@ -246,6 +246,15 @@ impl BestEffortSink<EncodedRecord> for HttpBatchSink {
 
     fn on_idle(&mut self) -> Result<u64, String> {
         self.flush_batch(None)
+    }
+
+    fn flush(&mut self, deadline: Instant) -> Result<BestEffortFlush, String> {
+        let buffered = self.pending.len() as u64;
+        let durable_records = self.flush_batch(Some(deadline))?;
+        Ok(BestEffortFlush {
+            durable_records,
+            dropped_records: buffered.saturating_sub(durable_records),
+        })
     }
 
     fn finish(&mut self) -> Result<u64, String> {

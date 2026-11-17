@@ -7,6 +7,8 @@ ROOT_DIR="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
 GUEST_BUNDLE="${BUNDLE_DIR:-$ROOT_DIR/.actrail-guest-bundle}"
 OUTPUT="${WORKLOAD_BUNDLE_DIR:-$ROOT_DIR/.actrail-workload-bundle}"
 GUEST_CONFIG="$ROOT_DIR/deploy/virtual-container/guest/operator.conf"
+SECCOMP_NOTIFY_PATCH="$ROOT_DIR/deploy/virtual-container/guest/seccomp-notify.toml"
+SECCOMP_NOTIFY="disabled"
 SOCKET_GID=39000
 
 usage() {
@@ -17,6 +19,10 @@ Options:
   --guest-bundle DIR  Verified guest bundle containing actrailctl/probe/libs
   --output DIR        Output directory (default: .actrail-workload-bundle)
   --socket-gid GID    Supplemental GID used by the guest sockets (default: 39000)
+  --seccomp-notify MODE
+                      AcTrail seccomp user-notify requested by actrail-launch:
+                      disabled, auto or required (default: disabled). Must
+                      match the mode the Guest image was installed with.
   -h, --help          Show this help
 
 The output intentionally excludes actraild, storage, logs and viewer binaries.
@@ -47,6 +53,11 @@ while [[ "$#" -gt 0 ]]; do
       SOCKET_GID="$((10#$2))"
       shift 2
       ;;
+    --seccomp-notify)
+      [[ "$#" -ge 2 ]] || fail "--seccomp-notify requires a value"
+      SECCOMP_NOTIFY="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -67,6 +78,14 @@ done
   || fail "--socket-gid must be between 1 and 2147483647"
 [[ -d "$GUEST_BUNDLE" ]] || fail "guest bundle is not a directory: $GUEST_BUNDLE"
 [[ -f "$GUEST_CONFIG" ]] || fail "guest operator config not found: $GUEST_CONFIG"
+case "$SECCOMP_NOTIFY" in
+  disabled) ;;
+  auto|required)
+    [[ -f "$SECCOMP_NOTIFY_PATCH" ]] \
+      || fail "seccomp-notify config not found: $SECCOMP_NOTIFY_PATCH"
+    ;;
+  *) fail "--seccomp-notify must be disabled, auto or required" ;;
+esac
 
 GUEST_BUNDLE="$(realpath "$GUEST_BUNDLE")"
 FINAL_OUTPUT="$(realpath -ms "$OUTPUT")"
@@ -127,7 +146,6 @@ while IFS= read -r library; do
   install -m 0644 "$library" "$STAGING_DIR/lib/$(basename "$library")"
 done < <(find "$GUEST_BUNDLE/lib" -maxdepth 1 -type f -print | LC_ALL=C sort)
 install -m 0755 "$SCRIPT_DIR/actrail-launch" "$STAGING_DIR/bin/actrail-launch"
-install -m 0755 "$SCRIPT_DIR/actrail-init" "$STAGING_DIR/bin/actrail-init"
 install -m 0755 "$SCRIPT_DIR/actrailctl-private" "$STAGING_DIR/bin/actrailctl-private"
 install -m 0755 "$SCRIPT_DIR/verify-interface.sh" "$STAGING_DIR/bin/verify-interface"
 
@@ -136,6 +154,18 @@ sed \
   -e 's|sync_event_socket_path = "/dev/actrail/tls-sync.sock"|sync_event_socket_path = "/run/actrail/tls-sync.sock"|' \
   -e 's|sync_runtime_library_path = "/usr/local/lib/actrail/libactrail_tls_payload_probe_sync.so"|sync_runtime_library_path = "/opt/actrail/lib/libactrail_tls_payload_probe_sync.so"|' \
   "$GUEST_CONFIG" >"$STAGING_DIR/etc/actrail/operator.conf"
+if [[ "$SECCOMP_NOTIFY" != "disabled" ]]; then
+  # The client derives the launch filter from its own config, so the workload
+  # copy must enable seccomp_notify together with the Guest daemon config.
+  {
+    printf '\n'
+    grep -Ev '^[[:space:]]*(#|$)' "$SECCOMP_NOTIFY_PATCH"
+  } >>"$STAGING_DIR/etc/actrail/operator.conf"
+  sed -i 's|^  --seccomp-notify disabled \\$|  --seccomp-notify '"$SECCOMP_NOTIFY"' \\|' \
+    "$STAGING_DIR/bin/actrail-launch"
+fi
+grep -Fqx -- "  --seccomp-notify $SECCOMP_NOTIFY \\" "$STAGING_DIR/bin/actrail-launch" \
+  || fail "failed to select the workload launcher seccomp-notify mode"
 chmod 0644 "$STAGING_DIR/etc/actrail/operator.conf"
 
 grep -Fqx 'socket_path = "/run/actrail/control.sock"' \
@@ -157,6 +187,7 @@ socket_group=actrail
 socket_gid=$SOCKET_GID
 socket_mode=0660
 socket_directory_mode=0750
+seccomp_notify=$SECCOMP_NOTIFY
 tool_target=/opt/actrail
 program_interpreter=$PROGRAM_INTERPRETER
 control_socket=/run/actrail/control.sock

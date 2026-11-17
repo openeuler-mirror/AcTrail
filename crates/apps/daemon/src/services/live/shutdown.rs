@@ -334,7 +334,9 @@ impl StorageAttachService {
         trace_runtime: &mut TraceRuntime,
     ) -> Result<(), ControlError> {
         self.enqueue_terminal_finalizations_impl(trace_runtime);
-        self.progress_terminal_finalizations_impl(trace_runtime)
+        let result = self.progress_terminal_finalizations_impl(trace_runtime);
+        self.progress_exit_settles_impl();
+        result
     }
 
     fn enqueue_terminal_finalizations_impl(&mut self, trace_runtime: &TraceRuntime) {

@@ -31,6 +31,20 @@ pub(in crate::services) struct DirectObject {
     file: File,
     identity: ExecFileIdentity,
     source: DirectSource,
+    /// The object was opened through overlayfs while the kernel recorded the backing file.
+    overlay_backed: bool,
+}
+
+/// `f_type` reported by `fstatfs` for overlayfs.
+const OVERLAYFS_SUPER_MAGIC: i64 = 0x794c_7630;
+
+fn on_overlayfs(file: &File) -> bool {
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `stat` is a valid out-pointer and is only read after fstatfs succeeds.
+    unsafe {
+        libc::fstatfs(file.as_raw_fd(), stat.as_mut_ptr()) == 0
+            && stat.assume_init().f_type as i64 == OVERLAYFS_SUPER_MAGIC
+    }
 }
 
 impl DirectObject {
@@ -45,6 +59,7 @@ impl DirectObject {
         Some(Self {
             file,
             source: DirectSource::Executable,
+            overlay_backed: false,
             identity: ExecFileIdentity {
                 device_major: libc::major(meta.dev()),
                 device_minor: libc::minor(meta.dev()),
@@ -64,6 +79,7 @@ impl DirectObject {
             file,
             identity: identity.clone(),
             source: DirectSource::Executable,
+            overlay_backed: false,
         };
         object.matches().then_some(object)
     }
@@ -93,11 +109,21 @@ impl DirectObject {
                 return None;
             }
         };
-        let object = Self {
+        let mut object = Self {
             file,
             identity: identity.clone(),
             source: DirectSource::SharedLibrary,
+            overlay_backed: false,
         };
+        if !object.matches()
+            && on_overlayfs(&object.file)
+            && Self::mapping_has_identity(pid, start, end, identity)
+        {
+            // A mapping of an overlayfs file keeps the backing file in the VMA, so the
+            // kernel reports the backing device while fstat here reports the overlay
+            // device. /proc/<pid>/maps carries the kernel-side device and inode.
+            object.overlay_backed = true;
+        }
         if !object.matches() {
             tracing::debug!(
                 pid,
@@ -117,6 +143,28 @@ impl DirectObject {
     ) -> Option<File> {
         // The loader can split the original VMA before userspace handles its event.
         // Resolve only this object's overlapping executable mapping, then fstat it.
+        let (left, right) = Self::current_mapping_range(pid, start, end, identity)?;
+        let file = File::open(format!("/proc/{pid}/map_files/{left:x}-{right:x}")).ok()?;
+        tracing::debug!(
+            pid,
+            inode = identity.inode,
+            "TLS mapped file range resolved"
+        );
+        Some(file)
+    }
+
+    fn mapping_has_identity(pid: u32, start: u64, end: u64, identity: &ExecFileIdentity) -> bool {
+        Self::current_mapping_range(pid, start, end, identity).is_some()
+    }
+
+    /// Find the executable mapping overlapping `start..end` whose kernel-side device
+    /// and inode in /proc/<pid>/maps equal the collector's file identity.
+    fn current_mapping_range(
+        pid: u32,
+        start: u64,
+        end: u64,
+        identity: &ExecFileIdentity,
+    ) -> Option<(u64, u64)> {
         let mut maps = BufReader::new(File::open(format!("/proc/{pid}/maps")).ok()?);
         let mut line = String::new();
         loop {
@@ -144,9 +192,7 @@ impl DirectObject {
             {
                 continue;
             }
-            let file = File::open(format!("/proc/{pid}/map_files/{left:x}-{right:x}")).ok()?;
-            tracing::debug!(pid, inode, "TLS mapped file range resolved");
-            return Some(file);
+            return Some((left, right));
         }
     }
 
@@ -163,8 +209,9 @@ impl DirectObject {
             return false;
         };
         let expected = &self.identity;
-        libc::major(meta.dev()) == expected.device_major
-            && libc::minor(meta.dev()) == expected.device_minor
+        let same_device = libc::major(meta.dev()) == expected.device_major
+            && libc::minor(meta.dev()) == expected.device_minor;
+        (same_device || self.overlay_backed)
             && meta.ino() == expected.inode
             && meta.size() == expected.size
             && meta.mtime() == expected.mtime_seconds

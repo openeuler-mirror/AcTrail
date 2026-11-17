@@ -24,7 +24,7 @@ Kata guest root
 
 workload mount namespace (UID 1000，GID 39000)
 ├── /opt/actrail/               只读：actrailctl、launcher、probe、依赖和配置
-│   ├── bin/actrail-init        workload PID 1，回收 launch wrapper
+│   ├── bin/actrail-launch      workload 入口，可直接作为容器主进程
 │   └── bin/actrailctl-private  仅为 actrailctl 应用 bundle 私有动态库搜索路径
 └── /run/actrail/               只读挂载 guest /dev/actrail
     ├── control.sock
@@ -137,25 +137,33 @@ namespace 比较。该断言工具不进入正式 workload bundle。公共生命
 生成唯一 container ID，并用 ownership label 约束定向清理；该 ID 不参与授权，也不
 作为测试通过判据。
 
-**采集配置**：Guest 使用默认 eBPF 采集，关闭 enforcement。`actrail-launch` 显式使用
-`--seccomp-notify disabled`。启用 AcTrail seccomp user-notify 需验证对应
-Kata/runtime 版本的兼容性和进程退出行为。
+**采集配置**：Guest 使用默认 eBPF 采集，关闭 enforcement。`actrail-launch` 默认使用
+`--seccomp-notify disabled`。`prepare-bundle.sh --seccomp-notify auto|required` 会在
+workload 配置中启用 `[seccomp_notify]` 和 `[process_seccomp]` 并把该档位写入 launcher，必须与 Guest 镜像安装时
+的 `--seccomp-notify` 一致；通过 `host/prepare-artifacts.py --seccomp-notify` 准备时两者
+自动保持一致。
 
-runtime 必须以
-`/bin/sh /opt/actrail/bin/actrail-init <launch-args>` 作为 workload 入口，而不是把
-任一 shebang 脚本或 `actrailctl` 直接作为 OCI init。实机中省略显式 shell，或跳过
-`actrail-init`，都会在受监督子进程退出后触发 Kata sandbox-stop 竞态；
-`actrail-init` 提供独立 PID 1 回收层。这个要求已经写入 V2 场景，不能只靠镜像
-默认 `ENTRYPOINT` 猜测。
+workload 入口是 `/opt/actrail/bin/actrail-launch <launch-args>`，可以直接作为容器主进程
+（OCI init），也可以在已运行的容器中经 exec 启动。launcher 校验接口后用 `exec` 替换为
+`actrailctl`，因此 launch 的退出码就是容器的退出码，launcher 退出前不做任何定时等待。
 
-launcher 在 `actrailctl` 完成 `track-remove` 后默认保留 2 秒
-`ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS` 收尾窗口。实机中直接让 workload PID 1 退出会
-使 shim 在 sandbox stop 时遇到 kata-agent `CheckRequest timed out`；2 秒窗口在两个
-VMM 上均可正常返回。该值只接受 `0..60` 的整数，生产 profile 不应设为 `0`，除非
-对应 Kata 版本已经单独通过立即退出测试。它是当前 Kata 3.32 Profile 的兼容措施，
-不属于稳定 Guest/workload interface contract；新的 runtime/Profile 必须重新测量，
-长期应由明确的 sandbox flush/退出握手替代。它不是 exporter 的持久化保证；完整
-交付仍要验证 daemon 的 shutdown flush。
+launcher 作容器主进程时，它一退出 sandbox VM 即停止，而 Guest 中的 `actraild` 还要处理
+根进程退出、完成 trace 收尾并发送最后一批记录。launcher 因此给 `actrailctl launch` 传入
+`--exit-settle`：workload 退出后，`actrailctl` 发出的 `TrackRemove` 由 `actraild`
+延后应答，直到该 trace 完成 finalization、内置导出插件把此前收到的记录全部发出，或到达
+`--exit-settle-deadline-ms`（默认 5000 毫秒）为止。Collector 正常时这一步只增加数百毫秒；
+握手失败或超时只在标准错误输出告警，不改变 workload 的退出码。Wasm 与 NativeDylib 插件
+有各自的队列，不参与这次冲刷。
+
+这依赖 Guest 内核包含 virtiofs 子挂载卸载修复（上游提交 `06b41351779e`
+「virtiofs: fix UAF on submount umount」，稳定版自 6.18.37 起包含，CVE-2026-53381，
+kata-containers issue 12589）。Kata 3.32.0 自带的 6.18.35 不含该修复：容器主进程退出时
+Guest 内核在 virtiofs 的工作线程里 Oops，kata-agent 不再响应，主机约 30 秒后报
+`CheckRequest timed out`/`Dead agent` 并强制停止沙箱，容器退出码变为 255；aarch64 上
+几乎必现，x86_64 上偶发。部署使用 Kata 4.3.1 静态包中的 6.18.56 调试版 Guest 内核，
+见部署文档 3.5。早期版本用独立的 `actrail-init` PID 1 包装层和 2 秒退出等待规避这一问题，
+两者均已移除。导出仍是尽力而为：Collector 在期限内不可达时，尾部记录按丢弃计入
+插件状态。
 
 这套 V2 矩阵是 `ctr` 级接口证据。后续 Kubernetes 集成层只需遵守本目录定义的
 接口契约：用 RuntimeClass/CRI 配置两条只读 mount 和 GID，并向 AcTrail 提供

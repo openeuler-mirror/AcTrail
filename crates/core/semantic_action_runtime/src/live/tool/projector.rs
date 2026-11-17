@@ -6,15 +6,14 @@ use std::time::SystemTime;
 use config_core::daemon::AgentInvocationConfig;
 use model_core::diagnostics::LlmPipelineDiagnosticCode;
 use model_core::ids::TraceId;
-use semantic_action::{SemanticAction, SemanticActionKind};
+use semantic_action::{SemanticAction, SemanticActionKind, attr_keys as attrs};
 
-use super::internal::correlation::{
-    AgentInvocationCorrelator, ToolResultBinding, ToolResultBindingState,
-};
+use super::internal::correlation::AgentInvocationCorrelator;
 use super::internal::declaration::{DeclaredLlmToolCall, DeclaredLlmToolCalls};
 use super::internal::emission::ToolSemanticEmitter;
-use super::internal::state::{StateMutation, ToolInteractionState};
+use super::internal::state::{StateMutation, ToolInteractionState, ToolResultOutcome};
 use super::{ToolProjectionBatch, ToolProjectionOutput};
+use crate::llm_pipeline::{ProjectedLlmToolCall, ProjectedLlmToolResult};
 
 pub(in crate::live) struct ToolInteractionProjector {
     correlator: AgentInvocationCorrelator,
@@ -141,36 +140,38 @@ impl ToolInteractionProjector {
             invocation.start_time,
             eviction,
         );
-        if changed {
-            emitter.emit_agent_invocation(tool_call, invocation);
+        if !changed {
+            return;
+        }
+        emitter.emit_agent_invocation(tool_call, invocation);
+        // The result may already have been processed; the invocation is then complete.
+        let early_result = declared.tool_call_id.as_deref().and_then(|id| {
+            self.state
+                .take_early_result(tool_call.trace_id, id, &tool_call.process)
+        });
+        if let Some(outcome) = early_result
+            && let Some(completed) = self.state.complete_agent_invocation(
+                tool_call.trace_id,
+                &tool_call.action_id,
+                outcome,
+            )
+        {
+            emitter.emit_agent_invocation(tool_call, completed);
         }
     }
 
     fn project_result(
         &mut self,
         request: &SemanticAction,
-        result: &crate::llm_pipeline::ProjectedLlmToolResult,
+        result: &ProjectedLlmToolResult,
         emitter: &mut ToolSemanticEmitter,
     ) {
-        let binding =
-            self.correlator
-                .bind_tool_result(&self.state, request, result.tool_call_id.as_deref());
-        let binding_diagnostic = match binding.state {
-            ToolResultBindingState::MissingId => {
-                Some(LlmPipelineDiagnosticCode::ToolResultCallIdMissing)
-            }
-            ToolResultBindingState::Unmatched => {
-                Some(LlmPipelineDiagnosticCode::ToolResultCallUnmatched)
-            }
-            ToolResultBindingState::Ambiguous => {
-                Some(LlmPipelineDiagnosticCode::ToolResultCallAmbiguous)
-            }
-            ToolResultBindingState::Bound => None,
-        };
-        if let Some(code) = binding_diagnostic {
-            emitter.diagnose_lifecycle_gap(request, code);
-        }
-        let action = emitter.tool_result_action(request, result, binding.state.as_str());
+        let observed_calls = result.tool_call_id.as_deref().map_or_else(Vec::new, |id| {
+            self.state
+                .observed_tool_calls(request.trace_id, id, &request.process)
+        });
+        let tool_call = Self::tool_call_of_result(result, &observed_calls);
+        let action = emitter.tool_result_action(request, result, tool_call.as_ref());
         let StateMutation {
             changed,
             existing,
@@ -182,52 +183,68 @@ impl ToolInteractionProjector {
             action.start_time,
             eviction,
         );
-        self.emit_bound_result(
+        emitter.emit_tool_result(request, &action, changed, existing);
+        self.complete_invocation(
             request,
-            result.is_error,
-            action,
-            changed,
-            existing,
-            binding,
+            result,
+            tool_call.as_ref(),
+            &observed_calls,
             emitter,
         );
     }
 
-    fn emit_bound_result(
+    /// The call a result answers comes from the request that carries the
+    /// result, which repeats the model's latest output. Requests that omit the
+    /// history fall back to the latest call observed in a response. A result
+    /// without an id, or whose call is in neither place, carries no call.
+    fn tool_call_of_result(
+        result: &ProjectedLlmToolResult,
+        observed_calls: &[SemanticAction],
+    ) -> Option<ProjectedLlmToolCall> {
+        result.tool_call_id.as_ref()?;
+        if let Some(tool_call) = &result.tool_call {
+            return Some(tool_call.clone());
+        }
+        let observed = observed_calls.last()?;
+        Some(ProjectedLlmToolCall {
+            name: observed.attributes.get(attrs::llm_tool_call::NAME)?.clone(),
+        })
+    }
+
+    /// Completes the agent invocation the answered call started. A result can
+    /// be processed before its call is declared; its outcome is then kept until
+    /// the call arrives.
+    fn complete_invocation(
         &mut self,
         request: &SemanticAction,
-        is_error: bool,
-        result_action: SemanticAction,
-        changed: bool,
-        existing: bool,
-        binding: ToolResultBinding,
+        result: &ProjectedLlmToolResult,
+        tool_call: Option<&ProjectedLlmToolCall>,
+        observed_calls: &[SemanticAction],
         emitter: &mut ToolSemanticEmitter,
     ) {
-        let tool_call = binding
-            .tool_call_action_id
-            .as_deref()
-            .and_then(|action_id| self.state.tool_call_action(request.trace_id, action_id));
-        emitter.emit_tool_result(
-            request,
-            tool_call.as_ref(),
-            &result_action,
-            changed,
-            existing,
-            binding.state.semantic(),
-        );
-        let Some(tool_call_action_id) = binding.tool_call_action_id else {
+        let Some(tool_call_id) = result.tool_call_id.as_deref() else {
             return;
         };
-        let Some(tool_call) = tool_call else {
-            return;
-        };
-        if let Some(invocation) = self.state.complete_agent_invocation(
-            request.trace_id,
-            &tool_call_action_id,
-            is_error,
-            request,
-        ) {
-            emitter.emit_agent_invocation(&tool_call, invocation);
+        let outcome = ToolResultOutcome::new(request, result.is_error);
+        match observed_calls {
+            [observed] => {
+                if let Some(invocation) = self.state.complete_agent_invocation(
+                    request.trace_id,
+                    &observed.action_id,
+                    outcome,
+                ) {
+                    emitter.emit_agent_invocation(observed, invocation);
+                }
+            }
+            [] if tool_call.is_none_or(|call| self.correlator.projects_invocation(&call.name)) => {
+                self.state.remember_early_result(
+                    request.trace_id,
+                    tool_call_id,
+                    request.process,
+                    outcome,
+                );
+            }
+            _ => {}
         }
     }
 }

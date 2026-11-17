@@ -492,8 +492,7 @@ class VirtualContainerScenario:
         workload = self._data_workload(case)
         launch = vm.exec(
             (
-                "/bin/sh",
-                "/opt/actrail/bin/actrail-init",
+                "/opt/actrail/bin/actrail-launch",
                 "--name",
                 title,
                 "--",

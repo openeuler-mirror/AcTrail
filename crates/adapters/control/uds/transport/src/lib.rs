@@ -18,7 +18,7 @@ use control_contract::command::{
     PluginConfigUpdateCommand, PluginConfigValidateCommand, PluginListCommand, PluginLoadCommand,
     PluginStatusCommand, PluginUnloadCommand, ProcessRef, RegisterSeccompListenerCommand,
     ReportSessionClosedCommand, ReportTurnLifecycleCommand, ReportUserInteractionCommand,
-    ReportWorkLifecycleCommand, ResolveLaunchTlsPlanCommand, TrackRemoveCommand,
+    ReportWorkLifecycleCommand, ResolveLaunchTlsPlanCommand, TrackRemoveCommand, TrackRemoveSettle,
 };
 use control_contract::selector::TraceSelector;
 use model_core::binary_identity::{BinaryIdentity, BinaryIdentityTypeCode};
@@ -59,11 +59,19 @@ pub fn encode_command(command: &ControlCommand) -> Vec<u8> {
             fields.push(command.trace_id.get().to_string());
             encode_process_ref(&mut fields, &command.target);
         }
-        ControlCommand::TrackRemove(command) => {
-            fields.push("track_remove".to_string());
-            fields.push(command.request_id.get().to_string());
-            encode_selector(&mut fields, &command.selector);
-        }
+        ControlCommand::TrackRemove(command) => match command.settle {
+            None => {
+                fields.push("track_remove".to_string());
+                fields.push(command.request_id.get().to_string());
+                encode_selector(&mut fields, &command.selector);
+            }
+            Some(settle) => {
+                fields.push("track_remove_v2".to_string());
+                fields.push(command.request_id.get().to_string());
+                fields.push(settle.deadline_ms.to_string());
+                encode_selector(&mut fields, &command.selector);
+            }
+        },
         ControlCommand::ListTraces(command) => {
             fields.push("list_traces".to_string());
             fields.push(command.request_id.get().to_string());
@@ -203,6 +211,14 @@ pub fn decode_command(bytes: &[u8]) -> Result<ControlCommand, ControlCodecError>
         "track_remove" => Ok(ControlCommand::TrackRemove(TrackRemoveCommand {
             request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
             selector: decode_selector(&fields, 2)?,
+            settle: None,
+        })),
+        "track_remove_v2" => Ok(ControlCommand::TrackRemove(TrackRemoveCommand {
+            request_id: RequestId::new(parse_u64(field(&fields, 1)?, "request_id")?),
+            settle: Some(TrackRemoveSettle {
+                deadline_ms: parse_u32(field(&fields, 2)?, "settle_deadline_ms")?,
+            }),
+            selector: decode_selector(&fields, 3)?,
         })),
         "list_traces" => {
             let has_selector = field(&fields, 2)? == "1";

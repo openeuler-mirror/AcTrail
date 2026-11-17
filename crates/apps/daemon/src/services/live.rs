@@ -4,6 +4,8 @@
 mod batch;
 #[path = "live/direct.rs"]
 mod direct;
+#[path = "live/exit_settle.rs"]
+pub(in crate::services) mod exit_settle;
 #[path = "live/held_llm_requests.rs"]
 mod held_llm_requests;
 #[path = "live/launch_binding.rs"]

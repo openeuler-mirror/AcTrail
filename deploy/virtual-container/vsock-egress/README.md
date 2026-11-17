@@ -65,8 +65,10 @@ bridge 的 `POST /v1/traces` 到达 Host Collector 并返回 200。
 - Guest 镜像内含 `socat`（见 `guest/build-openeuler-image.sh` 的包列表）；
 - Host Collector 监听 `127.0.0.1:4318`。容器化 Collector 需使用 host 网络。
 
-专用 VSOCK 端口默认 `43180`。脚本拒绝 `1-1026`，避开 Kata agent 通信、日志和调试
-端口（其中 1026 是 debug console）。
+专用 VSOCK 端口默认 `43180`，可在 1027-65535 内修改：生成部署包时传
+`prepare-artifacts.py --vsock-port PORT`（写入 Guest bridge unit 和 `manifest.json` 的
+`vsock_port`），Host bridge 用 systemd drop-in 传同一个 `--vsock-port`（见部署文档 5.1）。
+`1-1026` 被拒绝，避开 Kata agent 通信、日志和调试端口（其中 1026 是 debug console）。
 
 ## Guest 侧：由镜像构建/注入完成
 

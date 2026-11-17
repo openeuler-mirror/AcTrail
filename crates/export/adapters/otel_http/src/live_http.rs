@@ -1,6 +1,7 @@
 //! Realtime OTLP/HTTP observation consumer and delivery boundary.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use export_core::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, ExportError,
@@ -11,13 +12,13 @@ use export_core::{
 };
 use plugin_system::{
     DEFAULT_OBSERVATION_EVENT_FAMILIES, ObservationBatch, ObservationConsumeReport,
-    ObservationConsumer, ObservationEventFamily, PluginDroppedRecord,
-    PluginOperationalMetricsSource, PluginRuntimeError,
+    ObservationConsumer, ObservationEventFamily, ObservationFlush, ObservationFlushOutcome,
+    PluginDroppedRecord, PluginOperationalMetricsSource, PluginRuntimeError,
 };
 use plugin_system_contracts::PluginRuntimeKind;
 use semantic_action::{
     SemanticActionKind, SemanticActionStatus,
-    attr_keys::{agent, llm_request, process, process_parent},
+    attr_keys::{agent, llm_request, llm_tool_call, process, process_parent},
 };
 
 use crate::batch::OtelHttpSemanticActionAdapter;
@@ -254,6 +255,41 @@ impl ObservationConsumer for OtelHttpObservationConsumer {
         Ok(report)
     }
 
+    fn flush(&self, deadline: Instant) -> Option<ObservationFlush> {
+        let result = match self.route.flush(deadline) {
+            Ok(result) => result,
+            Err(error) => {
+                return Some(ObservationFlush::failed(format!(
+                    "{}: {}",
+                    error.code, error.message
+                )));
+            }
+        };
+        Some(ObservationFlush::from_poll(move || {
+            use std::sync::mpsc::TryRecvError;
+            match result.try_recv() {
+                Ok(Ok(flush)) => Some(ObservationFlushOutcome {
+                    flushed_records: flush.durable_records,
+                    error: (flush.dropped_records > 0).then(|| {
+                        format!(
+                            "{} record(s) were not accepted by the collector and were dropped",
+                            flush.dropped_records
+                        )
+                    }),
+                }),
+                Ok(Err(error)) => Some(ObservationFlushOutcome {
+                    flushed_records: 0,
+                    error: Some(error),
+                }),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => Some(ObservationFlushOutcome {
+                    flushed_records: 0,
+                    error: Some("delivery worker stopped before the flush completed".to_string()),
+                }),
+            }
+        }))
+    }
+
     fn finish(&self) -> Result<ObservationConsumeReport, PluginRuntimeError> {
         let cleanup = self
             .terminal_actions
@@ -298,6 +334,8 @@ fn metadata_only_action(
             process_parent::IDENTITY_STATE
                 | llm_request::TRAJECTORY_ID
                 | llm_request::TRAJECTORY_INFERENCE_VERSION
+                // The short id pairs a tool call with its result; it carries no content.
+                | llm_tool_call::ID
         ) || agent_identity
             && matches!(
                 key.as_str(),

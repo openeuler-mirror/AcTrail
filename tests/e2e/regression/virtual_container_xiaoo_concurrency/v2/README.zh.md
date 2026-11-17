@@ -325,7 +325,7 @@ deploy/virtual-container/host/run-v2-tests.sh \
 - Provider 未 Ready：检查 `coord/<instance>/provider.stderr`；
 - 未同时出现两个 `xiaoo.active`：检查 barrier 文件和 A/B workload 日志；
 - xiaoO 返回码非零：检查 `coord/<instance>/xiaoo.stdout`；
-- trace 不存在：检查 workload 是否通过 `actrail-init` 启动及 control socket；
+- trace 不存在：检查 workload 是否通过 `actrail-launch` 启动及 control socket；
 - `events=0`：检查 data kernel 的 BTF/eBPF、tracefs 和 bpffs；
 - regression lock 等待：已有另一轮 `test_all.py` 正在运行。
 

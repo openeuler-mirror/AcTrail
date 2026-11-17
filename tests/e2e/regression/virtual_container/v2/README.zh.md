@@ -381,7 +381,7 @@ runner 创建一台长驻 base VM，并在同一 VM 中顺序执行四个 cell�
 
 1. `verify`：UID 1000、补充 GID 39000 可以连接 guest control/TLS socket；
 2. `deny`：错误 GID 在访问 AcTrail 前被拒绝；
-3. `launch`：`actrail-init` 创建并完成 trace；
+3. `launch`：`actrail-launch` 创建并完成 trace；
 4. `namespace`：daemon 返回的 root PID namespace 与 workload 一致。
 
 四个 cell 共用一台 VM，某个 cell 失败后不得以重新创建 VM 掩盖状态污染。

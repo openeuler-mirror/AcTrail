@@ -1,8 +1,10 @@
 use crate::{
-    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortSink,
-    ExportError, ExportPublishResult, SemanticActionExportAdapter, SemanticActionExportRecord,
+    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortFlush,
+    BestEffortSink, ExportError, ExportPublishResult, SemanticActionExportAdapter,
+    SemanticActionExportRecord,
 };
-use std::time::Duration;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 pub trait SemanticActionExportRoute: Send + Sync {
     fn name(&self) -> &'static str;
@@ -54,6 +56,14 @@ where
 
     pub fn finish(&self) -> BestEffortDeliveryFinish {
         self.delivery.finish()
+    }
+
+    /// Flushes the sink behind the records published so far; see `BestEffortDelivery::flush`.
+    pub fn flush(
+        &self,
+        deadline: Instant,
+    ) -> Result<Receiver<Result<BestEffortFlush, String>>, ExportError> {
+        self.delivery.flush(deadline)
     }
 
     pub fn prepare(
