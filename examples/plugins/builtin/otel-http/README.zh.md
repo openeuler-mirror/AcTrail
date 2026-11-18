@@ -12,7 +12,9 @@ drop，但不提供 WAL、at-least-once 或可靠投递保证。
 进程标识等结构化元数据，并以 action 类型代替可能含内容的 span 标题；对于
 `llm.request`，该模式还保留 `llm.request.trajectory_id` 和
 `llm.request.trajectory_inference_version`，以便只启用 request 导出时仍可观测其
-trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有 Collector
+trajectory 归属；对于 `llm.tool_call` 和 `llm.tool_result`，保留短 ID `llm.tool_call.id`，
+使工具请求和它的结果可以配对（工具名和协议原始 ID 不发送）；不发送命令行、HTTP/LLM
+内容等采集属性。只有 Collector
 及传输链路均受信任且业务确有需要时，才应显式改成 `attribute_mode = "full"`。
 这里的 `full` 只表示“导出 daemon 已经生成的动作属性”，不表示自动生成所有可选内容。
 在 `[action_kinds]` 已允许 `llm.request` 的前提下，请求正文只有以下三个条件同时成立
@@ -35,7 +37,7 @@ trajectory 归属；不发送命令行、HTTP/LLM 内容等采集属性。只有
 OTLP Span Links 输出。因为 action kind 是显式出境白名单，已有配置升级后需要自行加入
 `"llm.tool_call" = true` 和 `"llm.tool_result" = true`。
 
-工具结果正文采用独立授权，daemon 默认仅生成 ID、错误态、字节数与绑定状态，
+工具结果正文采用独立授权，daemon 默认仅生成它所回应的调用的短 ID 和工具名、错误态、字节数，
 这些属性也只有插件设置 `attribute_mode = "full"` 时才会出境。正文还要求 daemon 设置
 `semantic_retention.l0_llm_call.tool_result_content_export = "canonical_json"`；规范化 JSON
 仅在不超过 `tool_result_content_export_max_bytes` 时才会出境。

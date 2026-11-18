@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use control_contract::reply::{
     ControlError, ControlReply, DoctorReply, LaunchTlsPlanDescriptor, LaunchTlsPlanReply,
     LaunchTlsPlanStatus, LaunchTlsPlanUnavailableReason, PluginCommandReply, PluginConfigReply,
-    PluginConfigValidationReply, TraceListItem, TrackAddReply,
+    PluginConfigValidationReply, TraceListItem, TrackAddReply, TrackSettleReply,
 };
 use model_core::ids::{TraceId, TraceName};
 use model_core::process::NamespaceIdentity;
@@ -71,6 +71,14 @@ pub fn encode_reply(reply: &Result<ControlReply, ControlError>) -> Vec<u8> {
             fields.push("reply_seccomp_listener_registered".to_string());
         }
         Ok(ControlReply::TrackRemoved) => fields.push("reply_track_removed".to_string()),
+        Ok(ControlReply::TrackSettled(reply)) => {
+            fields.push("reply_track_settled".to_string());
+            fields.push(reply.finalized.to_string());
+            fields.push(reply.export_state.clone());
+            fields.push(reply.flushed_records.to_string());
+            fields.push(reply.timed_out.to_string());
+            fields.push(reply.detail.clone());
+        }
         Ok(ControlReply::TurnLifecycleRecorded) => {
             fields.push("reply_turn_lifecycle_recorded".to_string());
         }
@@ -228,6 +236,13 @@ pub fn decode_reply(bytes: &[u8]) -> Result<Result<ControlReply, ControlError>, 
                 .ok_or_else(|| ControlCodecError::new("decode", "invalid TLS event token"))?,
         }))),
         "reply_track_removed" => Ok(Ok(ControlReply::TrackRemoved)),
+        "reply_track_settled" => Ok(Ok(ControlReply::TrackSettled(TrackSettleReply {
+            finalized: parse_bool(field(&fields, 1)?, "finalized")?,
+            export_state: field(&fields, 2)?.clone(),
+            flushed_records: parse_u64(field(&fields, 3)?, "flushed_records")?,
+            timed_out: parse_bool(field(&fields, 4)?, "timed_out")?,
+            detail: field(&fields, 5)?.clone(),
+        }))),
         "reply_turn_lifecycle_recorded" => Ok(Ok(ControlReply::TurnLifecycleRecorded)),
         "reply_user_interaction_recorded" => Ok(Ok(ControlReply::UserInteractionRecorded)),
         "reply_work_lifecycle_recorded" => Ok(Ok(ControlReply::WorkLifecycleRecorded)),

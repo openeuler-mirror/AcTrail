@@ -26,7 +26,7 @@ flowchart LR
     direction TB
     AG["Agent<br/>workload 容器内，由 actrail-launch 启动"]
     D["actraild<br/>Guest 系统内，开机自启"]
-    GSB["Guest socat<br/>127.0.0.1:$GUEST_PORT → vsock 43180<br/>（仅 vsock 部署包）"]
+    GSB["Guest socat<br/>127.0.0.1:$GUEST_PORT → vsock $VSOCK_PORT<br/>（仅 vsock 部署包）"]
     NIC["网卡 eth0"]
     VS["vsock 设备"]
   end
@@ -34,7 +34,7 @@ flowchart LR
     direction TB
     BR["网桥 $BR（$GW）"]
     PX["白名单代理 $GW:$PROXY_PORT<br/>只放行 ALLOW_HOSTS"]
-    HSB["宿主机 socat<br/>vsock 43180 → 127.0.0.1:$COL_PORT"]
+    HSB["宿主机 socat<br/>vsock $VSOCK_PORT → 127.0.0.1:$COL_PORT"]
     COL["Collector<br/>0.0.0.0:$COL_PORT"]
   end
   API["模型服务"]
@@ -103,6 +103,7 @@ sequenceDiagram
 | 文件 | 来源 | 必需 |
 | --- | --- | --- |
 | Kata 3.32.0 静态包 `kata-static-3.32.0-amd64.tar.zst`（x86_64）或 `kata-static-3.32.0-arm64.tar.zst`（aarch64） | GitHub `kata-containers/kata-containers` Releases | 是 |
+| Kata 4.3.1 静态包 `kata-static-4.3.1-amd64.tar.zst`（x86_64）或 `kata-static-4.3.1-arm64.tar.zst`（aarch64），只取其中的 Guest 内核 6.18.56（3.5） | GitHub `kata-containers/kata-containers` Releases | 是 |
 | Docker Compose 插件 `docker-compose-linux-x86_64` 或 `docker-compose-linux-aarch64` | GitHub `docker/compose` Releases | 用 Docker 运行 Collector 时 |
 | OpenTelemetry Collector `otelcol-contrib_0.157.0_linux_amd64.tar.gz` 或 `…_linux_arm64.tar.gz` | GitHub `open-telemetry/opentelemetry-collector-releases` Releases | 不用 Docker 运行 Collector 时（3.9） |
 | Agent 凭据，示例为 Anthropic API key（`sk-ant-api03-…`） | Agent 服务商控制台 | 是 |
@@ -134,6 +135,7 @@ export GW=10.89.77.1              # 网桥地址
 export COL_PORT=4318              # Collector 端口
 export PROXY_PORT=18443           # 白名单代理端口
 export GUEST_PORT=14318           # vsock 部署包中 Guest socat 的监听端口
+export VSOCK_PORT=43180           # vsock 端口，Guest 与宿主机转发服务共用，取 1027–65535
 export ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')  # 架构：amd64 或 arm64，选择下载文件和 Guest 内核
 EOF
 source /etc/actrail-test.env; echo $ARCH  # → amd64 或 arm64
@@ -147,10 +149,11 @@ source /etc/actrail-test.env; echo $ARCH  # → amd64 或 arm64
 | `BR`、`SUBNET`、`GW` | 3.8、4.1 |
 | `COL_PORT` | 3.9、4.1、5.1 |
 | `GUEST_PORT` | 5.2 |
+| `VSOCK_PORT` | 5.1、5.2 |
 | `PROXY_PORT` | 无，下次运行 Agent 时生效 |
 | `ARCH` | 由 `uname -m` 得出，无需修改 |
 
-vsock 端口 `43180` 和 Guest socat 地址 `127.0.0.1` 固定，不可修改。
+Guest socat 地址 `127.0.0.1` 固定，不可修改。
 
 ### 3.2 安装系统包
 
@@ -202,7 +205,20 @@ bash $REPO/deploy/virtual-container/host/install-kata-3.32.sh --archive /path/to
 cat /opt/kata/VERSION  # → 3.32.0
 ```
 
-静态包提供 Guest 内核、含 Kata agent 的 initrd、Cloud Hypervisor 和 virtiofsd；不提供 StratoVirt，StratoVirt 使用 3.2 安装的 `/usr/bin/stratovirt`。
+静态包提供含 Kata agent 的 initrd、Cloud Hypervisor 和 virtiofsd；不提供 StratoVirt，StratoVirt 使用 3.2 安装的 `/usr/bin/stratovirt`。
+
+Guest 内核使用 6.18.56，不使用 Kata 3.32.0 静态包自带的 6.18.35。从 Kata 4.3.1 静态包中只取出带 BTF 的调试版内核及其配置清单，放到独立目录，Kata 运行时仍为 3.32.0：
+
+```bash
+source /etc/actrail-test.env
+install -d /opt/actrail-guest-kernel
+tar --zstd -xf /path/to/kata-static-4.3.1-$ARCH.tar.zst -C /opt/actrail-guest-kernel --strip-components=5 --wildcards \
+  './opt/kata/share/kata-containers/vmlinu*-6.18.56-208-debug' \
+  './opt/kata/share/kata-containers/config-6.18.56-208-debug'
+ls /opt/actrail-guest-kernel  # → config-6.18.56-208-debug、vmlinux-6.18.56-208-debug、vmlinuz-6.18.56-208-debug
+```
+
+6.18.35 存在 virtiofs 缺陷（上游 kata-containers issue 12589，CVE-2026-53381，6.18.37 修复）：容器主进程退出时 Guest 内核出错，kata-agent 不再响应，沙箱约 30 秒后被强制停止，容器退出码变为 255，aarch64 上几乎必现。
 
 构建 openEuler 24.03 Guest 镜像：从宿主机的 openEuler 软件源安装 systemd、socat 等基础软件包，并从静态包的 initrd 中提取匹配的 Kata agent。镜像不含 AcTrail，第 4、5 节生成部署包时注入；CNI 和 vsock 两种部署包使用同一个镜像：
 
@@ -384,10 +400,10 @@ actrail-otel-spans $(date +%s)  # → spans = 0
 source /etc/actrail-test.env
 cd $REPO; export PATH=/root/.cargo/bin:$PATH; K=/opt/kata-3.32.0
 case $BACKEND in   # 按后端选择 VMM、Kata 默认配置和 Guest 内核
-  stratovirt)       HV=/usr/bin/stratovirt;     CFG=configuration-stratovirt.toml; KERN=vmlinuz-6.18.35-197-debug ;;
-  cloud-hypervisor) HV=$K/bin/cloud-hypervisor; CFG=configuration-clh.toml;        KERN=vmlinux-6.18.35-197-debug ;;
+  stratovirt)       HV=/usr/bin/stratovirt;     CFG=configuration-stratovirt.toml; KERN=vmlinuz-6.18.56-208-debug ;;
+  cloud-hypervisor) HV=$K/bin/cloud-hypervisor; CFG=configuration-clh.toml;        KERN=vmlinux-6.18.56-208-debug ;;
 esac
-[ "$ARCH" = arm64 ] && KERN=vmlinux-6.18.35-197-debug  # aarch64 两种后端都用 vmlinux
+[ "$ARCH" = arm64 ] && KERN=vmlinux-6.18.56-208-debug  # aarch64 两种后端都用 vmlinux
 # 生成部署包，参数：
 #   --backend、--hypervisor、--*-config-source、--*-kernel：后端相关，取自上面的 case
 #   --kata-prefix：Kata 安装目录
@@ -403,8 +419,8 @@ python3 deploy/virtual-container/host/prepare-artifacts.py \
   --data-config-source $K/share/defaults/kata-containers/$CFG \
   --base-image-source /opt/actrail-images/openeuler-24.03-guest.image \
   --data-image-source /opt/actrail-images/openeuler-24.03-guest.image \
-  --base-kernel $K/share/kata-containers/$KERN \
-  --data-kernel $K/share/kata-containers/$KERN \
+  --base-kernel /opt/actrail-guest-kernel/$KERN \
+  --data-kernel /opt/actrail-guest-kernel/$KERN \
   --workload-image docker.io/library/actrail-openeuler-workload:24.03 --image-pull-policy never \
   --egress-mode network --otel-endpoint http://$GW:$COL_PORT/v1/traces \
   > /var/tmp/prepare-$BACKEND-network.log 2>&1; echo "rc=$?"  # → rc=0
@@ -419,6 +435,7 @@ test -f $REPO/local/kata/current/$BACKEND-network/configuration-data.toml && ech
 ```
 
 - **`--hypervisor`**：必须显式指定。Kata 默认配置中的 StratoVirt 路径 `/opt/kata/bin/stratovirt` 不存在。
+- **内核版本**：使用 3.5 取出的 6.18.56，位于 `/opt/actrail-guest-kernel`；不要指向 `/opt/kata-3.32.0/share/kata-containers/` 下的 6.18.35。
 - **内核格式**：x86_64 上 StratoVirt 使用压缩内核 `vmlinuz`，Cloud Hypervisor 使用 ELF 内核 `vmlinux`。aarch64 的 Kata 包中 `vmlinux-*` 为 ARM64 Image 格式，两种后端的默认配置都引用它，`vmlinuz-*` 只是它的 gzip 压缩版，因此两种后端都使用 `vmlinux`。均使用带 BTF 的 `-debug` 版本，数据采集需要。
 - **`--base-*`、`--data-*`**：prepare 会同时生成 base 和 data 两份虚拟机配置。**后续只用 data**（`configuration-data.toml`）；base 供仓库自动化回归使用，参数填与 data 相同的值即可。两份配置的源镜像相同，部署包中只有一张 Guest 镜像 `guest.img`，两份配置共用。
 - **`--activate`**：部署时使用。不加时（仓库自动化回归的用法）不更新固定链接、不清理旧部署包，并写入回归使用的 `local/kata/v2-test-profile.json`；加上后不写该文件，清理旧部署包时保留 `local/kata/v2-test-profile*.json` 引用的部署包。
@@ -437,7 +454,7 @@ test -f $REPO/local/kata/current/$BACKEND-network/configuration-data.toml && ech
 
 ### 5.1 安装宿主机转发服务
 
-安装宿主机侧 socat 转发服务，将 vsock 端口 43180 的数据转发到 Collector：
+安装宿主机侧 socat 转发服务，将 vsock 端口 `$VSOCK_PORT` 的数据转发到 Collector：
 
 ```bash
 source /etc/actrail-test.env
@@ -446,18 +463,18 @@ install -D -m 0755 -t /usr/local/libexec/actrail-vsock-egress host-bridge.sh ch-
 install -D -m 0644 -t /etc/systemd/system systemd/actrail-vsock-host-*  # systemd 单元
 ```
 
-设置转发目标端口为 `$COL_PORT`：
+设置 vsock 端口为 `$VSOCK_PORT`、转发目标端口为 `$COL_PORT`：
 
 ```bash
 D=/etc/systemd/system
 install -d $D/actrail-vsock-host-stratovirt.service.d $D/actrail-vsock-host-cloud-hypervisor@.service.d
-# systemd 覆盖配置：先清空原 ExecStart，再写入带 --collector-port $COL_PORT 的启动命令
+# systemd 覆盖配置：先清空原 ExecStart，再写入带 --vsock-port $VSOCK_PORT --collector-port $COL_PORT 的启动命令
 # StratoVirt 转发服务
-printf '[Service]\nExecStart=\nExecStart=/usr/local/libexec/actrail-vsock-egress/host-bridge.sh --backend stratovirt --collector-port %s\n' \
-  $COL_PORT > $D/actrail-vsock-host-stratovirt.service.d/collector-port.conf
+printf '[Service]\nExecStart=\nExecStart=/usr/local/libexec/actrail-vsock-egress/host-bridge.sh --backend stratovirt --vsock-port %s --collector-port %s\n' \
+  $VSOCK_PORT $COL_PORT > $D/actrail-vsock-host-stratovirt.service.d/ports.conf
 # Cloud Hypervisor 转发服务模板，%I 为虚拟机的 sandbox 目录名（printf 中写作 %%I）
-printf '[Service]\nExecStart=\nExecStart=/usr/local/libexec/actrail-vsock-egress/host-bridge.sh --backend cloud-hypervisor --clh-vsock-socket /run/vc/vm/%%I/clh.sock --collector-port %s\n' \
-  $COL_PORT > $D/actrail-vsock-host-cloud-hypervisor@.service.d/collector-port.conf
+printf '[Service]\nExecStart=\nExecStart=/usr/local/libexec/actrail-vsock-egress/host-bridge.sh --backend cloud-hypervisor --clh-vsock-socket /run/vc/vm/%%I/clh.sock --vsock-port %s --collector-port %s\n' \
+  $VSOCK_PORT $COL_PORT > $D/actrail-vsock-host-cloud-hypervisor@.service.d/ports.conf
 ```
 
 启用服务：
@@ -466,12 +483,13 @@ printf '[Service]\nExecStart=\nExecStart=/usr/local/libexec/actrail-vsock-egress
 systemctl daemon-reload
 systemctl enable --now actrail-vsock-host-stratovirt.service actrail-vsock-host-cloud-hypervisor-reconcile.path
 systemctl is-active actrail-vsock-host-stratovirt actrail-vsock-host-cloud-hypervisor-reconcile.path  # → active active
+ss -l --vsock | grep -c ":$VSOCK_PORT "  # → 1（StratoVirt 转发服务已监听）
 ```
 
 | 后端 | 转发方式 |
 | --- | --- |
-| StratoVirt | 常驻服务 `actrail-vsock-host-stratovirt`，所有虚拟机共用，监听 vsock 43180 |
-| Cloud Hypervisor | 每台虚拟机使用独立的 Unix socket `/run/vc/vm/<sandbox>/clh.sock_43180`；`…-reconcile.path` 监视 `/run/vc/vm`，虚拟机启动时创建 `actrail-vsock-host-cloud-hypervisor@<sandbox>`，删除时停止 |
+| StratoVirt | 常驻服务 `actrail-vsock-host-stratovirt`，所有虚拟机共用，监听 vsock `$VSOCK_PORT` |
+| Cloud Hypervisor | 每台虚拟机使用独立的 Unix socket `/run/vc/vm/<sandbox>/clh.sock_$VSOCK_PORT`；`…-reconcile.path` 监视 `/run/vc/vm`，虚拟机启动时创建 `actrail-vsock-host-cloud-hypervisor@<sandbox>`，删除时停止 |
 
 两套服务同时启用，互不影响。
 
@@ -483,12 +501,12 @@ systemctl is-active actrail-vsock-host-stratovirt actrail-vsock-host-cloud-hyper
 source /etc/actrail-test.env
 cd $REPO; export PATH=/root/.cargo/bin:$PATH; K=/opt/kata-3.32.0
 case $BACKEND in   # 按后端选择 VMM、Kata 默认配置和 Guest 内核
-  stratovirt)       HV=/usr/bin/stratovirt;     CFG=configuration-stratovirt.toml; KERN=vmlinuz-6.18.35-197-debug ;;
-  cloud-hypervisor) HV=$K/bin/cloud-hypervisor; CFG=configuration-clh.toml;        KERN=vmlinux-6.18.35-197-debug ;;
+  stratovirt)       HV=/usr/bin/stratovirt;     CFG=configuration-stratovirt.toml; KERN=vmlinuz-6.18.56-208-debug ;;
+  cloud-hypervisor) HV=$K/bin/cloud-hypervisor; CFG=configuration-clh.toml;        KERN=vmlinux-6.18.56-208-debug ;;
 esac
-[ "$ARCH" = arm64 ] && KERN=vmlinux-6.18.35-197-debug  # aarch64 两种后端都用 vmlinux
+[ "$ARCH" = arm64 ] && KERN=vmlinux-6.18.56-208-debug  # aarch64 两种后端都用 vmlinux
 # 生成部署包，参数含义同 4.1；区别：--egress-mode vsock-bridge 启用 Guest socat，
-# --otel-endpoint 为 Guest socat 的监听地址
+# --otel-endpoint 为 Guest socat 的监听地址，--vsock-port 与 5.1 宿主机转发服务一致
 python3 deploy/virtual-container/host/prepare-artifacts.py \
   --backend $BACKEND --kata-prefix $K --hypervisor $HV \
   --activate \
@@ -496,10 +514,10 @@ python3 deploy/virtual-container/host/prepare-artifacts.py \
   --data-config-source $K/share/defaults/kata-containers/$CFG \
   --base-image-source /opt/actrail-images/openeuler-24.03-guest.image \
   --data-image-source /opt/actrail-images/openeuler-24.03-guest.image \
-  --base-kernel $K/share/kata-containers/$KERN \
-  --data-kernel $K/share/kata-containers/$KERN \
+  --base-kernel /opt/actrail-guest-kernel/$KERN \
+  --data-kernel /opt/actrail-guest-kernel/$KERN \
   --workload-image docker.io/library/actrail-openeuler-workload:24.03 --image-pull-policy never \
-  --egress-mode vsock-bridge --otel-endpoint http://127.0.0.1:$GUEST_PORT/v1/traces \
+  --egress-mode vsock-bridge --otel-endpoint http://127.0.0.1:$GUEST_PORT/v1/traces --vsock-port $VSOCK_PORT \
   > /var/tmp/prepare-$BACKEND-vsock.log 2>&1; echo "rc=$?"  # → rc=0
 ```
 
@@ -509,6 +527,7 @@ python3 deploy/virtual-container/host/prepare-artifacts.py \
 grep -E '^artifact_(cache|current)=' /var/tmp/prepare-$BACKEND-vsock.log  # → 含 artifact_current=…/current/<后端>-vsock
 readlink -f $REPO/local/kata/current/$BACKEND-vsock
 test -f $REPO/local/kata/current/$BACKEND-vsock/configuration-data.toml && echo ok  # → ok
+grep -cE "^  \"vsock_port\": $VSOCK_PORT,?$" $REPO/local/kata/current/$BACKEND-vsock/manifest.json  # → 1（与 5.1 一致）
 ```
 
 ## 6 准备 Agent

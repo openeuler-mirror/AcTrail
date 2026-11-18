@@ -1,5 +1,3 @@
 mod correlator;
 
-pub(in crate::live::tool) use correlator::{
-    AgentInvocationCorrelator, ToolResultBinding, ToolResultBindingState,
-};
+pub(in crate::live::tool) use correlator::AgentInvocationCorrelator;

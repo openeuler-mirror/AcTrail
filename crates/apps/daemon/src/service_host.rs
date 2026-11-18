@@ -25,6 +25,9 @@ use crate::services::sandbox_plugins::{SandboxPluginManager, SandboxPluginRouteS
 
 mod checkpoint;
 
+/// Exit-settle tickets live above the checkpoint service's own ticket counter.
+const EXIT_SETTLE_TICKET_BASE: u64 = 1 << 63;
+
 pub trait AttachService {
     fn process_record(&self, process: ProcessIdentity) -> Result<ProcessRecord, ControlError>;
     fn host_pid_for_process(&self, process: ProcessIdentity) -> Result<u32, ControlError> {
@@ -88,6 +91,23 @@ pub trait AttachService {
         trace_id: model_core::ids::TraceId,
         removed_at: SystemTime,
     ) -> Result<(), ControlError>;
+    /// Registers the exit handshake of a removed root: its reply is produced later by
+    /// `take_exit_settle_replies` under `ticket`. `false` means this service cannot
+    /// hold the reply and the caller answers at once.
+    fn begin_exit_settle(
+        &mut self,
+        _trace_id: model_core::ids::TraceId,
+        _ticket: u64,
+        _settle: control_contract::command::TrackRemoveSettle,
+    ) -> bool {
+        false
+    }
+    /// Exit handshakes that completed since the last call.
+    fn take_exit_settle_replies(
+        &mut self,
+    ) -> Vec<(u64, control_contract::reply::TrackSettleReply)> {
+        Vec::new()
+    }
     fn register_seccomp_listener(
         &mut self,
         trace_runtime: &mut trace_runtime::TraceRuntime,
@@ -150,6 +170,7 @@ pub struct DaemonServiceHost<A> {
     sandbox_plugins: SandboxPluginManager,
     pending_launch_admissions: BTreeMap<model_core::process::ProcessObservation, LaunchAdmission>,
     checkpoint: Option<CheckpointService>,
+    exit_settle_tickets: u64,
 }
 
 impl<A> DaemonServiceHost<A> {
@@ -162,6 +183,7 @@ impl<A> DaemonServiceHost<A> {
             sandbox_plugins: SandboxPluginManager::new(sandbox_alerts),
             pending_launch_admissions: BTreeMap::new(),
             checkpoint: None,
+            exit_settle_tickets: 0,
         }
     }
 
@@ -413,23 +435,59 @@ where
             ControlCommand::TrackAdd(track_add) => track_add.checkpoint.clone(),
             _ => None,
         };
+        // Resolved before the removal, while the selector still names a live trace.
+        let exit_settle = match &command {
+            ControlCommand::TrackRemove(remove) => remove.settle.and_then(|settle| {
+                resolve_trace_id(&self.wiring.trace_runtime, &remove.selector)
+                    .ok()
+                    .map(|trace_id| (trace_id, settle))
+            }),
+            _ => None,
+        };
         let reply = match peer {
             Some(peer) => self.handle_from_peer_with_launch_pidfd(peer, command, launch_pidfd),
             None => self.handle_with_launch_pidfd(command, launch_pidfd),
         };
-        match (checkpoint, reply) {
-            (Some(config), Ok(ControlReply::TrackAdded(added))) => {
+        match (checkpoint, exit_settle, reply) {
+            (Some(config), _, Ok(ControlReply::TrackAdded(added))) => {
                 self.start_checkpoint_launch(added, config)
             }
-            (_, reply) => ControlOutcome::Reply(reply),
+            (_, Some((trace_id, settle)), Ok(ControlReply::TrackRemoved)) => {
+                self.exit_settle_tickets += 1;
+                let ticket = EXIT_SETTLE_TICKET_BASE | self.exit_settle_tickets;
+                if self
+                    .wiring
+                    .attach_service
+                    .begin_exit_settle(trace_id, ticket, settle)
+                {
+                    ControlOutcome::Later(ReplyTicket::new(ticket))
+                } else {
+                    ControlOutcome::Reply(Ok(ControlReply::TrackRemoved))
+                }
+            }
+            (_, _, reply) => ControlOutcome::Reply(reply),
         }
     }
 
     fn finished_replies(&mut self) -> Vec<(ReplyTicket, Result<ControlReply, ControlError>)> {
-        self.checkpoint
+        let mut replies = self
+            .checkpoint
             .as_mut()
             .map(CheckpointService::take_finished_replies)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        replies.extend(
+            self.wiring
+                .attach_service
+                .take_exit_settle_replies()
+                .into_iter()
+                .map(|(ticket, reply)| {
+                    (
+                        ReplyTicket::new(ticket),
+                        Ok(ControlReply::TrackSettled(reply)),
+                    )
+                }),
+        );
+        replies
     }
 
     fn handle_with_launch_pidfd(

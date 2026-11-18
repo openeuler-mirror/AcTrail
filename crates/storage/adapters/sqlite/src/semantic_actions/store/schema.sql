@@ -10,8 +10,7 @@ CREATE TABLE IF NOT EXISTS semantic_action_state (
     failure_http_reason TEXT,
     command_invocation_kind INTEGER,
     command_tool_name TEXT,
-    command_exit_code INTEGER,
-    tool_result_binding INTEGER
+    command_exit_code INTEGER
 );
 CREATE TABLE IF NOT EXISTS semantic_action_evidence (
     evidence_key INTEGER PRIMARY KEY,

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use export_core::SemanticActionKindSelection;
 use model_core::ids::{OtelTraceId, ProfileName, TraceId, TraceName};
@@ -95,6 +95,13 @@ fn request_complete(request: &[u8]) -> bool {
 }
 
 fn export_canonical_request_body(attribute_mode: OtelAttributeMode) -> String {
+    export_canonical_request_body_with_flush(attribute_mode, false)
+}
+
+fn export_canonical_request_body_with_flush(
+    attribute_mode: OtelAttributeMode,
+    flush: bool,
+) -> String {
     let canonical_body = r#"{"messages":[{"content":"body-export-marker","role":"user"}]}"#;
     let action = SemanticAction {
         action_id: "llm-request-body".to_string(),
@@ -112,14 +119,24 @@ fn export_canonical_request_body(attribute_mode: OtelAttributeMode) -> String {
         )]),
         evidence: Vec::new(),
     };
-    export_action(action, attribute_mode)
+    export_action_with_flush(action, attribute_mode, flush)
 }
 
 fn export_action(action: SemanticAction, attribute_mode: OtelAttributeMode) -> String {
+    export_action_with_flush(action, attribute_mode, false)
+}
+
+fn export_action_with_flush(
+    action: SemanticAction,
+    attribute_mode: OtelAttributeMode,
+    flush: bool,
+) -> String {
     let (endpoint, received) = spawn_stub_collector();
-    let consumer =
-        build_otel_http_observation_consumer(test_config(endpoint, attribute_mode, action.kind))
-            .expect("build consumer");
+    let mut config = test_config(endpoint, attribute_mode, action.kind);
+    if flush {
+        config.batch_max_spans = 100;
+    }
+    let consumer = build_otel_http_observation_consumer(config).expect("build consumer");
     let trace = TraceRecord::new(
         TraceId::new(7),
         OtelTraceId::from_bytes([7; OtelTraceId::BYTE_COUNT]).expect("non-zero OTEL trace ID"),
@@ -140,6 +157,22 @@ fn export_action(action: SemanticAction, attribute_mode: OtelAttributeMode) -> S
             payload_refs: &[],
         })
         .expect("consume semantic action");
+
+    if flush {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pending = consumer
+            .flush(deadline)
+            .expect("HTTP consumer supports flush");
+        let outcome = loop {
+            if let Some(outcome) = pending.try_outcome() {
+                break outcome;
+            }
+            assert!(Instant::now() < deadline, "flush did not complete");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(outcome.flushed_records, 1);
+        assert_eq!(outcome.error, None);
+    }
 
     received
         .recv_timeout(Duration::from_secs(2))
@@ -293,4 +326,10 @@ fn full_attribute_mode_delivers_opted_in_tool_result_content() {
 
     assert!(request.contains(llm_tool_result::CONTENT_JSON));
     assert!(request.contains("tool-result-marker"));
+}
+
+#[test]
+fn explicit_flush_delivers_partial_batch_before_consumer_shutdown() {
+    let request = export_canonical_request_body_with_flush(OtelAttributeMode::Full, true);
+    assert!(request.contains("body-export-marker"));
 }

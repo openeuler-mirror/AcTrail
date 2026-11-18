@@ -133,8 +133,7 @@ class DualKataXiaooScenario:
             for instance in DUAL_VM_INSTANCES:
                 processes[instance] = containers[instance].start_exec(
                     (
-                        "/bin/sh",
-                        "/opt/actrail/bin/actrail-init",
+                        "/opt/actrail/bin/actrail-launch",
                         "--name",
                         self._trace_title(instance),
                         "--",

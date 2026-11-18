@@ -17,7 +17,6 @@ fn tool_interaction_codes_are_unique_and_round_trip() {
         SemanticActionLinkRole::LlmRequestTrajectoryParent,
         SemanticActionLinkRole::LlmRequestTrajectoryFork,
         SemanticActionLinkRole::LlmResponseToolCall,
-        SemanticActionLinkRole::LlmToolCallResult,
         SemanticActionLinkRole::LlmToolCallAgentInvocation,
     ] {
         let code = codebook.link_role.code(role);

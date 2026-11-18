@@ -324,6 +324,7 @@ impl AttachService for StorageAttachService {
         timeout = min_optional_timeout(
             timeout,
             (!self.pending_terminal_finalizations.is_empty()
+                || !self.exit_settles.is_empty()
                 || self.post_trace_coordinator.has_running_tasks()
                 || self.alert_ingress.has_outstanding_writes()?)
             .then_some(self.finalization_poll_interval),
@@ -351,6 +352,22 @@ impl AttachService for StorageAttachService {
         removed_at: SystemTime,
     ) -> Result<(), ControlError> {
         self.remove_root_impl(trace_runtime, trace_id, removed_at)
+    }
+
+    fn begin_exit_settle(
+        &mut self,
+        trace_id: model_core::ids::TraceId,
+        ticket: u64,
+        settle: control_contract::command::TrackRemoveSettle,
+    ) -> bool {
+        self.begin_exit_settle_impl(trace_id, ticket, settle);
+        true
+    }
+
+    fn take_exit_settle_replies(
+        &mut self,
+    ) -> Vec<(u64, control_contract::reply::TrackSettleReply)> {
+        self.exit_settles.take_finished()
     }
 
     fn register_seccomp_listener(

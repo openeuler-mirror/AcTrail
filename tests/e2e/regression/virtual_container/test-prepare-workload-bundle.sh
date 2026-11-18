@@ -29,7 +29,6 @@ fail() {
 for relative in \
   bin/actrailctl \
   bin/actrailctl-private \
-  bin/actrail-init \
   bin/actrail-launch \
   bin/verify-interface \
   etc/actrail/operator.conf \
@@ -73,8 +72,13 @@ for section in seccomp_notify process_seccomp enforcement; do
 done
 grep -Fq -- '--seccomp-notify disabled' "$OUTPUT/bin/actrail-launch" \
   || fail "Kata workload launcher must not auto-enable seccomp user-notify"
-grep -Fq -- 'ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS' "$OUTPUT/bin/actrail-launch" \
-  || fail "Kata workload launcher has no bounded guest drain window"
+if grep -Eq -- 'ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS|(^|[^[:alnum:]_])sleep ' "$OUTPUT/bin/actrail-launch"; then
+  fail "Kata workload launcher must not delay its exit"
+fi
+grep -Fqx -- '  --exit-settle \' "$OUTPUT/bin/actrail-launch" \
+  || fail "Kata workload launcher does not wait for the trace to settle before exiting"
+[[ ! -e "$OUTPUT/bin/actrail-init" ]] \
+  || fail "workload bundle still ships the removed PID 1 wrapper"
 [[ ! -e "$OUTPUT/bin/assert-pid-namespace" ]] \
   || fail "workload bundle contains the V2-only PID namespace assertion"
 
@@ -182,7 +186,6 @@ program_interpreter=$fake_root/bin/fake-loader
 EOF
 set +e
 ACTRAIL_WORKLOAD_ROOT="$fake_root" \
-ACTRAIL_WORKLOAD_EXIT_GRACE_SECONDS=0 \
 ACTRAIL_TEST_ARGS="$WORK_DIR/launch-args" \
 ACTRAIL_TEST_LD_PATH="$WORK_DIR/launch-ld-path" \
 ACTRAIL_TEST_LOADER_PATH="$WORK_DIR/loader-path" \
@@ -237,23 +240,6 @@ set -e
 [[ "$runtime_rc" -ne 0 ]] || fail "private client accepted incompatible runtime libraries"
 grep -Fq 'workload runtime compatibility check failed' <<<"$runtime_output" \
   || fail "runtime-library rejection did not identify the loader boundary"
-
-cat >"$fake_root/bin/actrail-launch" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$@" >"$ACTRAIL_TEST_INIT_ARGS"
-exit "${ACTRAIL_TEST_INIT_EXIT:-0}"
-EOF
-chmod 0755 "$fake_root/bin/actrail-launch"
-set +e
-ACTRAIL_WORKLOAD_ROOT="$fake_root" \
-ACTRAIL_TEST_INIT_ARGS="$WORK_DIR/init-args" \
-ACTRAIL_TEST_INIT_EXIT=9 \
-  "$OUTPUT/bin/actrail-init" --name init-contract -- /bin/true
-init_rc=$?
-set -e
-[[ "$init_rc" -eq 9 ]] || fail "workload init lost actrail-launch exit status 9"
-grep -Fqx -- 'init-contract' "$WORK_DIR/init-args" \
-  || fail "workload init did not forward launch arguments"
 
 printf 'stale\n' >"$OUTPUT/stale"
 "$PREPARE" \

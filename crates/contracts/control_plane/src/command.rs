@@ -100,10 +100,20 @@ pub struct RegisterSeccompListenerCommand {
     pub listener_fd: Option<RawFd>,
 }
 
+/// Exit handshake requested by a launcher: the daemon holds the `TrackRemove`
+/// reply until the trace has been finalized and the records published so far have
+/// been sent by the export consumers, or until the deadline passed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TrackRemoveSettle {
+    pub deadline_ms: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackRemoveCommand {
     pub request_id: RequestId,
     pub selector: TraceSelector,
+    /// `None` answers as soon as the root is removed.
+    pub settle: Option<TrackRemoveSettle>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

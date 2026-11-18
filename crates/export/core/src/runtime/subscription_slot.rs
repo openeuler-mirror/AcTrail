@@ -22,7 +22,7 @@ use super::{
 };
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PluginHostcallMetricsSource, PluginOperationalMetricsSource, PostTraceTask,
+    ObservationFlush, PluginHostcallMetricsSource, PluginOperationalMetricsSource, PostTraceTask,
 };
 use plugin_system_contracts::{
     PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeKind,
@@ -290,6 +290,15 @@ impl ObservationConsumerSlot {
                     u64::try_from(batch.actions.len()).unwrap_or(u64::MAX),
                 );
             }
+        }
+    }
+
+    /// Only an inline consumer receives records in publish order on the caller's
+    /// thread, so only there a flush is known to follow everything published.
+    pub(super) fn flush(&self, deadline: Instant) -> Option<ObservationFlush> {
+        match &self.delivery {
+            ObservationDelivery::Inline(consumer) => consumer.flush(deadline),
+            ObservationDelivery::Queued { .. } | ObservationDelivery::Stopped => None,
         }
     }
 

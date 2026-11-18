@@ -23,7 +23,6 @@ pub(crate) struct LinkRoleCodes {
     pub(crate) llm_call_http_response: i16,
     pub(crate) llm_request_tool_result: i16,
     pub(crate) llm_response_tool_call: i16,
-    pub(crate) llm_tool_call_result: i16,
     pub(crate) llm_tool_call_agent_invocation: i16,
     pub(crate) http_request_http_response: i16,
     pub(crate) llm_request_http_message: i16,
@@ -80,7 +79,6 @@ impl LinkRoleCodes {
             SemanticActionLinkRole::LlmCallHttpResponse => self.llm_call_http_response,
             SemanticActionLinkRole::LlmRequestToolResult => self.llm_request_tool_result,
             SemanticActionLinkRole::LlmResponseToolCall => self.llm_response_tool_call,
-            SemanticActionLinkRole::LlmToolCallResult => self.llm_tool_call_result,
             SemanticActionLinkRole::LlmToolCallAgentInvocation => {
                 self.llm_tool_call_agent_invocation
             }
@@ -163,9 +161,6 @@ impl LinkRoleCodes {
             value if value == self.llm_response_tool_call => {
                 Ok(SemanticActionLinkRole::LlmResponseToolCall)
             }
-            value if value == self.llm_tool_call_result => {
-                Ok(SemanticActionLinkRole::LlmToolCallResult)
-            }
             value if value == self.llm_tool_call_agent_invocation => {
                 Ok(SemanticActionLinkRole::LlmToolCallAgentInvocation)
             }
@@ -204,7 +199,7 @@ impl LinkRoleCodes {
         }
     }
 
-    pub(super) fn entries(self) -> [(&'static str, i16); 32] {
+    pub(super) fn entries(self) -> [(&'static str, i16); 31] {
         [
             (
                 SemanticActionLinkRole::LlmResponseWebSocketMessage.as_str(),
@@ -285,10 +280,6 @@ impl LinkRoleCodes {
             (
                 SemanticActionLinkRole::LlmResponseToolCall.as_str(),
                 self.llm_response_tool_call,
-            ),
-            (
-                SemanticActionLinkRole::LlmToolCallResult.as_str(),
-                self.llm_tool_call_result,
             ),
             (
                 SemanticActionLinkRole::LlmToolCallAgentInvocation.as_str(),

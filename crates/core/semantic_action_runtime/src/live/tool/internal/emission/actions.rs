@@ -13,9 +13,10 @@ use semantic_action::{
     attr_keys as attrs,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::live::tool::internal::declaration::DeclaredLlmToolCall;
-use crate::llm_pipeline::ProjectedLlmToolResult;
+use crate::llm_pipeline::{ProjectedLlmToolCall, ProjectedLlmToolResult};
 
 pub(super) fn tool_diagnostic(
     trace_id: TraceId,
@@ -34,6 +35,19 @@ pub(super) fn tool_diagnostic(
     )
 }
 
+/// Bytes of the provider id digest kept in `llm.tool_call.id`.
+const SHORT_TOOL_CALL_ID_BYTES: usize = 6;
+
+/// A short, fixed-length form of the provider's tool call id. The call and the
+/// result that answers it each derive it from the protocol id they observed,
+/// so both carry the same value without looking each other up.
+fn short_tool_call_id(protocol_id: &str) -> String {
+    Sha256::digest(protocol_id.as_bytes())[..SHORT_TOOL_CALL_ID_BYTES]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 pub(super) fn tool_call_action(
     response: &SemanticAction,
     declared: &DeclaredLlmToolCall,
@@ -48,16 +62,13 @@ pub(super) fn tool_call_action(
             declared.ordinal.to_string(),
         ),
         (
-            attrs::llm_tool_call::RESPONSE_ACTION_ID.to_string(),
-            response.action_id.clone(),
-        ),
-        (
             attrs::llm_tool_call::ARGUMENTS_BYTES.to_string(),
             declared.arguments_json.len().to_string(),
         ),
     ]);
     if let Some(id) = &declared.tool_call_id {
-        attributes.insert(attrs::llm_tool_call::ID.to_string(), id.clone());
+        attributes.insert(attrs::llm_tool_call::ID.to_string(), short_tool_call_id(id));
+        attributes.insert(attrs::llm_tool_call::PROTOCOL_ID.to_string(), id.clone());
     }
     SemanticAction {
         action_id: format!("{}:tool-call:{}", response.action_id, declared.ordinal),
@@ -131,16 +142,14 @@ pub(super) fn agent_invocation_action(
     }
 }
 
+/// The result carries the call it answers, so one action describes the whole
+/// tool use without a lookup of the separately emitted tool call.
 pub(super) fn tool_result_action(
     request: &SemanticAction,
     result: &ProjectedLlmToolResult,
-    binding_state: &str,
+    tool_call: Option<&ProjectedLlmToolCall>,
 ) -> SemanticAction {
     let mut attributes = BTreeMap::from([
-        (
-            attrs::llm_tool_result::BINDING_STATE.to_string(),
-            binding_state.to_string(),
-        ),
         (
             attrs::llm_tool_result::CONTENT_EXPORT_STATE.to_string(),
             result.content_export_state.to_string(),
@@ -149,14 +158,6 @@ pub(super) fn tool_result_action(
             attrs::llm_tool_result::IS_ERROR.to_string(),
             result.is_error.to_string(),
         ),
-        (
-            attrs::llm_tool_result::ORDINAL.to_string(),
-            result.ordinal.to_string(),
-        ),
-        (
-            attrs::llm_tool_result::REQUEST_ACTION_ID.to_string(),
-            request.action_id.clone(),
-        ),
     ]);
     if let Some(content_bytes) = result.content_bytes {
         attributes.insert(
@@ -164,8 +165,15 @@ pub(super) fn tool_result_action(
             content_bytes.to_string(),
         );
     }
+    // The protocol gives a result no id of its own; it names the call it answers.
     if let Some(id) = &result.tool_call_id {
-        attributes.insert(attrs::llm_tool_result::ID.to_string(), id.clone());
+        attributes.insert(attrs::llm_tool_call::ID.to_string(), short_tool_call_id(id));
+    }
+    if let Some(tool_call) = tool_call {
+        attributes.insert(
+            attrs::llm_tool_call::NAME.to_string(),
+            tool_call.name.clone(),
+        );
     }
     if let Some(content_json) = &result.content_json {
         attributes.insert(

@@ -24,7 +24,7 @@ const COLUMNS: &str = "ids.action_id, action.trace_id, action.kind_code,
  (SELECT path_text FROM file_paths WHERE trace_id=action.trace_id AND path_id=action.file_path_id) AS file_path_text,
  action.start_time, state.end_time, action.process_id, state.status_code, state.completeness_code,
  state.finalization_reason, state.failure_body_format, state.failure_http_status, state.failure_http_reason,
- state.command_invocation_kind, state.command_tool_name, state.command_exit_code, state.tool_result_binding,
+ state.command_invocation_kind, state.command_tool_name, state.command_exit_code,
  NULL AS attributes_encoding_code";
 
 impl SqliteStorage {

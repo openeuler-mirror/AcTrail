@@ -80,7 +80,6 @@ pub(in crate::semantic_actions::codebook) const CODEBOOK: &SemanticActionCodeboo
             llm_call_http_response: 528,
             llm_request_tool_result: 529,
             llm_response_tool_call: 524,
-            llm_tool_call_result: 525,
             llm_tool_call_agent_invocation: 526,
             http_request_http_response: 527,
             llm_request_http_message: 512,
