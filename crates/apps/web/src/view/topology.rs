@@ -19,7 +19,32 @@ struct TimelineRow {
 pub(super) fn process_tree_json(
     memberships: &[ProcessMembership],
     process_display: &ProcessDisplayIndex,
+    events: &[DomainEvent],
 ) -> String {
+    let mut commands = BTreeMap::new();
+    for event in events {
+        if let EventPayload::Process(payload) = &event.payload {
+            if payload.operation == "exec"
+                && payload
+                    .metadata
+                    .get("exec.result")
+                    .is_none_or(|result| result == "success")
+                && payload
+                    .metadata
+                    .get("result")
+                    .is_none_or(|result| result == "0")
+            {
+                if let Some(command) = payload
+                    .metadata
+                    .get("command_line")
+                    .filter(|s| !s.is_empty())
+                    .or(payload.executable.as_ref())
+                {
+                    commands.insert(event.envelope.process, command.as_str());
+                }
+            }
+        }
+    }
     let parents = memberships
         .iter()
         .map(|membership| (membership.identity, membership.inherited_from))
@@ -40,7 +65,13 @@ pub(super) fn process_tree_json(
         "[{}]",
         rows.iter()
             .map(|membership| {
-                process_tree_node_json(membership, &parents, &children, process_display)
+                process_tree_node_json(
+                    membership,
+                    &parents,
+                    &children,
+                    process_display,
+                    commands.get(&membership.identity).copied(),
+                )
             })
             .collect::<Vec<_>>()
             .join(",")
@@ -82,8 +113,15 @@ fn process_tree_node_json(
     parents: &BTreeMap<ProcessIdentity, Option<ProcessIdentity>>,
     children: &BTreeMap<ProcessIdentity, usize>,
     process_display: &ProcessDisplayIndex,
+    command_line: Option<&str>,
 ) -> String {
     let mut output = String::from("{");
+    json::field(
+        &mut output,
+        "command_line",
+        &json::optional_string(command_line),
+    );
+    output.push(',');
     json::field(
         &mut output,
         "process_id",

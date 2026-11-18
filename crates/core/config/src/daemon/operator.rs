@@ -2,9 +2,12 @@
 
 #[path = "operator/document.rs"]
 mod document;
+#[path = "operator/file.rs"]
+mod file;
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use file::OperatorConfigFile;
+
+use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -392,8 +395,16 @@ impl OperatorConfig {
         )
     }
 
+    /// Apply the main configuration's permission ceiling at initialization/startup.
+    pub fn restrict_runtime_file(path: &Path) -> Result<(), String> {
+        file_permissions::FilePermissions
+            .prepare_existing(path)
+            .map_err(|error| format!("prepare config {}: {error}", path.display()))
+    }
+
     pub fn load(path: &Path) -> Result<Self, String> {
-        let raw = fs::read_to_string(path)
+        let raw = file_permissions::FilePermissions
+            .read_only(path)
             .map_err(|error| format!("read config {}: {error}", path.display()))?;
         Self::parse(&raw)
     }
@@ -452,48 +463,8 @@ impl OperatorConfig {
 
     pub fn dump_to_path(&self, path: &Path, overwrite: bool) -> Result<(), String> {
         let raw = self.dump()?;
-        let mode = if overwrite {
-            WriteMode::Overwrite
-        } else {
-            WriteMode::CreateNew
-        };
-        write_operator_config(path, mode, &raw)
+        OperatorConfigFile::new(path).write(overwrite, &raw)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WriteMode {
-    CreateNew,
-    Overwrite,
-}
-
-fn write_operator_config(path: &Path, mode: WriteMode, raw: &str) -> Result<(), String> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("create config directory {}: {error}", parent.display()))?;
-    }
-    let mut options = OpenOptions::new();
-    options.write(true);
-    match mode {
-        WriteMode::CreateNew => {
-            options.create_new(true);
-        }
-        WriteMode::Overwrite => {
-            options.create(true).truncate(true);
-        }
-    }
-    let action = match mode {
-        WriteMode::CreateNew => "create",
-        WriteMode::Overwrite => "overwrite",
-    };
-    let mut file = options
-        .open(path)
-        .map_err(|error| format!("{action} config {}: {error}", path.display()))?;
-    file.write_all(raw.as_bytes())
-        .map_err(|error| format!("write config {}: {error}", path.display()))
 }
 
 fn merge_toml_value(base: &mut toml::Value, patch: toml::Value) {
