@@ -10,7 +10,6 @@ name = "actrailweb"
 path = "src/main.rs"
 
 [dependencies]
-file_permissions = { path = "../../core/file_permissions" }
 storage_contracts = { path = "../../contracts/storage" }
 checkpoint_core_contracts = { path = "../../contracts/checkpoint_core" }
 plugin_system_contracts = { path = "../../contracts/plugin_system" }

@@ -2,17 +2,6 @@ use std::path::Path;
 
 use super::PathResolution;
 
-pub(super) fn proc_fd_alias(path: &str) -> Option<(u32, &str)> {
-    let tail = path
-        .strip_prefix("/proc/self/fd/")
-        .or_else(|| path.strip_prefix("/proc/thread-self/fd/"))?;
-    let (fd, suffix) = tail.split_once('/').unwrap_or((tail, ""));
-    if fd.is_empty() || !fd.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    Some((fd.parse().ok()?, suffix))
-}
-
 pub(super) fn lexically_normalize_path(path: &str) -> String {
     let absolute = path.starts_with('/');
     let mut parts = Vec::new();

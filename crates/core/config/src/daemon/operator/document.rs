@@ -606,10 +606,7 @@ impl OperatorDocument {
         Ok(OperatorConfig {
             socket_path: PathBuf::from(&self.control.socket_path),
             socket_permissions: SocketPermissions {
-                mode: parse_socket_mode(
-                    "control.socket_mode_octal",
-                    &self.control.socket_mode_octal,
-                )?,
+                mode: parse_octal("control.socket_mode_octal", &self.control.socket_mode_octal)?,
             },
             control_pending_connection_max: require_positive_u32(
                 "control.pending_connection_max",

@@ -16,7 +16,7 @@
 文件：
 
 - `plugin.toml`：插件 manifest。
-- `actrail_tool_consecutive_failure_alert.wasm`：示例 manifest 加载的本地 WASM 组件，见[编译](#编译)。
+- `actrail_tool_consecutive_failure_alert.wasm`：已编译的 component artifact。
 - `alert-schema.json`：告警 payload JSON Schema。
 - `src/lib.rs`：Rust 源码。
 
@@ -49,23 +49,31 @@ TraceAlertToken 校验 → payload JSON Schema 校验 → SQLite 存储
 `CommandInvocation` 的 `completeness=partial` 初始快照用于登记工具名和命令行，终态快照跳过登记。
 `ProcessExit` 通过宿主注入的 `process.id` 关联命令并判定成败；缺少该属性时，按 trace 内命令到达顺序 FIFO 关联。
 
-### 编译
-
-从仓库根目录构建示例 WASM。构建使用 Rust `1.98.1`，依赖由示例目录的 `Cargo.lock` 锁定。
+#### 重新编译：
 
 ```bash
 rustup target add --toolchain 1.98.1 wasm32-wasip2
 cd examples/plugins/wasm-legacy/tool-consecutive-failure-alert
 unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
-WASM_BUILD_DIR="$(mktemp -d /tmp/actrail-consecutive-wasm.XXXXXX)"
-cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$WASM_BUILD_DIR"
-cp "$WASM_BUILD_DIR/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm" .
-rm -r "$WASM_BUILD_DIR"
+REBUILD_DIR="$(mktemp -d /tmp/actrail-consecutive-wasm.XXXXXX)"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/a"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/b"
+cmp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm" "$REBUILD_DIR/b/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm"
+cp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_consecutive_failure_alert.wasm" .
+rm -r "$REBUILD_DIR"
 ```
 
-复核构建一致性时，分别在两个独立的 `--target-dir` 中执行构建命令，再用 `cmp` 比较两份 WASM 产物。
+构建工具链：Rust `1.98.1`（`48a229cea`）、Cargo `1.98.1`（`797e8a9bc`）、
+LLVM `22.1.8`。构建命令使用本目录的 `Cargo.lock`，通过 `cmp` 比较两个独立
+target 目录的输出。
 
-示例 manifest 从同目录加载 WASM。`scripts/install-release.sh` 和 RPM 打包从源码构建并安装组件。
+| 构建输入 | Git 对象 |
+| --- | --- |
+| `src/lib.rs` blob | `1b32cbadf8afc1f4b9d1b7aae0683e21298b5d39` |
+| `Cargo.lock` blob | `50fe811cef53b82278609f804d8c538e30aba960` |
+| WIT tree | `126f2d22c83707cd5afca9a685fa41eefa94ec3e` |
+
+仓库中的 WASM 产物大小为 137091 字节。
 
 ### 插件侧：运行时参数
 

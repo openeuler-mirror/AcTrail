@@ -9,7 +9,6 @@ pub(super) use connection_layout::RustlsConnectionLayout;
 mod config;
 mod connection_layout;
 mod handshake_locator;
-mod outlined_profile;
 mod probe_detector;
 mod static_pattern;
 mod symbol;

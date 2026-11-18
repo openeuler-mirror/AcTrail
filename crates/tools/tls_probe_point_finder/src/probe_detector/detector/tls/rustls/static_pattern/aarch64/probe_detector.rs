@@ -13,7 +13,6 @@ use super::common_state_pair_48_56::CommonStatePair4856ProbeDetector;
 use super::common_state_pair_52_64::CommonStatePair5264ProbeDetector;
 use super::common_state_pair_52_64_stack160::CommonStatePair5264Stack160ProbeDetector;
 use super::common_state_pair_52_64_x22::CommonStatePair5264X22ProbeDetector;
-use crate::probe_detector::detector::tls::rustls::outlined_profile::OutlinedRustlsProfile;
 use crate::probe_detector::detector::tls::rustls::static_pattern::PatternPairProbeDetector;
 
 pub(crate) struct Aarch64RustlsProbeDetector {
@@ -21,7 +20,6 @@ pub(crate) struct Aarch64RustlsProbeDetector {
     match_limit: usize,
     selector: DetectionSelector,
     candidates: [PatternPairProbeDetector; 4],
-    outlined: PatternPairProbeDetector,
 }
 
 impl Aarch64RustlsProbeDetector {
@@ -36,7 +34,6 @@ impl Aarch64RustlsProbeDetector {
                 .child(DetectorId::new("aarch64")),
             match_limit: config.match_limit,
             selector: DetectionSelector::new(config.selection),
-            outlined: OutlinedRustlsProfile::plaintext_pair(),
             candidates: [
                 CommonStatePair5264ProbeDetector::try_new(config.common_state_pair_52_64)?
                     .into_pattern_pair(),
@@ -56,10 +53,6 @@ impl Aarch64RustlsProbeDetector {
         if image.arch().as_str() != "aarch64" {
             return;
         }
-        if OutlinedRustlsProfile::matches(image) {
-            self.outlined.register_executable_patterns(image);
-            return;
-        }
         for candidate in &self.candidates {
             candidate.register_executable_patterns(image);
         }
@@ -77,9 +70,6 @@ impl ProbeDetector for Aarch64RustlsProbeDetector {
                 DetectionEvidence::new(self.path.clone(), context.target.architecture.clone())
                     .rejected("aarch64 Rustls detector received another architecture"),
             ));
-        }
-        if OutlinedRustlsProfile::matches(context.probe.image) {
-            return Ok(self.outlined.detect_outcome(context, self.match_limit));
         }
         let mut outcomes = Vec::with_capacity(self.candidates.len());
         for candidate in &self.candidates {

@@ -1,5 +1,7 @@
 //! Open the selected storage implementation with the shared configuration.
 
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use sqlite_storage::SqliteStorage;
@@ -14,6 +16,7 @@ pub fn open_storage_backend(
     match (config, mode) {
         (StorageConfig::NoOp, _) => Ok(Box::new(storage_noop::NoOpStorage::new())),
         (StorageConfig::Sqlite(config), StorageOpenMode::ReadWrite) => {
+            create_parent_directory(&config.path)?;
             SqliteStorage::open_with_options(
                 &config.path,
                 Some(Duration::from_millis(config.busy_timeout_ms)),
@@ -45,4 +48,22 @@ pub fn open_storage_backend(
                 })
         }
     }
+}
+
+fn create_parent_directory(path: &Path) -> Result<(), StorageError> {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        StorageError::new(
+            "create_sqlite_storage_directory",
+            format!(
+                "create sqlite storage directory {}: {error}",
+                parent.display()
+            ),
+        )
+    })
 }

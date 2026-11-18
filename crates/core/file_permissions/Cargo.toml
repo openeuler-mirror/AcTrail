@@ -1,9 +1,0 @@
-[package]
-name = "file_permissions"
-version.workspace = true
-edition = "2024"
-license = "MulanPSL-2.0"
-
-[dependencies]
-libc = "0.2"
-tempfile = "3"

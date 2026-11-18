@@ -7,7 +7,6 @@ from typing import Any
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
 from tests.e2e.common.core import TestOutput, TestResult, TestStatus
-from tests.e2e.common.tool_alert_lifecycle.plugin_package import ToolAlertPluginPackage
 
 from .config import ToolConsecutiveFailureAlertConfig
 
@@ -22,9 +21,6 @@ class ToolConsecutiveFailureAlertEnvironment:
     ):
         self.config = config
         self.output = output
-        self._repo_package = ToolAlertPluginPackage(
-            config.repo, config.work_dir, config.plugin_manifest
-        )
         self.runtime = ActrailRuntime.isolated(
             config.repo,
             config.bin_dir,
@@ -58,7 +54,6 @@ class ToolConsecutiveFailureAlertEnvironment:
         )
 
     def prepare(self) -> None:
-        self._repo_package.prepare()
         self.runtime.prepare()
         self.load_repo_plugin()
 
@@ -89,7 +84,7 @@ class ToolConsecutiveFailureAlertEnvironment:
 
     def plugin_load_command(self) -> list[Path | str]:
         return self._plugin_load_command(
-            self._repo_package.manifest,
+            self.config.plugin_manifest,
             self.config.plugin_instance,
         )
 

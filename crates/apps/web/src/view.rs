@@ -230,12 +230,12 @@ pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<Strin
     let events = snapshot
         .events
         .iter()
-        .map(|event| events::event_json(event, &process_display))
+        .map(events::event_json)
         .collect::<Vec<_>>();
     let processes = snapshot
         .memberships
         .iter()
-        .map(|process| events::process_json(process, &process_display))
+        .map(events::process_json)
         .collect::<Vec<_>>();
     let diagnostics = snapshot
         .diagnostics
@@ -246,8 +246,7 @@ pub fn trace_json(storage_config: &StorageConfig, trace_id: u64) -> Result<Strin
         .iter()
         .map(payloads::payload_json_row)
         .collect::<Vec<_>>();
-    let process_tree =
-        topology::process_tree_json(&snapshot.memberships, &process_display, &snapshot.events);
+    let process_tree = topology::process_tree_json(&snapshot.memberships, &process_display);
     let timeline = topology::timeline_json(&snapshot.events, &payloads);
 
     let mut output = String::from("{");
@@ -346,15 +345,11 @@ pub fn trace_time_attribution_json(
 
 pub fn trace_events_json(storage_config: &StorageConfig, trace_id: u64) -> Result<String, String> {
     let storage = open_storage(storage_config)?;
-    let process_display = traces::ProcessDisplayIndex::load(storage.as_ref())?;
     let trace_id = TraceId::new(trace_id);
     let events = storage
         .list_events(trace_id)
         .map_err(|error| format!("list events failed: {}: {}", error.stage, error.message))?;
-    let rows = events
-        .iter()
-        .map(|event| events::event_json(event, &process_display))
-        .collect::<Vec<_>>();
+    let rows = events.iter().map(events::event_json).collect::<Vec<_>>();
     Ok(format!("{{\"events\":[{}]}}", rows.join(",")))
 }
 
@@ -404,10 +399,9 @@ pub fn trace_processes_json(
     let processes = snapshot
         .memberships
         .iter()
-        .map(|process| events::process_json(process, &process_display))
+        .map(events::process_json)
         .collect::<Vec<_>>();
-    let process_tree =
-        topology::process_tree_json(&snapshot.memberships, &process_display, &snapshot.events);
+    let process_tree = topology::process_tree_json(&snapshot.memberships, &process_display);
     Ok(format!(
         "{{\"processes\":[{}],\"process_tree\":{}}}",
         processes.join(","),

@@ -10,6 +10,7 @@ use plugin_system::{
     NetworkPolicyRuleView, NetworkPolicyRulesApplyGrant,
 };
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -25,7 +26,7 @@ pub struct NetworkPolicyStore {
 
 impl NetworkPolicyStore {
     pub fn load(path: &Path) -> Result<Self, String> {
-        let raw = match file_permissions::FilePermissions.read_restricted(path) {
+        let raw = match fs::read_to_string(path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
             Err(error) => {

@@ -28,7 +28,6 @@ impl OperatorConfigInitializer {
             }
             OperatorConfig::load(path)
                 .map_err(|error| format!("validate config {}: {error}", path.display()))?;
-            OperatorConfig::restrict_runtime_file(path)?;
             return Ok(OperatorConfigInitStatus::ExistingValid);
         }
         let mut document = DeliveryConfigDocument::defaults(filter)?;

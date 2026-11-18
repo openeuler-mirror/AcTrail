@@ -11,7 +11,6 @@ use crate::probe_detector::contract::selection::DetectionSelector;
 
 use super::RustlsProbeDetectorConfig;
 use super::handshake_locator::RustlsHandshakeLocator;
-use super::outlined_profile::OutlinedRustlsProfile;
 use super::static_pattern::RustlsStaticPatternProbeDetector;
 use super::symbol::RustlsSymbolProbeDetector;
 use crate::probe_detector::contract::capability::ConsumerCapability;
@@ -109,17 +108,12 @@ impl RustlsProbeDetector {
             }
             other => return other,
         };
-        let layout = super::RustlsConnectionLayout::augment(
+        let _ = super::RustlsConnectionLayout::augment(
             context.probe.image,
             &self.handshake,
             &mut candidate.points,
             &mut candidate.evidence,
         );
-        if layout.is_none() && OutlinedRustlsProfile::matches(context.probe.image) {
-            return DetectionOutcome::NoMatch(candidate.evidence.rejected(
-                "Rustls handshake or certificate layout did not match the verified outlined build",
-            ));
-        }
         candidate.capability.consumer = ConsumerCapability::evaluate(
             candidate.capability.consumer.key.clone(),
             &candidate.points,
@@ -232,7 +226,7 @@ impl ProbeDetector for RustlsProbeDetector {
 impl ExecutablePatternRegistration for RustlsProbeDetector {
     fn register_executable_patterns(&self, context: &ProbeContext<'_>) {
         super::RustlsConnectionLayout::register(context.probe.image);
-        if Self::requires_native(context) && !OutlinedRustlsProfile::matches(context.probe.image) {
+        if Self::requires_native(context) {
             self.handshake.register(context.probe.image);
         }
         self.static_pattern.register_executable_patterns(context);

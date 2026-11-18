@@ -596,24 +596,6 @@ impl FileTracker {
             };
         };
         if Path::new(&raw_path).is_absolute() {
-            if let Some((fd, suffix)) = proc_fd_alias(&raw_path) {
-                // Resolve against the event owner's FD state, while its open/
-                // dup/close events are applied in order. Reading /proc here
-                // would use the collector's namespace and race FD reuse/exit.
-                let resolved = self
-                    .resolve_fd_path(process_key.trace_id, &process_key.process, fd)
-                    .map(|base| lexically_normalize_path(&format!("{base}/{suffix}")));
-                let source = if resolved.is_some() {
-                    "proc_fd"
-                } else {
-                    "unresolved_proc_fd"
-                };
-                return PathResolution {
-                    raw: Some(raw_path),
-                    resolved,
-                    source,
-                };
-            }
             let resolved = lexically_normalize_path(&raw_path);
             return PathResolution {
                 raw: Some(raw_path),

@@ -46,17 +46,17 @@
 告警中的命令证据均属于实际 ls，并包含三个失败 ls 的 action ID。
 该轮预期失败数为 3、总数为 6、失败率为 0.5，生成一条告警。
 
-在仓库根目录以 root 运行回归。
+在仓库根目录以 root 执行：
 
 ```bash
 sudo -E python3.11 tests/e2e/regression/test_all.py \
   --case tool_frequent_failure_alert
 ```
 
-公共 runner 会先执行 `scripts/install-release.sh` 构建并安装官方插件包。用例将
-`${CARGO_TARGET_DIR:-target}/wasm32-wasip2/release/` 中的 WASM 与仓库的 manifest、
-schema 组装到隔离工作目录，再启动真实 `actraild`。加载插件后依次跑混合正向、
-低于阈值、冷却、安装包和可选真实 Agent 轮次。首次运行的编译耗时取决于本机缓存。
+公共 runner 会先执行 `scripts/install-release.sh`（构建并安装官方插件包），再
+创建隔离工作目录，启动真实 `actraild`，加载插件后依次跑混合正向、低于
+阈值、冷却、安装包和可选真实 Agent 轮次。首次运行包含 release、TLS runtime
+和 WASM 插件构建，编译耗时取决于本机缓存。
 
 只运行该 case 并显示详细过程：
 
@@ -72,8 +72,8 @@ sudo -E python3.11 \
 2. 断言 `scripts/install-release.sh` 已把插件安装到
    `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}/tool-frequent-failure-alert/`
    （manifest、wasm、两个 payload schema）。
-3. 在隔离目录组装插件包，初始化、清理并启动 AcTrail。
-4. 从隔离目录加载插件，携带测试专用配置
+3. 在隔离目录初始化、清理并启动 AcTrail。
+4. 从仓库示例目录加载插件，携带测试专用配置
    `tool-frequent-failure-alert.e2e.config.json`（`tool_scope=agent_children`、
    `parent_scope=any`），并授予 `alert-write`。
 5. 混合正向轮：同一 `ls` 工具先成功三次、再失败三次，断言定义注册、恰好
@@ -84,9 +84,9 @@ sudo -E python3.11 \
 6. 低于阈值轮：同一 trace 只有两条失败 `ls`，断言无告警。
 7. 冷却矩阵：单 trace 连续五条失败命令，断言告警数为 1，并核对存储的
    `command.invocation` 数量。
-8. 断言隔离目录的插件实例 `observed_records > 0`。
-9. 安装包轮先卸载隔离目录的插件实例，再加载安装目录的插件并跑一轮正向验证。
-   完成后卸载安装包实例，并从隔离目录重新加载插件。
+8. 断言仓库实例 `observed_records > 0`。
+9. 安装包轮：卸载仓库实例，加载安装目录实例跑一轮正向，断言安装产物
+   可用；完成后卸载安装目录实例并加载仓库实例。
 10. 真实 Agent 轮（可选）：切换到
     `tool-frequent-failure-alert.agent.e2e.config.json`
     （`tool_scope=llm_and_mcp`、`parent_scope=agent_child`），再探测
@@ -99,8 +99,7 @@ sudo -E python3.11 \
 
 # 手动测试
 
-按[插件编译说明](../../../../examples/plugins/wasm-legacy/tool-frequent-failure-alert/README.zh.md#编译)生成示例目录中的 WASM。
-在仓库根目录用同一个 root shell 执行以下命令。
+以下步骤手动运行插件加载、命令执行和告警查询，均在仓库根目录的同一个 root shell 中执行。
 手动测试工作目录为 `/tmp/actrail-frequent-alert-manual`，命令通过该目录下的
 `actraild.conf` 操作隔离实例。
 

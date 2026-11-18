@@ -1,7 +1,6 @@
 //! Certificate ownership layout is checked independently of handshake discovery.
 //! The destructor shapes cover rustls 0.23.36, 0.23.37, 0.23.45 and 0.23.46 client builds.
-use super::handshake_locator::{HandshakeLocation, RustlsHandshakeLocator};
-use super::outlined_profile::OutlinedRustlsProfile;
+use super::handshake_locator::RustlsHandshakeLocator;
 use crate::elf::ElfImage;
 use crate::plan::{AttachPoint, CaptureStrategy, PayloadDirection, ProbePoint};
 use crate::probe_detector::contract::detection::{DetectionEvidence, EvidenceFact};
@@ -118,7 +117,7 @@ impl RustlsConnectionLayout {
     ];
 
     pub(super) fn register(image: &ElfImage) {
-        if image.arch().as_str() == "aarch64" && !OutlinedRustlsProfile::matches(image) {
+        if image.arch().as_str() == "aarch64" {
             image.register_pattern_scan(CERTIFICATE_HEAD);
         }
     }
@@ -129,46 +128,6 @@ impl RustlsConnectionLayout {
         points: &mut Vec<ProbePoint>,
         evidence: &mut DetectionEvidence,
     ) -> Option<()> {
-        let (found, certificates) = if OutlinedRustlsProfile::matches(image) {
-            OutlinedRustlsProfile::connection_layout(image, points)?
-        } else {
-            Self::locate_connection_layout(image, locator, points)?
-        };
-        let virtual_address = found.virtual_address;
-        let offset = image
-            .file_offset_for_virtual_address(virtual_address)
-            .ok()?;
-        for point in points.iter_mut() {
-            point.cookie = certificates;
-        }
-        points.push(ProbePoint {
-            symbol: "rustls_start_outgoing_traffic".to_string(),
-            direction: PayloadDirection::Control,
-            attach: AttachPoint::Entry,
-            capture: CaptureStrategy::EntryBuffer,
-            virtual_address,
-            file_offset: offset,
-            cookie: certificates,
-        });
-        evidence.facts.push(EvidenceFact {
-            key: "rustls_handshake_structure".to_string(),
-            value: format!(
-                "entry=0x{:x};send-field={};caller-set-field={}",
-                found.virtual_address, found.send_field, found.preceding_field
-            ),
-        });
-        evidence.facts.push(EvidenceFact {
-            key: "rustls_connection_identity".to_string(),
-            value: format!("handshake-generation:certificate-vec-offset={certificates}"),
-        });
-        Some(())
-    }
-
-    fn locate_connection_layout(
-        image: &ElfImage,
-        locator: &RustlsHandshakeLocator,
-        points: &[ProbePoint],
-    ) -> Option<(HandshakeLocation, u64)> {
         let buffer = points
             .iter()
             .find(|point| point.symbol == "rustls_buffer_plaintext")?;
@@ -202,7 +161,34 @@ impl RustlsConnectionLayout {
         let offsets = image.pattern_offsets_for(&[CERTIFICATE_HEAD], &ranges);
         let certificates = Self::resolve_certificates(image, &offsets[0])?;
         let found = locator.locate(image, buffer.virtual_address).ok()?;
-        Some((found, certificates))
+        let virtual_address = found.virtual_address;
+        let offset = image
+            .file_offset_for_virtual_address(virtual_address)
+            .ok()?;
+        for point in points.iter_mut() {
+            point.cookie = certificates;
+        }
+        points.push(ProbePoint {
+            symbol: "rustls_start_outgoing_traffic".to_string(),
+            direction: PayloadDirection::Control,
+            attach: AttachPoint::Entry,
+            capture: CaptureStrategy::EntryBuffer,
+            virtual_address,
+            file_offset: offset,
+            cookie: certificates,
+        });
+        evidence.facts.push(EvidenceFact {
+            key: "rustls_handshake_structure".to_string(),
+            value: format!(
+                "entry=0x{:x};send-field={};caller-set-field={}",
+                found.virtual_address, found.send_field, found.preceding_field
+            ),
+        });
+        evidence.facts.push(EvidenceFact {
+            key: "rustls_connection_identity".to_string(),
+            value: format!("handshake-generation:certificate-vec-offset={certificates}"),
+        });
+        Some(())
     }
 
     fn resolve_certificates(image: &ElfImage, offsets: &[usize]) -> Option<u64> {

@@ -1,7 +1,7 @@
 //! Persistent plugin instance registry for the `actraild plugin` CLI.
 
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use control_contract::command::PluginLoadCommand;
@@ -102,7 +102,7 @@ pub(crate) fn registry_path(config_path: &Path) -> Result<PathBuf, String> {
 }
 
 fn read_registry(path: &Path) -> Result<PersistentPluginRegistry, String> {
-    match file_permissions::FilePermissions.read_restricted(path) {
+    match fs::read_to_string(path) {
         Ok(raw) => toml::from_str::<PersistentPluginRegistry>(&raw).map_err(|error| {
             format!(
                 "parse persistent plugin registry {}: {error}",
@@ -136,14 +136,36 @@ fn write_registry(path: &Path, registry: &PersistentPluginRegistry) -> Result<()
             path.display()
         )
     })?;
-    file_permissions::FilePermissions
-        .atomic_write(path, true, |file| file.write_all(raw.as_bytes()))
-        .map_err(|error| {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
             format!(
-                "write persistent plugin registry {}: {error}",
-                path.display()
+                "create persistent plugin registry directory {}: {error}",
+                parent.display()
             )
-        })
+        })?;
+    }
+    let temp_path = temporary_registry_path(path)?;
+    fs::write(&temp_path, raw).map_err(|error| {
+        format!(
+            "write persistent plugin registry temp {}: {error}",
+            temp_path.display()
+        )
+    })?;
+    fs::rename(&temp_path, path).map_err(|error| {
+        format!(
+            "replace persistent plugin registry {} with {}: {error}",
+            path.display(),
+            temp_path.display()
+        )
+    })
+}
+
+fn temporary_registry_path(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("registry path {} has no file name", path.display()))?
+        .to_string_lossy();
+    Ok(path.with_file_name(format!("{file_name}.tmp.{}", std::process::id())))
 }
 
 fn canonical_reference(path: &Path, label: &str) -> Result<String, String> {

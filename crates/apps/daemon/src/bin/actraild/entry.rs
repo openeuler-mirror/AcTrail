@@ -68,7 +68,6 @@ pub fn run_from_env() -> Result<(), String> {
 }
 
 fn run_foreground(config_path: &Path, config: &OperatorConfig) -> Result<(), String> {
-    OperatorConfig::restrict_runtime_file(config_path)?;
     signals::install_shutdown_handlers()?;
     write_pid_file(&config.pid_file, std::process::id())?;
     let pid_written = true;

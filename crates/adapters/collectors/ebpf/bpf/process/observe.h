@@ -454,15 +454,26 @@ static __noinline int store_pending_exit_op(
     struct trace_event_raw_sys_enter *ctx,
     __u32 group_exit
 ) {
-    __u32 pid = 0;
-    __u32 tid = 0;
-    __u32 flags = 0;
-    __u64 *trace_id = lookup_current_trace(&pid, &tid, &flags);
-    __u64 pid_tgid = ((__u64)pid << 32) | tid;
+    __u64 pid_tgid = current_pid_tgid();
+    __u32 pid = pid_tgid >> 32;
+    __u64 *trace_id = 0;
     struct actrail_pending_exit_op op = {};
 
-    // Fork-only children retain an inherited binding until exec. Use the same
-    // membership lookup and kernel PID coordinates as sched_process_exit.
+    if (pid) {
+        trace_id = bpf_map_lookup_elem(&tracked_traces, &pid);
+    }
+    if (!trace_id) {
+        __u64 kernel_pid_tgid = current_kernel_pid_tgid();
+        __u32 kernel_pid = kernel_pid_tgid >> 32;
+
+        if (kernel_pid_tgid && kernel_pid_tgid != pid_tgid) {
+            trace_id = bpf_map_lookup_elem(&tracked_traces, &kernel_pid);
+            if (trace_id) {
+                pid_tgid = kernel_pid_tgid;
+                pid = kernel_pid;
+            }
+        }
+    }
     if (!pid || !trace_id) {
         return 0;
     }

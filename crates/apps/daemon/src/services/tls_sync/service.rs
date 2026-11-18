@@ -458,17 +458,21 @@ fn payload_direction(direction: SyncDirection) -> PayloadDirection {
 }
 
 fn create_parent_directory(socket_path: &Path) -> Result<(), ControlError> {
-    file_permissions::FilePermissions
-        .prepare_owned_parent(socket_path)
-        .map_err(|error| {
-            ControlError::new(
-                "tls_sync_directory",
-                format!(
-                    "prepare socket directory {}: {error}",
-                    socket_path.display()
-                ),
-            )
-        })
+    let Some(parent) = socket_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        ControlError::new(
+            "tls_sync_directory",
+            format!(
+                "create TLS sync socket directory {} failed: {error}",
+                parent.display()
+            ),
+        )
+    })
 }
 
 fn enabled(config: &PayloadTlsConfig) -> bool {

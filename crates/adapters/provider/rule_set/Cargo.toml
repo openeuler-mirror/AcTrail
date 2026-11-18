@@ -5,7 +5,6 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
-file_permissions = { path = "../../../core/file_permissions" }
 config_core = { path = "../../../core/config" }
 provider_evidence = { path = "../../../contracts/provider_label/evidence" }
 provider_label = { path = "../../../contracts/provider_label/label" }

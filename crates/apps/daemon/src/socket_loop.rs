@@ -263,17 +263,21 @@ fn bind_listener(
 }
 
 fn create_parent_directory(socket_path: &Path) -> Result<(), DaemonRunError> {
-    file_permissions::FilePermissions
-        .prepare_owned_parent(socket_path)
-        .map_err(|error| {
-            DaemonRunError::new(
-                "bind",
-                format!(
-                    "prepare socket directory {}: {error}",
-                    socket_path.display()
-                ),
-            )
-        })
+    let Some(parent) = socket_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        DaemonRunError::new(
+            "bind",
+            format!(
+                "create socket directory {} failed: {error}",
+                parent.display()
+            ),
+        )
+    })
 }
 
 fn setup_error_after_bind(

@@ -3,4 +3,3 @@ pub(crate) use probe_detector::Aarch64BoringSslStaticPatternProbeDetector;
 
 mod config;
 mod probe_detector;
-mod verified;

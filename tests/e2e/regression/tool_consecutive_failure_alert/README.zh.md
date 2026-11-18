@@ -27,17 +27,17 @@
 将告警命令证据匹配到三个 `error/complete/exit=2` 的 ls action ID。
 该轮预期连续失败数为 3，生成一条告警。
 
-在仓库根目录以 root 运行回归。
+在仓库根目录以 root 执行：
 
 ```bash
 sudo -E python3.11 tests/e2e/regression/test_all.py \
   --case tool_consecutive_failure_alert
 ```
 
-公共 runner 会先执行 `scripts/install-release.sh` 构建并安装官方插件包。用例将
-`${CARGO_TARGET_DIR:-target}/wasm32-wasip2/release/` 中的 WASM 与仓库的 manifest、
-schema 组装到隔离工作目录，再启动真实 `actraild`。加载插件后依次跑负向、正向、
-重置、冷却、安装包和可选真实 Agent 轮次。首次运行的编译耗时取决于本机缓存。
+公共 runner 会先执行 `scripts/install-release.sh`（构建并安装官方插件包），再
+创建隔离工作目录，启动真实 `actraild`，加载插件后依次跑负向、正向、重置、
+冷却、安装包和可选真实 Agent 轮次。首次运行包含 release、TLS runtime 和
+WASM 插件构建，编译耗时取决于本机缓存。
 
 只运行该 case 并显示详细过程：
 
@@ -53,8 +53,8 @@ sudo -E python3.11 \
 2. 断言 `scripts/install-release.sh` 已把插件安装到
    `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}/tool-consecutive-failure-alert/`
    （manifest、wasm、payload schema 三件套）。
-3. 在隔离目录组装插件包，初始化、清理并启动 AcTrail。
-4. 从隔离目录加载插件（`--grant alert-write`）。
+3. 在隔离目录初始化、清理并启动 AcTrail。
+4. 从仓库示例目录加载插件（`--grant alert-write`）。
 5. 负向轮：`/bin/true` 连续成功三次，断言无告警。
 6. 正向轮：三条失败 `ls`，断言定义注册、恰好一条告警、payload 字段与
    证据（`evidence_action_ids` 唯一且含 `:process.exit` 动作 id）正确。
@@ -62,9 +62,9 @@ sudo -E python3.11 \
    断言告警数为 0。
 8. 冷却矩阵：单 trace 连续五条失败命令，断言告警数为 1，并核对存储的
    `command.invocation` 数量。
-9. 断言隔离目录的插件实例 `observed_records > 0`。
-10. 安装包轮先卸载隔离目录的插件实例，再加载安装目录的插件并跑一轮正向验证。
-    完成后卸载安装包实例，并从隔离目录重新加载插件。
+9. 断言仓库实例 `observed_records > 0`。
+10. 安装包轮：卸载仓库实例，加载安装目录实例跑一轮正向，断言安装产物
+    可用；完成后卸载安装目录实例并加载仓库实例。
 11. 真实 Agent 轮（可选）：按顺序选择第一个找到的 agent 二进制
     （`xiaoo`/`pi`/`opencode`/`claude`/`codex`）；设置
     `ACTRAIL_TEST_AGENT_PROBE_ALL=1` 启用逐候选可用性探测。用统一提示词
@@ -75,8 +75,7 @@ sudo -E python3.11 \
 
 # 手动测试
 
-按[插件编译说明](../../../../examples/plugins/wasm-legacy/tool-consecutive-failure-alert/README.zh.md#编译)生成示例目录中的 WASM。
-在仓库根目录用同一个 root shell 执行以下命令。
+以下步骤手动运行插件加载、命令执行和告警查询，均在仓库根目录的同一个 root shell 中执行。
 手动测试工作目录为 `/tmp/actrail-tool-alert-manual`，命令通过该目录下的
 `actraild.conf` 操作隔离实例。
 
@@ -91,7 +90,6 @@ test -x target/release/actraild
 test -x target/release/actrailctl
 test -x target/release/actrailviewer
 test -f examples/plugins/wasm-legacy/tool-consecutive-failure-alert/plugin.toml
-test -f examples/plugins/wasm-legacy/tool-consecutive-failure-alert/actrail_tool_consecutive_failure_alert.wasm
 
 bash scripts/install-release.sh
 ```

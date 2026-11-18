@@ -7,7 +7,6 @@ from typing import Any
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
 from tests.e2e.common.core import TestOutput, TestResult, TestStatus
-from tests.e2e.common.tool_alert_lifecycle.plugin_package import ToolAlertPluginPackage
 
 from .config import ToolFrequentFailureAlertConfig
 
@@ -22,9 +21,6 @@ class ToolFrequentFailureAlertEnvironment:
     ):
         self.config = config
         self.output = output
-        self._repo_package = ToolAlertPluginPackage(
-            config.repo, config.work_dir, config.plugin_manifest
-        )
         self.runtime = ActrailRuntime.isolated(
             config.repo,
             config.bin_dir,
@@ -55,7 +51,6 @@ class ToolFrequentFailureAlertEnvironment:
         return self.installed_package_dir / "tool-frequent-failure-alert.plugin.toml"
 
     def prepare(self) -> None:
-        self._repo_package.prepare()
         self.runtime.prepare()
         self.load_repo_plugin()
 
@@ -92,7 +87,7 @@ class ToolFrequentFailureAlertEnvironment:
         plugin_config: Path | None = None,
     ) -> list[Path | str]:
         return self._plugin_load_command(
-            self._repo_package.manifest,
+            self.config.plugin_manifest,
             self.config.plugin_instance,
             plugin_config or self.config.plugin_config,
         )
