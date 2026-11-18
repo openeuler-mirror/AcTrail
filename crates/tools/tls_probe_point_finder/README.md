@@ -114,6 +114,15 @@ For this build, the read entry is VA `0x331e810`, file offset `0x311d810`; the w
 
 The candidate path is `tls/boringssl/x86_64/read-write-pair-19-53`. It uses complete-closure conflict selection, reuses read-pattern scan results, and registers the 53-byte write pattern for this BuildID. `--match-limit` controls the reported matches. Build the finder and daemon from the same checkout, then restart the daemon to refresh its TLS plan cache.
 
+The aarch64 BoringSSL detector uses the following ELF file offsets for native OpenCode and Claude Code builds.
+
+| Executable | GNU Build ID | `SSL_read` | `SSL_read_internal` | `SSL_write` |
+| --- | --- | --- | --- | --- |
+| OpenCode 1.19.5 | `575f3e2cbf93171450778aa621b817e388d140aa` | `0x2449680` | `0x2449780` | `0x24c8280` |
+| Claude Code 2.1.325 | `74507c06dbb3aa7767fda21db32e442b13f9ca9a` | `0x2d160c0` | `0x2d161c0` | `0x2d15f00` |
+
+OpenCode's write entry follows the read wrapper by `0x7ec00` bytes. Claude Code's write entry precedes the wrapper by `0x1c0` bytes, and its write and internal read functions use stack canaries. The detector matches the Build ID and requires a unique executable signature for each entry. It checks the wrapper's call to the internal read, the write displacement, and the BoringSSL source marker. The probe plan uses the public read and write entries. They take `SSL*` in `x0`, the buffer in `x1`, and the requested size in `w2`. A positive return value in `w0` gives the completed byte count.
+
 Rustls stripped x86_64 probing uses these documented entry patterns:
 
 - `rustls_buffer_plaintext`, `CommonState::buffer_plaintext`, 27 bytes: `55 41 57 41 56 41 55 41 54 53 48 83 ec 28 49 89 d6 48 89 f3 4c 8b a7 08 03 00 00`
@@ -147,3 +156,7 @@ The independent `common-state-pair-52-64-stack160` candidate supports the stripp
 - `rustls_take_received_plaintext`, 64 bytes: `fd 7b bc a9 f7 0b 00 f9 f6 57 02 a9 f4 4f 03 a9 fd 03 00 91 36 54 40 a9 09 00 f0 d2 33 08 40 f9 f4 03 00 aa 08 04 80 52 08 b8 0c 39 df 02 09 eb c1 02 00 54 b3 00 f8 b6 f7 03 1f aa e0 03 17 aa`
 
 Connection identity augmentation also validates certificate ownership through the inline or called destructor shapes documented in `src/probe_detector/detector/tls/rustls/handshake_locator/README.md`. Rebuild both the finder and the daemon after adding a candidate. Restart the daemon to clear cached unavailable plans before retrying the same executable.
+
+The aarch64 xiaoO `0.2.3-1.oe2403sp5` RPM with GNU Build ID `bcf409a1125acd7aad8f2f122b272af8df9f4fbb` embeds outlined Rustls 0.23.43 functions. The detector matches unique plaintext entries at `0x1fdcc48` for `buffer_plaintext` and `0x1fdb404` for `take_received_plaintext`. Both take `CommonState` in `x0` and the payload in `x1`. `buffer_plaintext` returns the accepted length in `x0`.
+
+The probe plan checks `start_outgoing_traffic` at `0x1fdb328`, its caller, and the certificate chain assignment and destruction at `CommonState + 0x2f0`. The three-point plan uses the certificate chain allocation to identify the TLS connection. In this PIE, all three virtual addresses equal their ELF file offsets.

@@ -377,7 +377,7 @@ impl PayloadTlsDocument {
                 "payload.tls.sync_max_frame_bytes",
                 self.sync_max_frame_bytes,
             )?,
-            sync_socket_mode: parse_octal(
+            sync_socket_mode: parse_socket_mode(
                 "payload.tls.sync_socket_mode_octal",
                 &self.sync_socket_mode_octal,
             )?,

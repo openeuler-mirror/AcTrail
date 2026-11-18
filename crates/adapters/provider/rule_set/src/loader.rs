@@ -1,6 +1,5 @@
 //! Fail-fast provider-rule file loading.
 
-use std::fs;
 use std::path::Path;
 
 use crate::rules::ProviderRule;
@@ -10,7 +9,8 @@ const REQUIRED_RULE_PARTS: usize = 4;
 const RULE_PARTS_WITH_RATIONALE: usize = 5;
 
 pub fn load_rules(path: &Path) -> Result<Vec<ProviderRule>, String> {
-    let raw = fs::read_to_string(path)
+    let raw = file_permissions::FilePermissions
+        .read_restricted(path)
         .map_err(|error| format!("read provider rules {}: {error}", path.display()))?;
     let mut rules = Vec::new();
     for (line_index, line) in raw.lines().enumerate() {

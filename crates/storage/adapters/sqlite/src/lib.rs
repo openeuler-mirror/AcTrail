@@ -104,6 +104,14 @@ impl SqliteStorage {
             event_record_block_max_uncompressed_bytes,
             event_record_block_zstd_level,
         )?;
+        file_permissions::FilePermissions
+            .prepare_database(path)
+            .map_err(|error| {
+                rusqlite::Error::InvalidParameterName(format!(
+                    "prepare SQLite {}: {error}",
+                    path.display()
+                ))
+            })?;
         let connection = Connection::open(path)?;
         configure_file_connection(&connection, busy_timeout)?;
         schema::initialize(&connection)?;
