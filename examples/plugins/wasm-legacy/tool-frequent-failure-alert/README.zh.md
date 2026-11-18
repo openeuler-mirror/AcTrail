@@ -25,7 +25,7 @@
 ## 文件
 
 - `plugin.toml`：插件 manifest。
-- `actrail_tool_frequent_failure_alert.wasm`：已编译的 component artifact。
+- `actrail_tool_frequent_failure_alert.wasm`：示例 manifest 加载的本地 WASM 组件，见[编译](#编译)。
 - `frequent-failure-alert-v1.schema.json`：频繁失败告警 payload JSON Schema。
 - `indeterminate-result-v1.schema.json`：无法判定诊断告警 payload JSON Schema。
 - `src/lib.rs`：Rust 源码。
@@ -83,31 +83,23 @@ daemon 语义动作投影（command.invocation / process.exit / mcp.tool_call /
 | `command.invocation` + `process.exit` | `status=error` 或退出码非 0 | `status=success`（`unknown` 可按配置视为成功） | 其余 `unknown` |
 | `enforcement.decision` | `result=denied/blocked/error` 或 `status=error` | `result=allowed/success` | 其余 |
 
-## 重新编译
+## 编译
+
+从仓库根目录构建示例 WASM。构建使用 Rust `1.98.1`，依赖由示例目录的 `Cargo.lock` 锁定。
 
 ```bash
 rustup target add --toolchain 1.98.1 wasm32-wasip2
 cd examples/plugins/wasm-legacy/tool-frequent-failure-alert
 unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_TARGET_DIR RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER
-REBUILD_DIR="$(mktemp -d /tmp/actrail-frequent-wasm.XXXXXX)"
-cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/a"
-cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$REBUILD_DIR/b"
-cmp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm" "$REBUILD_DIR/b/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm"
-cp "$REBUILD_DIR/a/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm" .
-rm -r "$REBUILD_DIR"
+WASM_BUILD_DIR="$(mktemp -d /tmp/actrail-frequent-wasm.XXXXXX)"
+cargo +1.98.1 build --locked --target wasm32-wasip2 --release --target-dir "$WASM_BUILD_DIR"
+cp "$WASM_BUILD_DIR/wasm32-wasip2/release/actrail_tool_frequent_failure_alert.wasm" .
+rm -r "$WASM_BUILD_DIR"
 ```
 
-构建工具链：Rust `1.98.1`（`48a229cea`）、Cargo `1.98.1`（`797e8a9bc`）、
-LLVM `22.1.8`。构建命令使用本目录的 `Cargo.lock`，通过 `cmp` 比较两个独立
-target 目录的输出。
+复核构建一致性时，分别在两个独立的 `--target-dir` 中执行构建命令，再用 `cmp` 比较两份 WASM 产物。
 
-| 构建输入 | Git 对象 |
-| --- | --- |
-| `src/lib.rs` blob | `a43f33f5116d6e645cdd7b8348410db859a62322` |
-| `Cargo.lock` blob | `f1d85583b814a69e0b38226b265234c3417ca824` |
-| WIT tree | `126f2d22c83707cd5afca9a685fa41eefa94ec3e` |
-
-仓库中的 WASM 产物大小为 421447 字节。
+示例 manifest 从同目录加载 WASM。`scripts/install-release.sh` 和 RPM 打包从源码构建并安装组件。
 
 ## 插件配置
 

@@ -101,11 +101,9 @@ pub fn start_daemon(
     max_bytes: NonZeroU64,
 ) -> Result<(), String> {
     ensure_start_preconditions(config)?;
-    create_parent_directory(&config.log_path, "log directory")?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config.log_path)
+    OperatorConfig::restrict_runtime_file(config_path)?;
+    let log = file_permissions::FilePermissions
+        .append(&config.log_path)
         .map_err(|error| format!("open log {}: {error}", config.log_path.display()))?;
     let stderr = log
         .try_clone()
@@ -175,8 +173,8 @@ pub fn write_pid_file(path: &Path, pid: u32) -> Result<(), String> {
     if pid == u32::default() {
         return Err("current process id must not be zero".to_string());
     }
-    create_parent_directory(path, "pid directory")?;
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+    let permissions = file_permissions::FilePermissions;
+    let mut file = match permissions.create_new(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             let existing_pid = read_pid_file(path)?.ok_or_else(|| {
@@ -192,18 +190,22 @@ pub fn write_pid_file(path: &Path, pid: u32) -> Result<(), String> {
                     existing_pid
                 ));
             }
+            let original = fs::symlink_metadata(path)
+                .map_err(|error| format!("inspect stale pid file {}: {error}", path.display()))?;
             remove_runtime_file(path)?;
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .map_err(|retry_error| {
-                    format!(
-                        "create pid file {} after removing stale pid {}: {retry_error}",
-                        path.display(),
-                        existing_pid
-                    )
-                })?
+            let file = permissions.create_new(path).map_err(|retry_error| {
+                format!(
+                    "create pid file {} after removing stale pid {}: {retry_error}",
+                    path.display(),
+                    existing_pid
+                )
+            })?;
+            permissions
+                .preserve_metadata(&file, &original)
+                .map_err(|error| {
+                    format!("preserve stale pid permissions {}: {error}", path.display())
+                })?;
+            file
         }
         Err(error) => return Err(format!("create pid file {}: {error}", path.display())),
     };
@@ -237,17 +239,6 @@ pub(super) fn cleanup_runtime_files(
         remove_runtime_file(&config.payload_config.tls.sync_event_socket_path)?;
     }
     Ok(())
-}
-
-fn create_parent_directory(path: &Path, label: &str) -> Result<(), String> {
-    let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    else {
-        return Ok(());
-    };
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {label} {}: {error}", parent.display()))
 }
 
 fn ensure_start_preconditions(config: &OperatorConfig) -> Result<(), String> {
