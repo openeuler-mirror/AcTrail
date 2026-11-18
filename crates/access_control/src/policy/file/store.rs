@@ -16,7 +16,6 @@ use plugin_system::{
     FilePolicyPatchItem, FilePolicyPatchOp, FilePolicyRulesApplyGrant,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -55,7 +54,7 @@ impl EnforcementRules {
     }
 
     fn load_with_coverage(path: &Path, coverage: FileRuleCoverage) -> Result<Self, String> {
-        match fs::read_to_string(path) {
+        match file_permissions::FilePermissions.read_restricted(path) {
             Ok(raw) => Self::parse(&raw, coverage),
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 Ok(Self::empty_with_coverage(coverage))

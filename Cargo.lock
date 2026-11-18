@@ -53,6 +53,7 @@ name = "access_control"
 version = "0.9.1"
 dependencies = [
  "config_core",
+ "file_permissions",
  "libbpf-rs",
  "libc",
  "plugin_system",
@@ -679,6 +680,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "config_core"
 version = "0.9.1"
 dependencies = [
+ "file_permissions",
  "idle_detector",
  "model_core",
  "payload_capability",
@@ -929,6 +931,7 @@ dependencies = [
  "config_core",
  "config_export_filter",
  "control_contract",
+ "file_permissions",
  "libc",
  "linux_platform",
  "model_core",
@@ -966,6 +969,7 @@ dependencies = [
  "ebpf_collector",
  "export_core",
  "export_factory",
+ "file_permissions",
  "gateway_ingest_runtime",
  "getrandom 0.3.4",
  "idle_detector",
@@ -1213,6 +1217,14 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "file_permissions"
+version = "0.9.1"
+dependencies = [
+ "libc",
+ "tempfile",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -2839,6 +2851,7 @@ name = "rule_set_provider"
 version = "0.9.1"
 dependencies = [
  "config_core",
+ "file_permissions",
  "provider_evidence",
  "provider_label",
 ]
@@ -3309,6 +3322,7 @@ version = "0.9.1"
 dependencies = [
  "alert_contract",
  "bincode",
+ "file_permissions",
  "model_core",
  "resource_profiling",
  "rusqlite",
@@ -4453,6 +4467,7 @@ dependencies = [
  "config_core",
  "config_export_filter",
  "control_contract",
+ "file_permissions",
  "flate2",
  "model_core",
  "plugin_system",

@@ -1,4 +1,4 @@
-import { compactRows, row, valuesMatchQuery, windowedTableView } from '../../tableModel';
+import { compactRows, previewText, row, valuesMatchQuery, windowedTableView } from '../../tableModel';
 
 const COLUMNS = Object.freeze([
   { key: 'process', label: 'Process' },
@@ -18,19 +18,21 @@ export function project({ traceDetail, query = '', rowLimit = 0 }) {
 
 function processTreeRow(process) {
   return row(
-    `process-tree:${process.pid}:${process.generation}`,
+    `process-tree:${process.process_id ?? `${process.pid}:${process.generation}`}`,
     {
-      process: { text: `pid ${process.pid}`, indent: process.depth },
+      process: { text: processLabel(process), indent: process.depth },
       parent: process.parent_pid,
       children: process.children,
       state: process.state,
       generation: process.generation,
     },
     {
-      title: `pid ${process.pid}`,
+      title: process.command_line || `pid ${process.pid ?? "—"}`,
       kind: 'process.tree',
       rows: compactRows({
         pid: process.pid,
+        process_id: process.process_id,
+        command_line: process.command_line,
         parent_pid: process.parent_pid,
         children: process.children,
         depth: process.depth,
@@ -43,7 +45,12 @@ function processTreeRow(process) {
 
 function processTreeMatchesQuery(process, query) {
   return valuesMatchQuery(
-    [process.pid, process.parent_pid, process.children, process.depth, process.state, process.generation],
+    [process.command_line, process.pid, process.parent_pid, process.children, process.depth, process.state, process.generation],
     query,
   );
+}
+
+function processLabel(process) {
+  const pid = `pid ${process.pid ?? "—"}`;
+  return process.command_line ? `${pid} · ${previewText(process.command_line)}` : pid;
 }
