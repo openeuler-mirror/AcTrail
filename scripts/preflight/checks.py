@@ -229,7 +229,15 @@ def tracefs_mounts() -> list[Path]:
         if len(fields) > 4 and right_fields and right_fields[0] == "tracefs":
             mounts.append(Path(fields[4]))
     for fallback in (Path("/sys/kernel/tracing"), Path("/sys/kernel/debug/tracing")):
-        if fallback.exists() and fallback not in mounts:
+        # Path.exists() only swallows ENOENT and friends; /sys/kernel/debug is
+        # root-only on most systems, so stat() comes back EACCES and is raised.
+        # That killed the whole run before the first check could be reported.
+        # Same treatment as common.read_text: unreadable means "not there".
+        try:
+            present = fallback.exists()
+        except OSError:
+            present = False
+        if present and fallback not in mounts:
             mounts.append(fallback)
     return mounts
 
