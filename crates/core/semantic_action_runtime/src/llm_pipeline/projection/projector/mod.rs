@@ -19,6 +19,6 @@ pub(in crate::llm_pipeline) use live::{
 pub(in crate::llm_pipeline) use projector::{
     ActionProjector, PendingTrajectoryAction, PendingTrajectoryAdmission, capacity_diagnostic,
 };
-pub(crate) use request::ProjectedLlmToolResult;
 pub(in crate::llm_pipeline) use request::{ProjectedLlmRequestHistory, ProviderContextReference};
+pub(crate) use request::{ProjectedLlmToolCall, ProjectedLlmToolResult};
 pub(in crate::llm_pipeline) use response::{InFlightResponse, ProjectedProviderResponseId};

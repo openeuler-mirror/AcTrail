@@ -5,6 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+storage_contracts = { path = "../../contracts/storage" }
 toml = "0.8"
 resource_profiling = { path = "../../core/resource_profiling" }
 clap = { version = "4.6", features = ["derive"] }

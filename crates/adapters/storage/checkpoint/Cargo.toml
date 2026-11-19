@@ -5,7 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
-checkpoint_core = { path = "../../../core/checkpoint" }
+checkpoint_core_contracts = { path = "../../../contracts/checkpoint_core" }
 model_core = { path = "../../../core/model" }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

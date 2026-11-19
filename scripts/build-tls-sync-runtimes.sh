@@ -32,8 +32,14 @@ if [[ $# -ne 0 ]]; then
 fi
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$repo_root/scripts/ci/lib/common.sh"
 cd "$repo_root"
 target_dir="${CARGO_TARGET_DIR:-target}"
+mkdir -p "$target_dir"
+build_log_dir="$(mktemp -d "$target_dir/build-logs.XXXXXX")"
+trap 'rm -r -- "$build_log_dir"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 runtime_output_dir="${ACTRAIL_TLS_SYNC_RUNTIME_OUTPUT_DIR:-$target_dir/release}"
 prebuilt_musl_runtime="${ACTRAIL_TLS_SYNC_PREBUILT_MUSL_RUNTIME:-}"
 
@@ -81,20 +87,39 @@ run() {
   "$@"
 }
 
-if [[ -n "$prebuilt_musl_runtime" ]]; then
-  :
-elif ! command -v rustup >/dev/null 2>&1; then
-  echo "missing rustup; cannot verify or install Rust musl target $musl_target" >&2
-  exit 1
-fi
-if [[ -z "$prebuilt_musl_runtime" ]] && ! rustup target list --installed | grep -qx "$musl_target"; then
-  run rustup target add "$musl_target"
+# Use installed target libraries directly; use rustup only for missing targets.
+if [[ -z "$prebuilt_musl_runtime" ]]; then
+  target_libdir="$(rustc --print target-libdir --target "$musl_target")"
+  if ! compgen -G "$target_libdir/libstd-*.rlib" >/dev/null; then
+    command -v rustup >/dev/null 2>&1 || {
+      ci_log SKIP "$musl_target standard library missing in $target_libdir; rustup not found on PATH"
+      exit 1
+    }
+    ci_log INFO "Installing Rust target: $musl_target"
+    if run rustup target add "$musl_target"; then
+      ci_log PASS "rustup target add $musl_target completed"
+    else
+      code=$?
+      ci_log SKIP "rustup target add $musl_target failed (exit $code); see command output above"
+      exit "$code"
+    fi
+  fi
 fi
 
 if [[ "$musl_only" -eq 0 ]]; then
   # Host runtime comes from the plain full-workspace build so fingerprints
   # stay identical to a normal `cargo build --release` (no -p flip-flop).
-  run cargo build --release
+  ci_log INFO 'Starting release build'
+  if cargo build --release >"$build_log_dir/workspace.log" 2>&1; then
+    rm -- "$build_log_dir/workspace.log"
+    ci_log PASS 'Release build completed'
+  else
+    code=$?
+    ci_log FAIL "Release build failed (exit $code)"
+    cat "$build_log_dir/workspace.log" >&2
+    rm -- "$build_log_dir/workspace.log"
+    exit "$code"
+  fi
 fi
 
 musl_output="$runtime_output_dir/libactrail_tls_payload_probe_sync-musl.so"
@@ -113,7 +138,18 @@ else
   export "$linker_env=$musl_linker"
   unset CARGO_ENCODED_RUSTFLAGS
   export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static -C panic=abort -L native=$shim_dir"
-  run cargo build --release -p tls_payload_probe_sync --target "$musl_target" --lib
+  ci_log INFO 'Starting musl TLS build'
+  if cargo build --release -p tls_payload_probe_sync --target "$musl_target" --lib \
+      >"$build_log_dir/tls-$musl_target.log" 2>&1; then
+    rm -- "$build_log_dir/tls-$musl_target.log"
+    ci_log PASS 'Musl TLS build completed'
+  else
+    code=$?
+    ci_log FAIL "Musl TLS build failed (exit $code)"
+    cat "$build_log_dir/tls-$musl_target.log" >&2
+    rm -- "$build_log_dir/tls-$musl_target.log"
+    exit "$code"
+  fi
 
   musl_source="$target_dir/$musl_target/release/libactrail_tls_payload_probe_sync.so"
   if [[ ! -f "$musl_source" ]]; then

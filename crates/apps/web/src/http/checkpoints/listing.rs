@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use checkpoint_core::model::{
+use checkpoint_core_contracts::model::{
     Boundary, CheckpointRecord, OperationRecord, Release, ScopeConfig, TraceRecord,
 };
 use control_contract::checkpoint::{CheckpointAction, CheckpointCommand, CheckpointReply};

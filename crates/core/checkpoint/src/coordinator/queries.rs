@@ -5,7 +5,7 @@
 use std::fmt::Display;
 
 use super::{CheckpointCoordinator, CoordinatorError};
-use crate::model::{
+use checkpoint_core_contracts::model::{
     CheckpointRecord, ContextStatus, FilterMode, OperationId, OperationRecord, SnapshotContext,
     TraceOwner,
 };

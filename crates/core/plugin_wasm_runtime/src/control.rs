@@ -7,9 +7,10 @@ use plugin_system::{
     CommandPolicyHost, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
     ControlDecisionResponse, ControlVerdict, DecisionScope, FilePolicyHost, NetworkPolicyHost,
     PluginCommandBudget, PluginCommandRequest, PluginCommandResponse, PluginHostGrants,
-    PluginHostcallMetricsSource, PluginManifest, PluginRuntimeError, PluginRuntimeKind,
-    PluginWasmAbi, RuntimePluginConfig,
+    PluginHostcallMetricsSource, PluginManifest, PluginRuntimeError, PluginWasmAbi,
+    RuntimePluginConfig,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 use serde_json::{Map, Value, json};
 use wasmtime::{Engine, Memory, Module, TypedFunc};
 

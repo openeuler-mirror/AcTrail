@@ -55,7 +55,7 @@ use model_core::capability::Capability;
 use model_core::diagnostics::{DiagnosticKind, DiagnosticRecord, DiagnosticSeverity};
 use model_core::ids::TraceId;
 use model_core::process::{ProcessIdentity, ProcessObservation, ProcessRecord};
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 use process_identity::ProcessIdentityError;
 use process_identity::ProcessIdentityManager;
 use provider_label::ProviderClassifier;
@@ -94,7 +94,7 @@ pub(crate) struct StorageAttachService {
     pub(super) host_id: Option<String>,
     pub(super) launch_seccomp_requirements: LaunchSeccompRequirements,
     pub(super) storage: Box<dyn StorageBackend>,
-    pub(super) storage_config: storage_factory::StorageConfig,
+    pub(super) storage_config: storage_contracts::StorageConfig,
     pub(super) process_registry: ProcessIdentityManager,
     pub(super) process_id_block_size: u64,
     pub(super) collector: EbpfCollector,
@@ -139,6 +139,7 @@ pub(crate) struct StorageAttachService {
     pub(super) control_plugins: ControlPluginRuntime,
     plugin_configs: plugin_config::PluginConfigManager,
     pub(super) semantic_actions: LiveSemanticActionRuntime,
+    pub(super) recording: recording_runtime::RecordingRuntime,
     pub(super) export_runtime: ExportRuntime,
     pub(super) alert_ingress: AlertIngress,
     pub(super) idle_detection: idle_detector::IdleDetector,
@@ -151,6 +152,8 @@ pub(crate) struct StorageAttachService {
     pub(super) finalized_terminal_traces: BTreeSet<model_core::ids::TraceId>,
     pub(super) pending_terminal_finalizations: BTreeSet<model_core::ids::TraceId>,
     pub(super) terminal_finalization_queued_at: BTreeMap<model_core::ids::TraceId, Instant>,
+    /// Launchers waiting for their trace to settle before they exit.
+    pub(super) exit_settles: crate::services::live::exit_settle::ExitSettles,
     pub(super) finalization_traces_per_cycle: usize,
     pub(super) finalization_poll_interval: Duration,
     pub(super) terminal_settle_delay: Duration,
@@ -425,7 +428,6 @@ impl StorageAttachService {
                 root_identity: bootstrap.root_identity,
                 root_observation: bootstrap.root_observation.clone(),
                 root_namespace_pid: command.root.namespace_pid,
-                profile_snapshot: profile_snapshot.clone(),
                 requested_capabilities,
             };
             let bind_result = if command.launch_mode {

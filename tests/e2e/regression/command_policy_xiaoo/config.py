@@ -21,6 +21,7 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
     web_port: int
     ready_timeout_seconds: float
     evidence_timeout_seconds: float
+    audit_enabled: bool
 
     @classmethod
     def from_environment(
@@ -44,6 +45,11 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
         )
         if ready_timeout <= 0 or evidence_timeout <= 0:
             raise RuntimeError("command-policy Xiaoo timeouts must be positive")
+        audit = os.environ.get(
+            "COMMAND_POLICY_XIAOO_E2E_AUDIT_ENABLED", str(CASE_CONSTANTS.audit_enabled)
+        ).lower()
+        if audit not in {"true", "false"}:
+            raise RuntimeError("COMMAND_POLICY_XIAOO_E2E_AUDIT_ENABLED must be true or false")
         if not bash.is_file() or not os.access(bash, os.X_OK):
             raise RuntimeError(f"Bash executable is unavailable: {bash}")
         return cls(
@@ -62,4 +68,5 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
             ),
             ready_timeout_seconds=ready_timeout,
             evidence_timeout_seconds=evidence_timeout,
+            audit_enabled=audit == "true",
         )

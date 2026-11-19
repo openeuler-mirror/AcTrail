@@ -5,8 +5,10 @@ use checkpoint::{SnapshotContext as BackendContext, SnapshotScope};
 use super::disconnect;
 use super::save;
 use crate::coordinator::{CoordinatorError, LaunchRequest, Shared};
-use crate::model::{NewOperation, OperationKind, Phase, RootProcess, TraceRecord, Trigger};
 use crate::scope::plan_scopes;
+use checkpoint_core_contracts::model::{
+    NewOperation, OperationKind, Phase, RootProcess, TraceRecord, Trigger,
+};
 
 /// Filesystem-only launches also require an initial checkpoint before the Agent starts.
 pub(crate) fn run(shared: &Shared, request: LaunchRequest) -> Result<(), CoordinatorError> {

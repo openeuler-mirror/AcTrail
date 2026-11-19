@@ -5,9 +5,11 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+plugin_system_contracts = { path = "../../../contracts/plugin_system" }
 export_core = { path = "../../core" }
 export_otel_codec = { path = "../otel_codec" }
 plugin_system = { path = "../../../core/plugin_system" }
+semantic_action = { path = "../../../contracts/semantic_action" }
 serde_json = "1"
 toml = "0.8"
 ureq = { version = "3.3", default-features = false, features = ["rustls"] }

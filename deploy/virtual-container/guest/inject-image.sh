@@ -12,9 +12,11 @@ OTEL_ENDPOINT=""
 OTEL_ENDPOINT_CONFIGURED="false"
 EGRESS_MODE="network"
 OTEL_ATTRIBUTE_MODE="metadata-only"
+VSOCK_PORT=""
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
 WITH_SANDBOX_OBSERVER=0
+SECCOMP_NOTIFY="disabled"
 SOCKET_GID=39000
 GROW_MIB=0
 LOOP_DEVICE=""
@@ -29,9 +31,11 @@ Options:
   --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --otel-attribute-mode MODE   otel-http attribute_mode: metadata-only or full (default: metadata-only)
+  --vsock-port PORT            Host AF_VSOCK port for vsock-bridge egress (default: 43180)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer into the guest image
   --with-sandbox-observer      Install actrail-sb as a Guest system service
+  --seccomp-notify MODE        AcTrail seccomp user-notify: disabled, auto or required (default: disabled)
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
   --grow-mib N                 Grow the copied image and ext4 rootfs by N MiB
   -h, --help                   Show this help
@@ -102,6 +106,11 @@ while [[ "$#" -gt 0 ]]; do
       OTEL_ATTRIBUTE_MODE="$2"
       shift 2
       ;;
+    --vsock-port)
+      [[ "$#" -ge 2 ]] || fail "--vsock-port requires a value"
+      VSOCK_PORT="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -114,6 +123,11 @@ while [[ "$#" -gt 0 ]]; do
     --with-sandbox-observer)
       WITH_SANDBOX_OBSERVER=1
       shift
+      ;;
+    --seccomp-notify)
+      [[ "$#" -ge 2 ]] || fail "--seccomp-notify requires a value"
+      SECCOMP_NOTIFY="$2"
+      shift 2
       ;;
     --socket-gid)
       [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
@@ -144,6 +158,9 @@ actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 actrail_validate_guest_otel_attribute_mode "$OTEL_ATTRIBUTE_MODE" "$OTEL_ENDPOINT" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+actrail_resolve_guest_vsock_port "$VSOCK_PORT" "$EGRESS_MODE" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+VSOCK_PORT="$ACTRAIL_GUEST_VSOCK_PORT"
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   OTEL_ENDPOINT_CONFIGURED="true"
 fi
@@ -253,12 +270,16 @@ if [[ -n "$OTEL_ENDPOINT" ]]; then
   install_args+=(--otel-endpoint "$OTEL_ENDPOINT")
   install_args+=(--otel-attribute-mode "$OTEL_ATTRIBUTE_MODE")
 fi
+if [[ -n "$VSOCK_PORT" ]]; then
+  install_args+=(--vsock-port "$VSOCK_PORT")
+fi
 if [[ "$WITH_VIEWER" == "1" ]]; then
   install_args+=(--with-viewer)
 fi
 if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
   install_args+=(--with-sandbox-observer)
 fi
+install_args+=(--seccomp-notify "$SECCOMP_NOTIFY")
 image_injection_stage install-rootfs
 "${sudo_cmd[@]}" "$SCRIPT_DIR/install-rootfs.sh" "${install_args[@]}"
 verify_args=(
@@ -271,9 +292,13 @@ if [[ -n "$OTEL_ENDPOINT" ]]; then
   verify_args+=(--otel-endpoint "$OTEL_ENDPOINT")
   verify_args+=(--otel-attribute-mode "$OTEL_ATTRIBUTE_MODE")
 fi
+if [[ -n "$VSOCK_PORT" ]]; then
+  verify_args+=(--vsock-port "$VSOCK_PORT")
+fi
 if [[ "$WITH_SANDBOX_OBSERVER" == "1" ]]; then
   verify_args+=(--with-sandbox-observer)
 fi
+verify_args+=(--seccomp-notify "$SECCOMP_NOTIFY")
 image_injection_stage verify-rootfs
 "${sudo_cmd[@]}" "$SCRIPT_DIR/verify-rootfs.sh" "${verify_args[@]}"
 image_injection_stage sync-rootfs
@@ -293,8 +318,10 @@ echo "source_image=$SOURCE_IMAGE"
 echo "output_image=$OUTPUT_IMAGE"
 echo "guest_startup_dependency=$STARTUP_DEPENDENCY"
 echo "guest_egress_mode=$EGRESS_MODE"
+echo "guest_vsock_port=${VSOCK_PORT:-none}"
 echo "workload_socket_gid=$SOCKET_GID"
 echo "image_grow_mib=$GROW_MIB"
 echo "sandbox_observer_installed=$WITH_SANDBOX_OBSERVER"
+echo "seccomp_notify=$SECCOMP_NOTIFY"
 echo "otel_endpoint_configured=$OTEL_ENDPOINT_CONFIGURED"
 echo "otel_attribute_mode=$OTEL_ATTRIBUTE_MODE"

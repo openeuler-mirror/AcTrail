@@ -1,11 +1,13 @@
+//! Validate plugin manifests against runtime and capability requirements.
+
 use std::collections::BTreeSet;
 
 use super::{
     PluginAlertDefinitionDeclaration, PluginCapability, PluginManifest, PluginObservationDelivery,
-    PluginPurpose, PluginRuntimeKind, PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi,
-    PluginWasmDeclaration,
+    PluginUnusedRuntimeSectionsPolicy, PluginWasmAbi, PluginWasmDeclaration,
 };
 use crate::{ObservationEventFamily, DEFAULT_OBSERVATION_EVENT_FAMILIES};
+use plugin_system_contracts::{PluginPurpose, PluginRuntimeKind};
 
 pub const SUPPORTED_PLUGIN_API_VERSION: &str = "actrail.plugin.v2";
 

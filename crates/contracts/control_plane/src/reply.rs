@@ -11,7 +11,7 @@ use model_core::capability::Capability;
 use model_core::ids::{ProfileName, TraceId, TraceName};
 use model_core::process::NamespaceIdentity;
 use model_core::trace::{TlsEventToken, TraceHealth, TraceLifecycleState};
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TraceListItem {
@@ -141,6 +141,21 @@ pub struct PluginConfigValidationReply {
     pub errors: Vec<String>,
 }
 
+/// Outcome of the exit handshake requested with `TrackRemoveCommand::settle`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrackSettleReply {
+    /// The trace reached finalization before the reply was sent.
+    pub finalized: bool,
+    /// `no_consumer`, `flushed`, `failed` or `timeout`.
+    pub export_state: String,
+    /// Records the export sinks sent while flushing for this request.
+    pub flushed_records: u64,
+    /// The deadline passed before the requested stage completed.
+    pub timed_out: bool,
+    /// Human-readable reason when a stage failed or timed out; empty otherwise.
+    pub detail: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ControlReply {
     LaunchPermissions(LaunchPermissionsReply),
@@ -148,6 +163,7 @@ pub enum ControlReply {
     TrackAdded(TrackAddReply),
     SeccompListenerRegistered,
     TrackRemoved,
+    TrackSettled(TrackSettleReply),
     TraceList(Vec<TraceListItem>),
     Doctor(DoctorReply),
     TurnLifecycleRecorded,

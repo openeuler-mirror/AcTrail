@@ -19,6 +19,9 @@ RELEASE_FILES = {
     "actrailviewer_sha256": "actrailviewer",
     "tls_probe_sha256": "libactrail_tls_payload_probe_sync.so",
 }
+# Host AF_VSOCK port of the Guest bridge; guest-bridge.sh and host-bridge.sh
+# use the same default.
+DEFAULT_VSOCK_PORT = 43180
 
 
 @dataclass(frozen=True)
@@ -46,8 +49,19 @@ class PreparationInputs:
     data_vcpus: int
     sandbox_observer: bool = False
     egress_mode: str = "network"
+    vsock_port: int | None = None
     otel_attribute_mode: str = "metadata-only"
+    seccomp_notify: str = "disabled"
     tool_inputs: tuple[Path, ...] = ()
+
+    @property
+    def guest_vsock_port(self) -> int | None:
+        """Host AF_VSOCK port of the Guest bridge; None outside vsock-bridge."""
+        if self.egress_mode != "vsock-bridge":
+            return None
+        if self.vsock_port is None:
+            return DEFAULT_VSOCK_PORT
+        return self.vsock_port
 
     @property
     def jailer(self) -> Path | None:
@@ -76,10 +90,17 @@ class PreparationInputs:
             raise ValueError("Guest OTLP/HTTP endpoint must be omitted or non-empty")
         if self.egress_mode == "vsock-bridge" and self.otel_endpoint is None:
             raise ValueError("vsock-bridge egress requires a Guest OTLP/HTTP endpoint")
+        if self.vsock_port is not None:
+            if self.egress_mode != "vsock-bridge":
+                raise ValueError("--vsock-port requires --egress-mode vsock-bridge")
+            if not 1027 <= self.vsock_port <= 65535:
+                raise ValueError("VSOCK port must be between 1027 and 65535")
         if self.otel_attribute_mode not in {"metadata-only", "full"}:
             raise ValueError("OTLP attribute mode must be metadata-only or full")
         if self.otel_attribute_mode != "metadata-only" and self.otel_endpoint is None:
             raise ValueError("OTLP attribute mode full requires a Guest OTLP/HTTP endpoint")
+        if self.seccomp_notify not in {"disabled", "auto", "required"}:
+            raise ValueError("seccomp-notify must be disabled, auto or required")
         if not 1 <= self.socket_gid <= 2_147_483_647:
             raise ValueError("socket GID must be between 1 and 2147483647")
         if self.data_vcpus < 2:

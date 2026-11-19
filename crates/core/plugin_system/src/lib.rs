@@ -49,12 +49,12 @@ pub use manifest::{
     PluginCommandPolicyHostcallLimits, PluginConfigDeclaration, PluginConfigHostcallLimits,
     PluginContextHostcallLimits, PluginControlDeciderDeclaration, PluginControlDeciderResources,
     PluginEnvHostcallLimits, PluginFilePolicyHostcallLimits, PluginGeneralDeclaration,
-    PluginHostDeclaration, PluginHostcallLimits, PluginHttpDeclaration, PluginManifest,
-    PluginManifestPolicy, PluginNativeDylibDeclaration, PluginNetworkPolicyHostcallLimits,
+    PluginHostDeclaration, PluginHostcallLimits, PluginManifest, PluginManifestPolicy,
+    PluginNativeDylibDeclaration, PluginNetworkPolicyHostcallLimits,
     PluginObservationConsumerDeclaration, PluginObservationConsumerResources,
     PluginObservationDelivery, PluginOutputsDeclaration, PluginPayloadHostcallLimits,
-    PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginPurpose, PluginRoleDeclaration,
-    PluginRuntimeDeclaration, PluginRuntimeKind, PluginSandboxObservationConsumerDeclaration,
+    PluginPostTraceDeclaration, PluginPostTraceTrigger, PluginRoleDeclaration,
+    PluginRuntimeDeclaration, PluginSandboxObservationConsumerDeclaration,
     PluginSandboxObservationKind, PluginSandboxSubscriptionDeclaration,
     PluginSubscriptionDeclaration, PluginTraceActivityHostcallLimits,
     PluginTraceAnalysisHostcallLimits, PluginTraceFileStateHostcallLimits,
@@ -72,12 +72,12 @@ pub use network_policy::{
 };
 pub use observation::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PayloadReadResult, PayloadReference, PayloadReferenceMetadata, PostTraceAnalyzer,
-    PostTraceHost, PostTraceTask, TraceActivityContext, TraceAnalysisAction,
-    TraceAnalysisActionPage, TraceAnalysisContext, TraceAnalysisFileChange, TraceCommandExecution,
-    TraceCommandExecutionPage, TraceFileState, TraceFileStateStatus, TraceLlmExchange,
-    TraceLlmExchangePage, TraceLlmResponseStatus, DEFAULT_OBSERVATION_EVENT_FAMILIES,
-    DEFAULT_OBSERVATION_QUEUE_CAPACITY,
+    ObservationFlush, ObservationFlushOutcome, PayloadReadResult, PayloadReference,
+    PayloadReferenceMetadata, PostTraceAnalyzer, PostTraceHost, PostTraceTask,
+    TraceActivityContext, TraceAnalysisAction, TraceAnalysisActionPage, TraceAnalysisContext,
+    TraceAnalysisFileChange, TraceCommandExecution, TraceCommandExecutionPage, TraceFileState,
+    TraceFileStateStatus, TraceLlmExchange, TraceLlmExchangePage, TraceLlmResponseStatus,
+    DEFAULT_OBSERVATION_EVENT_FAMILIES, DEFAULT_OBSERVATION_QUEUE_CAPACITY,
 };
 pub use runtime::{BuiltinPluginInstance, PluginInstanceId};
 pub use sandbox_observation::{
@@ -85,6 +85,5 @@ pub use sandbox_observation::{
     SandboxPluginRegistrationError, SandboxPluginUnregisterResult,
 };
 pub use status::{
-    PluginHostcallMetrics, PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
-    PluginOperationalMetrics, PluginOperationalMetricsSource, PluginPayloadReadMetrics,
+    PluginHostcallMetricsSource, PluginOperationalMetrics, PluginOperationalMetricsSource,
 };

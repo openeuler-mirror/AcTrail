@@ -8,8 +8,10 @@ use control_contract::command::PluginLoadCommand;
 use control_contract::reply::ControlError;
 use export_core::ExportPublishReport;
 use plugin_system::{
-    ControlDecider, PluginCapability, PluginHostGrant, PluginHostGrants, PluginInstanceStatus,
-    PluginLifecycleState, PluginManifest, PluginPurpose, PluginRuntimeKind,
+    ControlDecider, PluginCapability, PluginHostGrant, PluginHostGrants, PluginManifest,
+};
+use plugin_system_contracts::{
+    PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeKind,
 };
 use recording_runtime::{RecordingError, RecordingWriter};
 
@@ -363,6 +365,9 @@ impl StorageAttachService {
                 .export_runtime
                 .remove_observation_consumer(instance_id)
                 .map_err(|error| ControlError::new(error.code, error.message))?;
+            if !self.export_runtime.has_semantic_consumers() {
+                self.recording.clear_deliveries();
+            }
             self.post_trace_broker.unregister_plugin(instance_id);
             self.persist_export_drop_report(removal.drop_report)?;
             if alert_registered {

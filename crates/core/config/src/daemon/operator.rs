@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
-use storage_factory::StorageConfig;
+use storage_contracts::StorageConfig;
 
 use super::{
     AccessControlConfig, AgentInvocationConfig, ApplicationProtocolConfig, ClusterConfig,

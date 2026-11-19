@@ -3,7 +3,6 @@
 use std::time::SystemTime;
 
 use collector_capability::CollectorDescriptor;
-use config_core::trace_snapshot::CaptureProfileSnapshot;
 use model_core::capability::CapabilityRequest;
 use model_core::ids::{CollectorName, TraceId};
 use model_core::process::{ProcessIdentity, ProcessObservation};
@@ -27,7 +26,6 @@ pub struct TraceBindingRequest {
     pub root_identity: ProcessIdentity,
     pub root_observation: ProcessObservation,
     pub root_namespace_pid: u32,
-    pub profile_snapshot: CaptureProfileSnapshot,
     pub requested_capabilities: Vec<CapabilityRequest>,
 }
 

@@ -42,8 +42,7 @@ INTERFACE_CASES = (
         name="launch",
         gid_delta=0,
         command=(
-            "/bin/sh",
-            "/opt/actrail/bin/actrail-init",
+            "/opt/actrail/bin/actrail-launch",
             "--name",
             TRACE_TITLE_TOKEN,
             "--",
@@ -58,8 +57,7 @@ INTERFACE_CASES = (
         name="namespace",
         gid_delta=0,
         command=(
-            "/bin/sh",
-            "/opt/actrail/bin/actrail-init",
+            "/opt/actrail/bin/actrail-launch",
             "--name",
             TRACE_TITLE_TOKEN,
             "--",

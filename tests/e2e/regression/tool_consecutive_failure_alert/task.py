@@ -10,6 +10,7 @@ from typing import Any
 from tests.e2e.common.agent_selection import AgentSelector
 from tests.e2e.common.core import TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
+from tests.e2e.common.tool_alert_lifecycle import CommandTerminalEvidence
 
 from .environment import ToolConsecutiveFailureAlertEnvironment
 
@@ -119,6 +120,9 @@ class ToolConsecutiveFailureAlertTask:
             "verifying unique alert evidence references process.exit",
         )
         self._assert_evidence(payload)
+        results["terminal-command-registration"] = CommandTerminalEvidence(self._environment).verify(
+            failure_trace_id, payload, self._MISSING_PATHS
+        )
         results["alert-evidence"] = TestResult(
             TestStatus.PASSED,
             "alert evidence has unique command/exit action ids",
@@ -243,7 +247,7 @@ class ToolConsecutiveFailureAlertTask:
         paths: tuple[str, ...],
     ) -> tuple[int, dict[str, Any]]:
         marker = f"TOOL_ALERT_{prefix}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
-        command = ["bash", "-c", "; ".join(f"ls {path}" for path in paths)]
+        command = ["bash", "-c", "; ".join(f"bash -c 'exec ls {path}'" for path in paths)]
         launch = self._launch(marker, command)
         trace_id = self._require_trace_id(launch)
         self._wait_terminal(trace_id)

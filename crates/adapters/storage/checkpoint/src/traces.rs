@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use checkpoint_core::model::{Disconnected, RootProcess, TraceOwner, TraceRecord};
+use checkpoint_core_contracts::model::{Disconnected, RootProcess, TraceOwner, TraceRecord};
 use model_core::ids::TraceId;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 

@@ -4,7 +4,6 @@ mod action_content;
 pub mod alerts;
 pub mod backend;
 mod cgroup_v2_binding;
-pub mod config;
 mod payload;
 pub mod query;
 pub mod records;
@@ -26,17 +25,15 @@ use model_core::process::{
     ProcessRecord, ProcessResolutionState,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
-
-pub use config::{
-    EventRecordLayout, SQLITE_DEFAULT_BUSY_TIMEOUT_MS,
-    SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+use storage_contracts::{
+    EventRecordLayout, SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
     SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
     SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
     SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
     SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL, SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
-    SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES, SQLITE_STORAGE_CONFIG_PREFIX,
-    SqliteStorageConfig,
+    SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
 };
+
 pub use semantic_actions::storage_meta::ColdFieldCompression;
 
 #[derive(Clone)]

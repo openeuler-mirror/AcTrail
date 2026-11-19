@@ -42,7 +42,7 @@ impl StorageAttachService {
     pub(in crate::services) fn new(
         profiles: DaemonProfileRegistry,
         storage: Box<dyn StorageBackend>,
-        storage_config: storage_factory::StorageConfig,
+        storage_config: storage_contracts::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         payload_config: PayloadConfig,
         active_trace_max: u32,
@@ -104,7 +104,7 @@ impl StorageAttachService {
     pub(in crate::services) fn new_with_provider_classifier(
         mut profiles: DaemonProfileRegistry,
         mut storage: Box<dyn StorageBackend>,
-        storage_config: storage_factory::StorageConfig,
+        storage_config: storage_contracts::StorageConfig,
         ebpf_config: EbpfCollectorConfig,
         mut payload_config: PayloadConfig,
         active_trace_max: u32,
@@ -342,6 +342,24 @@ impl StorageAttachService {
             enforcement,
             control_plugins,
             plugin_configs: Default::default(),
+            recording: recording_runtime::RecordingRuntime::new(
+                recording_runtime::CommandDeliveryLimits::new(
+                    semantic_retention
+                        .command_delivery
+                        .max_pending_commands_per_trace as usize,
+                    semantic_retention.command_delivery.max_pending_commands as usize,
+                    usize::try_from(semantic_retention.command_delivery.max_accounted_bytes)
+                        .map_err(|_| {
+                            control_contract::reply::ControlError::new(
+                                "command_delivery_config",
+                                "command delivery byte limit exceeds addressable memory",
+                            )
+                        })?,
+                )
+                .map_err(|error| {
+                    control_contract::reply::ControlError::new(error.stage, error.message)
+                })?,
+            ),
             semantic_actions: LiveSemanticActionRuntime::new(
                 agent_invocation,
                 process_seccomp_config.pending_max_entries,
@@ -361,6 +379,7 @@ impl StorageAttachService {
             finalized_terminal_traces: Default::default(),
             pending_terminal_finalizations: Default::default(),
             terminal_finalization_queued_at: Default::default(),
+            exit_settles: Default::default(),
             finalization_traces_per_cycle,
             finalization_poll_interval: std::time::Duration::from_millis(
                 trace_finalization.poll_interval_ms,

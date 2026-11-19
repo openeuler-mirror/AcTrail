@@ -210,7 +210,7 @@ fn link_is_parent_child(role: SemanticActionLinkRole) -> bool {
             | SemanticActionLinkRole::LlmCallRequest
             | SemanticActionLinkRole::LlmCallResponse
             | SemanticActionLinkRole::LlmResponseToolCall
-            | SemanticActionLinkRole::LlmToolCallResult
+            | SemanticActionLinkRole::LlmRequestToolResult
             | SemanticActionLinkRole::LlmToolCallAgentInvocation
             | SemanticActionLinkRole::LlmResponseSseStream
             | SemanticActionLinkRole::SseStreamEvent
@@ -238,7 +238,6 @@ enum ParentRolePriority {
     LlmCallRequest,
     LlmCallResponse,
     LlmResponseToolCall,
-    LlmToolCallResult,
     FileWriteContainsFileEvent,
     LlmResponseSseStream,
     SseStreamEvent,
@@ -300,7 +299,6 @@ fn parent_role_priority(role: SemanticActionLinkRole) -> ParentRolePriority {
         SemanticActionLinkRole::LlmCallRequest => ParentRolePriority::LlmCallRequest,
         SemanticActionLinkRole::LlmCallResponse => ParentRolePriority::LlmCallResponse,
         SemanticActionLinkRole::LlmResponseToolCall => ParentRolePriority::LlmResponseToolCall,
-        SemanticActionLinkRole::LlmToolCallResult => ParentRolePriority::LlmToolCallResult,
         SemanticActionLinkRole::FileWriteContainsFileEvent => {
             ParentRolePriority::FileWriteContainsFileEvent
         }

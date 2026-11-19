@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-pub use process_identity::{
+pub use process_identity_contracts::{
     HostProcessCoordinates, NamespaceIdentity, NamespaceProcessCoordinates, ProcessIdentity,
     ProcessObservation, ProcessRecord, ProcessResolutionState,
 };

@@ -13,6 +13,10 @@ compression = "none"
 # "full" only when the Collector and transport are trusted for captured content.
 attribute_mode = "metadata-only"
 queue_capacity = 1024
+# Terminal delivery identity limits. Capacity rejections emit RuntimeDropped diagnostics.
+terminal_action_max_entries_per_trace = 65536
+terminal_action_max_entries = 262144
+terminal_action_max_key_bytes = 33554432
 batch_max_spans = 64
 batch_timeout_ms = 1000
 connect_timeout_ms = 1000

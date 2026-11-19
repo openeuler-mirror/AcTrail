@@ -30,6 +30,10 @@ pub use compact::{
 use std::str::FromStr;
 use std::time::Duration;
 
+#[path = "agent/command_delivery.rs"]
+mod command_delivery;
+pub use command_delivery::CommandDeliveryConfig;
+
 pub const DEFAULT_LLM_TRAJECTORY_MAX_ACTIVE_TRAJECTORIES_PER_SCOPE: u32 = 128;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_CANDIDATE_NODES_PER_TRAJECTORY: u32 = 256;
 pub const DEFAULT_LLM_TRAJECTORY_MAX_PREFIX_NODES_PER_SCOPE: u32 = 65_536;
@@ -81,6 +85,7 @@ impl AgentInvocationConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticRetentionConfig {
     pub projection_enabled: bool,
+    pub command_delivery: CommandDeliveryConfig,
     pub content_owner: SemanticContentOwner,
     pub l0_llm_call: L0LlmCallRetention,
     pub l0_mcp_call: L0McpCallRetention,
@@ -95,6 +100,7 @@ impl Default for SemanticRetentionConfig {
     fn default() -> Self {
         Self {
             projection_enabled: true,
+            command_delivery: CommandDeliveryConfig::default(),
             content_owner: SemanticContentOwner::HighestConsumed,
             l0_llm_call: L0LlmCallRetention::default(),
             l0_mcp_call: L0McpCallRetention::default(),

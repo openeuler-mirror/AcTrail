@@ -26,9 +26,9 @@ fn selected_parent_is_also_emitted_as_a_typed_span_link() {
     };
     let link = SemanticActionLink {
         trace_id: action.trace_id,
-        parent_action_id: "tool-call".to_string(),
+        parent_action_id: "llm-request".to_string(),
         child_action_id: action.action_id.clone(),
-        role: SemanticActionLinkRole::LlmToolCallResult,
+        role: SemanticActionLinkRole::LlmRequestToolResult,
         origin: SemanticActionLinkOrigin::Observed,
         valid: true,
         evidence: Vec::new(),
@@ -41,8 +41,11 @@ fn selected_parent_is_also_emitted_as_a_typed_span_link() {
 
     assert_eq!(
         parent.map(|link| link.role),
-        Some(SemanticActionLinkRole::LlmToolCallResult)
+        Some(SemanticActionLinkRole::LlmRequestToolResult)
     );
     assert_eq!(emitted.len(), 1);
-    assert_eq!(emitted[0].role, SemanticActionLinkRole::LlmToolCallResult);
+    assert_eq!(
+        emitted[0].role,
+        SemanticActionLinkRole::LlmRequestToolResult
+    );
 }

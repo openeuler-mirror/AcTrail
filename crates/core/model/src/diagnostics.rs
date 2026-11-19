@@ -86,9 +86,6 @@ pub enum LlmPipelineDiagnosticCode {
     ToolCallsJsonInvalid,
     ToolCallNameMissing,
     ToolResultRequestMissing,
-    ToolResultCallIdMissing,
-    ToolResultCallUnmatched,
-    ToolResultCallAmbiguous,
     ToolStateCapacityEvicted,
     WebSocketConnectionCapacityEvicted,
     WebSocketDecodeFailed,
@@ -147,9 +144,6 @@ impl LlmPipelineDiagnosticCode {
             Self::ToolCallsJsonInvalid => 7001,
             Self::ToolCallNameMissing => 7002,
             Self::ToolResultRequestMissing => 7003,
-            Self::ToolResultCallIdMissing => 7004,
-            Self::ToolResultCallUnmatched => 7005,
-            Self::ToolResultCallAmbiguous => 7006,
             Self::ToolStateCapacityEvicted => 7010,
             Self::WebSocketConnectionCapacityEvicted => 8001,
             Self::WebSocketDecodeFailed => 8002,
@@ -208,9 +202,6 @@ impl LlmPipelineDiagnosticCode {
             7001 => Self::ToolCallsJsonInvalid,
             7002 => Self::ToolCallNameMissing,
             7003 => Self::ToolResultRequestMissing,
-            7004 => Self::ToolResultCallIdMissing,
-            7005 => Self::ToolResultCallUnmatched,
-            7006 => Self::ToolResultCallAmbiguous,
             7010 => Self::ToolStateCapacityEvicted,
             8001 => Self::WebSocketConnectionCapacityEvicted,
             8002 => Self::WebSocketDecodeFailed,
@@ -292,9 +283,6 @@ impl LlmPipelineDiagnosticCode {
             Self::ToolCallsJsonInvalid => "tool_calls_json_invalid",
             Self::ToolCallNameMissing => "tool_call_name_missing",
             Self::ToolResultRequestMissing => "tool_result_request_missing",
-            Self::ToolResultCallIdMissing => "tool_result_call_id_missing",
-            Self::ToolResultCallUnmatched => "tool_result_call_unmatched",
-            Self::ToolResultCallAmbiguous => "tool_result_call_ambiguous",
             Self::ToolStateCapacityEvicted => "tool_state_capacity_evicted",
             Self::WebSocketConnectionCapacityEvicted => "websocket_connection_capacity_evicted",
             Self::WebSocketDecodeFailed => "websocket_decode_failed",
@@ -325,9 +313,6 @@ impl LlmPipelineDiagnosticCode {
                 | Self::ToolCallsJsonInvalid
                 | Self::ToolCallNameMissing
                 | Self::ToolResultRequestMissing
-                | Self::ToolResultCallIdMissing
-                | Self::ToolResultCallUnmatched
-                | Self::ToolResultCallAmbiguous
                 | Self::WebSocketDecodeFailed
                 | Self::WebSocketLifecycleInterrupted
         )

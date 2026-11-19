@@ -1,5 +1,7 @@
+//! Observation-consumer and post-trace analysis interfaces.
+
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use model_core::payload::{PayloadRedactionState, PayloadSegmentId, PayloadTruncationState};
 use model_core::trace::TraceRecord;
@@ -11,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     PluginDroppedRecord, PluginHostcallMetricsSource, PluginOperationalMetricsSource,
-    PluginRuntimeError, PluginRuntimeKind,
+    PluginRuntimeError,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 
 pub const DEFAULT_OBSERVATION_QUEUE_CAPACITY: u32 = 4096;
 pub const DEFAULT_OBSERVATION_EVENT_FAMILIES: [ObservationEventFamily; 2] = [
@@ -107,6 +110,56 @@ pub trait ObservationConsumer: Send + Sync {
 
     fn finish(&self) -> Result<ObservationConsumeReport, PluginRuntimeError> {
         Ok(ObservationConsumeReport::empty())
+    }
+
+    /// Asks the consumer to send what it has buffered so far without waiting for
+    /// its batch timer. The call returns at once; the handle reports the outcome.
+    /// `None` means the consumer keeps no buffer the host could flush.
+    fn flush(&self, _deadline: Instant) -> Option<ObservationFlush> {
+        None
+    }
+}
+
+/// Result of one `ObservationConsumer::flush`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservationFlushOutcome {
+    /// Records the consumer's sink sent while flushing.
+    pub flushed_records: u64,
+    pub error: Option<String>,
+}
+
+/// A consumer flush that may still be running on the consumer's own worker.
+pub struct ObservationFlush {
+    poll: Box<dyn FnMut() -> Option<ObservationFlushOutcome> + Send>,
+}
+
+impl ObservationFlush {
+    /// `poll` returns `None` while the flush is still running.
+    pub fn from_poll(
+        poll: impl FnMut() -> Option<ObservationFlushOutcome> + Send + 'static,
+    ) -> Self {
+        Self {
+            poll: Box::new(poll),
+        }
+    }
+
+    pub fn failed(error: impl Into<String>) -> Self {
+        let mut outcome = Some(ObservationFlushOutcome {
+            flushed_records: 0,
+            error: Some(error.into()),
+        });
+        Self::from_poll(move || {
+            outcome.take().or_else(|| {
+                Some(ObservationFlushOutcome {
+                    flushed_records: 0,
+                    error: Some("flush outcome already taken".to_string()),
+                })
+            })
+        })
+    }
+
+    pub fn try_outcome(&mut self) -> Option<ObservationFlushOutcome> {
+        (self.poll)()
     }
 }
 

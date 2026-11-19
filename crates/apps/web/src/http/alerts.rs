@@ -1,5 +1,5 @@
 use config_core::daemon::WebAlertsConfig;
-use storage_factory::StorageConfig;
+use storage_contracts::StorageConfig;
 
 use crate::view::{AlertProjection, AlertProjectionError};
 

@@ -2,13 +2,17 @@
 
 use export_core::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, ExportError,
-    SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionExportRoute,
-    SemanticActionKindSelection,
+    SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionKindSelection,
+};
+use export_core::{
+    TerminalActionDelivery, TerminalActionGate, TerminalActionLimits, TerminalActionRejection,
 };
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PluginDroppedRecord, PluginRuntimeError, PluginRuntimeKind,
+    PluginDroppedRecord, PluginRuntimeError,
 };
+use plugin_system_contracts::PluginRuntimeKind;
+use semantic_action::{SemanticActionKind, SemanticActionStatus};
 
 use crate::OtelJsonlExporterConfig;
 use crate::exporter::ExporterSink;
@@ -28,6 +32,7 @@ pub fn build_otel_jsonl_observation_consumer_instance_with_subscriptions(
     Ok(OtelJsonlObservationConsumer::new(
         instance_id,
         config.action_kinds,
+        config.terminal_action_limits,
         route,
         event_families,
     ))
@@ -54,12 +59,91 @@ pub struct OtelJsonlObservationConsumer {
     event_families: Vec<ObservationEventFamily>,
     action_kinds: SemanticActionKindSelection,
     route: OtelJsonlSemanticActionRoute,
+    terminal_actions: TerminalActionGate<SemanticActionStatus>,
 }
 
 impl OtelJsonlObservationConsumer {
+    fn consume_batch(
+        &self,
+        batch: &ObservationBatch<'_>,
+    ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+        validate_observation_batch(batch)?;
+        let mut dropped_records = Vec::new();
+        for action in batch.semantic_actions {
+            if action.status == SemanticActionStatus::InProgress
+                || (action.kind == SemanticActionKind::CommandInvocation
+                    && action.completeness == semantic_action::SemanticActionCompleteness::Partial)
+                || !self.action_kinds.enabled(action.kind)
+            {
+                continue;
+            }
+            let outcome = self.terminal_actions.deliver(
+                action.trace_id.get(),
+                &action.action_id,
+                action.status,
+                || {
+                    self.route.prepare(SemanticActionExportRecord {
+                        trace: batch.trace,
+                        action,
+                        links: batch.semantic_links,
+                    })
+                },
+                |message| self.route.publish_encoded(message),
+            );
+            let (reason, capacity, count) = match outcome {
+                Ok(TerminalActionDelivery::Skipped(TerminalActionRejection::Duplicate)) => continue,
+                Ok(TerminalActionDelivery::Skipped(TerminalActionRejection::Conflict {
+                    previous,
+                })) => (
+                    format!(
+                        "otel_jsonl_terminal_conflict: action {} has conflicting terminal revisions: {} then {}",
+                        action.action_id,
+                        previous.as_str(),
+                        action.status.as_str()
+                    ),
+                    None,
+                    1,
+                ),
+                Ok(TerminalActionDelivery::Skipped(TerminalActionRejection::Capacity(reason))) => {
+                    (reason.code().to_string(), None, 1)
+                }
+                Ok(TerminalActionDelivery::Attempted(result)) => {
+                    let Some(drop) = result.dropped_outcome() else {
+                        continue;
+                    };
+                    if drop.dropped_records() == 0 {
+                        continue;
+                    }
+                    (
+                        drop.reason().code().to_string(),
+                        drop.queue_capacity(),
+                        drop.dropped_records(),
+                    )
+                }
+                Err(error) => {
+                    let capacity = error.queue_capacity();
+                    (format!("{}: {}", error.code, error.message), capacity, 1)
+                }
+            };
+
+            dropped_records.push(PluginDroppedRecord {
+                trace_id: Some(action.trace_id),
+                plugin_instance: self.instance_id.clone(),
+                reason,
+                queue_capacity: capacity,
+                dropped_records: count,
+            });
+        }
+        Ok(ObservationConsumeReport {
+            dropped_records,
+            reevaluate_at: None,
+        })
+    }
+
     fn new(
         instance_id: impl Into<String>,
         action_kinds: SemanticActionKindSelection,
+        terminal_action_limits: TerminalActionLimits,
         route: OtelJsonlSemanticActionRoute,
         event_families: Vec<ObservationEventFamily>,
     ) -> Self {
@@ -68,6 +152,7 @@ impl OtelJsonlObservationConsumer {
             event_families,
             action_kinds,
             route,
+            terminal_actions: TerminalActionGate::new(terminal_action_limits),
         }
     }
 }
@@ -93,52 +178,27 @@ impl ObservationConsumer for OtelJsonlObservationConsumer {
         &self,
         batch: ObservationBatch<'_>,
     ) -> Result<ObservationConsumeReport, PluginRuntimeError> {
-        validate_observation_batch(&batch)?;
-        let mut dropped_records = Vec::new();
-        for action in batch.semantic_actions {
-            if !self.action_kinds.enabled(action.kind) {
-                continue;
-            }
-            let record = SemanticActionExportRecord {
-                trace: batch.trace,
-                action,
-                links: batch.semantic_links,
-            };
-            match self.route.publish(record) {
-                Ok(result) => {
-                    let Some(drop) = result.dropped_outcome() else {
-                        continue;
-                    };
-                    if drop.dropped_records() == u64::default() {
-                        continue;
-                    }
-                    dropped_records.push(PluginDroppedRecord {
-                        trace_id: Some(action.trace_id),
-                        plugin_instance: self.instance_id.clone(),
-                        reason: drop.reason().code().to_string(),
-                        queue_capacity: drop.queue_capacity(),
-                        dropped_records: drop.dropped_records(),
-                    });
-                }
-                Err(error) => {
-                    dropped_records.push(PluginDroppedRecord {
-                        trace_id: Some(action.trace_id),
-                        plugin_instance: self.instance_id.clone(),
-                        reason: format!("{}: {}", error.code, error.message),
-                        queue_capacity: error.queue_capacity(),
-                        dropped_records: 1,
-                    });
-                }
-            }
-        }
-        Ok(ObservationConsumeReport {
-            dropped_records,
-            reevaluate_at: None,
-        })
+        let result = self.consume_batch(&batch);
+        // Final cleanup must run even when validation or delivery returns early.
+        let cleanup = if batch.trace_finalized {
+            self.terminal_actions
+                .finish_trace(batch.trace.trace_id.get())
+                .map_err(|error| PluginRuntimeError::new(error.code, error.message))
+        } else {
+            Ok(())
+        };
+        let report = result?;
+        cleanup?;
+        Ok(report)
     }
 
     fn finish(&self) -> Result<ObservationConsumeReport, PluginRuntimeError> {
+        let cleanup = self
+            .terminal_actions
+            .clear()
+            .map_err(|error| PluginRuntimeError::new(error.code, error.message));
         let finish = self.route.finish();
+        cleanup?;
         let Some(error) = finish.error() else {
             return Ok(ObservationConsumeReport::empty());
         };

@@ -8,9 +8,11 @@ EXPECTED_SOCKET_GID=39000
 EXPECTED_OTEL_ENDPOINT=""
 EXPECTED_EGRESS_MODE="network"
 EXPECTED_OTEL_ATTRIBUTE_MODE="metadata-only"
+EXPECTED_VSOCK_PORT=""
 EXPECTED_OTEL_EXPORT_ENABLED=0
 EXPECTED_OTEL_ENDPOINT_CONFIGURED="false"
 EXPECTED_SANDBOX_OBSERVER=0
+EXPECTED_SECCOMP_NOTIFY="disabled"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=otel-endpoint.sh
@@ -18,7 +20,7 @@ source "$SCRIPT_DIR/otel-endpoint.sh"
 
 usage() {
   cat <<'EOF'
-Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--otel-attribute-mode metadata-only|full] [--startup-dependency optional|required] [--socket-gid GID] [--with-sandbox-observer]
+Usage: verify-rootfs.sh --rootfs DIR [--otel-endpoint URL] [--egress-mode network|vsock-bridge] [--otel-attribute-mode metadata-only|full] [--vsock-port PORT] [--startup-dependency optional|required] [--socket-gid GID] [--with-sandbox-observer] [--seccomp-notify disabled|auto|required]
 
 This is an offline structural check. A real Kata boot and `actrailctl doctor`
 are still required before declaring the guest-root startup path complete.
@@ -57,6 +59,11 @@ while [[ "$#" -gt 0 ]]; do
       EXPECTED_OTEL_ATTRIBUTE_MODE="$2"
       shift 2
       ;;
+    --vsock-port)
+      [[ "$#" -ge 2 ]] || fail "--vsock-port requires a value"
+      EXPECTED_VSOCK_PORT="$2"
+      shift 2
+      ;;
     --socket-gid)
       [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
       [[ "$2" =~ ^[0-9]+$ ]] || fail "--socket-gid must be an integer"
@@ -66,6 +73,11 @@ while [[ "$#" -gt 0 ]]; do
     --with-sandbox-observer)
       EXPECTED_SANDBOX_OBSERVER=1
       shift
+      ;;
+    --seccomp-notify)
+      [[ "$#" -ge 2 ]] || fail "--seccomp-notify requires a value"
+      EXPECTED_SECCOMP_NOTIFY="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -82,6 +94,9 @@ actrail_validate_guest_otel_selection "$EXPECTED_OTEL_ENDPOINT" "$EXPECTED_EGRES
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 actrail_validate_guest_otel_attribute_mode "$EXPECTED_OTEL_ATTRIBUTE_MODE" "$EXPECTED_OTEL_ENDPOINT" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+actrail_resolve_guest_vsock_port "$EXPECTED_VSOCK_PORT" "$EXPECTED_EGRESS_MODE" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+EXPECTED_VSOCK_PORT="$ACTRAIL_GUEST_VSOCK_PORT"
 if [[ -n "$EXPECTED_OTEL_ENDPOINT" ]]; then
   EXPECTED_OTEL_EXPORT_ENABLED=1
   EXPECTED_OTEL_ENDPOINT_CONFIGURED="true"
@@ -90,6 +105,10 @@ fi
 case "$EXPECTED_STARTUP_DEPENDENCY" in
   optional|required) ;;
   *) fail "--startup-dependency must be optional or required" ;;
+esac
+case "$EXPECTED_SECCOMP_NOTIFY" in
+  disabled|auto|required) ;;
+  *) fail "--seccomp-notify must be disabled, auto or required" ;;
 esac
 (( EXPECTED_SOCKET_GID > 0 && EXPECTED_SOCKET_GID <= 2147483647 )) \
   || fail "--socket-gid must be between 1 and 2147483647"
@@ -193,6 +212,9 @@ if [[ "$EXPECTED_OTEL_EXPORT_ENABLED" == "1" ]]; then
     "endpoint = \"$EXPECTED_OTEL_ENDPOINT\""
   assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml \
     "attribute_mode = \"$EXPECTED_OTEL_ATTRIBUTE_MODE\""
+  for action_kind in file.modify file.read file.write file.bulk_read fs.enumerate http.message; do
+    assert_line /etc/actrail/plugins/otel-http/otel-http.config.toml "\"$action_kind\" = true"
+  done
   if grep -Eiq -- 'COLLECTOR_HOST|placeholder|replace[_-]me|change[_-]me' \
     "$ROOTFS/etc/actrail/plugins/otel-http/otel-http.config.toml"; then
     fail "/etc/actrail/plugins/otel-http/otel-http.config.toml contains a placeholder"
@@ -209,15 +231,29 @@ else
       || fail "local-only rootfs unexpectedly contains $path"
   done
 fi
-for section in seccomp_notify process_seccomp enforcement; do
-  awk -v section="[$section]" '
+operator_section_has() {
+  awk -v section="[$1]" -v line="$2" '
     $0 == section { inside = 1; next }
     inside && /^\[/ { exit }
-    inside && $0 == "enabled = false" { found = 1 }
+    inside && $0 == line { found = 1 }
     END { exit !found }
-  ' "$ROOTFS/etc/actrail/operator.conf" \
-    || fail "/etc/actrail/operator.conf must disable $section"
-done
+  ' "$ROOTFS/etc/actrail/operator.conf"
+}
+# Enforcement stays off in every Guest profile. AcTrail seccomp user-notify is
+# a deployment choice: the default keeps it and process_seccomp disabled.
+operator_section_has enforcement 'enabled = false' \
+  || fail "/etc/actrail/operator.conf must disable enforcement"
+if [[ "$EXPECTED_SECCOMP_NOTIFY" == "disabled" ]]; then
+  for section in seccomp_notify process_seccomp; do
+    operator_section_has "$section" 'enabled = false' \
+      || fail "/etc/actrail/operator.conf must disable $section"
+  done
+else
+  for section in seccomp_notify process_seccomp; do
+    operator_section_has "$section" 'enabled = true' \
+      || fail "/etc/actrail/operator.conf must enable $section"
+  done
+fi
 assert_line /usr/lib/systemd/system/actraild.service \
   'Environment=LD_LIBRARY_PATH=/usr/local/lib/actrail'
 assert_line /usr/lib/systemd/system/actraild.service 'User=root'
@@ -259,11 +295,15 @@ assert_line /usr/share/actrail/guest-install-info \
 assert_line /usr/share/actrail/guest-install-info \
   "guest_egress_mode=$EXPECTED_EGRESS_MODE"
 assert_line /usr/share/actrail/guest-install-info \
+  "guest_vsock_port=${EXPECTED_VSOCK_PORT:-none}"
+assert_line /usr/share/actrail/guest-install-info \
   "otel_export_enabled=$EXPECTED_OTEL_EXPORT_ENABLED"
 assert_line /usr/share/actrail/guest-install-info \
   "workload_socket_gid=$EXPECTED_SOCKET_GID"
 assert_line /usr/share/actrail/guest-install-info \
   "sandbox_observer_installed=$EXPECTED_SANDBOX_OBSERVER"
+assert_line /usr/share/actrail/guest-install-info \
+  "seccomp_notify=$EXPECTED_SECCOMP_NOTIFY"
 assert_line /usr/share/actrail/workload-interface \
   "socket_gid=$EXPECTED_SOCKET_GID"
 assert_line /usr/share/actrail/workload-interface \
@@ -283,9 +323,9 @@ if [[ "$EXPECTED_OTEL_EXPORT_ENABLED" == "1" && "$EXPECTED_EGRESS_MODE" == "vsoc
   expected_bridge_port="$(actrail_guest_otel_endpoint_port "$EXPECTED_OTEL_ENDPOINT")" \
     || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
   grep -Fqx -- \
-    "ExecStart=/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh --listen-port $expected_bridge_port" \
+    "ExecStart=/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh --listen-port $expected_bridge_port --vsock-port $EXPECTED_VSOCK_PORT" \
     "$bridge_unit" \
-    || fail "Guest bridge unit does not listen on the endpoint port $expected_bridge_port"
+    || fail "Guest bridge unit does not listen on the endpoint port $expected_bridge_port and connect to VSOCK port $EXPECTED_VSOCK_PORT"
   assert_link /usr/lib/systemd/system/kata-containers.target.wants/actrail-vsock-guest-bridge.service \
     ../actrail-vsock-guest-bridge.service
   assert_link /usr/lib/systemd/system/multi-user.target.wants/actrail-vsock-guest-bridge.service \
@@ -311,5 +351,6 @@ echo "ACTRAIL_GUEST_ROOTFS_STATIC_OK"
 echo "rootfs=$ROOTFS"
 echo "guest_startup_dependency=$EXPECTED_STARTUP_DEPENDENCY"
 echo "guest_egress_mode=$EXPECTED_EGRESS_MODE"
+echo "guest_vsock_port=${EXPECTED_VSOCK_PORT:-none}"
 echo "otel_endpoint_configured=$EXPECTED_OTEL_ENDPOINT_CONFIGURED"
 echo "sandbox_observer_installed=$EXPECTED_SANDBOX_OBSERVER"

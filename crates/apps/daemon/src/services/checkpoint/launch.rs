@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use checkpoint::TraceProcess;
 use checkpoint_core::LaunchRequest;
-use checkpoint_core::model::{ScopeConfig, SnapshotContext, TraceOwner};
+use checkpoint_core_contracts::model::{ScopeConfig, SnapshotContext, TraceOwner};
 use control_contract::checkpoint::LaunchCheckpointConfig;
 use control_contract::reply::ControlError;
 use model_core::ids::TraceId;

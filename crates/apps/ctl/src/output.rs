@@ -41,6 +41,17 @@ pub fn format_reply(reply: &ControlReply) -> String {
         }
         ControlReply::SeccompListenerRegistered => "seccomp listener registered".to_string(),
         ControlReply::TrackRemoved => "root capture removed".to_string(),
+        ControlReply::TrackSettled(reply) => format!(
+            "root capture removed; finalized={} export={} flushed_records={}{}",
+            reply.finalized,
+            reply.export_state,
+            reply.flushed_records,
+            if reply.detail.is_empty() {
+                String::new()
+            } else {
+                format!(" detail={}", reply.detail)
+            }
+        ),
         ControlReply::TraceList(items) => items
             .iter()
             .map(|item| {

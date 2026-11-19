@@ -8,11 +8,11 @@ use checkpoint::{BackendInstanceConfig, TraceProcess};
 
 use super::scheduler::{Job, TraceState};
 use super::{CheckpointCoordinator, CoordinatorError, unknown_checkpoint, unknown_trace};
-use crate::model::{
+use checkpoint_core_contracts::model::{
     CheckpointId, NewOperation, OperationId, OperationKind, OperationRecord, Phase, ScopeConfig,
     SnapshotContext, TraceOwner, TraceRecord, Trigger,
 };
-use crate::ports::CheckpointCatalog;
+use checkpoint_core_contracts::ports::CheckpointCatalog;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchRequest {

@@ -128,8 +128,8 @@ grep -Fq -- 'pidns=$EXPECTED_PID_NAMESPACE ' "$NAMESPACE_ASSERTION" \
 if grep -Fq -- 'container=' "$NAMESPACE_ASSERTION"; then
   fail "PID namespace assertion must not use container ID as a test criterion"
 fi
-grep -Fq -- '/opt/actrail/bin/actrail-init' "$MATRIX" \
-  || fail "V2 matrix does not use the workload PID 1 supervisor"
+grep -Fq -- '/opt/actrail/bin/actrail-launch' "$MATRIX" \
+  || fail "V2 matrix does not start workloads through the launcher"
 grep -Fq -- 'program_interpreter=' \
   "$ROOT_DIR/deploy/virtual-container/workload/prepare-bundle.sh" \
   || fail "workload bundle does not declare its actrailctl ELF interpreter"

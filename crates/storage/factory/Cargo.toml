@@ -5,6 +5,7 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+storage_contracts = { path = "../../contracts/storage" }
 sqlite_storage = { path = "../adapters/sqlite" }
 storage_noop = { path = "../adapters/noop" }
 storage_core = { path = "../core" }

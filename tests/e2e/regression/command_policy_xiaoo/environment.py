@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import shutil
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,8 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         self._plugin_root = config.work_dir / "plugins"
         self._rules = config.work_dir / "command-control.rules"
         self._xiaoo_config = config.work_dir / "xiaoo-config.toml"
+        self._path_search = config.work_dir / "path-search"
+        self._audit_patch = config.work_dir / "audit.patch.toml"
         self._thread_exec_fixture = (
             config.repo
             / "tests" / "e2e"
@@ -55,7 +59,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             config,
             output,
             operator_config=config.operator_config,
-            operator_config_patches=[config.operator_config_patch, Path(__file__).with_name("patch_config.toml")],
+            operator_config_patches=[config.operator_config_patch, Path(__file__).with_name("patch_config.toml"), self._audit_patch],
             web_host=config.web_host,
             web_port=config.web_port,
             plugin=PluginRuntimeSpec(
@@ -84,11 +88,21 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
 
     def prepare(self) -> dict[str, Any]:
         self._install_plugin_package()
+        self._prepare_path_search()
         self._rules.write_text("", encoding="utf-8")
         self._write_operator_patch()
+        self._audit_patch.write_text(
+            "[command_control]\n"
+            f"audit_enabled = {str(self.command_config.audit_enabled).lower()}\n",
+            encoding="utf-8",
+        )
         provider_url = self._provider.start()
         self._write_xiaoo_config(provider_url)
         initial = super().prepare()
+        with self.operator_config.open("rb") as stream:
+            effective = tomllib.load(stream)
+        if effective["command_control"]["audit_enabled"] != self.command_config.audit_enabled:
+            raise AssertionError("effective command audit setting differs from requested mode")
         self._require_load_grant()
         return initial
 
@@ -212,6 +226,21 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
                 f"{result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
             )
 
+    def require_native_lookup_errnos(self) -> int:
+        fixture = Path(__file__).with_name("fixtures") / "lookup_errors.py"
+        result = self.runtime.run(
+            self.runtime.control_command(
+                "launch", "--seccomp-notify", "required", "--name", "command-native-errno",
+                "--", Path(sys.executable).resolve(), fixture,
+                self._path_search / "missing/bash", self._path_search / "not-directory/bash",
+            ),
+            timeout_seconds=self.command_config.launch_timeout_seconds,
+        )
+        match = TRACE_RE.search(result.output)
+        if result.returncode != 0 or "ACTRAIL_NATIVE_ERRNO_OK 2 20" not in result.output or match is None:
+            raise AssertionError(f"native exec errno verification failed: {result.output}")
+        return int(match.group(1))
+
     def run_xiaoo(self, trace_name: str) -> tuple[int, CommandResult]:
         environment = os.environ.copy()
         for variable in (
@@ -226,7 +255,15 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         environment["NO_PROXY"] = CASE_CONSTANTS.no_proxy_hosts
         environment["no_proxy"] = CASE_CONSTANTS.no_proxy_hosts
         environment["ACTRAIL_XIAOO_COMMAND_POLICY_KEY"] = "local-test-key"
-        environment["PATH"] = "/usr/bin"
+        environment["PATH"] = os.pathsep.join(
+            str(path)
+            for path in (
+                self._path_search / "missing",
+                self._path_search / "not-directory",
+                self._path_search / "not-executable",
+                Path("/usr/bin"),
+            )
+        )
         result = self.runtime.run(
             self.runtime.control_command(
                 "launch",
@@ -327,6 +364,45 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
         if marker != "ACTRAIL_XIAOO_COMMAND_OK":
             raise AssertionError(f"marker content is wrong after unload: {marker!r}")
 
+    def require_path_search_errors(self, trace_id: int) -> None:
+        expected = {
+            str(self._path_search / "missing/bash"): str(errno.ENOENT),
+            str(self._path_search / "not-directory/bash"): str(errno.ENOTDIR),
+        }
+        deadline = time.monotonic() + self.command_config.evidence_timeout_seconds
+        observed: dict[str, str] = {}
+        while time.monotonic() < deadline:
+            result = self.runtime.run_checked(
+                self.runtime.viewer_command(
+                    "events", "--trace-id", str(trace_id), "--output-format", "json"
+                ),
+                echo=False,
+            )
+            for event in json.loads(result.stdout).get("events", []):
+                if event.get("variant") != "enforcement":
+                    continue
+                payload = event.get("payload", {})
+                metadata = payload.get("metadata", {})
+                requested = metadata.get("requested_executable")
+                if (
+                    metadata.get("decision_source") != "target-lookup"
+                    or requested not in expected
+                ):
+                    continue
+                if (
+                    payload.get("result") != "error"
+                    or payload.get("rule_id") is not None
+                    or payload.get("path") is not None
+                ):
+                    raise AssertionError(f"native lookup was recorded as a policy decision: {payload}")
+                observed[requested] = metadata.get("errno", "")
+            if observed == expected:
+                return
+            time.sleep(self.command_config.drain_interval_seconds)
+        raise AssertionError(
+            f"native PATH lookup errors are incomplete: {observed}, expected {expected}"
+        )
+
     def cleanup(self) -> TestResult:
         base = super().cleanup()
         provider_failure = self._provider.stop()
@@ -359,6 +435,15 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             if not source_path.is_file():
                 raise RuntimeError(f"official command-policy asset missing: {source_path}")
             shutil.copy2(source_path, destination / destination_name)
+
+    def _prepare_path_search(self) -> None:
+        self._path_search.mkdir()
+        (self._path_search / "not-directory").write_text("PATH component\n", encoding="utf-8")
+        nonexecutable = self._path_search / "not-executable"
+        nonexecutable.mkdir()
+        candidate = nonexecutable / "bash"
+        candidate.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+        candidate.chmod(0o644)
 
     def _write_operator_patch(self) -> None:
         (

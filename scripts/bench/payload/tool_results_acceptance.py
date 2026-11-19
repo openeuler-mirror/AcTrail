@@ -73,25 +73,24 @@ class ToolResultsAcceptance:
         if name == "metadata_request_none":
             self.verify_request_none(args.out / f"runtime-{mode}", actions, trace_id)
         results = [a for a in actions.values() if a["kind"] == "llm.tool_result"]
-        links = [link for link in document["links"] if link["role"] == "llm.tool_call.result"]
+        calls = {
+            a["attributes"]["llm.tool_call.id"]: a
+            for a in actions.values() if a["kind"] == "llm.tool_call"
+        }
         expected = 0 if name == "disabled" else 3
-        if len(results) != expected or len(links) != expected:
-            raise RuntimeError(f"{name}: expected {expected} tool results and bindings")
+        if len(results) != expected:
+            raise RuntimeError(f"{name}: expected {expected} tool results")
         for result in results:
             attrs = result["attributes"]
             request = actions[attrs["llm.tool_result.request_action_id"]]
             if (request["kind"] != "llm.request"
                     or request["trace_id"] != result["trace_id"]
-                    or request["process"] != result["process"]
-                    or attrs["llm.tool_result.binding_state"] != "bound"):
+                    or request["process"] != result["process"]):
                 raise RuntimeError(f"{name}: tool result request identity mismatch")
-            parents = [link for link in links if link["child_action_id"] == result["action_id"]]
-            if len(parents) != 1 or not parents[0]["valid"] or parents[0]["origin"] != "observed":
-                raise RuntimeError(f"{name}: missing observed tool binding")
-            call = actions[parents[0]["parent_action_id"]]
-            if (call["kind"] != "llm.tool_call"
-                    or call["attributes"]["llm.tool_call.id"] != attrs["llm.tool_result.id"]):
-                raise RuntimeError(f"{name}: tool call ID mismatch")
+            call = calls.get(attrs.get("llm.tool_call.id"))
+            if (call is None
+                    or attrs.get("llm.tool_call.name") != call["attributes"].get("llm.tool_call.name")):
+                raise RuntimeError(f"{name}: tool result does not carry its call")
             response_id = call["attributes"]["llm.tool_call.response_action_id"]
             if actions[response_id]["kind"] != "llm.response" or not any(
                 link["parent_action_id"] == response_id
@@ -114,7 +113,7 @@ class ToolResultsAcceptance:
                 valid = state == "too_large" and content is None and length is not None and int(length) > limit
             if not valid:
                 raise RuntimeError(f"{name}: unexpected export state or content size")
-        return {"name": name, "results": len(results), "bindings": len(links),
+        return {"name": name, "results": len(results),
                 "workload": sample["workload_result"], "trace_id": trace_id}
 
     @staticmethod

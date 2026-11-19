@@ -4,6 +4,7 @@ mod diagnostics;
 
 use crate::checkpoint::{CheckpointArgs, load_launch_config};
 use control_contract::checkpoint::{CheckpointAction, LaunchCheckpointConfig};
+use control_contract::command::TrackRemoveSettle;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,6 +66,7 @@ pub enum CtlCommand {
         ebpf_seccomp_policy: DeploymentPermissionPolicy,
         agent_integration: AgentLaunchIntegration,
         checkpoint: Option<LaunchCheckpointConfig>,
+        exit_settle: Option<TrackRemoveSettle>,
         argv: Vec<String>,
     },
     TrackRemove {
@@ -287,6 +289,9 @@ impl CtlCommandArgs {
                         .as_deref()
                         .map(load_launch_config)
                         .transpose()?,
+                    exit_settle: args.exit_settle.then_some(TrackRemoveSettle {
+                        deadline_ms: args.exit_settle_deadline_ms,
+                    }),
                     argv: args.argv,
                 })
             }
@@ -569,6 +574,22 @@ struct LaunchArgs {
         help = "Protect files with checkpoints; the TOML file lists [[scopes]]"
     )]
     checkpoint: Option<PathBuf>,
+
+    #[arg(
+        long = "exit-settle",
+        help = "After the command exits, return only once the daemon finalized the trace \
+                and its export plugins sent the last records. For a launcher whose exit \
+                stops the sandbox. The command's exit status is kept"
+    )]
+    exit_settle: bool,
+
+    #[arg(
+        long = "exit-settle-deadline-ms",
+        value_name = "MS",
+        default_value_t = 5000,
+        help = "Longest time --exit-settle waits before returning anyway"
+    )]
+    exit_settle_deadline_ms: u32,
 
     #[arg(
         value_name = "COMMAND",

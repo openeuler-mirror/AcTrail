@@ -58,7 +58,6 @@ done
 for relative in \
   bin/actrailctl \
   bin/actrailctl-private \
-  bin/actrail-init \
   bin/actrail-launch \
   etc/actrail/operator.conf \
   lib/libactrail_tls_payload_probe_sync.so \
@@ -68,7 +67,6 @@ for relative in \
 done
 [ -x "$ROOT/bin/actrailctl" ] || fail "actrailctl is not executable"
 [ -x "$ROOT/bin/actrailctl-private" ] || fail "actrailctl-private is not executable"
-[ -x "$ROOT/bin/actrail-init" ] || fail "actrail-init is not executable"
 [ -x "$ROOT/bin/actrail-launch" ] || fail "actrail-launch is not executable"
 
 (

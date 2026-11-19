@@ -19,7 +19,7 @@ const AGENT_GRAPH_ROLES = new Set([
   'llm.call.request',
   'llm.call.response',
   'llm.response.tool_call',
-  'llm.tool_call.result',
+  'llm.request.tool_result',
   'llm.tool_call.agent_invocation',
   'llm.request.llm_response',
   'llm.request.trajectory_parent',
@@ -32,7 +32,6 @@ const AGENT_GRAPH_ROLES = new Set([
 
 export const FLAME_GRAPH_ASSOCIATION_ROLES = new Set([
   'llm.response.tool_call',
-  'llm.tool_call.result',
   'agent.invocation.child_llm_request',
   'llm.tool_call.agent_invocation',
   'llm.request.trajectory_parent',

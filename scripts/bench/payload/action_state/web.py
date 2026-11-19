@@ -40,7 +40,7 @@ class WebAcceptance:
             for key, value in expected["attributes"].items():
                 if key.endswith((".action_id", "_action_id")) or key in (
                     "invocation.kind", "command.tool_name", "mcp.execution.status",
-                    "llm.tool_result.binding", "finalization.reason",
+                    "finalization.reason",
                 ):
                     self.require(actual["attributes"].get(key) == value,
                                  f"{actual['id']}: paged {key} differs")

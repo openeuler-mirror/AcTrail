@@ -99,6 +99,7 @@ pub(in crate::view) fn action_tree_children_json(
     if parent_id == NODE_ID_AGENT {
         compact_display.project_root_rows(storage, trace_id, &mut rows, &display_roles)?;
     }
+    let mut tool_display = LlmToolDisplay::default();
     for row in &mut rows {
         if row.action.kind == SemanticActionKind::AgentContextCompact {
             row.child_count = 0;
@@ -109,7 +110,7 @@ pub(in crate::view) fn action_tree_children_json(
             row.child_count = row.child_count.saturating_add(1);
         }
         LlmCallDisplay::normalize_one(storage, &mut row.action)?;
-        LlmToolDisplay::normalize_one(storage, &mut row.action);
+        tool_display.normalize_one(storage, &mut row.action);
     }
     let actions = rows
         .iter()

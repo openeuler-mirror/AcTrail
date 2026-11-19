@@ -1,0 +1,13 @@
+# Applied on top of operator.conf only when the deployment selects
+# --seccomp-notify auto or required. The default deployment leaves AcTrail
+# seccomp user-notify disabled.
+#
+# The Guest captures TLS through eBPF, so nothing in the default profile needs
+# the notify path. process_seccomp is the consumer that makes the launch
+# install the filter; without it a `required` launch is rejected.
+
+[seccomp_notify]
+enabled = true
+
+[process_seccomp]
+enabled = true

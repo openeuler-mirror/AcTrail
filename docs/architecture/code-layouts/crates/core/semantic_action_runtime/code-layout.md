@@ -35,7 +35,7 @@
     │   │   │   └── [x] struct ToolInteractionProjector # 拥有关联器和有界工具状态，生成工具动作及关系。
     │   │   └── [x] internal/ # 将声明、关联、状态和动作输出集中到各自职责。
     │   │       ├── [x] declaration/ # 从模型响应中提取已声明的 tool call。
-    │   │       ├── [x] correlation/ # 匹配工具结果及 Agent 调用证据。
+    │   │       ├── [x] correlation/ # 按工具名识别 Agent 调用。
     │   │       ├── [x] state/ # 保存待关联工具记录及容量受限的索引。
     │   │       └── [x] emission/ # 从确认事实生成动作、link 和诊断。
     │   └── [x] links/ # 按动作类别维护已确认的父子、协议及压缩实现关联。

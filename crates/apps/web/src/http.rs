@@ -13,8 +13,9 @@ use crate::args::WebConfig;
 use crate::configuration::ConfigEditor;
 use crate::{render, view};
 use config_core::daemon::OperatorConfig;
+use storage_contracts::StorageConfig;
 use storage_core::StorageOpenMode;
-use storage_factory::{StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 #[path = "http/alerts.rs"]
 mod alerts;
