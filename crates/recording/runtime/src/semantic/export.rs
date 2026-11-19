@@ -10,7 +10,8 @@ use semantic_action::{
 };
 
 use super::{
-    RecordingError, SemanticActionBatch, SemanticActionPublication, SemanticActionRecordBatch,
+    CommandDelivery, RecordingError, SemanticActionBatch, SemanticActionPublication,
+    SemanticActionRecordBatch,
 };
 
 const LIVE_EXPORT_STAGE: &str = "live_export";
@@ -21,11 +22,18 @@ pub trait TraceRecordLookup {
 
 pub(crate) struct SemanticActionExportRecorder<'a> {
     export_runtime: &'a ExportRuntime,
+    command_delivery: &'a mut CommandDelivery,
 }
 
 impl<'a> SemanticActionExportRecorder<'a> {
-    pub(crate) fn new(export_runtime: &'a ExportRuntime) -> Self {
-        Self { export_runtime }
+    pub(crate) fn new(
+        export_runtime: &'a ExportRuntime,
+        command_delivery: &'a mut CommandDelivery,
+    ) -> Self {
+        Self {
+            export_runtime,
+            command_delivery,
+        }
     }
 
     pub(crate) fn publish_batch(
@@ -34,20 +42,47 @@ impl<'a> SemanticActionExportRecorder<'a> {
         batch: SemanticActionRecordBatch<'_>,
         trace_finalized: bool,
         emitted_at: SystemTime,
-        next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
+        mut next_diagnostic_id: impl FnMut() -> Result<DiagnosticId, RecordingError>,
     ) -> SemanticActionPublication {
         let mut delivery = SemanticActionPublication::default();
         if !self.export_runtime.has_semantic_consumers() {
             return delivery;
         }
-        if batch.action_views().next().is_none() && !trace_finalized {
-            return delivery;
+        let mut completed = self.command_delivery.complete(
+            trace.trace_id,
+            batch.action_views(),
+            batch.links(),
+            batch.updates(),
+        );
+        let drop_report = completed.take_drop_report(trace.trace_id);
+        if !drop_report.dropped_records.is_empty() {
+            match crate::diagnostics::export_drop_diagnostics(
+                drop_report,
+                emitted_at,
+                &mut next_diagnostic_id,
+            ) {
+                Ok(diagnostics) => delivery.diagnostics.extend(diagnostics),
+                Err(error) => delivery.record(DeliveryFailureKind::Runtime, Err(error)),
+            }
         }
-        let exportable_actions = exportable_actions(batch.action_views());
+        let mut exportable_actions = exportable_actions(batch.action_views());
+        exportable_actions.extend(completed.actions);
         if exportable_actions.is_empty() && !trace_finalized {
             return delivery;
         }
-        let exportable_links = exportable_links(&exportable_actions, batch.links());
+        let completed_children = completed
+            .links
+            .iter()
+            .map(|link| link.child_action_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut exportable_links = exportable_links(
+            &exportable_actions,
+            batch
+                .links()
+                .iter()
+                .filter(|link| !completed_children.contains(link.child_action_id.as_str())),
+        );
+        exportable_links.extend(completed.links);
         let exportable_paths =
             exportable_paths(&exportable_actions, batch.file_observation_paths());
         let payload_refs = SemanticActionPublication::payload_references(
@@ -93,7 +128,10 @@ impl<'a> SemanticActionExportRecorder<'a> {
         if !self.export_runtime.has_semantic_consumers() {
             return delivery;
         }
-        if batch.action_views().next().is_none() {
+        if batch.action_views().next().is_none()
+            && batch.updates().is_empty()
+            && batch.links().is_empty()
+        {
             return delivery;
         }
         let trace_id = match batch.trace_id().and_then(|trace_id| {
@@ -194,16 +232,15 @@ fn exportable_actions<'a>(
         .collect()
 }
 
-fn exportable_links(
+fn exportable_links<'a>(
     exportable_actions: &[SemanticAction],
-    links: &[SemanticActionLink],
+    links: impl Iterator<Item = &'a SemanticActionLink>,
 ) -> Vec<SemanticActionLink> {
     let exportable_child_ids = exportable_actions
         .iter()
         .map(|action| action.action_id.as_str())
         .collect::<BTreeSet<_>>();
     links
-        .iter()
         .filter(|link| exportable_child_ids.contains(link.child_action_id.as_str()))
         .cloned()
         .collect()

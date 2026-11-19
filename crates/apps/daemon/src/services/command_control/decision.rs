@@ -40,6 +40,42 @@ impl CommandSyscall {
     }
 }
 
+pub(super) enum ExecCaptureError {
+    Capture(String),
+    TargetLookup {
+        requested_path: String,
+        errno: i32,
+        message: String,
+    },
+}
+
+impl ExecCaptureError {
+    pub(super) fn target_lookup(&self) -> Option<(&str, i32)> {
+        match self {
+            Self::TargetLookup {
+                requested_path,
+                errno,
+                ..
+            } => Some((requested_path, *errno)),
+            Self::Capture(_) => None,
+        }
+    }
+}
+
+impl From<String> for ExecCaptureError {
+    fn from(message: String) -> Self {
+        Self::Capture(message)
+    }
+}
+
+impl std::fmt::Display for ExecCaptureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Capture(message) | Self::TargetLookup { message, .. } => message.fmt(formatter),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ExecNotificationContext {
     trace_id: TraceId,
@@ -63,7 +99,7 @@ impl ExecNotificationContext {
         process_registry: &ProcessIdentityManager,
         notification: &libc::seccomp_notif,
         path_max_bytes: u32,
-    ) -> Result<Option<Self>, String> {
+    ) -> Result<Option<Self>, ExecCaptureError> {
         let Some(syscall) = CommandSyscall::from_notification(notification) else {
             return Ok(None);
         };
@@ -71,13 +107,15 @@ impl ExecNotificationContext {
             return Err(format!(
                 "listener trace {listener_trace_id} received pid {} owned by trace {}",
                 notification.pid, resolved.trace_id
-            ));
+            )
+            .into());
         }
         if !resolved.is_capturable() {
             return Err(format!(
                 "pid {} is not capturable in trace {listener_trace_id}",
                 notification.pid
-            ));
+            )
+            .into());
         }
         let process = resolved.process;
         let mut actor = ControlActorIdentityResolver::new(process_registry)
@@ -95,7 +133,8 @@ impl ExecNotificationContext {
                 "{} executable path exceeds {} bytes or lacks NUL termination",
                 syscall.as_str(),
                 path_max_bytes
-            ));
+            )
+            .into());
         }
         let requested_path = remote_path
             .value
@@ -234,17 +273,31 @@ impl CommandPath {
         requested: &str,
         dirfd: Option<i32>,
         flags: Option<u64>,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<PathBuf, ExecCaptureError> {
         let empty_path = syscall == CommandSyscall::Execveat
             && requested.is_empty()
             && flags.is_some_and(|value| value & libc::AT_EMPTY_PATH as u64 != 0);
-        TraceePath::new(pid)
-            .and_then(|paths| paths.executable(requested, dirfd, empty_path))
+        let paths = TraceePath::new(pid).map_err(|error| {
+            ExecCaptureError::Capture(format!(
+                "prepare {} filesystem view for {requested}: {error}",
+                syscall.as_str()
+            ))
+        })?;
+        paths
+            .executable(requested, dirfd, empty_path)
             .map_err(|error| {
-                format!(
+                let message = format!(
                     "resolve {} executable {requested}: {error}",
                     syscall.as_str()
-                )
+                );
+                match error.native_lookup_errno() {
+                    Some(errno) => ExecCaptureError::TargetLookup {
+                        requested_path: requested.to_string(),
+                        errno,
+                        message,
+                    },
+                    None => ExecCaptureError::Capture(message),
+                }
             })
     }
 }

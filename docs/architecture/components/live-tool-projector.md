@@ -20,22 +20,28 @@ Live Tool Projector 是 `LiveSemanticActionRuntime` 内部的有状态组件。�
 
 | 组件 | 当前职责 |
 |---|---|
-| `ToolInteractionProjector` | 按批次顺序编排声明解码、状态更新、关联和输出 |
+| `ToolInteractionProjector` | 按批次顺序编排声明解码、状态更新和输出，并为每个工具结果确定它所回应的调用 |
 | `DeclaredLlmToolCalls` | 从 `llm.response` attributes 解码声明的 tool call，并报告损坏或缺失名称的条目 |
-| `AgentInvocationCorrelator` | 按工具结果 ID 关联结果，并按 Agent 工具策略识别调用 |
+| `AgentInvocationCorrelator` | 按 Agent 工具策略识别调用 |
 | `ToolInteractionState` | 独占主记录、查询索引、trace ownership 和容量淘汰 |
 | `ToolSemanticEmitter` | 构造 action、link 和诊断，并持有本批输出 |
 
-状态和关联分离：Correlator 只能通过状态对象的语义方法查询候选，不能直接修改内部 map；所有主记录和辅助索引的变更由同一个状态方法完成。
+所有主记录和辅助索引的变更由状态对象的同一个方法完成，投影器只通过它的语义方法查询。
 
 ## 一批数据如何投影
 
 1. 投影器先遍历 `llm.response`，解码其中声明的 tool call。
 2. 每个有效声明生成 `llm.tool_call`；符合 Agent 工具策略的声明同时建立或更新 `agent.invocation`。
-3. 投影器从本批 `llm.request` 建立查找表，再将每个工具结果绑定到对应 tool call。缺少 ID、没有候选或候选不唯一时，结果仍可形成 action，同时产生生命周期诊断。
+3. 投影器从本批 `llm.request` 建立查找表，为每个工具结果生成 `llm.tool_result`。该 action 带着它所回应的调用：`llm.tool_call.id`、`llm.tool_call.name`，与对应 `llm.tool_call` 的值相同。协议中的工具结果没有自己的 ID，只引用它所回应的调用 ID，因此 `llm.tool_result` 不另设 ID 字段。参数字节数只在 `llm.tool_call` 上。
+   - `llm.tool_call.id` 是协议 ID 的 SHA-256 前 6 字节（12 位十六进制）。调用和结果各自从观测到的协议 ID 推出同一个值，不需要互相查找。协议原始 ID 只放在 `llm.tool_call` 的 `llm.tool_call.protocol_id` 上。
+   - 两个 action 不带 `llm.tool_call.response_action_id` / `llm.tool_result.request_action_id`：所属的模型回复和 LLM 请求已由 link（导出时即父节点）表达，本地存储读出时会从 link 还原这两个属性。
+   - 调用取自携带结果的请求本身：请求重复了模型最近一次输出，其中声明了这次调用。这一步不依赖响应是否已被处理。
+   - 请求中没有这次调用时（例如只发送结果的请求），改用此前从响应中观察到的调用。
+   - 同一个 ID 对应多个调用时取最近的一个。结果没有 ID，或两处都找不到调用时，结果仍形成 action，只是不带调用。
+   - 符合 Agent 工具策略的调用收到结果后，对应的 `agent.invocation` 结束。结果先于调用被处理时，其结论保留到调用出现。
 4. Emitter 一次返回完整输出，运行时将其与 LLM pipeline 的 action、content 和 lineage 合并。
 
-实时运行时通过 tool call ID 关联工具调用和结果，并记录 Agent 调用生命周期。`llm.request.message_preview` 保存有界展示文本。委派 prompt 与子请求的匹配、完整文本读取和匹配状态由 Web 离线关联组件负责，生成当前视图中的 `delegation` 边。
+`llm.tool_call` 与 `llm.tool_result` 之间没有 link，二者通过相同的 tool call ID 对应；`llm.tool_result` 的父节点是携带它的 `llm.request`。实时运行时同时记录 Agent 调用生命周期。`llm.request.message_preview` 保存有界展示文本。委派 prompt 与子请求的匹配、完整文本读取和匹配状态由 Web 离线关联组件负责，生成当前视图中的 `delegation` 边。
 
 ## Web 离线委派关联
 
@@ -65,7 +71,7 @@ crates/core/semantic_action_runtime/src/live/
     ├── projector.rs           # 投影 façade
     └── internal/
         ├── declaration/       # tool call 声明解码
-        ├── correlation/       # 工具结果关联与 Agent 工具识别
+        ├── correlation/       # Agent 工具识别
         ├── state/             # 记录、索引、容量和 trace 清理
         └── emission/          # action、link 与诊断构造
 ```

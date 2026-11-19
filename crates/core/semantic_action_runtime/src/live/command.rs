@@ -198,7 +198,7 @@ impl CommandProjector {
             return LiveSemanticActionOutput::default();
         };
         let action = entry.get_mut();
-        if action.end_time.is_some() {
+        if !action.is_running() {
             return LiveSemanticActionOutput::default();
         }
         let observed_exit = event.envelope.collector.as_str() == "ebpf"

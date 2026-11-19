@@ -256,10 +256,8 @@ impl PluginState {
             .or_default()
             .push_back(entry.clone());
         if !process_id.is_empty() {
-            self.commands_by_process.insert(
-                (trace_id.to_string(), process_id.to_string()),
-                entry,
-            );
+            self.commands_by_process
+                .insert((trace_id.to_string(), process_id.to_string()), entry);
         }
     }
 
@@ -298,8 +296,8 @@ impl PluginState {
         }
 
         let is_failure = status == "error" || (!exit_code.is_empty() && exit_code != "0");
-        let is_success = status == "success"
-            || (status == "unknown" && self.unknown_status_counts_as_success);
+        let is_success =
+            status == "success" || (status == "unknown" && self.unknown_status_counts_as_success);
 
         let key: StateKey = (trace_id.to_string(), entry.effective_tool_name.clone());
         if is_success {
@@ -673,6 +671,9 @@ impl Guest for Component {
         for action in &batch.semantic_actions {
             let process_id = find_attr(&action.attributes, PROCESS_ID_ATTR).unwrap_or("");
             if action.kind == "command.invocation" {
+                if action.completeness != "partial" {
+                    continue;
+                }
                 // 只登记，成败由 process.exit 决定
                 let bare_tool_name = extract_bare_tool_name(action);
                 let tool_args = find_attr(&action.attributes, COMMAND_LINE_ATTR).unwrap_or("");
@@ -692,8 +693,7 @@ impl Guest for Component {
                 );
                 observed += 1;
             } else if action.kind == "process.exit" {
-                let exit_code =
-                    find_attr(&action.attributes, PROCESS_EXIT_CODE_ATTR).unwrap_or("");
+                let exit_code = find_attr(&action.attributes, PROCESS_EXIT_CODE_ATTR).unwrap_or("");
                 let failure_summary =
                     find_attr(&action.attributes, PROCESS_FAILURE_SUMMARY_ATTR).unwrap_or("");
                 if let Some(alert_json) = state.process_exit(

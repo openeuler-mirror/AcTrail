@@ -1,8 +1,10 @@
 use crate::{
-    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortSink,
-    ExportError, ExportPublishResult, SemanticActionExportAdapter, SemanticActionExportRecord,
+    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortFlush,
+    BestEffortSink, ExportError, ExportPublishResult, SemanticActionExportAdapter,
+    SemanticActionExportRecord,
 };
-use std::time::Duration;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 pub trait SemanticActionExportRoute: Send + Sync {
     fn name(&self) -> &'static str;
@@ -55,6 +57,26 @@ where
     pub fn finish(&self) -> BestEffortDeliveryFinish {
         self.delivery.finish()
     }
+
+    /// Flushes the sink behind the records published so far; see `BestEffortDelivery::flush`.
+    pub fn flush(
+        &self,
+        deadline: Instant,
+    ) -> Result<Receiver<Result<BestEffortFlush, String>>, ExportError> {
+        self.delivery.flush(deadline)
+    }
+
+    pub fn prepare(
+        &self,
+        record: SemanticActionExportRecord<'_>,
+    ) -> Result<A::Message, ExportError> {
+        self.delivery.check_health()?;
+        self.adapter.encode(record)
+    }
+
+    pub fn publish_encoded(&self, message: A::Message) -> Result<ExportPublishResult, ExportError> {
+        self.delivery.publish(message)
+    }
 }
 
 impl<A> SemanticActionExportRoute for BestEffortSemanticActionRoute<A>
@@ -69,8 +91,6 @@ where
         &self,
         record: SemanticActionExportRecord<'_>,
     ) -> Result<ExportPublishResult, ExportError> {
-        self.delivery.check_health()?;
-        let message = self.adapter.encode(record)?;
-        self.delivery.publish(message)
+        self.publish_encoded(self.prepare(record)?)
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 按统一文本格式汇报 CI 步骤、执行结果和失败详情。
+# Prepare the build environment, run checks, then build and install.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -7,23 +7,10 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/lib/common.sh"
 cd -- "$script_dir/../.."
 
-for arg in "$@"; do
-    case "$arg" in
-        -h|--help)
-            printf 'Usage: bash scripts/ci/run.sh [-h|--help]\n' >&2
-            printf 'Run all CI checks. Exit codes: 0 success, 1 check failure, 2 invalid arguments.\n' >&2
-            exit 0
-            ;;
-        *)
-            printf 'Unknown argument: %s (usage: bash scripts/ci/run.sh [-h|--help])\n' "$arg" >&2
-            exit 2
-            ;;
-    esac
-done
-
+bash "$script_dir/../install-build-deps.sh" --install
 check_dependency bash git python3 cargo rustfmt dirname mktemp rm sed
 
-# 进度和结果统一输出到 stderr，子脚本输出单独捕获。
+# Write progress and results to stderr and capture each check separately.
 exec 1>&2
 steps=(
     'Module layout|scripts/ci/check-module-layout.sh'
@@ -32,7 +19,7 @@ steps=(
     'Documentation|scripts/ci/check-docs.py'
 )
 log_dir="$(mktemp -d "${TMPDIR:-/tmp}/actrail-ci-logs.XXXXXX")"
-# 入口途中退出时清理目录。完成失败汇总后取消清理，以保留失败日志。
+# Clean up on exit unless failed checks require their logs to be retained.
 trap 'rm -r -- "$log_dir"' EXIT
 failed_steps=()
 failed_reasons=()
@@ -41,7 +28,7 @@ failed_logs=()
 step_no=0
 printf 'CI: %s checks\n' "${#steps[@]}"
 
-# 成功只显示结果，失败显示完整详情并继续执行其余检查。
+# Show brief success results and full failures, then continue with other checks.
 for step in "${steps[@]}"; do
     name="${step%%|*}"
     script="${step#*|}"
@@ -72,6 +59,7 @@ done
 ci_title 'CI result'
 if (( ${#failed_steps[@]} == 0 )); then
     printf '  [PASS] All checks passed\n'
+    bash "$script_dir/build.sh"
     exit 0
 fi
 

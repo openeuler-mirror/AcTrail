@@ -1,9 +1,10 @@
+//! Manage observation subscriptions and plugin lifecycle status.
+
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use plugin_system::{
-    ObservationConsumer, PluginInstanceStatus, PluginLifecycleState, PostTraceTask,
-};
+use plugin_system::{ObservationConsumer, ObservationFlush, PostTraceTask};
+use plugin_system_contracts::{PluginInstanceStatus, PluginLifecycleState};
 
 use crate::ExportError;
 
@@ -188,6 +189,21 @@ impl SemanticActionSubscriptionManager {
         }
         self.drain_pending_reports(&mut report);
         report.into_report()
+    }
+
+    /// Starts a flush on every consumer that buffers semantic actions.
+    pub(crate) fn flush_observation_consumers(
+        &self,
+        deadline: Instant,
+    ) -> Vec<(String, ObservationFlush)> {
+        self.consumers
+            .iter()
+            .filter(|slot| slot.receives_semantic_action_batch())
+            .filter_map(|slot| {
+                slot.flush(deadline)
+                    .map(|flush| (slot.instance_id().to_string(), flush))
+            })
+            .collect()
     }
 
     pub(crate) fn publish_semantic_actions(

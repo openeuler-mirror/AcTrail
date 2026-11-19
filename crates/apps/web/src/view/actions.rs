@@ -79,7 +79,7 @@ pub(super) fn action_detail_json(
         .map_err(|error| storage_error("read semantic action", error))?
         .ok_or_else(|| format!("semantic action {action_id} not found"))?;
     LlmCallDisplay::normalize_one(storage, &mut action)?;
-    LlmToolDisplay::normalize_one(storage, &mut action);
+    LlmToolDisplay::default().normalize_one(storage, &mut action);
     let compact = ContextCompactDisplay::for_actions(storage, trace_id, [&action])?;
     Ok(compact.action_json(&action, false))
 }

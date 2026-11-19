@@ -128,7 +128,8 @@ impl StorageAttachService {
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
         let started = crate::services::workload_diagnostics::now();
-        let result = RecordingWriter::new(self.storage.as_mut()).persist_live_events_then_export(
+        let result = self.recording.persist_live_events_then_export(
+            self.storage.as_mut(),
             &self.export_runtime,
             events,
             diagnostics,
@@ -214,7 +215,7 @@ impl StorageAttachService {
             .then(|| semantic_actions.clone());
         self.write_semantic_action_batch(semantic_actions);
         let result = match export_batch {
-            Some(batch) => self.publish_live_export_actions(trace_runtime, trace_id, batch),
+            Some(batch) => self.publish_live_export_actions(trace_runtime, trace_id, batch, true),
             None => Ok(()),
         };
 
@@ -257,11 +258,13 @@ impl StorageAttachService {
         trace_runtime: &TraceRuntime,
         trace_id: TraceId,
         semantic_actions: SemanticActionBatch,
+        trace_finalized: bool,
     ) -> Result<(), ControlError> {
         let traces = LiveTraceRecordLookup::new(trace_runtime);
         let next_diagnostic_id = &mut self.next_diagnostic_id;
-        let report = RecordingWriter::new(self.storage.as_mut())
-            .export_final_semantic_action_batch_for_trace(
+        let report = if trace_finalized {
+            self.recording.export_final_semantic_action_batch_for_trace(
+                self.storage.as_mut(),
                 &self.export_runtime,
                 &traces,
                 trace_id,
@@ -271,7 +274,20 @@ impl StorageAttachService {
                     next_diagnostic_id_from_seed(next_diagnostic_id)
                         .map_err(control_error_to_recording)
                 },
-            );
+            )
+        } else {
+            self.recording.export_semantic_action_batch_for_trace(
+                self.storage.as_mut(),
+                &self.export_runtime,
+                &traces,
+                semantic_actions,
+                SystemTime::now(),
+                || {
+                    next_diagnostic_id_from_seed(next_diagnostic_id)
+                        .map_err(control_error_to_recording)
+                },
+            )
+        };
         Self::handle_delivery_report(report)
     }
 

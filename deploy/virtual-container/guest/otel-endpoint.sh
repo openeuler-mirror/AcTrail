@@ -21,6 +21,11 @@ ACTRAIL_GUEST_OTEL_ENDPOINT_PORT=""
 ACTRAIL_GUEST_OTEL_EGRESS_MODE_DEFAULT="network"
 # otel-http attribute_mode written into the Guest exporter configuration.
 ACTRAIL_GUEST_OTEL_ATTRIBUTE_MODE_DEFAULT="metadata-only"
+# AF_VSOCK port the Guest bridge connects to on the Host (CID 2). The Host
+# bridge must listen on the same port.
+ACTRAIL_GUEST_VSOCK_PORT_DEFAULT="43180"
+# VSOCK port of the last resolved selection; empty outside vsock-bridge mode.
+ACTRAIL_GUEST_VSOCK_PORT=""
 
 actrail_guest_otel_endpoint_reject() {
   ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR="$1"
@@ -64,6 +69,32 @@ actrail_validate_guest_otel_selection() {
     return 0
   fi
   actrail_validate_guest_otel_endpoint "$endpoint" "$mode"
+}
+
+# Resolve the VSOCK port for an egress mode. An empty value selects the default
+# in vsock-bridge mode. Ports 1-1026 belong to Kata agent communication, logs
+# and the debug console.
+actrail_resolve_guest_vsock_port() {
+  local port="${1-}"
+  local mode="${2-}"
+  ACTRAIL_GUEST_VSOCK_PORT=""
+  if [[ "$mode" != "vsock-bridge" ]]; then
+    if [[ -n "$port" ]]; then
+      actrail_guest_otel_endpoint_reject "--vsock-port requires --egress-mode vsock-bridge"
+      return 1
+    fi
+    ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
+    return 0
+  fi
+  port="${port:-$ACTRAIL_GUEST_VSOCK_PORT_DEFAULT}"
+  if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1027 || 10#$port > 65535 )); then
+    actrail_guest_otel_endpoint_reject \
+      "--vsock-port must be between 1027 and 65535: $port"
+    return 1
+  fi
+  ACTRAIL_GUEST_VSOCK_PORT="$((10#$port))"
+  ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR=""
+  return 0
 }
 
 # Validate the otel-http attribute mode. "full" exports content attributes and
@@ -291,6 +322,11 @@ actrail_guest_otel_endpoint_port() {
   printf '%s\n' "$ACTRAIL_GUEST_OTEL_ENDPOINT_PORT"
 }
 
+# Action kinds the Guest exports in addition to the shared template's defaults.
+ACTRAIL_GUEST_OTEL_ACTION_KINDS=(
+  file.modify file.read file.write file.bulk_read fs.enumerate http.message
+)
+
 actrail_write_guest_otel_endpoint_config() {
   local template="${1-}"
   local target="${2-}"
@@ -348,12 +384,24 @@ actrail_write_guest_otel_endpoint_config() {
         }
         next
       }
+      # The Guest exports file and HTTP actions, which the shared template leaves off:
+      # Guest records are gone with the sandbox VM unless they are exported.
+      /^"(file\.modify|file\.read|file\.write|file\.bulk_read|fs\.enumerate|http\.message)"[[:space:]]*=/ {
+        guest_action_kind_count++
+        sub(/=.*/, "= true")
+        print
+        next
+      }
       { print }
-      END { if (endpoint_count != 1 || attribute_mode_count != 1) exit 42 }
+      END {
+        if (endpoint_count != 1 || attribute_mode_count != 1 || guest_action_kind_count != 6) {
+          exit 42
+        }
+      }
     ' "$template" >"$temp_path"; then
     rm -f -- "$temp_path"
     actrail_guest_otel_endpoint_reject \
-      "otel-http config template must contain exactly one endpoint and one attribute_mode assignment"
+      "otel-http config template must contain exactly one endpoint, one attribute_mode and the six file and HTTP action kinds"
     return 1
   fi
   if ! install -m 0640 -- "$temp_path" "$target"; then
@@ -372,5 +420,13 @@ actrail_write_guest_otel_endpoint_config() {
       "installed otel-http config does not contain the requested attribute_mode"
     return 1
   fi
+  local action_kind=""
+  for action_kind in "${ACTRAIL_GUEST_OTEL_ACTION_KINDS[@]}"; do
+    if ! grep -Fqx -- "\"$action_kind\" = true" "$target"; then
+      actrail_guest_otel_endpoint_reject \
+        "installed otel-http config does not export $action_kind"
+      return 1
+    fi
+  done
   return 0
 }

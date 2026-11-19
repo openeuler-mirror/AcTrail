@@ -29,6 +29,7 @@ use config_core::daemon::{
 };
 use control_contract::command::{
     ControlCommand, ResolveLaunchPermissionsCommand, TrackAddCommand, TrackRemoveCommand,
+    TrackRemoveSettle,
 };
 use control_contract::reply::{ControlError, ControlReply, TrackAddReply};
 use control_contract::selector::TraceSelector;
@@ -72,6 +73,8 @@ pub(crate) struct LaunchRequest {
     pub ebpf_seccomp_policy: DeploymentPermissionPolicy,
     pub agent_integration: AgentLaunchIntegration,
     pub checkpoint: Option<LaunchCheckpointConfig>,
+    /// Exit handshake requested with `--exit-settle`.
+    pub exit_settle: Option<TrackRemoveSettle>,
     pub argv: Vec<String>,
 }
 
@@ -295,11 +298,19 @@ pub(crate) fn run_launch(
         child.wait()
     };
     timing.mark("child_wait_finished");
-    let remove_result = remove_launch_root(
-        client,
-        launch_remove_request_id(track_add_request_id, seccomp_enabled)?,
-        trace_id,
-    );
+    let remove_request_id = launch_remove_request_id(track_add_request_id, seccomp_enabled)?;
+    let remove_result = match request.exit_settle {
+        None => remove_launch_root(client, remove_request_id, trace_id),
+        Some(settle) => {
+            settle_launch_root(
+                &request.control_socket_path,
+                remove_request_id,
+                trace_id,
+                settle,
+            );
+            Ok(())
+        }
+    };
     timing.mark("remove_launch_root");
     match (child_result, remove_result) {
         (Ok(status), Ok(())) => Ok(status),
@@ -486,10 +497,62 @@ fn remove_launch_root(
     match client.send(ControlCommand::TrackRemove(TrackRemoveCommand {
         request_id,
         selector: TraceSelector::TraceId(trace_id),
+        settle: None,
     })) {
         Ok(_) => Ok(()),
         Err(error) if error.code == "not_found" => Ok(()),
         Err(error) => Err(format_control_error(error)),
+    }
+}
+
+/// How long the settled reply may trail the daemon's own deadline.
+const EXIT_SETTLE_REPLY_MARGIN: Duration = Duration::from_millis(1_000);
+
+/// Removes the root and waits for the daemon to settle the trace. Observation is a
+/// side channel: a failed or late handshake is reported and never changes the
+/// workload's exit status.
+fn settle_launch_root(
+    control_socket_path: &Path,
+    request_id: RequestId,
+    trace_id: TraceId,
+    settle: TrackRemoveSettle,
+) {
+    // The daemon holds this reply, so the wait is bounded here as well: a daemon that
+    // stopped answering must not keep the workload from exiting.
+    let timeout = Duration::from_millis(u64::from(settle.deadline_ms)) + EXIT_SETTLE_REPLY_MARGIN;
+    let mut client = uds_control_client::UdsControlClient::new(
+        uds_control_client::UdsSocketTransport::new(control_socket_path).with_timeout(timeout),
+    );
+    match client.send(ControlCommand::TrackRemove(TrackRemoveCommand {
+        request_id,
+        selector: TraceSelector::TraceId(trace_id),
+        settle: Some(settle),
+    })) {
+        Ok(ControlReply::TrackSettled(reply)) if !reply.timed_out && reply.detail.is_empty() => {
+            println!(
+                "trace {trace_id} settled finalized={} export={} flushed_records={}",
+                reply.finalized, reply.export_state, reply.flushed_records
+            );
+        }
+        Ok(ControlReply::TrackSettled(reply)) => {
+            eprintln!(
+                "warning: trace {trace_id} did not settle cleanly: finalized={} export={} \
+                 flushed_records={} timed_out={} detail={}",
+                reply.finalized,
+                reply.export_state,
+                reply.flushed_records,
+                reply.timed_out,
+                reply.detail
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.code == "not_found" => {}
+        Err(error) => {
+            eprintln!(
+                "warning: exit settle for trace {trace_id} failed: {}",
+                format_control_error(error)
+            );
+        }
     }
 }
 

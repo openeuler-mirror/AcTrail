@@ -114,9 +114,9 @@ assert_line "$ENV_EXAMPLE" '^OTELCOL_OTLP_HTTP_ENDPOINT=0\.0\.0\.0:4318$' \
 assert_line "$ENV_EXAMPLE" '^OTELCOL_DATA_DIR=/var/lib/actrail/otelcol$' \
   ".env.example must document the writable host data directory"
 
-assert_line "$README_FILE" '127\.0\.0\.1.*Guest.*不是宿主机' \
+assert_line "$README_FILE" $'127\\.0\\.0\\.1.*Guest.*\u4e0d\u662f\u5bbf\u4e3b\u673a' \
   "README must warn that Guest loopback is not the host"
-assert_line "$README_FILE" '明文 HTTP' \
+assert_line "$README_FILE" $'\u660e\u6587 HTTP' \
   "README must state the development plaintext limitation"
 assert_line "$README_FILE" 'curl .*127\.0\.0\.1:13133' \
   "README must document the host-local health check"
@@ -126,13 +126,13 @@ assert_line "$README_FILE" 'docker compose .*logs' \
   "README must document log verification"
 assert_line "$README_FILE" 'actrail-traces\.json' \
   "README must document acceptance data verification"
-assert_line "$README_FILE" '不是 WAL' \
+assert_line "$README_FILE" $'\u4e0d\u662f WAL' \
   "README must state that the file exporter is not a WAL"
 assert_line "$README_FILE" 'GOMEMLIMIT=320MiB' \
   "README must document the Go runtime memory limit"
-assert_line "$README_FILE" 'cgroup.*硬边界' \
+assert_line "$README_FILE" $'cgroup.*\u786c\u8fb9\u754c' \
   "README must explain the cgroup hard memory boundary"
-assert_line "$README_FILE" 'Docker.*日志.*轮转' \
+assert_line "$README_FILE" $'Docker.*\u65e5\u5fd7.*\u8f6e\u8f6c' \
   "README must document container-log rotation"
 assert_line "$README_FILE" 'SELinux.*relabel' \
   "README must document bind-mount SELinux relabeling"

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use export_core::SemanticActionKindSelection;
+use export_core::{SemanticActionKindSelection, TerminalActionLimits};
 
 const FILE_EXPORTER: &str = "file";
 const JSON_RPC_HTTP_EXPORTER: &str = "json_rpc_http";
@@ -9,6 +9,7 @@ const JSON_RPC_HTTP_EXPORTER: &str = "json_rpc_http";
 pub struct OtelJsonlExporterConfig {
     pub(crate) exporter: ExporterConfig,
     pub(crate) queue_capacity: u32,
+    pub(crate) terminal_action_limits: TerminalActionLimits,
     pub(crate) action_kinds: SemanticActionKindSelection,
 }
 
@@ -53,6 +54,39 @@ struct OtelJsonlConfigParser<'a> {
 }
 
 impl<'a> OtelJsonlConfigParser<'a> {
+    fn parse_terminal_action_limits(&self) -> Result<TerminalActionLimits, String> {
+        let defaults = TerminalActionLimits::default();
+        TerminalActionLimits::new(
+            self.optional_positive_usize(
+                "terminal_action_max_entries_per_trace",
+                defaults.max_entries_per_trace(),
+            )?,
+            self.optional_positive_usize("terminal_action_max_entries", defaults.max_entries())?,
+            self.optional_positive_usize(
+                "terminal_action_max_key_bytes",
+                defaults.max_key_bytes(),
+            )?,
+        )
+        .map_err(|error| format!("invalid plugin.otel-jsonl: {}", error.message))
+    }
+
+    fn optional_positive_usize(&self, key: &str, default: usize) -> Result<usize, String> {
+        let Some(value) = self.root.get(key) else {
+            return Ok(default);
+        };
+        let value = value
+            .as_integer()
+            .ok_or_else(|| format!("plugin.otel-jsonl.{key} must be an integer"))?;
+        let value = usize::try_from(value)
+            .map_err(|error| format!("invalid plugin.otel-jsonl.{key}: {error}"))?;
+        if value == 0 {
+            return Err(format!(
+                "invalid plugin.otel-jsonl.{key}: value must be positive"
+            ));
+        }
+        Ok(value)
+    }
+
     fn new(root: &'a toml::value::Table) -> Self {
         Self { root }
     }
@@ -64,6 +98,9 @@ impl<'a> OtelJsonlConfigParser<'a> {
             &[
                 "exporter",
                 "queue_capacity",
+                "terminal_action_max_entries_per_trace",
+                "terminal_action_max_entries",
+                "terminal_action_max_key_bytes",
                 "action_kinds",
                 FILE_EXPORTER,
                 JSON_RPC_HTTP_EXPORTER,
@@ -96,6 +133,7 @@ impl<'a> OtelJsonlConfigParser<'a> {
                 "queue_capacity",
             )?,
             action_kinds: self.parse_action_kinds()?,
+            terminal_action_limits: self.parse_terminal_action_limits()?,
         })
     }
 

@@ -31,7 +31,7 @@ export class ToolCallDisplay {
         this.callsByResponse.set(response.id, Array.isArray(calls) ? calls : []);
       }
       const calls = this.callsByResponse.get(response.id);
-      const id = toolCall.attributes?.['llm.tool_call.id'];
+      const id = toolCall.attributes?.['llm.tool_call.protocol_id'];
       const ordinal = Number(toolCall.attributes?.['llm.tool_call.ordinal']);
       const call = (id ? calls.find((candidate) => candidate.id === id) : null)
         ?? (Number.isInteger(ordinal) ? calls[ordinal] : null);

@@ -124,6 +124,15 @@ def parser() -> argparse.ArgumentParser:
         help="export path used when --otel-endpoint is set",
     )
     result.add_argument(
+        "--vsock-port",
+        type=positive_int,
+        help=(
+            "Host AF_VSOCK port the Guest bridge connects to, 1027-65535 "
+            "(default: 43180; vsock-bridge only). The Host bridge must "
+            "listen on the same port"
+        ),
+    )
+    result.add_argument(
         "--otel-attribute-mode",
         choices=("metadata-only", "full"),
         default="metadata-only",
@@ -153,6 +162,16 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--socket-gid", type=positive_int, default=39000)
     result.add_argument("--data-vcpus", type=positive_int, default=2)
+    result.add_argument(
+        "--seccomp-notify",
+        choices=("disabled", "auto", "required"),
+        default="disabled",
+        help=(
+            "AcTrail seccomp user-notify for the Guest daemon and the workload "
+            "launcher; auto degrades when the launch probe fails, required "
+            "stops the workload instead"
+        ),
+    )
     result.add_argument(
         "--with-sandbox-observer",
         action="store_true",
@@ -238,10 +257,12 @@ def main(argv: list[str] | None = None) -> int:
             image_pull_policy=arguments.image_pull_policy,
             otel_endpoint=arguments.otel_endpoint,
             egress_mode=arguments.egress_mode,
+            vsock_port=arguments.vsock_port,
             otel_attribute_mode=arguments.otel_attribute_mode,
             socket_gid=arguments.socket_gid,
             data_vcpus=arguments.data_vcpus,
             sandbox_observer=arguments.with_sandbox_observer,
+            seccomp_notify=arguments.seccomp_notify,
             tool_inputs=default_tool_inputs(REPO),
         )
         if arguments.no_write_profile:

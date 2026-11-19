@@ -68,6 +68,7 @@ pub fn run_from_env() -> Result<i32, String> {
             ebpf_seccomp_policy,
             agent_integration,
             checkpoint,
+            exit_settle,
             argv,
         } => {
             let socket_path = required_socket_path(invocation.socket_path)?;
@@ -94,6 +95,7 @@ pub fn run_from_env() -> Result<i32, String> {
                     ebpf_seccomp_policy,
                     agent_integration,
                     checkpoint,
+                    exit_settle,
                     argv,
                 },
             )

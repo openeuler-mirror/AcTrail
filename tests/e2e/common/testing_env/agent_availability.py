@@ -48,6 +48,8 @@ class AgentAvailability:
             "pi": self._check_pi_availability,
             "qodercli": self._check_qodercli_availability,
             "xiaoo": self._check_xiaoo_availability,
+            "dcode": self._check_dcode_availability,
+            "grok": self._check_grok_availability,
         }
         check = checks.get(agent_name)
         if check is None:
@@ -169,6 +171,20 @@ class AgentAvailability:
             ],
             environment,
         )
+
+    def _check_dcode_availability(
+        self,
+        binary: str,
+        environment: Mapping[str, str] | None,
+    ) -> bool:
+        return self._run([binary, "-n", self._prompt(), "-q", "--no-mcp"], environment)
+
+    def _check_grok_availability(
+        self,
+        binary: str,
+        environment: Mapping[str, str] | None,
+    ) -> bool:
+        return self._run([binary, "-p", self._prompt()], environment)
 
     def _run(
         self,

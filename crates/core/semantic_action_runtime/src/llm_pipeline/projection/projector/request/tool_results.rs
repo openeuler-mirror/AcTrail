@@ -15,11 +15,19 @@ pub(crate) struct ProjectedLlmToolResult {
     pub(crate) observed_at: SystemTime,
     pub(crate) request_action_id: String,
     pub(crate) tool_call_id: Option<String>,
+    /// The tool call this result answers, as repeated in the same request.
+    pub(crate) tool_call: Option<ProjectedLlmToolCall>,
     pub(crate) ordinal: usize,
     pub(crate) is_error: bool,
     pub(crate) content_json: Option<String>,
     pub(crate) content_bytes: Option<u64>,
     pub(crate) content_export_state: &'static str,
+}
+
+/// The tool call a result answers, as the agent repeats it in the request history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectedLlmToolCall {
+    pub(crate) name: String,
 }
 
 pub(super) fn project_tool_results(
@@ -34,14 +42,19 @@ pub(super) fn project_tool_results(
         return Vec::new();
     }
     let mut raw = Vec::new();
-    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
-        collect_current_turn_tool_results(messages, &mut raw);
-    } else if let Some(input) = body.get("input").and_then(Value::as_array) {
-        collect_current_turn_tool_results(input, &mut raw);
-    }
+    let items = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .or_else(|| body.get("input").and_then(Value::as_array))
+        .map_or(&[][..], Vec::as_slice);
+    let turn_start = collect_current_turn_tool_results(items, &mut raw);
+    let history = &items[..turn_start];
     raw.into_iter()
         .enumerate()
         .map(|(ordinal, raw)| {
+            let tool_call = raw
+                .tool_call_id
+                .and_then(|id| declared_tool_call(history, id));
             let (content_json, content_bytes, content_export_state) =
                 if config.llm_tool_result_content_export_enabled() {
                     let canonical_json = canonical_llm_json_text(raw.content);
@@ -60,6 +73,7 @@ pub(super) fn project_tool_results(
                 observed_at,
                 request_action_id: request_action_id.to_string(),
                 tool_call_id: raw.tool_call_id.map(ToString::to_string),
+                tool_call,
                 ordinal,
                 is_error: raw.is_error,
                 content_json,
@@ -80,7 +94,12 @@ struct RawToolResult<'a> {
 /// model's latest output are new. Agents may append other messages after those
 /// results (for example a `system` or `user` reminder), so the results do not
 /// have to be at the end of the request.
-fn collect_current_turn_tool_results<'a>(items: &'a [Value], output: &mut Vec<RawToolResult<'a>>) {
+///
+/// Returns the index of the first item after the model's latest output.
+fn collect_current_turn_tool_results<'a>(
+    items: &'a [Value],
+    output: &mut Vec<RawToolResult<'a>>,
+) -> usize {
     let turn_start = items
         .iter()
         .rposition(is_model_output)
@@ -88,6 +107,70 @@ fn collect_current_turn_tool_results<'a>(items: &'a [Value], output: &mut Vec<Ra
     for item in &items[turn_start..] {
         collect_message_tool_results(item, output);
     }
+    turn_start
+}
+
+/// Finds the call a result answers in the history that precedes the results.
+/// Ids can repeat, so the nearest declaration wins.
+fn declared_tool_call(history: &[Value], tool_call_id: &str) -> Option<ProjectedLlmToolCall> {
+    history.iter().rev().find_map(|item| {
+        item_tool_calls(item)
+            .into_iter()
+            .rev()
+            .filter(|call| declares_tool_call_id(call, tool_call_id))
+            .find_map(projected_tool_call)
+    })
+}
+
+/// The tool calls one history item declares: a Responses API call item, the
+/// `tool_calls` of an assistant message, or the call blocks of its content.
+fn item_tool_calls(item: &Value) -> Vec<&Value> {
+    if is_tool_call_kind(item) {
+        return vec![item];
+    }
+    if item.get("role").and_then(Value::as_str) != Some("assistant") {
+        return Vec::new();
+    }
+    let declared = item.get("tool_calls").and_then(Value::as_array);
+    let blocks = item
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|block| is_tool_call_kind(block));
+    declared.into_iter().flatten().chain(blocks).collect()
+}
+
+fn is_tool_call_kind(value: &Value) -> bool {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| matches!(kind, "tool_use" | "tool-call") || kind.ends_with("_call"))
+}
+
+fn declares_tool_call_id(call: &Value, tool_call_id: &str) -> bool {
+    ["id", "call_id"]
+        .into_iter()
+        .any(|key| call.get(key).and_then(Value::as_str) == Some(tool_call_id))
+}
+
+/// Reads the tool name the same way the response projection does, so both
+/// observations of one call report the same name.
+fn projected_tool_call(call: &Value) -> Option<ProjectedLlmToolCall> {
+    let name = call
+        .pointer("/function/name")
+        .and_then(Value::as_str)
+        .or_else(|| call.get("name").and_then(Value::as_str))?;
+    // The response projection qualifies Responses API MCP calls the same way.
+    let name = call
+        .get("namespace")
+        .and_then(Value::as_str)
+        .filter(|namespace| namespace.starts_with("mcp__") && !name.starts_with("mcp__"))
+        .map_or_else(
+            || name.to_string(),
+            |namespace| format!("{namespace}__{name}"),
+        );
+    Some(ProjectedLlmToolCall { name })
 }
 
 /// An assistant message, or a Responses API call item such as `function_call`.

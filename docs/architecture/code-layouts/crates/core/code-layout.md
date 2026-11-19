@@ -19,14 +19,9 @@
 ├── [x] model/ # 定义跨采集、语义、控制和存储边界传递的领域值。
 │   └── [x] src/ # 身份、trace、事件、能力、载荷与诊断模型。
 ├── [x] process_identity/ # 将不同 PID 坐标收敛到稳定身份；身份解析不拥有 trace membership。
-│   └── [x] src/ # 身份值、来源端口及索引维护。
-│       ├── [x] lib.rs # 导出身份模型、读取端口和管理器。
-│       ├── [x] contract.rs # 区分逻辑身份、observer 坐标和 namespace alias。
-│       │   ├── [x] struct ProcessIdentity # AcTrail 分配的稳定数值 ID，供事件、membership 和存储关联。
-│       │   ├── [x] struct HostProcessCoordinates # daemon 可见 PID、开始时间与可选线程信息。
-│       │   ├── [x] struct NamespaceProcessCoordinates # namespace 身份、其中的 PID 与进程代际。
-│       │   ├── [x] struct ProcessObservation # 一次身份读取中的 observer 坐标和可选 namespace 坐标。
-│       │   ├── [x] struct ProcessRecord # 同一稳定身份的坐标、alias 集合与解析状态。
+│   └── [x] src/ # 来源端口、身份分配及索引维护。
+│       ├── [x] lib.rs # 导出读取端口和管理器。
+│       ├── [x] contract.rs # 定义身份读取端口和查找错误。
 │       │   └── [x] trait ProcessIdentityReader # 根据可见 PID 返回身份观测或明确的读取错误。
 │       └── [x] manager.rs # 维护身份记录及精确坐标索引，处理 alias 补充和活跃 PID 复用。
 │           ├── [x] struct ProcessIdentityManager # 拥有身份分配区间、记录、代际索引和活跃 PID 索引。

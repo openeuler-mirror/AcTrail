@@ -2,7 +2,7 @@
 
 > 本文指导插件管理员将选定的 semantic action 写入本地 OTLP JSONL，或交付给 JSON-RPC HTTP(S) 接收端。
 
-`otel-jsonl` 是内置异步观测插件，把选中的 semantic action（AcTrail 归一化后的行为记录）编码为 OTLP JSON。
+`otel-jsonl` 是内置观测插件，把选中的 semantic action（AcTrail 归一化后的行为记录）编码为 OTLP JSON 后异步交付。
 它支持本地 JSONL 文件和 JSON-RPC 2.0 over HTTP(S) 两种 exporter，不需要 host grant。
 插件安装、发现和加载的边界见 [管理插件](manage.md)。
 
@@ -73,6 +73,16 @@ sudo target/release/actraild --config operator.conf plugin status --instance liv
 写回插件包中的配置；daemon 重启后仍从磁盘配置读取。
 
 ## 运行期故障
+
+每个实例独立记住已入队的终态 action ID；重复的相同状态被跳过，冲突状态被拒收并计入 `dropped_records`。Trace 最终通知到达后释放其身份，卸载时释放全部账本。
+
+| 公共配置项 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `terminal_action_max_entries_per_trace` | `65536` | 单 Trace 的终态身份条目上限 |
+| `terminal_action_max_entries` | `262144` | 实例全部 Trace 的终态身份条目上限 |
+| `terminal_action_max_key_bytes` | `33554432` | 保存的 action ID 的 UTF-8 字节总上限 |
+
+三项必须为正整数，单 Trace 上限不得大于全局上限。字节上限按 ID 内容计账，容器开销由条目数约束。满额时保留已有身份并拒收新身份，产生 `RuntimeDropped`；原因分别为 `terminal_action_per_trace_capacity`、`terminal_action_global_capacity`、`terminal_action_key_byte_capacity`。文件和 JSON-RPC exporter 使用同一组配置。
 
 action 选择和入队发生在热路径，文件 I/O、网络、TLS、HTTP 和重试在独立 worker 中。
 队列满时只丢弃当前插件的记录，不阻塞 recording；最终交付失败会停止当前 exporter

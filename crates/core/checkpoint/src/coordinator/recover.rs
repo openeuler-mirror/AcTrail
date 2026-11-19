@@ -4,10 +4,10 @@
 use std::time::SystemTime;
 
 use super::CoordinatorError;
-use crate::model::{
+use checkpoint_core_contracts::model::{
     DAEMON_STOPPED, Disconnected, Failure, OperationKind, OperationOutcome, Phase, Release,
 };
-use crate::ports::CheckpointCatalog;
+use checkpoint_core_contracts::ports::CheckpointCatalog;
 
 /// Returns how many operations it finished.
 pub(crate) fn close_earlier_daemon(

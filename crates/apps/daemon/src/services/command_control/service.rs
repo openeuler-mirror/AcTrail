@@ -22,7 +22,7 @@ use trace_runtime::registry::TraceRuntime;
 use super::audit::{
     CommandAuditBuilder, CommandDecisionSource, CommandEnforcementDraft, failure_draft,
 };
-use super::decision::{CommandSyscall, ExecNotificationContext};
+use super::decision::{CommandSyscall, ExecCaptureError, ExecNotificationContext};
 use super::worker::{
     CachedCommandDecision, CommandWakeFd, GrayDecisionWorker, PluginDecisionCompletion,
     ReusableDecisionKey, respond_deferred,
@@ -155,56 +155,88 @@ impl CommandControlService {
         if !continuation.is_valid()? {
             return Ok(Vec::new());
         }
-        let path_max_bytes = backend
-            .lock()
-            .map_err(lock_control_error)?
-            .config
-            .path_max_bytes;
+        let (path_max_bytes, failure_decision, audit_enabled) = {
+            let backend = backend.lock().map_err(lock_control_error)?;
+            (
+                backend.config.path_max_bytes,
+                backend.config.failure_decision,
+                backend.config.audit_enabled,
+            )
+        };
         let prepared_identity = prepared_process
             .as_ref()
             .ok()
             .map(|resolved| resolved.process);
-        let mut context = match prepared_process.and_then(|resolved| {
-            ExecNotificationContext::capture(
-                listener_trace_id,
-                resolved,
-                process_registry,
-                notification,
-                path_max_bytes,
-            )
-            .and_then(|context| {
-                context.ok_or_else(|| "notification is not an exec syscall".to_string())
-            })
-        }) {
-            Ok(context) => context,
-            Err(error) => {
-                let backend = backend.lock().map_err(lock_control_error)?;
-                let decision = backend.config.failure_decision;
-                respond_continuation(continuation, decision)?;
-                let process = prepared_identity.or_else(|| {
-                    trace_runtime
-                        .get_trace(listener_trace_id)
-                        .map(|entry| entry.trace.root_process_identity)
-                });
-                let Some(process) = process else {
-                    tracing::error!(
-                        trace_id = %listener_trace_id,
-                        pid = notification.pid,
-                        error,
-                        "command control capture failed after trace disappeared"
-                    );
-                    return Ok(Vec::new());
-                };
-                return Ok(vec![failure_draft(
-                    listener_trace_id,
-                    process,
-                    operation,
-                    decision,
-                    notification.pid,
-                    error,
-                )]);
-            }
-        };
+        let mut context =
+            match prepared_process
+                .map_err(ExecCaptureError::from)
+                .and_then(|resolved| {
+                    ExecNotificationContext::capture(
+                        listener_trace_id,
+                        resolved,
+                        process_registry,
+                        notification,
+                        path_max_bytes,
+                    )
+                    .and_then(|context| {
+                        context.ok_or_else(|| {
+                            ExecCaptureError::Capture(
+                                "notification is not an exec syscall".to_string(),
+                            )
+                        })
+                    })
+                }) {
+                Ok(context) => context,
+                Err(error) => {
+                    let native_lookup = error.target_lookup();
+                    let decision = if let Some((_, errno)) = native_lookup {
+                        continuation.deny_errno(errno)?;
+                        EnforcementDecision::Deny
+                    } else {
+                        respond_continuation(continuation, failure_decision)?;
+                        failure_decision
+                    };
+                    if native_lookup.is_some() && !audit_enabled {
+                        return Ok(Vec::new());
+                    }
+                    let process = prepared_identity.or_else(|| {
+                        trace_runtime
+                            .get_trace(listener_trace_id)
+                            .map(|entry| entry.trace.root_process_identity)
+                    });
+                    let Some(process) = process else {
+                        tracing::error!(
+                            trace_id = %listener_trace_id,
+                            pid = notification.pid,
+                            error = %error,
+                            "command control capture failed after trace disappeared"
+                        );
+                        return Ok(Vec::new());
+                    };
+                    let draft = match native_lookup {
+                        Some((requested_path, errno)) => {
+                            CommandEnforcementDraft::target_lookup_error(
+                                listener_trace_id,
+                                process,
+                                operation,
+                                notification.pid,
+                                requested_path,
+                                errno,
+                                error.to_string(),
+                            )
+                        }
+                        None => failure_draft(
+                            listener_trace_id,
+                            process,
+                            operation,
+                            decision,
+                            notification.pid,
+                            error.to_string(),
+                        ),
+                    };
+                    return Ok(vec![draft]);
+                }
+            };
         let started_at = Instant::now();
         let (rule, default_decision, audit_enabled, audit_default_allow) = loop {
             let backend = backend.lock().map_err(lock_control_error)?;

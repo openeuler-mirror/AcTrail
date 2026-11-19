@@ -8,8 +8,9 @@ use plugin_system::{
     CommandPolicyHost, ControlDecider, ControlDecisionBudget, ControlDecisionRequest,
     ControlDecisionResponse, FilePolicyHost, NetworkPolicyHost, PluginCommandBudget,
     PluginCommandRequest, PluginCommandResponse, PluginHostGrants, PluginHostcallMetricsSource,
-    PluginManifest, PluginRuntimeError, PluginRuntimeKind, RuntimePluginConfig,
+    PluginManifest, PluginRuntimeError, RuntimePluginConfig,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 use wasmtime::Engine;
 use wasmtime::component::{Component, Func, Val};
 

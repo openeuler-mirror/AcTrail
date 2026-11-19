@@ -237,11 +237,11 @@ fn app_identity(
         .semantic_action_for_process_kind(
             trace.trace_id,
             &response.process,
-            SemanticActionKind::ProcessExec.as_str(),
+            SemanticActionKind::AgentIdentity.as_str(),
         )
         .map_err(|error| {
             format!(
-                "read process.exec action failed for trace {} response {}: {}: {}",
+                "read agent.identity action failed for trace {} response {}: {}: {}",
                 trace.trace_id, response.action_id, error.stage, error.message
             )
         })?;

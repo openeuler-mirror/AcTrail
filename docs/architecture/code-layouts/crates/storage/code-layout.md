@@ -4,7 +4,7 @@
 [x] crates/storage/ # 主观测存储契约、后端选择，以及 SQLite 与 noop 实现
 ├── [x] core/ # 汇集主存储能力和面向查询的分页模型
 │   └── [x] src/ # 后端接口、事务和控制状态存储接口
-│       ├── [x] lib.rs # 导出主存储能力与查询类型
+│       ├── [x] lib.rs # 导出主存储能力、查询类型和共享保留限额
 │       ├── [x] backend.rs # 聚合 trace、事件、语义、payload 和控制状态的存取能力
 │       │   ├── [x] trait StorageBackend # 提供记录保存、历史读取、保留策略和事务入口；继承两个外部 cgroup 绑定存取接口
 │       │   │   └── [x] semantic_action_display_path_to_action # 不加载整张图，返回到指定动作的展示路径，供 checkpoint 跳到 LLM 调用
@@ -27,18 +27,12 @@
 │       │   └── [x] struct TraceCounts # 汇总 trace 关联数据数量
 │       ├── [x] action_content.rs # HTTP 等行为正文的读取模型
 │       │   └── [x] struct HttpContentQuery # 保存正文读取范围与预算
-│       ├── [x] idle.rs # 空闲区间查询模型
-│       │   └── [x] struct IdleInterval # 描述一个空闲时间区间
-│       └── [x] payload_retention.rs # 明文保留预算
-│           └── [x] struct PayloadRetentionLimits # 限制 trace 保存的明文范围
-├── [x] factory/ # 解析存储配置并创建选定后端
-│   └── [x] src/ # 后端配置、解析和实例构造
-│       ├── [x] lib.rs # 导出 open_storage_backend 与后端配置类型
-│       ├── [x] config.rs # 表达存储后端选择和专属配置
-│       │   ├── [x] enum StorageBackendKind # 标识 SQLite 或 noop 后端
-│       │   └── [x] enum StorageConfig # 保存所选后端的完整配置
-│       ├── [x] parser.rs # 解析 operator 传入的存储子配置
-│       └── [x] builder.rs # open_storage_backend 按配置和打开模式构造 StorageBackend
+│       └── [x] idle.rs # 空闲区间查询模型
+│           └── [x] struct IdleInterval # 描述一个空闲时间区间
+├── [x] factory/ # 按共享配置创建选定后端
+│   └── [x] src/ # 实例构造和打开错误转换
+│       ├── [x] lib.rs # 导出 open_storage_backend
+│       └── [x] builder.rs # 创建目录并打开 SQLite 或 noop 后端
 └── [x] adapters/ # 主存储契约的具体后端
     ├── [x] noop/ # 跳过观测持久化，保留运行所需控制状态
     │   └── [x] src/ # 内存控制状态与事务
@@ -58,10 +52,6 @@
             ├── [x] backend.rs # 将 StorageBackend 方法适配到 SQLite 记录和查询实现
             ├── [x] transaction.rs # 创建数据库写事务并处理提交与回滚
             │   └── [x] struct SqliteWriteTransaction # 管理 SQLite 事务结束边界
-            ├── [x] config/ # SQLite 存储专属配置
-            │   └── [x] sqlite.rs # 数据库路径、等待预算、事件布局与压缩参数
-            │       ├── [x] struct SqliteStorageConfig # 持有 SQLite 后端全部打开选项
-            │       └── [x] enum EventRecordLayout # 选择事件记录的持久化布局
             ├── [x] records/ # 原始事件与明文记录的编码和压缩
             │   ├── [x] payload_dictionary.rs # 复用 trace 内重复事件载荷
             │   │   └── [x] struct EventPayloadDictionary # 管理有界载荷字典缓存

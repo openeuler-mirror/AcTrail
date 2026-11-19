@@ -18,7 +18,7 @@ use config_core::daemon::{
 use config_core::provider_rules::ProviderRuleSetConfig;
 use control_contract::command::PluginLoadCommand;
 use control_contract::reply::{ControlError, ControlReply};
-use plugin_system::PluginInstanceStatus;
+use plugin_system_contracts::PluginInstanceStatus;
 use sandbox_alert_sqlite::{
     SandboxAlertSqliteConfig, SandboxAlertSqliteStore, SandboxAlertSynchronous,
 };
@@ -26,7 +26,7 @@ use sandbox_evidence_sqlite::{
     SandboxEvidenceSqliteConfig, SandboxEvidenceSqliteStore, SandboxEvidenceSynchronous,
 };
 use sandbox_upstream_transport::{UpstreamServerConfig, UpstreamTcpServer};
-use storage_factory::StorageConfig;
+use storage_contracts::StorageConfig;
 use uds_control_server::{ReplyTicket, UdsControlConnection, UdsControlServer};
 
 use crate::profiles::DaemonProfileRegistry;

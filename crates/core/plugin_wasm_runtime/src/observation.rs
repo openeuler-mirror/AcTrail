@@ -1,12 +1,14 @@
+//! WASM observation-consumer execution and hostcall metrics.
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use plugin_system::{
     AlertHost, DEFAULT_OBSERVATION_QUEUE_CAPACITY, ObservationBatch, ObservationConsumeReport,
     ObservationConsumer, ObservationEventFamily, PluginHostGrants, PluginHostcallMetricsSource,
-    PluginManifest, PluginRuntimeError, PluginRuntimeKind, PluginWasmAbi, PostTraceAnalyzer,
-    PostTraceHost,
+    PluginManifest, PluginRuntimeError, PluginWasmAbi, PostTraceAnalyzer, PostTraceHost,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 use serde_json::json;
 use wasmtime::{Memory, Module, TypedFunc};
 

@@ -8,6 +8,24 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "terminal_action_max_entries_per_trace": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 65536,
+      "description": "Maximum remembered terminal delivery identities per trace; must not exceed the global entry limit."
+    },
+    "terminal_action_max_entries": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 262144,
+      "description": "Maximum remembered terminal delivery identities across all traces in this exporter instance."
+    },
+    "terminal_action_max_key_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 33554432,
+      "description": "Maximum total UTF-8 bytes of remembered action IDs; entry limits also bound container overhead. At capacity, existing IDs remain registered and new IDs are rejected."
+    },
     "exporter": {
       "title": "Exporter",
       "description": "Delivery implementation used for OTLP JSON records.",

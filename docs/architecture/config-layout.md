@@ -1,10 +1,10 @@
 | 配置项 | 类型 | 默认值 | 必填 | 所属模块 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `host.http.allowed_urls` | `string[]` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 插件 manifest 配置。授予 `http.request` 要求配置该列表。HTTP 或 HTTPS 完整地址精确匹配，禁用代理和重定向。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.timeout_ms` | `uint64` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | HTTP 请求时长上限，单位为毫秒且必须大于 0。授权和管理命令中还受调用剩余时间扣除收尾预留后的限制。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.finish_reserve_ms` | `uint64` | `30` | 否 | plugin_system / plugin_wasm_runtime | 为插件处理 HTTP 结果和返回预留的毫秒数。0 关闭预留。调用剩余时间不大于预留时，不发送请求并返回错误。没有调用截止时间时不扣除。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.request_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 请求正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
-| `host.http.response_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 响应正文字节数上限，必须大于 0。[声明](../../crates/core/plugin_system/src/manifest/declarations.rs) |
+| `host.http.allowed_urls` | `string[]` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 插件 manifest 配置。授予 `http.request` 要求配置该列表。HTTP 或 HTTPS 完整地址精确匹配，禁用代理和重定向。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.timeout_ms` | `uint64` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | HTTP 请求时长上限，单位为毫秒且必须大于 0。授权和管理命令中还受调用剩余时间扣除收尾预留后的限制。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.finish_reserve_ms` | `uint64` | `30` | 否 | plugin_system / plugin_wasm_runtime | 为插件处理 HTTP 结果和返回预留的毫秒数。0 关闭预留。调用剩余时间不大于预留时，不发送请求并返回错误。没有调用截止时间时不扣除。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.request_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 请求正文字节数上限，必须大于 0。[声明](../../crates/contracts/plugin_system/src/http.rs) |
+| `host.http.response_max_bytes` | `uint32` | 无 | 配置 `host.http` 时必填 | plugin_system / plugin_wasm_runtime | 响应正文字节数上限，必须大于 0。[声明](../../crates/contracts/plugin_system/src/http.rs) |
 | `control.socket_path` | `string` | `"/run/actrail/control.sock"` | 否 | control | Unix socket 路径；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L11) |
 | `control.socket_mode_octal` | `string` | `"660"` | 否 | control | Unix socket 权限的八进制字符串；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L12) |
 | `control.pending_connection_max` | `uint32` | `256` | 否 | control | 同时跟踪的 control 连接数上限；[声明](../../crates/core/config/src/daemon/operator/document/base/document.rs#L13) |
@@ -258,6 +258,9 @@
 | `agent_invocation.commands` | `string[]` | `[]` | 否 | agent_invocation | 用于识别 Agent 调用的命令列表；[声明](../../crates/core/config/src/daemon/operator/document/process.rs#L82) |
 | `agent_invocation.tool_names` | `string[]` | `["Agent", "Task", "task", "spawn_agent"]` | 否 | agent_invocation | 用于识别 Agent 调用的工具名称列表；[声明](../../crates/core/config/src/daemon/operator/document/process.rs#L83) |
 | `semantic_retention.projection_enabled` | `bool` | `true` | 否 | semantic_retention | 启用语义投影；[声明](../../crates/core/config/src/daemon/operator/document/semantic.rs#L17) |
+| `semantic_retention.command_delivery.max_pending_commands_per_trace` | `uint32` | `4096` | 否 | semantic_retention | 单个 Trace 等待终态导出的命令上限；必须为正数且不大于全局上限。 |
+| `semantic_retention.command_delivery.max_pending_commands` | `uint32` | `16384` | 否 | semantic_retention | 全局等待终态导出的命令上限；必须为正数。 |
+| `semantic_retention.command_delivery.max_accounted_bytes` | `uint64` | `67108864` | 否 | semantic_retention | 待交付命令开端、入边和证据的计账字节上限；计入 UTF-8 字符串与固定记录大小，分配器和容器开销由条目数约束；必须为正数。满额时拒收该命令的待交付记录并产生 `RuntimeDropped`，采集与本地存储继续。终态、Trace 结束或遗忘、最后一个语义消费者卸载及关闭均释放状态。 |
 | `semantic_retention.content_owner` | `string` | `"highest_consumed"` | 否 | semantic_retention | 内容保留层级的归属策略；[声明](../../crates/core/config/src/daemon/operator/document/semantic.rs#L18) |
 | `semantic_retention.l0_llm_call.enabled` | `bool` | `true` | 否 | semantic_retention | 保留 LLM 语义观测；[声明](../../crates/core/config/src/daemon/operator/document/semantic/llm.rs#L6) |
 | `semantic_retention.l0_llm_call.request_content` | `string` | `"canonical_blocks"` | 否 | semantic_retention | 请求正文保留模式；[声明](../../crates/core/config/src/daemon/operator/document/semantic/llm.rs#L7) |

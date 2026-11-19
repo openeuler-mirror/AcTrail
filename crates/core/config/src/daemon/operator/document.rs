@@ -7,7 +7,7 @@ use std::time::Duration;
 use model_core::capability::{Capability, CapabilityRequest, RequestMode};
 use model_core::ids::ProfileName;
 use serde::{Deserialize, Serialize};
-use storage_factory::{
+use storage_contracts::{
     EventRecordLayout, SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS,
     SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES, StorageConfig,
 };

@@ -1,5 +1,10 @@
 [Unit]
 Description=Reconcile AcTrail Cloud Hypervisor VSOCK bridges with live Kata sandboxes
+# The path unit starts this oneshot on every change under /run/vc/vm. With the
+# default start limit (5 starts in 10 seconds) a burst of sandbox starts and
+# stops fails this unit and then the path unit for good, and no later sandbox
+# gets a bridge. Reconciliation is idempotent and cheap, so do not rate-limit it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

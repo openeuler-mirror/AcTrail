@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -14,14 +15,21 @@ from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
 
 from .config import OtelHttpConfig
+from .commands import CommandSpanVerification
 from .environment import OtelHttpEnvironment
+from .tool_agents import TOOL_AGENTS, ToolAgent, ToolChainTask, resolve_tool_agent
 
 from .constants import CASE_CONSTANTS
 
 
 class OtelHttpCase(TestCase):
+    _ACTION_KINDS = {
+        "process.exec", "process.exit", "agent.identity", "llm.request",
+        "command.invocation",
+    }
     _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
     _TERMINAL_STATUSES = {"success", "error", "unknown"}
+    _TOOL_ROUND_KINDS = {"process.exec", "process.exit", "llm.tool_call", "llm.tool_result"}
     _METADATA_KEYS = {
         "actrail.action.id",
         "actrail.action.kind",
@@ -38,7 +46,9 @@ class OtelHttpCase(TestCase):
         "actrail.agent.type.source",
         "llm.request.trajectory_id",
         "llm.request.trajectory_inference_version",
+        "llm.tool_call.id",
     }
+    _SHORT_TOOL_CALL_ID_HEX = 12
 
     def __init__(self, config: OtelHttpConfig):
         self._config = config
@@ -79,13 +89,14 @@ class OtelHttpCase(TestCase):
             )
 
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "agent.identity", "llm.request"}
+                self._ACTION_KINDS
             )
             results["outbound-policy"] = TestResult(
                 TestStatus.PASSED,
-                "explicit process/identity/request allow-list and metadata-only mode accepted",
+                "explicit process/identity/request/command allow-list and metadata-only mode accepted",
             )
 
+            commands = CommandSpanVerification(self._config)
             marker = f"OTEL_HTTP_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
             trace_id = self._launch(marker, xiaoo, xiaoo_environment)
             self._wait_for_terminal_trace(trace_id)
@@ -101,7 +112,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             spans = self._wait_for_marker_spans(
                 marker,
-                {"process.exec", "process.exit", "agent.identity", "llm.request"},
+                self._ACTION_KINDS,
             )
             results["shutdown-tail"] = TestResult(
                 TestStatus.PASSED,
@@ -143,7 +154,7 @@ class OtelHttpCase(TestCase):
             )
 
             self._environment.configure_buffered_export(
-                {"process.exec", "process.exit", "agent.identity", "llm.request"},
+                self._ACTION_KINDS,
                 attribute_mode="full",
             )
             body_marker = f"REQUEST_BODY_V2_{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
@@ -162,7 +173,7 @@ class OtelHttpCase(TestCase):
             self._environment.finish_buffered_export()
             full_spans = self._wait_for_marker_spans(
                 full_marker,
-                {"process.exec", "process.exit", "agent.identity", "llm.request"},
+                self._ACTION_KINDS,
             )
             full_counts = self._require_terminal_one_shot(full_spans)
             if full_counts["llm.request"] < 1:
@@ -175,6 +186,24 @@ class OtelHttpCase(TestCase):
                 TestStatus.PASSED,
                 f"full mode exported {exported_bodies} canonical request body/bodies",
             )
+
+            for mode, local_id, received in (
+                ("metadata-only", trace_id, spans),
+                ("full", full_trace_id, full_spans),
+            ):
+                try:
+                    summary = commands.verify(
+                        local_id, mode, received, self._ACTION_KINDS,
+                    )
+                    results[f"command-terminal-{mode}"] = TestResult(
+                        TestStatus.PASSED, summary
+                    )
+                except AssertionError as error:
+                    results[f"command-terminal-{mode}"] = TestResult(
+                        TestStatus.FAILED, str(error)
+                    )
+
+            results.update(self._tool_result_rounds(test_context))
 
             requests = self._require_configured_credential()
             results["request-credential"] = TestResult(
@@ -203,6 +232,207 @@ class OtelHttpCase(TestCase):
             return None
         return self._environment.cleanup()
 
+    def _tool_result_rounds(
+        self,
+        test_context: TestingContextSingleton,
+    ) -> dict[str, TestResult]:
+        """Each installed agent runs a two-file task; every tool call needs one bound result."""
+        discovery = AgentBinaryDiscovery(self._config.repo)
+        results: dict[str, TestResult] = {}
+        available: list[ToolAgent] = []
+        for kind, variable, executable in TOOL_AGENTS:
+            name = f"tool-results-{kind}"
+            agent = resolve_tool_agent(discovery, kind, variable, executable)
+            if agent is None:
+                results[name] = TestResult(
+                    TestStatus.SKIPPED,
+                    f"{kind} executable not found; set {variable} to its path",
+                )
+                continue
+            test_context.report_progress(
+                "agent_availability",
+                f"checking {kind} availability",
+            )
+            if not test_context.check_agent_availability(
+                kind, agent.binary, agent.environment
+            ):
+                results[name] = TestResult(
+                    TestStatus.SKIPPED,
+                    f"{kind} external availability check failed",
+                )
+                continue
+            available.append(agent)
+            test_context.report_progress(
+                "tool_results",
+                f"exporting tool calls and results of {kind}",
+            )
+            try:
+                results[name] = TestResult(
+                    TestStatus.PASSED,
+                    self._require_tool_results_with_calls(agent),
+                )
+            except AssertionError as error:
+                results[name] = TestResult(TestStatus.FAILED, f"{kind}: {error}")
+        results["tool-results-metadata-only"] = self._metadata_only_tool_round(
+            test_context, available
+        )
+        return results
+
+    def _metadata_only_tool_round(
+        self,
+        test_context: TestingContextSingleton,
+        available: list[ToolAgent],
+    ) -> TestResult:
+        """The default export mode still pairs each tool call with its result."""
+        agent = next((agent for agent in available if agent.kind == "xiaoo"), None)
+        agent = agent or (available[0] if available else None)
+        if agent is None:
+            return TestResult(TestStatus.SKIPPED, "no tool agent is available")
+        test_context.report_progress(
+            "tool_results",
+            f"pairing tool calls and results of {agent.kind} in metadata-only mode",
+        )
+        try:
+            spans = self._run_tool_chain(agent, "metadata-only")
+            self._require_metadata_only(spans)
+            call_ids = self._paired_tool_ids(spans)
+        except AssertionError as error:
+            return TestResult(TestStatus.FAILED, f"{agent.kind}: {error}")
+        return TestResult(
+            TestStatus.PASSED,
+            f"{agent.kind}: {len(call_ids)} tool call(s) paired with their result "
+            "by llm.tool_call.id without content attributes",
+        )
+
+    def _require_tool_results_with_calls(self, agent: ToolAgent) -> str:
+        spans = self._run_tool_chain(agent, "full")
+        call_ids = self._paired_tool_ids(spans)
+        mismatched = self._results_without_their_call(spans)
+        if mismatched:
+            raise AssertionError(f"tool result(s) do not carry their call: {mismatched}")
+        unshortened = self._calls_without_short_id(spans)
+        if unshortened:
+            raise AssertionError(f"tool call id is not the short form of the protocol id: {unshortened}")
+        # The parent span already names the response or request; the id is not repeated.
+        repeated = sorted(
+            key
+            for span in spans
+            for key in ("llm.tool_call.response_action_id", "llm.tool_result.request_action_id")
+            if self._attribute(span, key) is not None
+        )
+        if repeated:
+            raise AssertionError(f"tool span repeated its parent id: {repeated}")
+        return f"{len(call_ids)} tool call(s), each with one tool result carrying the call"
+
+    def _run_tool_chain(self, agent: ToolAgent, attribute_mode: str) -> list[dict[str, Any]]:
+        """Run the two-file task and return its exported spans."""
+        assert self._environment is not None
+        self._environment.configure_buffered_export(
+            self._TOOL_ROUND_KINDS,
+            attribute_mode=attribute_mode,
+        )
+        # Each round needs its own files; the metadata-only round reuses an agent.
+        suffix = "" if attribute_mode == "full" else f"-{attribute_mode}"
+        task = ToolChainTask.create(self._config.work_dir / f"tool-chain-{agent.kind}{suffix}")
+        marker = (
+            f"OTEL_HTTP_TOOLS_V2_{agent.kind}_"
+            f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
+        )
+        result = self._environment.runtime.run(
+            [
+                *self._environment.runtime.control_command("launch"),
+                "--name",
+                marker,
+                "--host-ebpf",
+                "required",
+                "--seccomp-notify",
+                "auto",
+                "--",
+                *agent.command(task.prompt),
+            ],
+            timeout_seconds=self._config.launch_timeout_seconds,
+            # Agents such as OpenCode reject reads outside their working directory,
+            # which OpenCode takes from PWD rather than from the process.
+            environment={**agent.environment, "PWD": str(task.first.parent)},
+            cwd=task.first.parent,
+        )
+        tail = result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]
+        if result.returncode != 0:
+            raise AssertionError(f"actrailctl launch exited with {result.returncode}: {tail}")
+        if task.answer not in result.stdout:
+            raise AssertionError(f"output did not contain the second file's text: {tail}")
+        trace_ids = [int(value) for value in self._TRACE_PATTERN.findall(result.output)]
+        if len(trace_ids) != 1:
+            raise AssertionError(f"expected one trace id, found {trace_ids}")
+        self._wait_for_terminal_trace(trace_ids[0])
+        self._environment.finish_buffered_export()
+        return self._wait_for_marker_spans(marker, {"process.exit", "llm.tool_call"})
+
+    def _paired_tool_ids(self, spans: list[dict[str, Any]]) -> list[str]:
+        """Every tool call has exactly one result with the same llm.tool_call.id."""
+        call_ids = self._tool_ids(spans, "llm.tool_call", "llm.tool_call.id")
+        result_ids = self._tool_ids(spans, "llm.tool_result", "llm.tool_call.id")
+        if Counter(result_ids) != Counter(call_ids):
+            missing = sorted((Counter(call_ids) - Counter(result_ids)).elements())
+            extra = sorted((Counter(result_ids) - Counter(call_ids)).elements())
+            raise AssertionError(
+                f"{len(call_ids)} tool call(s) but {len(result_ids)} tool result(s); "
+                f"calls without a result={missing}, unexpected results={extra}"
+            )
+        return call_ids
+
+    def _calls_without_short_id(self, spans: list[dict[str, Any]]) -> list[str]:
+        """llm.tool_call.id is the leading hex of the SHA-256 of the protocol id."""
+        wrong = []
+        for span in spans:
+            if self._attribute(span, "actrail.action.kind") != "llm.tool_call":
+                continue
+            protocol_id = self._attribute(span, "llm.tool_call.protocol_id")
+            short_id = self._attribute(span, "llm.tool_call.id")
+            expected = (
+                hashlib.sha256(protocol_id.encode()).hexdigest()[: self._SHORT_TOOL_CALL_ID_HEX]
+                if protocol_id
+                else None
+            )
+            if short_id != expected:
+                wrong.append(f"{short_id} for {protocol_id}")
+        return sorted(wrong)
+
+    def _results_without_their_call(self, spans: list[dict[str, Any]]) -> list[str]:
+        """A tool result carries the id and tool name of the call it answers."""
+        call_keys = ("llm.tool_call.name",)
+        calls = {
+            self._attribute(span, "llm.tool_call.id"): span
+            for span in spans
+            if self._attribute(span, "actrail.action.kind") == "llm.tool_call"
+        }
+        mismatched = []
+        for span in spans:
+            if self._attribute(span, "actrail.action.kind") != "llm.tool_result":
+                continue
+            call = calls[self._attribute(span, "llm.tool_call.id")]
+            carried = [self._attribute(span, key) for key in call_keys]
+            declared = [self._attribute(call, key) for key in call_keys]
+            if carried != declared:
+                mismatched.append(f"result carries {carried}, call declares {declared}")
+        return sorted(mismatched)
+
+    def _tool_ids(
+        self,
+        spans: list[dict[str, Any]],
+        kind: str,
+        id_key: str,
+    ) -> list[str]:
+        ids = []
+        for span in spans:
+            if self._attribute(span, "actrail.action.kind") != kind:
+                continue
+            tool_id = self._attribute(span, id_key)
+            if not tool_id:
+                raise AssertionError(f"{kind} span has no {id_key}")
+            ids.append(tool_id)
+        return ids
+
     def _launch(
         self,
         marker: str,
@@ -217,7 +447,9 @@ class OtelHttpCase(TestCase):
         if request_marker is not None:
             prompt = f'The opaque request verification marker is "{request_marker}". '
         prompt += (
-            f'Reply with exactly "{answer_marker}" and nothing else. Do not use tools.'
+            "Use the bash tool exactly once to execute the command "
+            f"`sleep {CASE_CONSTANTS.command_sleep_seconds}`. Do not run other commands. "
+            f'After the tool succeeds reply with exactly "{answer_marker}".'
         )
         result = self._environment.runtime.run(
             [
@@ -232,7 +464,8 @@ class OtelHttpCase(TestCase):
                 xiaoo,
                 "--cli",
                 "run",
-                "--no-tools",
+                "--tools",
+                "bash",
                 "--max-turns",
                 str(CASE_CONSTANTS.max_turns),
                 "--prompt",

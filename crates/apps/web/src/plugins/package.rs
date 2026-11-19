@@ -1,10 +1,13 @@
+//! Read plugin packages and describe their activation requirements.
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use config_core::daemon::PluginDiscoveryConfig;
-use plugin_system::{PluginCapability, PluginManifest, PluginPurpose, PluginRuntimeKind};
+use plugin_system::{PluginCapability, PluginManifest};
+use plugin_system_contracts::{PluginPurpose, PluginRuntimeKind};
 
 pub(super) struct PluginDirectory {
     roots: Vec<PathBuf>,

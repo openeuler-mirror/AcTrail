@@ -12,7 +12,7 @@ use semantic_action::{
 use crate::live::tool::contract::ToolProjectionOutput;
 use crate::live::tool::internal::declaration::DeclaredLlmToolCall;
 use crate::live::tool::internal::state::{FinalizedInvocation, StateEviction};
-use crate::llm_pipeline::ProjectedLlmToolResult;
+use crate::llm_pipeline::{ProjectedLlmToolCall, ProjectedLlmToolResult};
 
 use super::actions::{
     agent_invocation_action, tool_call_action, tool_diagnostic, tool_result_action,
@@ -48,9 +48,9 @@ impl ToolSemanticEmitter {
         &self,
         request: &SemanticAction,
         result: &ProjectedLlmToolResult,
-        binding_state: &str,
+        tool_call: Option<&ProjectedLlmToolCall>,
     ) -> SemanticAction {
-        tool_result_action(request, result, binding_state)
+        tool_result_action(request, result, tool_call)
     }
 
     pub(in crate::live::tool) fn agent_invocation_action(
@@ -90,11 +90,9 @@ impl ToolSemanticEmitter {
     pub(in crate::live::tool) fn emit_tool_result(
         &mut self,
         request: &SemanticAction,
-        tool_call: Option<&SemanticAction>,
         action: &SemanticAction,
         changed: bool,
         existing: bool,
-        state: semantic_action::SemanticToolResultBinding,
     ) {
         if !changed {
             return;
@@ -103,12 +101,6 @@ impl ToolSemanticEmitter {
             self.output
                 .updates
                 .push(crate::live::ActionUpdateFactory::lifecycle(action, None));
-            self.output
-                .updates
-                .push(crate::live::ActionUpdateFactory::update(
-                    action,
-                    semantic_action::SemanticActionChange::ToolResultBinding { state },
-                ));
             self.output.updated_actions.push(action.clone());
         } else {
             self.output.actions.push(action.clone());
@@ -119,14 +111,6 @@ impl ToolSemanticEmitter {
             SemanticActionLinkRole::LlmRequestToolResult,
             SemanticActionLinkOrigin::Observed,
         ));
-        if let Some(tool_call) = tool_call {
-            self.output.links.push(action_link(
-                tool_call,
-                action,
-                SemanticActionLinkRole::LlmToolCallResult,
-                SemanticActionLinkOrigin::Observed,
-            ));
-        }
     }
 
     pub(in crate::live::tool) fn emit_agent_invocation(
@@ -205,23 +189,6 @@ impl ToolSemanticEmitter {
                 observed_at,
                 LlmPipelineDiagnosticCode::ToolResultRequestMissing,
                 LlmPipelineDiagnosticSeverity::Error,
-            )
-            .with_discarded_entries(1),
-        );
-    }
-
-    pub(in crate::live::tool) fn diagnose_lifecycle_gap(
-        &mut self,
-        request: &SemanticAction,
-        code: LlmPipelineDiagnosticCode,
-    ) {
-        self.output.diagnostics.push(
-            tool_diagnostic(
-                request.trace_id,
-                &request.process,
-                request.start_time,
-                code,
-                LlmPipelineDiagnosticSeverity::Warning,
             )
             .with_discarded_entries(1),
         );

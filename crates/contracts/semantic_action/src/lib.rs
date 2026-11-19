@@ -15,8 +15,8 @@ pub use content_node::{
 
 pub use update::{
     SemanticActionChange, SemanticActionFinalizationReason, SemanticActionIdentity,
-    SemanticActionUpdate, SemanticAttributeSupplement, SemanticCommandKind,
-    SemanticToolResultBinding,
+    SemanticActionStateAttributes, SemanticActionUpdate, SemanticAttributeSupplement,
+    SemanticCommandKind,
 };
 
 pub use llm::{

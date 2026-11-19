@@ -7,7 +7,7 @@ use checkpoint::{BackendError, BackendErrorKind, SnapshotId};
 use super::records::PendingRecord;
 use crate::coordinator::scheduler::Held;
 use crate::coordinator::{CoordinatorError, Hold, Shared, unknown_checkpoint, unknown_trace};
-use crate::model::{
+use checkpoint_core_contracts::model::{
     Boundary, CheckpointRecord, Failure, OperationId, OperationOutcome, SnapshotContext,
     TraceRecord,
 };
@@ -75,7 +75,7 @@ pub(crate) fn run(
         Ok(invalidated) => (OperationOutcome::Succeeded, None, invalidated),
         Err(failure) => (
             OperationOutcome::Failed,
-            Some(Failure::from(failure.error)),
+            Some(Shared::backend_failure(failure.error)),
             failure.invalidated,
         ),
     };

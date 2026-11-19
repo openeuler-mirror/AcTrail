@@ -4,6 +4,8 @@
 mod batch;
 #[path = "live/direct.rs"]
 mod direct;
+#[path = "live/exit_settle.rs"]
+pub(in crate::services) mod exit_settle;
 #[path = "live/held_llm_requests.rs"]
 mod held_llm_requests;
 #[path = "live/launch_binding.rs"]
@@ -194,6 +196,7 @@ impl StorageAttachService {
                 self.idle_detection.finish_trace(trace.trace_id);
                 self.agent_executions.finish_trace(trace.trace_id);
                 self.semantic_actions.forget_trace(trace.trace_id);
+                self.recording.forget_trace(trace.trace_id);
                 self.application_protocol.forget_trace(trace.trace_id);
                 self.payload_reorderer.forget_trace(trace.trace_id);
                 self.seccomp_socket.forget_trace(trace.trace_id);

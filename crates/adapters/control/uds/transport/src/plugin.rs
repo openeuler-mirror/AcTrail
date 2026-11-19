@@ -1,6 +1,8 @@
+//! Encode and decode plugin status replies over the control protocol.
+
 use std::collections::BTreeMap;
 
-use plugin_system::{
+use plugin_system_contracts::{
     PluginHostcallMetrics, PluginInstanceStatus, PluginLifecycleState, PluginPayloadReadMetrics,
     PluginPurpose, PluginRuntimeKind,
 };

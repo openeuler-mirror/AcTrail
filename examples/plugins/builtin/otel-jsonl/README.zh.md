@@ -20,7 +20,11 @@ action 编码为 OTLP JSON，再交给配置选中的 exporter。当前 exporter
 - `otel-jsonl.config.v1.schema.json`：`schema_ref` 指向的 JSON Schema。
 
 插件配置中的 `exporter`、`queue_capacity` 和 `[action_kinds]` 是公共设置。
-`default` 控制未显式列出的可导出 kind，其余 boolean 字段会由 Web 按 schema
+文件与 JSON-RPC 共用有界终态去重：`terminal_action_max_entries_per_trace = 65536`、
+`terminal_action_max_entries = 262144`、`terminal_action_max_key_bytes = 33554432`。
+满额保留已有身份并拒收新身份，Trace 最终通知和卸载释放状态；配置与诊断见[运行期故障](../../../../docs/operations/plugins/otel-jsonl.md#运行期故障)。
+
+`[action_kinds]` 的 `default` 控制未显式列出的可导出 kind，其余 boolean 字段会由 Web 按 schema
 显示为 checkbox。`file.tty_io` 由 recording 层在 exporter 之前过滤，不属于插件
 配置。
 

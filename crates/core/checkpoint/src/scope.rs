@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::coordinator::CoordinatorError;
-use crate::model::ScopeConfig;
+use checkpoint_core_contracts::model::ScopeConfig;
 
 /// A scope after nesting is resolved; child scope roots are already in `excludes`.
 #[derive(Clone, Debug, Eq, PartialEq)]

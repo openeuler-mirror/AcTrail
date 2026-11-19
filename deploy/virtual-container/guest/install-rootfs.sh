@@ -22,9 +22,12 @@ OTEL_EXPORT_ENABLED=0
 OTEL_ENDPOINT_CONFIGURED="false"
 EGRESS_MODE="network"
 OTEL_ATTRIBUTE_MODE="metadata-only"
+VSOCK_PORT=""
 STARTUP_DEPENDENCY="optional"
 WITH_VIEWER=0
 WITH_SANDBOX_OBSERVER=0
+SECCOMP_NOTIFY="disabled"
+SECCOMP_NOTIFY_PATCH="$SCRIPT_DIR/seccomp-notify.toml"
 SOCKET_GID=39000
 MIN_FREE_BYTES=$((32 * 1024 * 1024))
 
@@ -38,9 +41,11 @@ Options:
   --otel-endpoint URL          Enable OTLP/HTTP export to this Guest-reachable URL
   --egress-mode MODE           Export path: network or vsock-bridge (default: network)
   --otel-attribute-mode MODE   otel-http attribute_mode: metadata-only or full (default: metadata-only)
+  --vsock-port PORT            Host AF_VSOCK port for vsock-bridge egress (default: 43180)
   --startup-dependency POLICY  optional or required (default: optional)
   --with-viewer                Also install actrailviewer (omitted by default)
   --with-sandbox-observer      Install actrail-sb as a Guest system service
+  --seccomp-notify MODE        AcTrail seccomp user-notify: disabled, auto or required (default: disabled)
   --socket-gid GID             Numeric GID shared with workloads (default: 39000)
   --min-free-mib N             Free-space reserve after installation (default: 32)
   -h, --help                   Show this help
@@ -104,6 +109,11 @@ while [[ "$#" -gt 0 ]]; do
       OTEL_ATTRIBUTE_MODE="$2"
       shift 2
       ;;
+    --vsock-port)
+      [[ "$#" -ge 2 ]] || fail "--vsock-port requires a value"
+      VSOCK_PORT="$2"
+      shift 2
+      ;;
     --startup-dependency)
       [[ "$#" -ge 2 ]] || fail "--startup-dependency requires a value"
       STARTUP_DEPENDENCY="$2"
@@ -116,6 +126,11 @@ while [[ "$#" -gt 0 ]]; do
     --with-sandbox-observer)
       WITH_SANDBOX_OBSERVER=1
       shift
+      ;;
+    --seccomp-notify)
+      [[ "$#" -ge 2 ]] || fail "--seccomp-notify requires a value"
+      SECCOMP_NOTIFY="$2"
+      shift 2
       ;;
     --socket-gid)
       [[ "$#" -ge 2 ]] || fail "--socket-gid requires a value"
@@ -149,6 +164,9 @@ actrail_validate_guest_otel_selection "$OTEL_ENDPOINT" "$EGRESS_MODE" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
 actrail_validate_guest_otel_attribute_mode "$OTEL_ATTRIBUTE_MODE" "$OTEL_ENDPOINT" \
   || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+actrail_resolve_guest_vsock_port "$VSOCK_PORT" "$EGRESS_MODE" \
+  || fail "$ACTRAIL_GUEST_OTEL_ENDPOINT_ERROR"
+VSOCK_PORT="$ACTRAIL_GUEST_VSOCK_PORT"
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   OTEL_EXPORT_ENABLED=1
   OTEL_ENDPOINT_CONFIGURED="true"
@@ -169,6 +187,14 @@ fi
 case "$STARTUP_DEPENDENCY" in
   optional|required) ;;
   *) fail "--startup-dependency must be optional or required" ;;
+esac
+case "$SECCOMP_NOTIFY" in
+  disabled) ;;
+  auto|required)
+    [[ -f "$SECCOMP_NOTIFY_PATCH" ]] \
+      || fail "seccomp-notify config not found: $SECCOMP_NOTIFY_PATCH"
+    ;;
+  *) fail "--seccomp-notify must be disabled, auto or required" ;;
 esac
 (( SOCKET_GID > 0 && SOCKET_GID <= 2147483647 )) \
   || fail "--socket-gid must be between 1 and 2147483647"
@@ -397,6 +423,9 @@ while IFS= read -r library; do
   install -m 0644 "$library" "$private_lib_dir/$(basename "$library")"
 done < <(find "$BUNDLE/lib" -maxdepth 1 -type f -print | LC_ALL=C sort)
 operator_patches=(--patch "$CONFIG")
+if [[ "$SECCOMP_NOTIFY" != "disabled" ]]; then
+  operator_patches+=(--patch "$SECCOMP_NOTIFY_PATCH")
+fi
 if [[ -n "$OTEL_ENDPOINT" ]]; then
   install -d -m 0755 "$plugin_config_dir" "$plugin_manifest_dir"
   actrail_write_guest_otel_endpoint_config \
@@ -476,9 +505,9 @@ if [[ -n "$OTEL_ENDPOINT" && "$EGRESS_MODE" == "vsock-bridge" ]]; then
   [[ -f "$bridge_unit_source" ]] \
     || fail "guest bridge unit not found: $bridge_unit_source"
   bridge_unit_temp="$(mktemp "${bridge_unit_target}.tmp.XXXXXX")"
-  awk -v port="$bridge_listen_port" '
+  awk -v port="$bridge_listen_port" -v vsock_port="$VSOCK_PORT" '
       /^ExecStart=/ {
-        printf "ExecStart=/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh --listen-port %s\n", port
+        printf "ExecStart=/usr/local/libexec/actrail-vsock-egress/guest-bridge.sh --listen-port %s --vsock-port %s\n", port, vsock_port
         rendered++
         next
       }
@@ -517,6 +546,7 @@ install_info="$share_dir/guest-install-info"
   printf 'format=1\n'
   printf 'guest_startup_dependency=%s\n' "$STARTUP_DEPENDENCY"
   printf 'guest_egress_mode=%s\n' "$EGRESS_MODE"
+  printf 'guest_vsock_port=%s\n' "${VSOCK_PORT:-none}"
   printf 'otel_export_enabled=%s\n' "$OTEL_EXPORT_ENABLED"
   printf 'workload_socket_group=actrail\n'
   printf 'workload_socket_gid=%s\n' "$SOCKET_GID"
@@ -525,6 +555,7 @@ install_info="$share_dir/guest-install-info"
   printf 'rootfs_glibc=%s\n' "$target_glibc"
   printf 'viewer_installed=%s\n' "$WITH_VIEWER"
   printf 'sandbox_observer_installed=%s\n' "$WITH_SANDBOX_OBSERVER"
+  printf 'seccomp_notify=%s\n' "$SECCOMP_NOTIFY"
 } >"$install_info"
 chmod 0644 "$install_info"
 

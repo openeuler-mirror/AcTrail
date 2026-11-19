@@ -6,9 +6,9 @@ use model_core::ids::TraceId;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use semantic_action::{
     SemanticAction, SemanticActionChange, SemanticActionFinalizationReason, SemanticActionKind,
-    SemanticActionStatus, SemanticActionStoreError, SemanticActionUpdate,
-    SemanticAttributeSupplement, SemanticAttributeSupplementRejection, SemanticCommandKind,
-    SemanticEvidence, SemanticToolResultBinding, attr_keys as attrs,
+    SemanticActionStateAttributes, SemanticActionStatus, SemanticActionStoreError,
+    SemanticActionUpdate, SemanticAttributeSupplement, SemanticAttributeSupplementRejection,
+    SemanticCommandKind, SemanticEvidence, attr_keys as attrs,
 };
 
 use crate::records::encode_time;
@@ -34,7 +34,6 @@ macro_rules! assignment_sql {
 
 pub(super) struct InitialActionState {
     finalization_reason: Option<i16>,
-    tool_binding: Option<i16>,
     command_kind: Option<i16>,
     command_tool_name: Option<String>,
     command_exit_code: Option<i32>,
@@ -52,24 +51,6 @@ impl<'a> ActionStateWriter<'a> {
     pub(super) fn take_initial_binding(
         action: &mut SemanticAction,
     ) -> Result<InitialActionState, SemanticActionStoreError> {
-        let tool_binding = if action.kind == SemanticActionKind::LlmToolResult {
-            action
-                .attributes
-                .remove(attrs::llm_tool_result::BINDING_STATE)
-                .map(|value| match value.as_str() {
-                    "missing_id" => Ok(1),
-                    "unmatched" => Ok(2),
-                    "bound" => Ok(3),
-                    "ambiguous" => Ok(4),
-                    _ => Err(SemanticActionStoreError::new(
-                        "tool_result_binding",
-                        "invalid binding state",
-                    )),
-                })
-                .transpose()?
-        } else {
-            None
-        };
         let (command_kind, command_tool_name) =
             if action.kind == SemanticActionKind::CommandInvocation {
                 (
@@ -111,7 +92,6 @@ impl<'a> ActionStateWriter<'a> {
             .map(|_| 1);
         Ok(InitialActionState {
             finalization_reason,
-            tool_binding,
             command_kind,
             command_tool_name,
             command_exit_code,
@@ -126,12 +106,12 @@ impl<'a> ActionStateWriter<'a> {
     ) -> Result<(), SemanticActionStoreError> {
         self.connection.prepare_cached(
             "INSERT INTO semantic_action_state(action_key, end_time, status_code, completeness_code,
-                tool_result_binding, command_invocation_kind, command_tool_name, finalization_reason,
+                command_invocation_kind, command_tool_name, finalization_reason,
                 command_exit_code)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
             .and_then(|mut statement| statement.execute(params![key, action.end_time.map(encode_time),
                 action_status_code(action.status), action_completeness_code(action.completeness),
-                initial.tool_binding, initial.command_kind, initial.command_tool_name, initial.finalization_reason,
+                initial.command_kind, initial.command_tool_name, initial.finalization_reason,
                 initial.command_exit_code]))
             .map(|_| ()).map_err(|e| Self::error("insert_semantic_action_state", e))
     }
@@ -262,30 +242,6 @@ impl<'a> ActionStateWriter<'a> {
                         kind,
                         update.process.get(),
                         tool_name
-                    ],
-                )?
-            }
-            SemanticActionChange::ToolResultBinding { state } => {
-                if update.kind != SemanticActionKind::LlmToolResult {
-                    return Err(Self::error(
-                        "update_semantic_action_kind",
-                        "binding requires tool result",
-                    ));
-                }
-                let code = match state {
-                    SemanticToolResultBinding::MissingId => 1,
-                    SemanticToolResultBinding::Unmatched => 2,
-                    SemanticToolResultBinding::Bound => 3,
-                    SemanticToolResultBinding::Ambiguous => 4,
-                };
-                self.assigned(
-                    assignment_sql!("UPDATE semantic_action_state SET tool_result_binding=?5"),
-                    params![
-                        update.action_id,
-                        update.trace_id.get(),
-                        kind,
-                        update.process.get(),
-                        code
                     ],
                 )?
             }
@@ -431,29 +387,19 @@ impl<'a> ActionStateWriter<'a> {
         attributes: &mut BTreeMap<String, String>,
     ) -> Result<(), rusqlite::Error> {
         if let Some(code) = row.get::<_, Option<i16>>("command_invocation_kind")? {
-            let value = match code {
-                1 => "agent",
-                2 => "mcp",
-                3 => "command",
+            let kind = match code {
+                1 => SemanticCommandKind::Agent,
+                2 => SemanticCommandKind::Mcp,
+                3 => SemanticCommandKind::Command,
                 _ => return Err(rusqlite::Error::InvalidQuery),
             };
-            attributes.insert(attrs::invocation::KIND.into(), value.into());
+            SemanticActionStateAttributes::new(attributes).command_kind(kind);
         }
         if let Some(value) = row.get::<_, Option<String>>("command_tool_name")? {
-            attributes.insert(attrs::command::TOOL_NAME.into(), value);
+            SemanticActionStateAttributes::new(attributes).command_tool_name(value);
         }
         if let Some(value) = row.get::<_, Option<i32>>("command_exit_code")? {
-            attributes.insert(attrs::command::EXIT_CODE.into(), value.to_string());
-        }
-        if let Some(code) = row.get::<_, Option<i16>>("tool_result_binding")? {
-            let value = match code {
-                1 => "missing_id",
-                2 => "unmatched",
-                3 => "bound",
-                4 => "ambiguous",
-                _ => return Err(rusqlite::Error::InvalidQuery),
-            };
-            attributes.insert(attrs::llm_tool_result::BINDING_STATE.into(), value.into());
+            SemanticActionStateAttributes::new(attributes).command_exit_code(value);
         }
         if let Some(format) = row.get::<_, Option<String>>("failure_body_format")? {
             attributes.insert(attrs::llm_response::BODY_FORMAT.into(), format);
@@ -480,16 +426,12 @@ impl<'a> ActionStateWriter<'a> {
             );
         }
         if let Some(code) = row.get::<_, Option<i16>>("finalization_reason")? {
-            match code {
-                1 => {
-                    attributes.insert(
-                        attrs::actrail::ACTION_FINALIZED_ON_TRACE_CLOSE.into(),
-                        "true".into(),
-                    );
-                }
-                2 => {}
+            let reason = match code {
+                1 => SemanticActionFinalizationReason::TraceClosed,
+                2 => SemanticActionFinalizationReason::CapacityEvicted,
                 _ => return Err(rusqlite::Error::InvalidQuery),
-            }
+            };
+            SemanticActionStateAttributes::new(attributes).finalization_reason(reason);
         }
         Ok(())
     }

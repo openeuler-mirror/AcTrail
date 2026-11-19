@@ -5,6 +5,7 @@ from tests.e2e.common.runner import TestingContextSingleton
 
 from .config import CommandPolicyXiaooConfig
 from .environment import CommandPolicyXiaooEnvironment
+from .verification.audit import CommandAuditVerification
 
 
 class CommandPolicyXiaooCase(TestCase):
@@ -67,6 +68,10 @@ class CommandPolicyXiaooCase(TestCase):
                 TestStatus.PASSED,
                 "non-leader exec resolved the governing process identity",
             )
+            errno_trace = self._environment.require_native_lookup_errnos()
+            results["native_errno"] = TestResult(
+                TestStatus.PASSED, f"trace-{errno_trace} actual exec calls returned ENOENT and ENOTDIR"
+            )
 
             test_context.report_progress(
                 "xiaoo_denied",
@@ -85,11 +90,12 @@ class CommandPolicyXiaooCase(TestCase):
                 "governance_evidence",
                 "checking Enforcement and command boundary alert",
             )
-            _, alert = self._environment.wait_for_evidence(denied_trace)
-            results["governance_evidence"] = TestResult(
-                TestStatus.PASSED,
-                f"trace-{denied_trace} has Enforcement and alert-{alert.get('alert_id')}",
-            )
+            if self._config.audit_enabled:
+                _, alert = self._environment.wait_for_evidence(denied_trace)
+                results["governance_evidence"] = TestResult(
+                    TestStatus.PASSED,
+                    f"trace-{denied_trace} has Enforcement and alert-{alert.get('alert_id')}",
+                )
 
             test_context.report_progress(
                 "owner_unload",
@@ -103,6 +109,24 @@ class CommandPolicyXiaooCase(TestCase):
             results["owner_unload"] = TestResult(
                 TestStatus.PASSED,
                 f"trace-{allowed_trace} Bash succeeded and created the marker",
+            )
+            test_context.report_progress(
+                "path_search", "checking native lookup errors before governed Bash execution"
+            )
+            if self._config.audit_enabled:
+                self._environment.require_path_search_errors(denied_trace)
+                self._environment.require_path_search_errors(allowed_trace)
+                self._environment.require_path_search_errors(errno_trace)
+            verification = CommandAuditVerification(self._environment)
+            for trace_id in (errno_trace, denied_trace, allowed_trace):
+                verification.verify(trace_id)
+            results["path_search"] = TestResult(
+                TestStatus.PASSED,
+                "ENOENT/ENOTDIR candidates preserved errno; a nonexecutable candidate allowed continued search; Bash policy deny and owner-unload allow both held",
+            )
+            results["audit_setting"] = TestResult(
+                TestStatus.PASSED,
+                f"audit_enabled={self._config.audit_enabled}: actual persisted events and actions match the setting",
             )
             return TestResult(
                 TestStatus.COMPOSITE,

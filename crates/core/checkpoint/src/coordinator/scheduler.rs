@@ -11,8 +11,8 @@ use crate::backends::composite::CompositeBackend;
 use super::jobs::records::PendingRecord;
 use super::jobs::{disconnect, launch, release, restore, save};
 use super::{CompletedJob, Completion, CoordinatorError, Hold, LaunchRequest, Shared, lock};
-use crate::model::{Boundary, CheckpointId, OperationId, SnapshotContext};
-use crate::ports::PausedProcess;
+use checkpoint_core_contracts::model::{Boundary, CheckpointId, OperationId, SnapshotContext};
+use checkpoint_core_contracts::ports::PausedProcess;
 
 #[derive(Default)]
 pub(crate) struct TraceState {

@@ -37,8 +37,8 @@ mod tool_results;
 
 use content::project_request_content;
 
-pub(crate) use tool_results::ProjectedLlmToolResult;
 use tool_results::project_tool_results;
+pub(crate) use tool_results::{ProjectedLlmToolCall, ProjectedLlmToolResult};
 
 pub(crate) struct ProjectedLlmRequestAction {
     pub(crate) action: SemanticAction,

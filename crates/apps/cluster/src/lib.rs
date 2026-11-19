@@ -18,8 +18,9 @@ use model_core::ids::TraceId;
 use model_core::trace::{TraceHealth, TraceRecord};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use storage_contracts::{StorageBackendKind, StorageConfig};
 use storage_core::{StorageBackend, StorageOpenMode, TraceFilter};
-use storage_factory::{StorageBackendKind, StorageConfig, open_storage_backend};
+use storage_factory::open_storage_backend;
 
 const BUNDLE_MAGIC_V1: &[u8] = b"ACTRAIL-BUNDLE-V1\n";
 const BUNDLE_MAGIC_V2: &[u8] = b"ACTRAIL-BUNDLE-V2\n";

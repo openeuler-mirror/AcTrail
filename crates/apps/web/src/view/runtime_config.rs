@@ -1,3 +1,5 @@
+//! Render runtime configuration and plugin status as JSON.
+
 use std::path::Path;
 
 use config_core::daemon::{OperatorConfig, StartupPluginLoadConfig};
@@ -228,7 +230,7 @@ fn plugin_json(config: &OperatorConfig, plugin: &StartupPluginLoadConfig) -> Str
     output
 }
 
-fn runtime_plugin_json(item: &plugin_system::PluginInstanceStatus) -> String {
+fn runtime_plugin_json(item: &plugin_system_contracts::PluginInstanceStatus) -> String {
     let mut output = String::from("{");
     json::field(&mut output, "instance_id", &json::string(&item.instance_id));
     output.push(',');
@@ -297,7 +299,7 @@ fn runtime_plugin_json(item: &plugin_system::PluginInstanceStatus) -> String {
     output
 }
 
-fn hostcall_metrics_json(metrics: &plugin_system::PluginHostcallMetrics) -> String {
+fn hostcall_metrics_json(metrics: &plugin_system_contracts::PluginHostcallMetrics) -> String {
     let payload_read = metrics.payload_read;
     let mut output = String::from("{");
     json::field(
@@ -309,7 +311,9 @@ fn hostcall_metrics_json(metrics: &plugin_system::PluginHostcallMetrics) -> Stri
     output
 }
 
-fn payload_read_metrics_json(metrics: &plugin_system::PluginPayloadReadMetrics) -> String {
+fn payload_read_metrics_json(
+    metrics: &plugin_system_contracts::PluginPayloadReadMetrics,
+) -> String {
     let mut output = String::from("{");
     json::field(&mut output, "calls", &json::number(metrics.calls));
     output.push(',');

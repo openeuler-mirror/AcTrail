@@ -23,8 +23,7 @@ use model_core::payload::{
 use model_core::process::{ProcessIdentity, ProcessMembership};
 use payload_event::{RawPayloadSegment, RawPayloadStreamClose};
 use recording_runtime::{
-    DeliveryReport, ObservedRecordWriteSession, RecordingError, RecordingWriter,
-    SemanticActionBatch,
+    DeliveryReport, ObservedRecordWriteSession, RecordingError, SemanticActionBatch,
 };
 use semantic_action_runtime::{LiveSemanticActionRuntime, live::LiveMcpStdioDiagnostic};
 use trace_runtime::registry::TraceRuntime;
@@ -102,7 +101,12 @@ impl StorageAttachService {
                     .then(|| batch.clone());
                 self.write_semantic_action_batch(batch);
                 if let Some(batch) = export_batch {
-                    self.publish_live_export_actions(trace_runtime, identity.trace_id, batch)?;
+                    self.publish_live_export_actions(
+                        trace_runtime,
+                        identity.trace_id,
+                        batch,
+                        false,
+                    )?;
                 }
             }
             let mut events = Vec::with_capacity(http1_drafts.len());
@@ -261,7 +265,8 @@ impl StorageAttachService {
             let has_export_work =
                 context.live_export_enabled && export_batch.has_live_export_records();
             let result = if has_durable_work {
-                RecordingWriter::new(self.storage.as_mut()).write_session_then_export(
+                self.recording.write_session_then_export(
+                    self.storage.as_mut(),
                     &self.export_runtime,
                     &traces,
                     SystemTime::now(),
@@ -286,7 +291,8 @@ impl StorageAttachService {
                     },
                 )
             } else if has_export_work {
-                RecordingWriter::new(self.storage.as_mut()).export_semantic_action_batches(
+                self.recording.export_semantic_action_batches(
+                    self.storage.as_mut(),
                     &self.export_runtime,
                     &traces,
                     export_batch,

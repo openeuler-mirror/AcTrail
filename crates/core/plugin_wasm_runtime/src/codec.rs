@@ -1,10 +1,13 @@
+//! WASM LLM codec execution and instance status reporting.
+
 use std::sync::{Arc, Mutex};
 
 use plugin_system::{
     LlmCodecDecoded, LlmCodecOutcome, LlmCodecPlugin, LlmCodecRequest, LlmCodecSseEvent,
     PluginHostGrants, PluginHostcallMetricsSource, PluginManifest, PluginRuntimeError,
-    PluginRuntimeKind, PluginWasmAbi,
+    PluginWasmAbi,
 };
+use plugin_system_contracts::PluginRuntimeKind;
 use serde_json::{Value, json};
 use wasmtime::{Memory, Module, TypedFunc};
 

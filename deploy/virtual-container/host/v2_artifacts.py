@@ -284,6 +284,8 @@ class ArtifactPreparer:
                     str(workload_bundle),
                     "--socket-gid",
                     str(self.inputs.socket_gid),
+                    "--seccomp-notify",
+                    self.inputs.seccomp_notify,
                 ],
                 environment=environment,
             )
@@ -384,6 +386,8 @@ class ArtifactPreparer:
             "--with-viewer",
             "--socket-gid",
             str(self.inputs.socket_gid),
+            "--seccomp-notify",
+            self.inputs.seccomp_notify,
             "--grow-mib",
             "128",
         ]
@@ -396,6 +400,8 @@ class ArtifactPreparer:
                     self.inputs.otel_attribute_mode,
                 ]
             )
+        if self.inputs.guest_vsock_port is not None:
+            command.extend(["--vsock-port", str(self.inputs.guest_vsock_port)])
         if self.inputs.sandbox_observer:
             command.append("--with-sandbox-observer")
         self.executor.run(command)
@@ -462,9 +468,11 @@ class ArtifactPreparer:
             "backend": self.inputs.backend,
             "runtime": self.inputs.runtime,
             "egress_mode": self.inputs.egress_mode,
+            "vsock_port": self.inputs.guest_vsock_port,
             "otel_export_enabled": self.inputs.otel_endpoint is not None,
             "otel_attribute_mode": self.inputs.otel_attribute_mode,
             "sandbox_observer_enabled": self.inputs.sandbox_observer,
+            "seccomp_notify": self.inputs.seccomp_notify,
             "release": release_hashes(self.inputs.bin_dir),
             "guest_bundle": {
                 "path": "guest-bundle",

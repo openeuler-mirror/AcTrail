@@ -1,6 +1,19 @@
 // Tests for the corresponding production module.
 use super::*;
 
+impl TraceState {
+    fn observe_llm_response(&mut self, action: &SemanticActionRecord, cap: usize) {
+        let cfg = PluginConfig::default();
+        let _ = self.observe_llm_response_at(action, &cfg, self.last_active_ms, cap);
+    }
+}
+
+impl AlertData {
+    fn total_count_for_test(&self) -> u64 {
+        self.failure_count + self.success_count
+    }
+}
+
 fn test_config() -> PluginConfig {
     PluginConfig::default()
 }

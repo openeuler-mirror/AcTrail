@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class OtelHttpConstants:
-    max_turns: int = 1
+    max_turns: int = 3
+    command_sleep_seconds: float = 0.5
+    command_duration_tolerance_seconds: float = 0.25
+    tool_agent_max_turns: int = 8
     marker_random_bytes: int = 8
     plugin_package: str = 'otel-http'
     plugin_instance: str = 'v2.otel-http'

@@ -1,3 +1,5 @@
+//! Track an observation subscriber's resources, counters, and lifecycle.
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender, TrySendError, sync_channel};
@@ -20,8 +22,10 @@ use super::{
 };
 use plugin_system::{
     ObservationBatch, ObservationConsumeReport, ObservationConsumer, ObservationEventFamily,
-    PluginHostcallMetricsSource, PluginInstanceStatus, PluginLifecycleState,
-    PluginOperationalMetricsSource, PluginPurpose, PluginRuntimeKind, PostTraceTask,
+    ObservationFlush, PluginHostcallMetricsSource, PluginOperationalMetricsSource, PostTraceTask,
+};
+use plugin_system_contracts::{
+    PluginInstanceStatus, PluginLifecycleState, PluginPurpose, PluginRuntimeKind,
 };
 
 pub(super) struct ObservationConsumerSlot {
@@ -286,6 +290,15 @@ impl ObservationConsumerSlot {
                     u64::try_from(batch.actions.len()).unwrap_or(u64::MAX),
                 );
             }
+        }
+    }
+
+    /// Only an inline consumer receives records in publish order on the caller's
+    /// thread, so only there a flush is known to follow everything published.
+    pub(super) fn flush(&self, deadline: Instant) -> Option<ObservationFlush> {
+        match &self.delivery {
+            ObservationDelivery::Inline(consumer) => consumer.flush(deadline),
+            ObservationDelivery::Queued { .. } | ObservationDelivery::Stopped => None,
         }
     }
 

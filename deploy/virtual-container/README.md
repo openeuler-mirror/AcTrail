@@ -308,9 +308,18 @@ openEuler guest 的制作和复测步骤见
   PID namespace 与 workload 的 `/proc/self/ns/pid`。
   尚未完成的是 `container.id` 的 OTLP Collector 端断言和异常 sandbox shutdown
   flush。
-- **采集与权限**：Guest 使用默认 eBPF 采集，关闭 enforcement。workload launcher
-  显式选择 `--seccomp-notify disabled`。启用 AcTrail seccomp user-notify 需验证
-  对应 Kata/runtime 版本的兼容性和进程退出行为。
+- **采集与权限**：Guest 使用默认 eBPF 采集，关闭 enforcement。Guest 的文件观测在默认的可写打开
+  和路径修改之外，另外开启读取、写入、目录枚举和经文件描述符的修改；Guest 的 `otel-http`
+  外送在共用模板之上额外开启 `file.modify`、`file.read`、`file.write`、`file.bulk_read`、
+  `fs.enumerate` 和 `http.message`，因为 Guest 内的记录随 sandbox VM 销毁。AcTrail seccomp
+  user-notify 默认关闭，workload launcher 使用 `--seccomp-notify disabled`。需要时在
+  `host/prepare-artifacts.py` 追加 `--seccomp-notify auto` 或
+  `--seccomp-notify required`：准备器会在 Guest 配置和 workload 配置中同时启用
+  `[seccomp_notify]` 和 `[process_seccomp]`，并把同一档位写入 `actrail-launch`；`auto` 在 launch 探测失败时
+  降级，`required` 则拒绝启动 workload。该选项计入缓存键和 artifact manifest，
+  Guest 镜像与 workload bundle 必须来自同一次准备。
+  Guest 的 TLS 明文经 eBPF 采集，不依赖 notify；该选项启用的是经 seccomp 采集进程
+  exec 上下文的 `process-seccomp` 路径。enforcement 不随该选项启用。
 - **rootfs image 与 initrd 不是同一条安装路径**:完整 rootfs image 的离线注入和
   systemd 启动已经验证；当前实现不适配 `kata-containers-initrd.img`。以后若出现
   明确客户需求，应作为独立部署方案重新设计和验收。
@@ -371,10 +380,8 @@ workload/prepare-bundle.sh  从已验证 guest bundle 生成不含 daemon/viewer
                         workload 工具包,重写路径、解析配置并原子发布。
 workload/Containerfile.openEuler  构建 openEuler 24.03 workload rootfs，并为
                         containerd 1.6 的非 root fallback 提供 setpriv。
-workload/actrail-init    由显式 `/bin/sh` 执行的 Kata workload PID 1 supervisor,
-                        负责启动并回收 launch wrapper。
-workload/actrail-launch  非 root launch wrapper:先验证只读 mount/GID/socket,再通过
-                        guest-root daemon 启动 trace并保留有界收尾窗口。
+workload/actrail-launch  非 root launch wrapper:先验证只读 mount/GID/socket,再 exec 为
+                        actrailctl,通过 guest-root daemon 启动 trace;可直接作为容器主进程。
 workload/verify-interface.sh  校验 manifest、最小权限、socket 模式/GID、只读 mount、
                         doctor 和 TLS probe。
 workload/README.md       guest `/dev` socket 源、固定 GID、安全边界和运行命令。

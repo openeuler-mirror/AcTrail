@@ -22,8 +22,22 @@ pub(in crate::live::tool) struct StateMutation {
     pub(in crate::live::tool) eviction: Option<StateEviction>,
 }
 
-pub(in crate::live::tool) struct ToolCallCandidate {
-    pub(in crate::live::tool) action_id: String,
+/// What a tool result says about the outcome of the call it answers.
+#[derive(Clone, Copy)]
+pub(in crate::live::tool) struct ToolResultOutcome {
+    pub(in crate::live::tool) is_error: bool,
+    pub(in crate::live::tool) completeness: SemanticActionCompleteness,
+    pub(in crate::live::tool) observed_at: SystemTime,
+}
+
+impl ToolResultOutcome {
+    pub(in crate::live::tool) fn new(request: &SemanticAction, is_error: bool) -> Self {
+        Self {
+            is_error,
+            completeness: request.completeness,
+            observed_at: request.end_time.unwrap_or(request.start_time),
+        }
+    }
 }
 
 pub(in crate::live::tool) struct FinalizedInvocation {
@@ -35,6 +49,10 @@ pub(in crate::live::tool) struct ToolInteractionState {
     tool_calls: BTreeMap<(TraceId, String), ToolCallRecord>,
     tool_results: BTreeMap<(TraceId, String), SemanticAction>,
     agent_invocations: BTreeMap<(TraceId, String), AgentInvocationRecord>,
+    /// Outcomes of results processed before the response that declares their
+    /// call, keyed by tool call id. Requests and responses on different
+    /// connections are not delivered in capture order.
+    early_results: BTreeMap<(TraceId, String), (ProcessIdentity, ToolResultOutcome)>,
     indexes: ToolInteractionIndexes,
     max_entries_per_trace: usize,
 }
@@ -45,6 +63,7 @@ impl ToolInteractionState {
             tool_calls: BTreeMap::new(),
             tool_results: BTreeMap::new(),
             agent_invocations: BTreeMap::new(),
+            early_results: BTreeMap::new(),
             indexes: ToolInteractionIndexes::default(),
             max_entries_per_trace: usize::try_from(max_entries_per_trace)
                 .expect("validated LLM tool state limit must fit usize"),
@@ -162,41 +181,63 @@ impl ToolInteractionState {
         }
     }
 
-    pub(in crate::live::tool) fn tool_call_candidates(
+    /// The tool calls a process declared under one id, oldest first.
+    pub(in crate::live::tool) fn observed_tool_calls(
         &self,
         trace_id: TraceId,
         tool_call_id: &str,
         process: &ProcessIdentity,
-    ) -> Vec<ToolCallCandidate> {
-        self.indexes
+    ) -> Vec<SemanticAction> {
+        let mut calls = self
+            .indexes
             .tool_call_candidates(trace_id, tool_call_id)
-            .filter_map(|action_id| {
-                self.tool_calls
-                    .get(&(trace_id, action_id.clone()))
-                    .filter(|record| record.action.process == *process)
-                    .map(|_| ToolCallCandidate {
-                        action_id: action_id.clone(),
-                    })
-            })
-            .collect()
+            .filter_map(|action_id| self.tool_calls.get(&(trace_id, action_id.clone())))
+            .filter(|record| record.action.process == *process)
+            .map(|record| record.action.clone())
+            .collect::<Vec<_>>();
+        calls.sort_by_key(|action| action.start_time);
+        calls
     }
 
-    pub(in crate::live::tool) fn tool_call_action(
-        &self,
+    /// Keeps the outcome of a result whose call has not been declared yet.
+    pub(in crate::live::tool) fn remember_early_result(
+        &mut self,
         trace_id: TraceId,
-        action_id: &str,
-    ) -> Option<SemanticAction> {
-        self.tool_calls
-            .get(&(trace_id, action_id.to_string()))
-            .map(|record| record.action.clone())
+        tool_call_id: &str,
+        process: ProcessIdentity,
+        outcome: ToolResultOutcome,
+    ) {
+        let key = (trace_id, tool_call_id.to_string());
+        let trace_entries = self
+            .early_results
+            .keys()
+            .filter(|(entry_trace, _)| *entry_trace == trace_id)
+            .count();
+        if trace_entries < self.max_entries_per_trace || self.early_results.contains_key(&key) {
+            self.early_results.insert(key, (process, outcome));
+        }
+    }
+
+    pub(in crate::live::tool) fn take_early_result(
+        &mut self,
+        trace_id: TraceId,
+        tool_call_id: &str,
+        process: &ProcessIdentity,
+    ) -> Option<ToolResultOutcome> {
+        let key = (trace_id, tool_call_id.to_string());
+        self.early_results
+            .get(&key)
+            .is_some_and(|(owner, _)| owner == process)
+            .then(|| self.early_results.remove(&key))
+            .flatten()
+            .map(|(_, outcome)| outcome)
     }
 
     pub(in crate::live::tool) fn complete_agent_invocation(
         &mut self,
         trace_id: TraceId,
         tool_call_action_id: &str,
-        is_error: bool,
-        request: &SemanticAction,
+        outcome: ToolResultOutcome,
     ) -> Option<SemanticAction> {
         let invocation = self
             .agent_invocations
@@ -204,13 +245,13 @@ impl ToolInteractionState {
         if invocation.action.status != SemanticActionStatus::InProgress {
             return None;
         }
-        invocation.action.status = if is_error {
+        invocation.action.status = if outcome.is_error {
             SemanticActionStatus::Error
         } else {
             SemanticActionStatus::Success
         };
-        invocation.action.completeness = request.completeness;
-        invocation.action.end_time = request.end_time.or(Some(request.start_time));
+        invocation.action.completeness = outcome.completeness;
+        invocation.action.end_time = Some(outcome.observed_at);
         Some(invocation.action.clone())
     }
 
@@ -316,6 +357,8 @@ impl ToolInteractionState {
     }
 
     fn forget_trace_records(&mut self, trace_id: TraceId, entries: ToolTraceEntries) {
+        self.early_results
+            .retain(|(entry_trace, _), _| *entry_trace != trace_id);
         for action_id in entries.tool_calls {
             if let Some(record) = self.tool_calls.remove(&(trace_id, action_id.clone()))
                 && let Some(tool_call_id) = record.tool_call_id

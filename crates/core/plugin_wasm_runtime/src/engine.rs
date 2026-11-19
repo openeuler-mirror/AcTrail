@@ -1,12 +1,14 @@
+//! Configure and instantiate the WASM plugin engine.
+
 use std::fmt::Display;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use plugin_system::{
-    PluginHostGrants, PluginHostcallMetrics, PluginHostcallMetricsSource, PluginManifest,
-    PluginPayloadReadMetrics, PluginRuntimeError,
+    PluginHostGrants, PluginHostcallMetricsSource, PluginManifest, PluginRuntimeError,
 };
+use plugin_system_contracts::{PluginHostcallMetrics, PluginPayloadReadMetrics};
 use wasmtime::{Config, Engine, Store};
 
 mod http;

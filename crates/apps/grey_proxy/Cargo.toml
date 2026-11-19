@@ -5,9 +5,10 @@ edition = "2024"
 license = "MulanPSL-2.0"
 
 [dependencies]
+storage_contracts = { path = "../../contracts/storage" }
 semantic_action = { path = "../../contracts/semantic_action" }
 model_core = { path = "../../core/model" }
-plugin_system = { path = "../../core/plugin_system" }
+plugin_system_contracts = { path = "../../contracts/plugin_system" }
 storage_core = { path = "../../storage/core" }
 storage_factory = { path = "../../storage/factory" }
 serde = { version = "1.0", features = ["derive"] }

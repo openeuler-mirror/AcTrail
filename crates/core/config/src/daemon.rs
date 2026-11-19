@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use storage_factory::StorageConfig;
+use storage_contracts::StorageConfig;
 
 #[path = "daemon/access_control/config.rs"]
 mod access_control;
@@ -44,7 +44,8 @@ pub use access_control::{
     LsmDenySignal, LsmGreyConfig, LsmGreyMode,
 };
 pub use agent::{
-    AgentInvocationConfig, DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
+    AgentInvocationConfig, CommandDeliveryConfig,
+    DEFAULT_HTTP_EXCHANGE_MAX_PENDING_REQUESTS_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_MAX_PENDING_RESPONSES_PER_STREAM,
     DEFAULT_HTTP_EXCHANGE_RESPONSE_LATENESS, DEFAULT_LLM_ASSEMBLY_MAX_BUFFER_BYTES,
     DEFAULT_LLM_ASSEMBLY_MAX_SEGMENT_RANGES,

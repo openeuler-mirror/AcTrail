@@ -9,6 +9,9 @@ default = []
 perf-buffer = ["ebpf_collector/perf-buffer"]
 
 [dependencies]
+storage_contracts = { path = "../../contracts/storage" }
+checkpoint_core_contracts = { path = "../../contracts/checkpoint_core" }
+plugin_system_contracts = { path = "../../contracts/plugin_system" }
 access_control = { path = "../../access_control" }
 idle_detector = { path = "../../core/idle_detector" }
 agent_host = { path = "../../adapters/agent_host" }

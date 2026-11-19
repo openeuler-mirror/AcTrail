@@ -10,6 +10,7 @@ from typing import Any
 from tests.e2e.common.agent_selection import AgentSelector
 from tests.e2e.common.core import TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
+from tests.e2e.common.tool_alert_lifecycle import CommandTerminalEvidence
 
 from .environment import ToolFrequentFailureAlertEnvironment
 
@@ -120,6 +121,9 @@ class ToolFrequentFailureAlertTask:
             "verifying unique alert evidence references commands and exits",
         )
         self._assert_evidence(payload)
+        results["terminal-command-registration"] = CommandTerminalEvidence(self._environment).verify(
+            mixed_trace_id, payload, self._MISSING_PATHS
+        )
         results["direct-alert-evidence"] = TestResult(
             TestStatus.PASSED,
             "alert evidence has unique command/exit action ids",
@@ -237,8 +241,8 @@ class ToolFrequentFailureAlertTask:
         successful_paths: tuple[str, ...] = CASE_CONSTANTS.run_positive_round_successful_paths,
     ) -> tuple[int, dict[str, Any]]:
         marker = f"TOOL_FREQUENT_ALERT_{prefix}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
-        commands = [f"ls {path}" for path in successful_paths]
-        commands.extend(f"ls {path}" for path in paths)
+        commands = [f"bash -c 'exec ls {path}'" for path in successful_paths]
+        commands.extend(f"bash -c 'exec ls {path}'" for path in paths)
         command = ["bash", "-c", "; ".join(commands)]
         launch = self._launch(marker, command)
         trace_id = self._require_trace_id(launch)

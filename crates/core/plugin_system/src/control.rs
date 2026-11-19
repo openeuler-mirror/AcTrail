@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use actrail_plugin_abi::control as control_abi;
 
-use crate::{PluginHostcallMetricsSource, PluginRuntimeError, PluginRuntimeKind};
+use crate::{PluginHostcallMetricsSource, PluginRuntimeError};
+use plugin_system_contracts::PluginRuntimeKind;
 
 pub const CONTROL_CURRENT_CONTEXT_TOKEN: &str = control_abi::context::CURRENT_DECISION;
 pub const FILE_POLICY_CURRENT_CONTEXT_TOKEN: &str = control_abi::context::CURRENT_FILE_POLICY;

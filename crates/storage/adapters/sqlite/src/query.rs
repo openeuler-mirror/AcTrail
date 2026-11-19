@@ -20,14 +20,14 @@ use store_snapshot_contract::lease::{
 use store_snapshot_contract::view::{SnapshotStore, SnapshotView};
 
 use crate::SqliteStorage;
-use crate::config::{
-    SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
-};
 use crate::records::{
     PAYLOAD_DIRECTION_MASK, decode_event_kind, decode_event_record_block,
     decode_event_record_block_kind_counts, decode_event_record_frame, decode_trace_health,
     diagnostic_from_row, event_from_row, event_kind_name, membership_from_row,
     payload_segment_from_row, trace_from_row,
+};
+use storage_contracts::{
+    SQLITE_MAX_EVENT_RECORD_BLOCK_EVENTS, SQLITE_MAX_EVENT_RECORD_BLOCK_UNCOMPRESSED_BYTES,
 };
 
 pub(crate) struct TraceLeaseRegistry {

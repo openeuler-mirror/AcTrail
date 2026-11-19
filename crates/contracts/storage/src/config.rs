@@ -1,9 +1,9 @@
+//! Backend selection and complete storage configuration.
+
 use std::path::Path;
 use std::str::FromStr;
 
-use sqlite_storage::{EventRecordLayout, SqliteStorageConfig};
-
-use crate::parser::parse_storage_config;
+use crate::{EventRecordLayout, SqliteStorageConfig};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StorageBackendKind {
@@ -43,7 +43,7 @@ impl StorageConfig {
     /// hint; zero disables caching without disabling retention limits.
     pub fn with_payload_retention_limits(
         mut self,
-        limits: storage_core::PayloadRetentionLimits,
+        limits: crate::PayloadRetentionLimits,
         max_cached_traces: usize,
     ) -> Self {
         match &mut self {
@@ -54,10 +54,6 @@ impl StorageConfig {
             Self::NoOp => {}
         }
         self
-    }
-
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        parse_storage_config(raw)
     }
 
     pub fn sqlite_path(path: impl AsRef<Path>) -> Self {
@@ -81,12 +77,12 @@ impl StorageConfig {
             busy_timeout_ms,
             cold_field_compression_min_bytes,
             cold_field_zstd_level,
-            sqlite_storage::SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
-            sqlite_storage::SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
+            crate::SQLITE_DEFAULT_EVENT_PAYLOAD_DICTIONARY_CACHE_BYTES,
+            crate::SQLITE_DEFAULT_EVENT_PATH_DICTIONARY_CACHE_BYTES,
             EventRecordLayout::Rows,
-            sqlite_storage::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
-            sqlite_storage::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
-            sqlite_storage::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
+            crate::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_EVENTS,
+            crate::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_MAX_UNCOMPRESSED_BYTES,
+            crate::SQLITE_DEFAULT_EVENT_RECORD_BLOCK_ZSTD_LEVEL,
         )
     }
 

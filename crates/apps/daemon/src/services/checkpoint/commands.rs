@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use checkpoint_core::model::{
+use checkpoint_core_contracts::model::{
     CheckpointId, CheckpointRecord, Failure, FilterMode, OperationId, OperationRecord, Release,
     SnapshotContext, Trigger,
 };

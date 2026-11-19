@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::scheduler::{Job, TraceState};
 use super::{CheckpointCoordinator, CoordinatorError, Hold};
-use crate::model::{Boundary, SnapshotContext};
+use checkpoint_core_contracts::model::{Boundary, SnapshotContext};
 
 /// What happens to the Agent waiting at an LLM request boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

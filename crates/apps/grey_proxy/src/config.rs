@@ -1,5 +1,5 @@
 //! Parse the configuration supplied by the owning WASM runtime.
-use plugin_system::PluginHttpDeclaration;
+use plugin_system_contracts::PluginHttpDeclaration;
 use serde::Deserialize;
 
 #[derive(Deserialize)]

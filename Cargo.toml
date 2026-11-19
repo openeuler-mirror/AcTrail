@@ -42,13 +42,16 @@ members = [
     "crates/contracts/collector/instance",
     "crates/contracts/collector/stats",
     "crates/contracts/control_plane",
+    "crates/contracts/plugin_system",
     "crates/contracts/checkpoint",
+    "crates/contracts/checkpoint_core",
     "crates/contracts/graph",
     "crates/contracts/payload/binding",
     "crates/contracts/payload/capability",
     "crates/contracts/payload/event",
     "crates/contracts/policy/evaluate",
     "crates/contracts/process/tree_snapshot",
+    "crates/contracts/process/identity",
     "crates/contracts/provider_label/evidence",
     "crates/contracts/provider_label/label",
     "crates/contracts/store/read",
@@ -57,6 +60,7 @@ members = [
     "crates/contracts/store/retention",
     "crates/contracts/store/tx",
     "crates/storage/core",
+    "crates/contracts/storage",
     "crates/contracts/semantic_action",
     "crates/contracts/alert",
     "crates/contracts/agent_lifecycle",
@@ -103,4 +107,4 @@ resolver = "2"
 
 [workspace.package]
 version = "0.9.1"
-rust-version = "1.90"
+rust-version = "1.90.0"

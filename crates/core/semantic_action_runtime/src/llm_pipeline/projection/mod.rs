@@ -11,5 +11,5 @@ pub(super) mod trajectory;
 pub(in crate::llm_pipeline) use batch::ProjectedResponseBinding;
 pub(crate) use batch::ProjectionBatch;
 pub(in crate::llm_pipeline) use orchestrator::ProjectionCoordinator;
-pub(crate) use projector::ProjectedLlmToolResult;
+pub(crate) use projector::{ProjectedLlmToolCall, ProjectedLlmToolResult};
 pub(crate) use retention::canonical_llm_json_text;

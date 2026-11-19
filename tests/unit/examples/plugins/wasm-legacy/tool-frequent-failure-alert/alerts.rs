@@ -220,7 +220,12 @@ fn action_record(kind: &str, attrs: &[(&str, &str)]) -> SemanticActionRecord {
         trace_id: "trace-test".to_string(),
         kind: kind.to_string(),
         status: "success".to_string(),
-        completeness: "complete".to_string(),
+        completeness: if kind == "command.invocation" {
+            "partial"
+        } else {
+            "complete"
+        }
+        .to_string(),
         file_change: None,
         attributes: attrs
             .iter()

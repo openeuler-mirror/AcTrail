@@ -23,7 +23,7 @@ export function buildFlameGraph(actions, links, associations = [], t, contextAct
       && ['llm.call.request', 'llm.call.response'].includes(link.role)
       && actionById.get(link.parent)?.kind === 'llm.call')
     .map((link) => link.child));
-  const displayIntervals = derivedDisplayIntervals(validActions, graphLinks, actionById);
+  const displayIntervals = derivedDisplayIntervals(validActions, actionById);
   const childrenByParent = graphChildren(graphLinks, actionById);
   const childRequests = new Set(graphLinks
     .filter((link) => link.valid !== false && link.role === 'agent.invocation.child_llm_request')

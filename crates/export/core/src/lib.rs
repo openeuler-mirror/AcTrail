@@ -3,6 +3,12 @@
 mod contract;
 mod delivery;
 mod runtime;
+mod terminal;
+
+pub use terminal::{
+    TerminalActionCapacity, TerminalActionDelivery, TerminalActionGate, TerminalActionLimits,
+    TerminalActionRejection,
+};
 
 pub use plugin_system::{PayloadReference, PayloadReferenceMetadata};
 
@@ -11,8 +17,8 @@ pub use contract::{
     SemanticActionExportAdapter, SemanticActionExportRecord, SemanticActionKindSelection,
 };
 pub use delivery::{
-    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortShutdown,
-    BestEffortSink,
+    BestEffortDelivery, BestEffortDeliveryConfig, BestEffortDeliveryFinish, BestEffortFlush,
+    BestEffortShutdown, BestEffortSink,
 };
 pub use runtime::{
     BestEffortSemanticActionRoute, BestEffortSemanticActionRouteConfig, ExportDroppedRecord,
