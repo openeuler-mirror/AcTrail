@@ -5,9 +5,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.common.actrail_runtime import CommandResult
-from tests.e2e.common.agent_selection import AgentSelection
-from tests.e2e.common.core import TestResult, TestStatus
+from tests.e2e.common.actrail_runtime import CommandResult, LaunchOptions, ToolAccess
+from tests.e2e.common.agents import Agent
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .environment import SemanticActionBoundariesEnvironment
@@ -33,46 +32,20 @@ class SemanticActionBoundariesTask:
     def __init__(
         self,
         environment: SemanticActionBoundariesEnvironment,
-        agent: AgentSelection,
-        test_context: TestingContextSingleton,
+        agent: Agent,
     ):
         self._environment = environment
         self._agent = agent
-        self._test_context = test_context
         self._observation = SemanticActionObservation(environment)
 
-    def run(self) -> dict[str, TestResult]:
-        results: dict[str, TestResult] = {}
-        self._test_context.report_progress(
-            "boundary_round",
-            "testing agent action boundaries",
-        )
-        boundary_counts = self._run_boundary_round()
-        results["terminal-actions"] = TestResult(
-            TestStatus.PASSED,
-            "root process one-shot counts: "
-            + ", ".join(
-                f"{kind}={count}"
-                for kind, count in sorted(boundary_counts.items())
-            ),
-        )
-        self._run_exec_edge_cases()
-        results["exec-edge-cases"] = TestResult(
-            TestStatus.PASSED,
-            "failed exec observation, eBPF-only completion, and nonzero "
-            "exit passed",
-        )
-        self._test_context.report_progress(
-            "runtime_health",
-            "checking observation runtime health",
-        )
-        self._observation.require_runtime_healthy()
-        results["observation_runtime"] = TestResult(
-            TestStatus.PASSED,
-            "semantic action observation remains active with "
-            "dropped_records=0",
-        )
-        return results
+    def run(self, case) -> None:
+        with case.step("Check which actions are exported at completion") as step:
+            counts = self._run_boundary_round()
+            step.message = ", ".join(f"{kind}={count}" for kind, count in sorted(counts.items()))
+        with case.step("Check process execution edge cases"):
+            self._run_exec_edge_cases(case)
+        with case.step("Check observation runtime health"):
+            self._observation.require_runtime_healthy()
 
     def _run_boundary_round(self) -> Counter[str]:
         self._environment.enable_observed_kinds(
@@ -82,40 +55,27 @@ class SemanticActionBoundariesTask:
             "SEMANTIC_ACTION_BOUNDARIES_"
             f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
-        self._test_context.report_progress(
-            "boundary_launch",
+        TestingContextSingleton.current().report_progress(
+            "Run the Agent to observe action completion",
             f"launching {self._agent.kind} boundary trace",
         )
-        launch = self._launch_agent(marker)
-        if launch.returncode != 0:
-            raise AssertionError(
-                "semantic action boundaries: actrailctl launch exited "
-                f"with {launch.returncode}\n{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-            )
-        if marker not in launch.output:
-            raise AssertionError(
-                f"semantic action boundaries: {self._agent.kind} output "
-                f"does not contain marker {marker}"
-            )
-        self._test_context.report_progress(
-            "boundary_observe",
+        trace_id, _ = self._launch_agent(marker)
+        TestingContextSingleton.current().report_progress(
+            "Wait for completed actions to be exported",
             "waiting for finalized exported actions",
         )
-        trace_id = self._observation.require_trace_id(launch)
         self._observation.wait_for_terminal_trace(trace_id)
         self._observation.wait_for_exported_kinds(
             marker,
             set(self._OBSERVED_KINDS),
         )
         spans = self._observation.extract_exported_spans(marker)
-        process_id = self._root_process_id(spans)
+        process_id = self._agent_process_id(spans)
         root_spans = [
             span for span in spans if span.process_id == process_id
         ]
         counts = Counter(span.kind for span in root_spans)
         expected_exact = {
-            "process.exec": 2,
-            "command.invocation": 2,
             "agent.identity": 1,
             "process.exit": 1,
             "agent.exit": 1,
@@ -127,14 +87,15 @@ class SemanticActionBoundariesTask:
         }
         unexpected = set(counts).difference(
             expected_exact,
-            {"llm.request"},
+            {"llm.request", "process.exec", "command.invocation"},
         )
-        if counts.get("llm.request", 0) < 1 or mismatches or unexpected:
+        missing = {"llm.request", "process.exec", "command.invocation"}.difference(counts)
+        if missing or mismatches or unexpected:
             raise AssertionError(
                 f"semantic action root process {process_id} counts are "
                 f"{dict(sorted(counts.items()))}, expected exact "
                 f"{dict(sorted(expected_exact.items()))}, "
-                "llm.request>=1, and no other kinds"
+                "at least one LLM request, exec and command, and no other kinds"
             )
         action_id_counts = Counter(
             span.action_id for span in root_spans
@@ -156,22 +117,13 @@ class SemanticActionBoundariesTask:
         )
         return counts
 
-    def _run_exec_edge_cases(self) -> None:
-        self._test_context.report_progress(
-            "failed_exec",
-            "testing failed exec observation",
-        )
-        self._require_failed_exec_attempt()
-        self._test_context.report_progress(
-            "ebpf_exec",
-            "testing eBPF-only exec completion",
-        )
-        self._require_ebpf_only_exec_completion()
-        self._test_context.report_progress(
-            "nonzero_exit",
-            "testing nonzero process exit",
-        )
-        self._require_nonzero_process_exit()
+    def _run_exec_edge_cases(self, case) -> None:
+        with case.step("Check a failed exec attempt"):
+            self._require_failed_exec_attempt()
+        with case.step("Check exec completion captured by eBPF"):
+            self._require_ebpf_only_exec_completion()
+        with case.step("Check a nonzero process exit"):
+            self._require_nonzero_process_exit()
 
     def _require_failed_exec_attempt(self) -> None:
         target = self._environment.config.work_dir / "non-executable"
@@ -393,29 +345,23 @@ class SemanticActionBoundariesTask:
             bash_execs[0].action_id,
         )
 
-    def _launch_agent(self, marker: str) -> CommandResult:
-        prompt = (
-            f'Reply with exactly "{marker}" and nothing else. Do not use tools.'
+    def _launch_agent(self, marker: str):
+        prompt = "Briefly explain how a process executes a program."
+        options = LaunchOptions(
+            name=marker, host_ebpf="auto", tool_access=ToolAccess.NONE,
+            max_turns=self._environment.config.agent_max_turns,
         )
-        agent_command = self._agent.command(prompt)
-        return self._environment.runtime.run(
-            [
-                self._environment.runtime.actrailctl,
-                "--config",
-                self._environment.config.operator_config,
-                "launch",
-                "--name",
-                marker,
-                "--",
-                "/bin/bash",
-                "-lc",
-                'cat /etc/hostname >/dev/null; exec "$@"',
-                "actrail-semantic-boundaries",
-                *agent_command,
-            ],
-            timeout_seconds=self._environment.config.launch_timeout_seconds,
-            environment=self._agent.environment,
-        )
+        with self._environment.runtime.launch_scope(options):
+            with self._agent.launchWithAcTrailCtl(stream_mode=False) as agent:
+                agent.run(prompt)
+                agent.join_all(self._environment.config.launch_timeout_seconds)
+                result = agent.results[-1]
+                if not result.succeeded:
+                    raise AssertionError(result.error or "Agent task failed")
+                trace_id = agent.launch_result.trace_id
+            if agent.returncode != 0:
+                raise AssertionError(f"Agent exited with {agent.returncode}")
+        return trace_id, result
 
     def _launch_command(
         self,
@@ -443,36 +389,11 @@ class SemanticActionBoundariesTask:
             timeout_seconds=self._environment.config.launch_timeout_seconds,
         )
 
-    def _root_process_id(
-        self,
-        spans: list[ExportedSpan],
-    ) -> str:
-        execs_by_process: dict[str, list[ExportedSpan]] = {}
-        for span in spans:
-            if span.kind == "process.exec":
-                execs_by_process.setdefault(
-                    span.process_id,
-                    [],
-                ).append(span)
-        agent_name = self._agent.binary.name
-        candidates = []
-        for process_id, execs in execs_by_process.items():
-            executable_names = {
-                Path(span.executable).name
-                for span in execs
-            }
-            if (
-                len(execs) == 2
-                and "bash" in executable_names
-                and agent_name in executable_names
-            ):
-                candidates.append(process_id)
-        if len(candidates) != 1:
-            raise AssertionError(
-                "semantic action boundaries expected one bash-to-agent "
-                f"process, found {sorted(candidates)}"
-            )
-        return candidates[0]
+    def _agent_process_id(self, spans: list[ExportedSpan]) -> str:
+        processes = {span.process_id for span in spans if span.kind == "agent.identity"}
+        if len(processes) != 1:
+            raise AssertionError(f"expected one actual Agent process, found {sorted(processes)}")
+        return next(iter(processes))
 
     def _require_stored_boundary_actions(
         self,

@@ -112,6 +112,7 @@ export class TimelineBrowser {
         attempts.push({ label: await canvas.getAttribute('aria-label'), x, y, title,
           width: box.width, viewport: { ...viewport, origin: String(viewport.origin) }, time: action.start_time_unix_nanos });
         if (!title || /activities|活动|zoom in|放大/i.test(title)) continue;
+        if (group === 'Network' && !title.includes(action.title)) continue;
         const response = this.page.waitForResponse(response => new URL(response.url()).pathname
           === `/api/traces/${encodeURIComponent(this.trace)}/actions/${encodeURIComponent(action.id)}`);
         await canvas.click({ position: { x, y } });
@@ -121,7 +122,8 @@ export class TimelineBrowser {
         return { title, x, y };
       }
     }
-    if (zoomAttempt < C.max_zoom_attempts && attempts.some(attempt => /activities share|Zoom in|活动|放大/i.test(attempt.title ?? ''))) {
+    if (zoomAttempt < C.max_zoom_attempts && (group === 'Network'
+      || attempts.some(attempt => /activities share|Zoom in|活动|放大/i.test(attempt.title ?? '')))) {
       await this.page.locator('.flame-zoom-controls button').last().click();
       await this.settle();
       return this.select(action, group, zoomAttempt + 1);

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from tests.e2e.common.core import TestCase, TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.resource_storage_assertion import (
     assert_restart_storage, assert_workload_columns, profile_snapshot,
@@ -25,16 +25,16 @@ BURN = "import time\nend = time.time() + {seconds}\nwhile time.time() < end: pas
 SLEEP = "import time\ntime.sleep({seconds})\n"
 
 
-class ResourceMetricsCgroupV1Case(TestCase):
+class ResourceMetricsCgroupV1Scenario:
     """Acceptance for daemon-owned cgroup-v1 trace scopes, run on hosts without unified v2."""
 
-    def __init__(self, inputs: TestCaseInputs) -> None:
-        self._inputs = inputs
+    def __init__(self, directories: TestRunDirectories) -> None:
+        self._directories = directories
         # A per-run root keeps this case away from a deployed daemon's `actrail/`.
         self._root_name = f"actrail-e2e-{os.getpid()}"
-        self._config = inputs.work_dir / "actraild.conf"
-        self._socket = inputs.work_dir / "run/control.sock"
-        self._database = inputs.work_dir / "data/actrail.sqlite"
+        self._config = directories.work_dir / "actraild.conf"
+        self._socket = directories.work_dir / "run/control.sock"
+        self._database = directories.work_dir / "data/actrail.sqlite"
         self._daemon: subprocess.Popen[bytes] | None = None
         self._hierarchies: list[Path] = []
 
@@ -58,10 +58,18 @@ class ResourceMetricsCgroupV1Case(TestCase):
                     self._config.parent / "actrail-resources.sqlite", 1, self._resource_samples(1),
                 )),
                 ("resource_api", lambda: assert_resource_api(
-                    self._inputs, self._config, {trace: self._resource_samples(trace) for trace in (1, 4)},
+                    self._directories, self._config, {trace: self._resource_samples(trace) for trace in (1, 4)},
                 )),
             ):
-                test_context.report_progress(current, f"checking managed cgroup-v1 {current}")
+                test_context.report_progress({
+                    'exact': 'Check resource sample accuracy',
+                    'isolation': 'Check resource isolation between traces',
+                    'restart': 'Check resource sampling after daemon restart',
+                    'timeout': 'Check resource sampling timeout',
+                    'lost': 'Check handling of a lost cgroup',
+                    'column_storage': 'Check stored resource columns',
+                    'resource_api': 'Check resource API results',
+                }[current], f"checking managed cgroup-v1 {current}")
                 results[current] = TestResult(TestStatus.PASSED, check())
             return TestResult(
                 TestStatus.COMPOSITE, "cgroup-v1 resource metrics", results,
@@ -111,8 +119,8 @@ class ResourceMetricsCgroupV1Case(TestCase):
 
     def _prepare_config(self) -> None:
         for directory in ("run", "data", "log", "export", "plugins"):
-            (self._inputs.work_dir / directory).mkdir(parents=True, exist_ok=True)
-        patch = self._inputs.work_dir / "operator.patch.toml"
+            (self._directories.work_dir / directory).mkdir(parents=True, exist_ok=True)
+        patch = self._directories.work_dir / "operator.patch.toml"
         patch.write_text(self._operator_patch(), encoding="utf-8")
         self._command(
             (
@@ -127,7 +135,7 @@ class ResourceMetricsCgroupV1Case(TestCase):
         )
 
     def _operator_patch(self) -> str:
-        work = self._inputs.work_dir
+        work = self._directories.work_dir
         return f'''[control]
 socket_path = "{self._socket}"
 pid_file = "{work / 'run/actraild.pid'}"
@@ -191,8 +199,8 @@ finalization_timeout_ms = 1000
     def _start_daemon(self) -> None:
         self._daemon = subprocess.Popen(
             (str(self._binary("actraild")), "--config", str(self._config), "run"),
-            cwd=self._inputs.repo,
-            stdout=(self._inputs.work_dir / "log/daemon.out").open("ab"),
+            cwd=self._directories.repo,
+            stdout=(self._directories.work_dir / "log/daemon.out").open("ab"),
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
@@ -227,7 +235,7 @@ finalization_timeout_ms = 1000
     def _run_exact_case(self) -> str:
         process = self._launch_workload("exact", child_seconds=0.8, parent_seconds=0.2)
         self._wait_until(
-            lambda: (self._inputs.work_dir / "child-cgroup-exact").exists(),
+            lambda: (self._directories.work_dir / "child-cgroup-exact").exists(),
             "exact workload did not start",
         )
         process.communicate(timeout=8)
@@ -280,7 +288,7 @@ finalization_timeout_ms = 1000
     def _run_restart_case(self) -> str:
         process = self._launch_workload("restart", child_seconds=4.0, parent_seconds=3.5)
         self._wait_until(
-            lambda: (self._inputs.work_dir / "child-cgroup-restart").is_file(),
+            lambda: (self._directories.work_dir / "child-cgroup-restart").is_file(),
             "restart workload did not start",
         )
         self._wait_until(lambda: self._event_count(4) > 0, "initial sample was not stored")
@@ -308,7 +316,7 @@ finalization_timeout_ms = 1000
         process = self._launch_workload("timeout", child_seconds=3.0, parent_seconds=0.2)
         process.communicate(timeout=8)
         child_pid = int(
-            (self._inputs.work_dir / "child-pid-timeout").read_text(encoding="utf-8")
+            (self._directories.work_dir / "child-pid-timeout").read_text(encoding="utf-8")
         )
         self._wait_for_trace(5, "orphaned")
         if not Path(f"/proc/{child_pid}").exists():
@@ -316,7 +324,7 @@ finalization_timeout_ms = 1000
         payloads = self._resource_payloads(5)
         self._assert_final(payloads, coverage="partial", timed_out=True)
         self._wait_until(
-            lambda: (self._inputs.work_dir / "child-done-timeout").is_file(),
+            lambda: (self._directories.work_dir / "child-done-timeout").is_file(),
             "timeout descendant did not finish naturally",
             timeout=6,
         )
@@ -333,7 +341,7 @@ finalization_timeout_ms = 1000
         os.kill(self._daemon.pid, signal.SIGSTOP)
         try:
             self._wait_until(
-                lambda: (self._inputs.work_dir / "child-done-lost").exists(),
+                lambda: (self._directories.work_dir / "child-done-lost").exists(),
                 "lost-scope workload did not write its completion marker",
             )
             self._remove_lost_scopes(self._scope_replicas(6))
@@ -414,7 +422,7 @@ finalization_timeout_ms = 1000
             suffix,
             (
                 str(WORKLOAD),
-                str(self._inputs.work_dir),
+                str(self._directories.work_dir),
                 suffix,
                 str(child_seconds),
                 str(parent_seconds),
@@ -441,7 +449,7 @@ finalization_timeout_ms = 1000
                 shutil.which("python3") or "python3",
                 *arguments,
             ),
-            cwd=self._inputs.repo,
+            cwd=self._directories.repo,
             text=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -455,8 +463,8 @@ finalization_timeout_ms = 1000
                 if set(line.split(":", 2)[1].split(",")) & {"cpuacct", "memory"}
             ]
 
-        parent = scoped(self._inputs.work_dir / f"parent-cgroup-{suffix}")
-        child = scoped(self._inputs.work_dir / f"child-cgroup-{suffix}")
+        parent = scoped(self._directories.work_dir / f"parent-cgroup-{suffix}")
+        child = scoped(self._directories.work_dir / f"child-cgroup-{suffix}")
         prefix = f"/{self._root_name}/traces/trace-"
         if (
             parent != child
@@ -563,7 +571,7 @@ finalization_timeout_ms = 1000
             raise RuntimeError(f"daemon exited with {self._daemon.returncode}")
         result = subprocess.run(
             (str(self._binary("actrailctl")), "doctor", "--config", str(self._config)),
-            cwd=self._inputs.repo,
+            cwd=self._directories.repo,
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -583,15 +591,15 @@ finalization_timeout_ms = 1000
                     pass
 
     def _binary(self, name: str) -> Path:
-        directory = self._inputs.bin_dir
+        directory = self._directories.bin_dir
         if not directory.is_absolute():
-            directory = self._inputs.repo / directory
+            directory = self._directories.repo / directory
         return directory / name
 
     def _command(self, command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             command,
-            cwd=self._inputs.repo,
+            cwd=self._directories.repo,
             check=True,
             capture_output=True,
             text=True,

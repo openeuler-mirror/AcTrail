@@ -1,99 +1,55 @@
-# Probe dcode LLM
+# 回归测试：Dcode LLM 交互采集
 
-使用刷新后的默认采集配置，验证真实 deepagents-code（`dcode`）通过 AcTrail
-启动后的 LLM 请求、响应采集与关联。
+## 测试目标
 
-## 运行
+验证 AcTrail 能采集 Dcode 的模型请求和响应，并将它们关联到对应的 LLM 调用。
 
-在仓库根目录执行，保留当前用户的 PATH、HOME 和 provider 认证环境：
+## 场景设计
 
-```bash
-sudo -E env "PATH=$PATH" python3 tests/e2e/regression/probe_dcode_llm/run_e2e.py
-sudo -E env "PATH=$PATH" python3 tests/e2e/regression/test_all.py \
-  --no-profile --case probe_dcode_llm
-```
+在隔离的 AcTrail 环境中启动 deepagents-code（`dcode`），使用刷新后的默认采集配置。Dcode 沿用自身的模型和服务配置，执行一次不依赖工具的开放式文本任务。以 Dcode 的实际回复核对采集响应正文。
 
-- **回归入口**：测例已纳入默认回归集合。
-- **保留产物**：保留日志及工作目录时添加 `--no-cleanup`。
-- **会话清理**：dcode thread 在每次调用结束时清理。
+## 测试依赖
 
-## 前提与配置
-
-### 运行环境与清理
-
-- **程序与模型**：`dcode` 必须可从 PATH 找到，并已配置可访问的默认模型。使用 `dcode --version` 和 `dcode --default-model` 查看实际版本与模型。
-- **调用隔离**：测例沿用 dcode 默认 provider/model，在 runner 分配的工作目录下为每次调用创建独占临时目录。
-- **会话清理**：预检和观测运行均在退出后按该目录精确查询并删除 thread。
-- **超时处理**：超时通过公共进程管理器终止进程组后执行清理。
-- **清理异常**：清理失败输出 warning，保留该次调用的观测回归结果。
-
-### 配置生成与使用
-
-- **配置位置**：公共配置构建器在 `<work-root>/probe_dcode_llm/` 生成隔离路径补丁。daemon 数据、日志和 socket 使用该测例工作目录。
-- **采集后端**：TLS 和 socket 继承 `init` 生成的默认后端，当前均为 `bpf-copy`，seccomp-notify 关闭。
-- **配置初始化**：初始化使用 `actrailctl --config <本地配置> init -f --patch <隔离路径补丁>`，生成测例使用的 `actraild.conf`。
-- **配置使用**：daemon、ctl launch 和 viewer 均显式使用同一份本地配置。
-
-### 采集模式与覆盖
-
-- **初始化模式**：`init` 默认使用 `complete` 模式，启动和运行期的直接探针发现沿用默认开启值。
-- **运行器参数**：runner 的 `--profile` 是机器环境配置，与 `init --mode profile` 含义不同。
-- **实际协议**：LLM 连接的实际协议取决于 provider 配置。明文 HTTP 由 socket 采集。
-- **TLS 覆盖**：确认 TLS 用户态探针（uprobe）覆盖时，还需检查 TLS 来源的采集证据。
-
-### 超时配置
-
-| 环境变量 | 默认值 | 用途 |
+| 依赖 | 要求 | 用途 |
 | --- | --- | --- |
-| `DCODE_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 生命周期、查询及 thread 清理命令超时，同时用作进程组终止宽限时间 |
-| `DCODE_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | 每次真实 dcode 预检、观测运行超时，同时传给 dcode `--timeout` |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、可工作的 eBPF 环境、root 权限 | 采集 Dcode 活动 |
+| AcTrail | 可运行的 release 产物 `actraild`、`actrailctl`、`actrailviewer` | 启动采集、保存并查询观测记录 |
+| Dcode | 支持非交互运行的 CLI | 执行文本任务并返回实际回复 |
+| 模型服务 | Dcode 已配置默认模型和认证，服务可访问 | 执行真实的模型请求 |
 
-通用 runner 参数及 release 安装行为见[回归说明](../README.md)。
+## 测试步骤摘要
 
-## 验收流程
+1. **检查 Dcode 可用性。** 直接运行 Dcode 完成一次模型请求。Dcode 缺失或可用性检查失败时，用例标记为 `SKIPPED`。
+2. **准备观测环境。** 在测例工作目录用 `actrailctl init` 生成默认配置。用 `actraild start` 启动守护进程。
+3. **启动 Dcode。** 通过 `actrailctl launch` 在独立临时目录启动 Dcode。记录启动结果中的 trace ID。
+4. **执行文本任务。** 通过标准输入提交一个简短的开放式问题。等待任务成功结束，从标准输出取得实际回复文本。
+5. **完成数据采集。** Dcode 退出后清理本次临时目录对应的 Dcode 会话。停止守护进程，等待观测记录落盘。
+6. **核对观测记录。** 使用 `actrailviewer` 查询第 3 步取得的 trace ID。
 
-1. 从 PATH 解析实际 dcode，使用随机标记运行一次外部可用性预检。
-   缺少可执行文件、预检超时、异常退出或未返回标记时标记为 `SKIPPED`。
-2. 在测例工作目录生成配置 patch，执行带本地 `--config` 的
-   `init -f --patch`、stop、clean、start，刷新默认配置并启动采集。
-3. 生成新的随机标记，通过 `actrailctl --config <本地配置> launch -- dcode -n <prompt> -q
-   --no-mcp --timeout <seconds>` 请求原样回答，不使用工具。
-4. 检查退出码、回答标记和唯一 trace id。
-5. 停止 daemon 并等待数据收尾，确认停止命令成功，trace 的 `state` 为
-   `Completed` 或 `Exited`，且 `health` 为 `Clean`。
-6. 使用公共 `LLMTraceAssertion` 验证 LLM call/request/response 终态、
-   有效关联和请求内容证据，确认关联响应成功且完整、包含本次标记。
+   | 检查项 | 条件 | 预期结果 |
+   | --- | --- | --- |
+   | Trace 终态 | 守护进程已停止 | trace 状态为 `Completed` 或 `Exited`，健康状态为 `Clean` |
+   | 调用关联 | trace 下的 LLM 请求和响应 | 每条 `llm.call` 关联一条 `llm.request`，最多关联一条 `llm.response`。每条请求或响应仅关联到一条调用。无响应的调用保持 `unknown/partial`，无结束时间 |
+   | 任务内容 | Dcode 成功完成任务并返回文本 | 至少一条 `success/complete` 响应的正文包含实际回复全文。同一调用的请求保留规范化内容，或在采集受限时保留有效的请求元数据 |
+   | 采集收尾 | 守护进程已停止 | LLM 请求、响应和 SSE 流处于终态 |
 
-预检和观测调用各自在 `finally` 中执行 thread 清理，覆盖正常返回、异常退出
-和超时路径。清理使用 `dcode threads list --cwd <独占目录> --json` 查询，
-再调用 `dcode threads delete <thread-id> --json` 删除。
+## 快速运行
 
-AcTrail 启动错误、观测运行失败、缺失请求或响应以及错误关联均判为 `FAILED`。
+### 测试所用环境变量
 
-## 手动复现
+| 环境变量 | 未设置时测试框架的行为 | 用途 |
+| --- | --- | --- |
+| `DCODE_E2E_COMMAND_TIMEOUT_SECONDS` | 等待 30 秒 | AcTrail 命令和 Dcode 会话清理的等待时限 |
+| `DCODE_E2E_LAUNCH_TIMEOUT_SECONDS` | 等待 180 秒 | 受观测的 Dcode 文本任务超时，同时传给 Dcode 的 `--timeout` |
+| `DCODE_E2E_BINARY` | 自动发现 Dcode 可执行文件 | 指定 Dcode CLI 路径 |
+| `ACTRAIL_TEST_AGENT_AVAILABILITY_TIMEOUT_SECONDS` | 等待 60 秒 | Dcode 可用性检查的等待时限 |
 
-先运行测例生成并保留本地配置：
+### 运行指令
 
-```bash
-sudo -E env "PATH=$PATH" python3 tests/e2e/regression/probe_dcode_llm/run_e2e.py \
-  --work-root "$PWD/tmp/dcode-probe/work" \
-  --log-dir "$PWD/tmp/dcode-probe/logs" --no-cleanup
-```
-
-以下命令查看该次运行的采集结果：
-
-```bash
-DCODE_CASE_DIR="$PWD/tmp/dcode-probe/work/probe_dcode_llm"
-DCODE_CONFIG="$DCODE_CASE_DIR/actraild.conf"
-sudo -E target/release/actrailviewer --config "$DCODE_CONFIG" --output-format json traces
-```
-
-使用 launch 输出的数字 trace id 查看采集内容：
+从仓库根目录执行以下命令。添加 `--no-cleanup` 可保留测例工作目录。
 
 ```bash
-sudo -E target/release/actrailviewer --config "$DCODE_CONFIG" \
-  --output-format json actions --trace-id <trace-id>
+sudo -E env "HOME=$HOME" "PATH=$PATH" \
+  python3 tests/e2e/regression/probe_dcode_llm/run_e2e.py
 ```
-
-目标 trace 应正常结束。LLM 请求与响应应有有效 call links，响应包含
-测例输出的随机标记。自动测例执行完整关联断言。

@@ -1,5 +1,59 @@
 # Sandbox Resource Alert Host 回归
 
+## 测试目标
+
+验证 Host native VSOCK 的资源观测、告警存储和公开订阅投递，并验证在线阈值更新与断连恢复行为。
+
+## 场景设计
+
+在命名根进程下运行真实 xiaoO 和文件工作负载，以受控 memory cgroup 产生 OOM。采集 daemon 显式连接 gateway 后验证四类告警，通过 Web 更新内存阈值，再断开和重建连接检查运行状态及新观测。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储与查询 |
+| 主机 | Linux、root、native AF_VSOCK loopback、可用 memory cgroup | 传输资源观测并执行受控 OOM |
+| 运行组件 | actrail-sb、VSOCK gateway、alert proxy、actrailweb | 采集、转发与在线配置 |
+| xiaoO | 真实 CLI 可用 | 执行 Bash tool call 和文件任务 |
+
+## 测试步骤摘要
+
+1. 刷新 actrail-sb 默认配置，启动采集 daemon 并等待 control socket。
+2. 在尚未连接时跨越多个采样周期，核对存活与数据库。
+3. 启动 Host gateway，显式执行 connect 后启动工作负载。
+4. 通过 Web 降低再提高内存风险阈值，核对同一插件实例产生新告警。
+5. 由真实 xiaoO 触发专属 cgroup 内的受控 OOM，并完成文件读写。
+6. 核对独立告警库与 subscriber 的四类告警。
+7. 停止 gateway 并持续采样，再重启并显式连接，核对恢复结果。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 未连接与断连 | 跨越多个采样周期 | daemon 存活，Evidence 和 Alert SQLite 无新增记录 |
+| 在线配置 | Web 更新阈值并写回原配置 | 同一插件实例按新阈值产生内存风险告警 |
+| 告警完整性 | 工作负载完成 | 数据库和 subscriber 同时出现内存风险、OOM killed、高读取量和高写入量告警 |
+| 读写归属 | 命名根进程的子进程执行读写 | PID、启动时钟、进程名匹配，字节数超过阈值 |
+| OOM 归属 | 32 MiB cgroup 内 allocator 被内核杀死 | critical 告警带真实 victim PID、python3、monitored 归因和稳定谱系标记 |
+| 重连 | gateway 重启并显式连接 | 收到新采样告警，断连期间旧观测不补发 |
+
+## 快速运行
+
+仓库根目录运行：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+deploy/virtual-container/host/run-v2-tests.sh \
+  --case sandbox_resource_alert_host \
+  --color never \
+  --fail-fast
+```
+
+`run-v2-tests.sh` 会在需要时申请 sudo，并保留调用用户的 Cargo、Rustup 和 PATH。
+该 Host case 直接使用运行环境，不需要本机 profile。
+
+## 手动测试
+
 该场景在无需 VMM 的主机环境验证采集、传输、落库和告警转发组件通路。
 
 实际运行路径如下：
@@ -66,17 +120,3 @@ gateway 重新启动后，场景再次执行真实 `actrail-sb connect`。
 
 该 case 的验收边界是 Host native-VSOCK 组件数据通路、Web 在线阈值配置和上述四类告警。
 Firecracker VMM transport 与快照恢复后的 Guest eBPF link 延续性由 Firecracker 主线场景验收。
-
-仓库根目录运行：
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 \
-deploy/virtual-container/host/run-v2-tests.sh \
-  --no-profile \
-  --case sandbox_resource_alert_host \
-  --color never \
-  --fail-fast
-```
-
-`run-v2-tests.sh` 会在需要时申请 sudo，并保留调用用户的 Cargo、Rustup 和 PATH。
-显式 `--no-profile` 表示该 Host case 不读取 Kata 本机 profile。

@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any, Protocol, TypeVar
 
-from tests.e2e.common.core import TestCase, TestResult
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .assertion import ScenarioPreconditionFailure
@@ -19,8 +19,9 @@ class ScenarioAssertion(Protocol[EvidenceT]):
 
 
 class TrajectoryCaseSupport(TestCase):
-    def __init__(self, config: TrajectoryTestConfig):
-        self._config = config
+    _config: TrajectoryTestConfig
+
+    def __init__(self, directories: TestRunDirectories):
         self._environment: TrajectoryTestEnvironment | None = None
 
     def cleanup(

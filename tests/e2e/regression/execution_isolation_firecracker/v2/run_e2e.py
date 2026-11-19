@@ -1,32 +1,13 @@
 #!/usr/bin/env python3
-
-from __future__ import annotations
-
+"""Run this regression scenario independently."""
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 
-from tests.e2e.common.runner import TestDefinition, run_one
-from tests.e2e.common.execution_isolation.kata.case import (
-    KataExecutionIsolationCase,
-)
-
-from .config import FirecrackerExecutionIsolationConfig
-
-
-TEST_DEFINITION = TestDefinition(
-    name="execution_isolation_firecracker",
-    description=(
-        "Firecracker coverage through the Kata lifecycle, its hybrid-VSOCK "
-        "bridge and a real xiaoO sandbox observation path"
-    ),
-    build_case=lambda inputs: KataExecutionIsolationCase(
-        FirecrackerExecutionIsolationConfig.from_environment(inputs)
-    ),
-)
-
+from tests.e2e.common.runner import run_one
+from tests.e2e.regression.execution_isolation_firecracker.v2.case import ExecutionIsolationFirecrackerCase
 
 if __name__ == "__main__":
-    raise SystemExit(run_one(TEST_DEFINITION, REPO))
+    raise SystemExit(run_one(ExecutionIsolationFirecrackerCase, REPO))

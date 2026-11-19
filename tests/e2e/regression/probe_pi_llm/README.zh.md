@@ -1,190 +1,54 @@
-# Probe pi LLM
+# 回归测试：Pi LLM 交互采集
 
-# Quick Run
+## 测试目标
 
-在仓库根目录执行：
+验证 AcTrail 能采集 Pi 的模型请求和响应，并将它们关联到对应的 LLM 调用。
 
-```bash
-sudo -E python3 tests/e2e/regression/probe_pi_llm/run_e2e.py
-```
+## 场景设计
 
-脚本从当前环境的 `PATH` 解析默认 `pi`，先执行外部可用性检查，再通过
-单层 `actrailctl launch` 执行：
+在隔离的 AcTrail 环境中启动 Pi 的 RPC 会话，使用刷新后的默认采集配置。Pi 沿用自身的模型和服务配置，执行一次简短的开放式文本任务。以 Pi 实际返回的助手文本核对采集响应正文。
 
-```bash
-pi -p "prompt" --no-session
-```
+## 测试依赖
 
-# 步骤摘要
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、可工作的 eBPF 环境、root 权限 | 采集 Pi 活动 |
+| AcTrail | 可运行的 release 产物 `actraild`、`actrailctl`、`actrailviewer` | 启动采集、保存并查询观测记录 |
+| Pi | 可从 `PATH` 找到，且支持 RPC 的 CLI | 执行文本任务并返回助手事件 |
+| 模型服务 | Pi 已配置默认模型和认证，服务可访问 | 执行真实的模型请求 |
 
-1. 检查 AcTrail release binaries 和默认 Pi agent 的外部可用性。
-2. 初始化、清理并启动 AcTrail。
-3. 生成随机 marker，以 `--no-session` 模式请求 Pi 原样回答。
-4. 验证标准输出包含 marker，并提取唯一 trace id。
-5. 安全停止 daemon，验证 trace 为 `Exited/Clean`。
-6. 验证终态 LLM actions 完整配对，response 包含 marker，request 具有
-   canonical content 证据。
+## 测试步骤摘要
 
-# 手动测试
+1. **检查 Pi 可用性。** 直接运行 Pi 完成一次模型请求。Pi 缺失或可用性检查失败时，用例标记为 `SKIPPED`。
+2. **准备观测环境。** 在测例工作目录用 `actrailctl init` 生成默认配置。用 `actraild start` 启动守护进程。
+3. **启动 Pi 会话。** 通过 `actrailctl launch` 启动 Pi RPC 会话，关闭默认工具、内置 MCP 和会话保存。记录启动结果中的 trace ID。
+4. **执行文本任务。** 通过 RPC 提交一个简短的开放式问题。等待任务成功结束，从 `agent_end` 事件取得本轮最终助手回复文本。
+5. **完成数据采集。** 结束 Pi 会话后停止守护进程，等待观测记录落盘。
+6. **核对观测记录。** 使用 `actrailviewer` 查询第 3 步取得的 trace ID。
 
-本测例没有浏览器交互面，使用 Bash 直接复现。以下命令均从仓库根目录执行。
+   | 检查项 | 条件 | 预期结果 |
+   | --- | --- | --- |
+   | Trace 终态 | 守护进程已停止 | trace 状态为 `Completed` 或 `Exited`，健康状态为 `Clean` |
+   | 调用关联 | trace 下的 LLM 请求和响应 | 每条 `llm.call` 关联一条 `llm.request`，最多关联一条 `llm.response`。每条请求或响应仅关联到一条调用。无响应的调用保持 `unknown/partial`，无结束时间 |
+   | 任务内容 | Pi 成功完成任务并返回文本 | 至少一条 `success/complete` 响应的正文包含实际回复全文。同一调用的请求保留规范化内容，或在采集受限时保留有效的请求元数据 |
+   | 采集收尾 | 守护进程已停止 | LLM 请求、响应和 SSE 流处于终态 |
 
-## 步骤1：检查测试前提
+## 快速运行
 
-### 手动指令
+### 测试所用环境变量
 
-```bash
-test -x target/release/actraild
-test -x target/release/actrailctl
-test -x target/release/actrailviewer
-PI_BIN="$(command -v pi)"
-test -n "$PI_BIN"
-"$PI_BIN" -p 'Reply with exactly "PI_PREFLIGHT_OK" and nothing else.' --no-session
-```
+| 环境变量 | 未设置时测试框架的行为 | 用途 |
+| --- | --- | --- |
+| `PI_E2E_COMMAND_TIMEOUT_SECONDS` | 等待 30 秒 | AcTrail 命令的等待时限 |
+| `PI_E2E_LAUNCH_TIMEOUT_SECONDS` | 等待 180 秒 | Pi 文本任务的等待时限 |
+| `ACTRAIL_TEST_AGENT_AVAILABILITY_TIMEOUT_SECONDS` | 等待 60 秒 | Pi 可用性检查的等待时限 |
 
-### 预期结果
+### 运行指令
 
-AcTrail binaries 均可执行；环境默认 Pi agent 成功输出 `PI_PREFLIGHT_OK`，且
-不保存 session。Pi 缺失、未配置 provider/model、认证失效或网络不可达时，
-自动测试标记为 `SKIPPED`。
-
-## 步骤2：初始化并启动 AcTrail
-
-### 手动指令
+从仓库根目录执行以下命令。
 
 ```bash
-sudo -E target/release/actrailctl init -f
-sudo -E target/release/actraild stop
-sudo -E target/release/actrailctl clean
-sudo -E target/release/actraild start
+sudo -E env "HOME=$HOME" "PATH=$PATH" \
+  python3 tests/e2e/regression/probe_pi_llm/run_e2e.py
 ```
-
-### 预期结果
-
-所有命令成功，daemon 正在监听 `/run/actrail/control.sock`。AcTrail 自身缺失
-或启动失败属于 `FAILED`。
-
-## 步骤3：生成 marker 并运行 Pi
-
-### 手动指令
-
-```bash
-CASE_MARKER="A$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
-LAUNCH_OUTPUT="$(
-  sudo -E target/release/actrailctl launch -- \
-    "$PI_BIN" \
-    -p "Reply with exactly \"$CASE_MARKER\" and nothing else. Do not use tools." \
-    --no-session 2>&1
-)"
-printf '%s\n' "$LAUNCH_OUTPUT"
-```
-
-### 预期结果
-
-输出中出现 `trace trace-N entered Active`，Pi 输出 `$CASE_MARKER` 并成功退出；
-运行结束后没有新增可恢复 session。
-
-## 步骤4：验证回答并提取 trace id
-
-### 手动指令
-
-```bash
-printf '%s\n' "$LAUNCH_OUTPUT" | rg -F "$CASE_MARKER"
-TRACE_ID="$(
-  printf '%s\n' "$LAUNCH_OUTPUT" |
-    sed -n 's/.*trace trace-\([0-9][0-9]*\) entered Active.*/\1/p'
-)"
-test "$(printf '%s\n' "$TRACE_ID" | sed '/^$/d' | wc -l)" -eq 1
-printf 'trace-%s\n' "$TRACE_ID"
-```
-
-### 预期结果
-
-marker 查找成功，只提取到一个数字 trace id。
-
-## 步骤5：安全停止并验证 trace
-
-### 手动指令
-
-```bash
-sudo -E target/release/actraild stop
-sudo -E target/release/actrailviewer --output-format json traces |
-  jq --argjson trace_id "$TRACE_ID" '
-    .traces[]
-    | select(.trace_id_raw == $trace_id)
-    | {trace_id, state, health}
-  '
-```
-
-### 预期结果
-
-daemon 成功停止；目标 trace 的 `state` 为 `Exited`、`health` 为 `Clean`。
-
-## 步骤6：验证 LLM action 与 marker
-
-### 手动指令
-
-```bash
-sudo -E target/release/actrailviewer --output-format json actions \
-  --trace-id "$TRACE_ID" > /tmp/actrail-pi-actions.json
-
-jq --arg marker "$CASE_MARKER" '
-  [.actions[] | select(.kind == "llm.call")] as $calls
-  | [.actions[] | select(.kind == "llm.request")] as $requests
-  | [.actions[] | select(.kind == "llm.response")] as $responses
-  | {
-      calls: ($calls | length),
-      requests: ($requests | length),
-      responses: ($responses | length),
-      nonterminal: [
-        .actions[]
-        | select(
-            (.kind == "llm.call"
-             or .kind == "llm.request"
-             or .kind == "llm.response"
-             or .kind == "sse.stream")
-            and .status == "in_progress"
-          )
-        | .action_id
-      ],
-      call_links: [
-        .links[]
-        | select(
-            .valid == true
-            and (.role == "llm.call.request" or .role == "llm.call.response")
-          )
-        | {
-            call: .parent_action_id,
-            role,
-            child: .child_action_id
-          }
-      ],
-      canonical_requests: [
-        $requests[]
-        | select(
-            .attributes["llm.request.content_state"] == "canonical_blocks"
-            and .status == "success" and .completeness == "complete"
-            and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
-            and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
-            and (((.attributes["llm.request.payload_bytes"] // "0")
-                  | tonumber) > 0)
-          )
-        | .action_id
-      ],
-      marker_responses: [
-        $responses[]
-        | select(
-            ((.attributes["llm.response.content_text"] // "") | contains($marker))
-            or ((.attributes["llm.response.output_text"] // "") | contains($marker))
-          )
-        | .action_id
-      ]
-    }
-' /tmp/actrail-pi-actions.json
-```
-
-### 预期结果
-
-三个 action 计数均大于零且相等；`nonterminal` 为空；`call_links` 中每个
-call 恰好有一个 request link 和一个 response link，且没有 request/response
-被重复使用；`canonical_requests` 和 `marker_responses` 均非空。

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ProbeCodexLlmConstants:
     reasoning_effort: str = 'low'
-    marker_random_bytes: int = 5
+    prompt: str = "Why do the phases of the Moon change during the month?"
     launch_diagnostic_tail_characters: int = 4000
     fallback_model: str = 'gpt-5.5'
 

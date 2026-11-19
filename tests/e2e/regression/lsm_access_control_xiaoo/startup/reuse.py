@@ -71,7 +71,7 @@ class StartupReuseScenario:
         case._write_patch()
         reports = []
         for sample in range(self.samples):
-            context.report_progress("startup_reuse", f"{case._selection.name}: sample {sample + 1}")
+            context.report_progress(f"Measure startup reuse for sample {sample + 1}", f"{case._selection.name}: sample {sample + 1}")
             # Each sample refreshes defaults and creates an independent daemon.
             case._write_rules("allow", port)
             runtime = MeasuredRuntime(

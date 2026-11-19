@@ -1,4 +1,4 @@
-"""Load optional machine-local defaults for the V2 regression runner."""
+"""Load an explicitly selected machine-local regression configuration."""
 
 from __future__ import annotations
 
@@ -6,11 +6,6 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-
-from tests.e2e.regression.constants import DEFAULTS
-
-
-DEFAULT_PROFILE = DEFAULTS.profile
 
 _ALLOWED_ENVIRONMENT = {
     "ACTRAIL_BIN_DIR",
@@ -119,28 +114,19 @@ def _object(value: Any, name: str) -> dict[str, Any]:
 
 def load_local_test_profile(
     repo: Path,
-    explicit_path: Path | None = None,
-) -> Path | None:
+    explicit_path: Path,
+) -> Path:
     """Apply a local profile without replacing explicit shell overrides."""
 
     repo = repo.resolve()
-    configured_path = os.environ.get("ACTRAIL_TEST_PROFILE")
-    required = explicit_path is not None or configured_path is not None
-    if explicit_path is not None:
-        profile_path = explicit_path.expanduser()
-    elif configured_path:
-        profile_path = Path(configured_path).expanduser()
-    else:
-        profile_path = repo / DEFAULT_PROFILE
+    profile_path = explicit_path.expanduser()
     if not profile_path.is_absolute():
         profile_path = (Path.cwd() / profile_path).resolve()
     else:
         profile_path = profile_path.resolve()
 
     if not profile_path.is_file():
-        if required:
-            raise ValueError(f"V2 test profile does not exist: {profile_path}")
-        return None
+        raise ValueError(f"V2 test profile does not exist: {profile_path}")
 
     try:
         document = json.loads(profile_path.read_text(encoding="utf-8"))

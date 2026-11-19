@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-import re
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
 
-from tests.e2e.common.actrail_runtime import CommandResult
-from tests.e2e.common.agent_selection import AgentSelection
-from tests.e2e.common.core import TestResult, TestStatus
+from tests.e2e.common.actrail_runtime import LaunchOptions, ToolAccess
+from tests.e2e.common.agents import Agent, AgentFactory
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .environment import OtelJsonlActionFilterEnvironment
@@ -21,13 +19,13 @@ from .commands.verification import CommandDeliveryVerification
 @dataclass(frozen=True)
 class FilterRound:
     name: str
+    label: str
     exporter: str
     enabled_kinds: frozenset[str]
     inject_retryable_failure: bool = CASE_CONSTANTS.inject_retryable_failure
 
 
 class OtelJsonlActionFilterTask:
-    _TRACE_PATTERN = re.compile(r"trace trace-(\d+) entered Active")
     _EXECUTION_CONTEXT_KINDS = frozenset(
         {"process.exec", "file.read", "command.invocation"}
     )
@@ -39,12 +37,10 @@ class OtelJsonlActionFilterTask:
     def __init__(
         self,
         environment: OtelJsonlActionFilterEnvironment,
-        agent: AgentSelection,
-        test_context: TestingContextSingleton,
+        agent: Agent,
     ):
         self._environment = environment
         self._agent = agent
-        self._test_context = test_context
         self._rounds = self._build_rounds()
         self._commands = CommandDeliveryVerification(environment.config)
 
@@ -67,51 +63,42 @@ class OtelJsonlActionFilterTask:
         return (
             FilterRound(
                 "execution-context-file",
+                "Export execution context to a file",
                 "file",
                 cls._EXECUTION_CONTEXT_KINDS,
             ),
             FilterRound(
                 "llm-complete-json-rpc",
+                "Export LLM activity over JSON-RPC",
                 "json_rpc_http",
                 cls._LLM_COMPLETE_KINDS,
                 inject_retryable_failure=True,
             ),
-            FilterRound("mixed-random-three-file", "file", random_three),
+            FilterRound(
+                "mixed-random-three-file",
+                "Export three selected action kinds to a file",
+                "file",
+                random_three,
+            ),
             FilterRound(
                 "representative-combined-json-rpc",
+                "Export execution context and LLM activity over JSON-RPC",
                 "json_rpc_http",
                 cls._REPRESENTATIVE_KINDS,
             ),
         )
 
-    def run(self) -> dict[str, TestResult]:
-        results: dict[str, TestResult] = {}
-        for index, round_definition in enumerate(self._rounds, start=1):
-            self._test_context.report_progress(
-                "filter_round",
-                f"{round_definition.name} via {round_definition.exporter} "
-                f"({index}/{len(self._rounds)})",
-            )
-            actual = self._run_round(round_definition)
-            results[round_definition.name] = TestResult(
-                TestStatus.PASSED,
-                f"{round_definition.exporter} exported action kinds: "
-                + ", ".join(sorted(actual)),
-            )
-        self._test_context.report_progress(
-            "runtime_health",
-            "checking otel-jsonl runtime health",
-        )
-        self._require_runtime_healthy()
-        results["plugin_runtime"] = TestResult(
-            TestStatus.PASSED,
-            "file and JSON-RPC exporters remain active with dropped_records=0",
-        )
-        return results
+    def run(self, case) -> None:
+        for round_definition in self._rounds:
+            with case.step(round_definition.label) as step:
+                actual = self._run_round(round_definition)
+                step.message = f"{round_definition.exporter} exported: " + ", ".join(sorted(actual))
+        with case.step("Check plugin health"):
+            self._require_runtime_healthy()
 
     def _run_round(self, round_definition: FilterRound) -> set[str]:
-        self._test_context.report_progress(
-            "filter_config",
+        TestingContextSingleton.current().report_progress(
+            "Configure the action filter and exporter",
             f"applying {round_definition.name} filter and exporter",
         )
         self._environment.update_selection(
@@ -132,26 +119,15 @@ class OtelJsonlActionFilterTask:
             f"OTEL_JSONL_FILTER_{round_definition.name}_"
             f"{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         )
-        self._test_context.report_progress(
-            "filter_launch",
+        TestingContextSingleton.current().report_progress(
+            "Run the Agent with the selected action filter",
             f"launching {self._agent.kind} for {round_definition.name}",
         )
-        launch = self._launch(marker)
-        if launch.returncode != 0:
-            raise AssertionError(
-                f"{round_definition.name}: actrailctl launch exited with "
-                f"{launch.returncode}\n{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-            )
-        if marker not in launch.output:
-            raise AssertionError(
-                f"{round_definition.name}: {self._agent.kind} output "
-                f"does not contain marker {marker}"
-            )
-        self._test_context.report_progress(
-            "filter_observe",
+        trace_id = self._launch(marker)
+        TestingContextSingleton.current().report_progress(
+            "Wait for the trace and exported actions",
             f"waiting for {round_definition.name} trace and exported actions",
         )
-        trace_id = self._require_trace_id(launch)
         self._wait_for_terminal_trace(trace_id)
         self._wait_for_source_actions(trace_id)
         actual = self._wait_for_exported_kinds(
@@ -205,42 +181,32 @@ class OtelJsonlActionFilterTask:
             f"response timeout failures; request_ids={observed}"
         )
 
-    def _launch(self, marker: str) -> CommandResult:
+    def _launch(self, marker: str):
+        fixture = self._environment.config.work_dir / "search.txt"
+        fixture.write_text("status=ready\nstatus=waiting\n", encoding="utf-8")
         prompt = (
-            f'Reply with exactly "{marker}" and nothing else. Do not use tools.'
+            f"Use the available grep/search tool to find status=ready in {fixture}. "
+            "Include line numbers in the search output, then briefly summarize the result."
         )
-        agent_command = self._agent.command(prompt)
-        return self._environment.runtime.run(
-            [
-                self._environment.runtime.actrailctl,
-                "--config",
-                self._environment.config.operator_config,
-                "launch",
-                "--name",
-                marker,
-                "--",
-                "bash",
-                "-lc",
-                f'sleep {CASE_CONSTANTS.command_sleep_seconds}; '
-                'cat /etc/hostname >/dev/null; exec "$@"',
-                "actrail-otel-jsonl-filter",
-                *agent_command,
-            ],
-            timeout_seconds=self._environment.config.launch_timeout_seconds,
-            environment=self._agent.environment,
+        options = LaunchOptions(
+            name=marker, host_ebpf="auto",
+            tool_access=ToolAccess.READ_ONLY,
+            max_turns=self._environment.config.agent_max_turns,
         )
+        with self._environment.runtime.launch_scope(options):
+            with AgentFactory.create(
+                self._agent.kind, binary=self._agent.binary, environment=self._agent.environment,
+            ).launchWithAcTrailCtl(stream_mode=False) as agent:
+                agent.run(prompt)
+                agent.join_all(self._environment.config.launch_timeout_seconds)
+                result = agent.results[-1]
+                if not result.succeeded:
+                    raise AssertionError(result.error or "Agent task failed")
+                trace_id = agent.launch_result.trace_id
+            if agent.returncode != 0:
+                raise AssertionError(f"Agent exited with {agent.returncode}")
+        return trace_id
 
-    def _require_trace_id(self, launch: CommandResult) -> int:
-        trace_ids = [
-            int(value)
-            for value in self._TRACE_PATTERN.findall(launch.output)
-        ]
-        if len(trace_ids) != 1:
-            raise AssertionError(
-                f"expected one trace id, found {trace_ids}: "
-                f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-            )
-        return trace_ids[0]
 
     def _wait_for_terminal_trace(self, trace_id: int) -> None:
         last_state = "<missing>"

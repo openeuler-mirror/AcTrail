@@ -39,15 +39,13 @@ class ActivityAnomalyTask:
         marker = f"ACTRAIL_ACTIVITY_RESPONSE_{secrets.token_hex(CASE_CONSTANTS.response_marker_random_bytes).upper()}"
         trace_name = f"activity-anomaly-{secrets.token_hex(CASE_CONSTANTS.trace_random_bytes)}"
         self._test_context.report_progress(
-            "real_agent",
+            "Run the task with a real Agent",
             "running deterministic three-turn activity through real Xiaoo",
         )
         self._environment.start_provider(marker)
-        trace_id, launch = self._environment.run_xiaoo(trace_name)
-        if marker not in launch.output:
-            raise AssertionError("real Xiaoo output omitted the provider final marker")
+        trace_id, reply = self._environment.run_xiaoo(trace_name)
         self._wait_terminal(trace_id)
-        document = self._wait_for_scenario(trace_id, marker)
+        document = self._wait_for_scenario(trace_id, reply)
         results = {
             "real-agent-scenario": TestResult(
                 TestStatus.PASSED,
@@ -56,7 +54,7 @@ class ActivityAnomalyTask:
         }
 
         self._test_context.report_progress(
-            "alerts",
+            "Wait for activity alerts",
             "waiting for exactly one alert from each activity rule",
         )
         api_alerts, database_alerts = self._wait_for_stable_alerts(trace_id)
@@ -66,7 +64,7 @@ class ActivityAnomalyTask:
         )
 
         self._test_context.report_progress(
-            "evidence",
+            "Check alerts against recorded actions",
             "checking every alert finding against captured actions and LLM links",
         )
         self._assert_api_database_match(api_alerts, database_alerts)
@@ -106,20 +104,20 @@ class ActivityAnomalyTask:
             f"trace-{trace_id} did not become terminal; last_state={last_state}"
         )
 
-    def _wait_for_scenario(self, trace_id: int, marker: str) -> dict[str, Any]:
+    def _wait_for_scenario(self, trace_id: int, reply: str) -> dict[str, Any]:
         deadline = time.monotonic() + self._environment.activity_config.alert_timeout_seconds
         last_error = "viewer had no actions"
         while time.monotonic() < deadline:
             try:
                 document = self._environment.viewer_document(trace_id)
-                self._assert_scenario(document, marker)
+                self._assert_scenario(document, reply)
                 return document
             except AssertionError as error:
                 last_error = str(error)
             time.sleep(self._environment.activity_config.drain_interval_seconds)
         raise AssertionError(f"captured Xiaoo scenario was incomplete: {last_error}")
 
-    def _assert_scenario(self, document: dict[str, Any], marker: str) -> None:
+    def _assert_scenario(self, document: dict[str, Any], reply: str) -> None:
         actions = self._object_list(document, "actions")
         links = self._object_list(document, "links")
         kinds = [action.get("kind") for action in actions]
@@ -157,9 +155,15 @@ class ActivityAnomalyTask:
             )
         self._assert_capture_outcomes(actions)
         serialized = json.dumps(actions, ensure_ascii=False)
-        for evidence in (marker, "ACTRAIL_ACTIVITY_WARMUP", "long-running-command.sh"):
+        for evidence in ("ACTRAIL_ACTIVITY_WARMUP", "long-running-command.sh"):
             if evidence not in serialized:
                 raise AssertionError(f"captured actions omitted scenario evidence {evidence}")
+        if not any(
+            action.get("kind") == "llm.response"
+            and reply in action.get("attributes", {}).get("llm.response.content_text", "")
+            for action in actions
+        ):
+            raise AssertionError("captured LLM responses omitted the actual XiaoO reply")
 
     @staticmethod
     def _assert_capture_outcomes(actions: list[dict[str, Any]]) -> None:

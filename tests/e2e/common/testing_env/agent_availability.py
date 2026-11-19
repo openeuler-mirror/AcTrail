@@ -1,3 +1,4 @@
+"""Probe real agents through their shared lifecycle and cache availability."""
 from __future__ import annotations
 
 import os
@@ -6,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Mapping
 
-from .agent_discovery import AgentBinaryDiscovery, default_claude_model
+from tests.e2e.common.agents import AgentFactory
 
 from .constants import DEFAULTS
 
@@ -29,9 +30,7 @@ class AgentAvailability:
         cache_key = (normalized, selected_binary)
         if cache_key not in self._agent2availability:
             self._agent2availability[cache_key] = self._update_agent_availability(
-                normalized,
-                selected_binary,
-                environment,
+                normalized, selected_binary, environment,
             )
         return self._agent2availability[cache_key]
 
@@ -41,168 +40,47 @@ class AgentAvailability:
         binary: str,
         environment: Mapping[str, str] | None,
     ) -> bool:
-        checks = {
-            "codex": self._check_codex_availability,
-            "claude": self._check_claude_availability,
-            "opencode": self._check_opencode_availability,
-            "pi": self._check_pi_availability,
-            "qodercli": self._check_qodercli_availability,
-            "xiaoo": self._check_xiaoo_availability,
-            "dcode": self._check_dcode_availability,
-            "grok": self._check_grok_availability,
-        }
-        check = checks.get(agent_name)
-        if check is None:
-            raise ValueError(f"unknown agent availability target: {agent_name}")
-        return check(binary, environment)
+        try:
+            agent_type = getattr(AgentFactory, agent_name)
+        except AttributeError:
+            raise ValueError(f"unknown agent availability target: {agent_name}") from None
+        selected_environment = os.environ.copy() if environment is None else dict(environment)
+        executable = shutil.which(binary, path=selected_environment.get("PATH"))
+        if executable is None:
+            return False
+        selected_binary = Path(executable).resolve()
+        try:
+            with agent_type(
+                binary=selected_binary,
+                environment=selected_environment,
+                arguments=self._arguments(agent_name),
+                shutdown_timeout_seconds=self._timeout_seconds,
+            ).launch(stream_mode=agent_name == "grok") as agent:
+                agent.run(self._prompt())
+                agent.join_all(timeout=self._timeout_seconds)
+                result = agent.results[-1]
+                succeeded = result.succeeded
+            # 退出作用域完成进程与会话清理后，才返回可缓存的探测结果。
+            return succeeded
+        except (OSError, TimeoutError, subprocess.SubprocessError, RuntimeError):
+            return False
 
     def _prompt(self) -> str:
         return os.environ.get(
-            "ACTRAIL_TEST_AGENT_AVAILABILITY_PROMPT",
-            DEFAULTS.availability_prompt,
+            "ACTRAIL_TEST_AGENT_AVAILABILITY_PROMPT", DEFAULTS.availability_prompt,
         )
 
-    def _check_codex_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run(
-            [
-                binary,
-                "exec",
-                "--ephemeral",
-                "-m",
-                self._codex_model(binary),
-                "-c",
-                "model_reasoning_effort="
-                + os.environ.get("CODEX_E2E_REASONING_EFFORT", DEFAULTS.codex_reasoning_effort),
-                self._prompt(),
-            ],
-            environment,
-        )
+    def _arguments(self, agent_name: str) -> tuple[str, ...]:
+        """探测场景选择模型和工具策略，参数原样交给具体 Agent。"""
+        if agent_name == "codex":
+            return ("--skip-git-repo-check",)
+        if agent_name == "claude":
+            return ("--permission-mode", "dontAsk", "--tools", "")
+        if agent_name == "qodercli":
+            return ("--tools", "")
+        if agent_name == "xiaoo":
+            return ("--no-tools", "--max-turns", str(DEFAULTS.xiaoo_max_turns))
+        if agent_name == "dcode":
+            return ("--no-mcp", "--timeout", str(self._timeout_seconds))
+        return ()
 
-    def _codex_model(self, binary: str) -> str:
-        configured = os.environ.get("CODEX_E2E_MODEL")
-        if configured:
-            return configured
-        try:
-            model = AgentBinaryDiscovery(Path.cwd()).default_codex_model_for_binary(
-                Path(binary)
-            )
-        except Exception:
-            model = None
-        return model or DEFAULTS.codex_model
-
-    def _check_claude_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run(
-            [
-                binary,
-                "-p",
-                self._prompt(),
-                "--model",
-                default_claude_model(),
-                "--no-session-persistence",
-                "--safe-mode",
-                "--permission-mode",
-                "dontAsk",
-                "--tools",
-                "",
-            ],
-            environment,
-        )
-
-    def _check_pi_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run(
-            [binary, "-p", self._prompt(), "--no-session"],
-            environment,
-        )
-
-    def _check_opencode_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run(
-            [binary, "run", self._prompt()],
-            environment,
-        )
-
-    def _check_qodercli_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run(
-            [
-                binary,
-                "--no-session-persistence",
-                "-p",
-                self._prompt(),
-                "--tools",
-                "",
-            ],
-            environment,
-        )
-
-    def _check_xiaoo_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run(
-            [
-                binary,
-                "--cli",
-                "run",
-                "--no-tools",
-                "--max-turns",
-                str(DEFAULTS.xiaoo_max_turns),
-                "--prompt",
-                self._prompt(),
-            ],
-            environment,
-        )
-
-    def _check_dcode_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run([binary, "-n", self._prompt(), "-q", "--no-mcp"], environment)
-
-    def _check_grok_availability(
-        self,
-        binary: str,
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        return self._run([binary, "-p", self._prompt()], environment)
-
-    def _run(
-        self,
-        command: list[str],
-        environment: Mapping[str, str] | None,
-    ) -> bool:
-        path = None if environment is None else environment.get("PATH")
-        if shutil.which(command[0], path=path) is None:
-            return False
-        try:
-            result = subprocess.run(
-                command,
-                env=None if environment is None else dict(environment),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_seconds,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-        return result.returncode == 0

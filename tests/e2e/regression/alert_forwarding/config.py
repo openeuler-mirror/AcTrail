@@ -5,7 +5,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.core.loopback_port import resolve_test_port
 
 from .constants import CASE_CONSTANTS
@@ -23,9 +23,9 @@ class AlertForwardingRegressionConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "AlertForwardingRegressionConfig":
-        common = CommonTestConfig.from_environment(inputs, "ALERT_FORWARDING")
+        common = CommonTestConfig.from_environment(directories, "ALERT_FORWARDING")
         alert_timeout = float(
             os.environ.get("ALERT_FORWARDING_E2E_ALERT_TIMEOUT_SECONDS", str(CASE_CONSTANTS.alert_timeout_seconds))
         )
@@ -36,7 +36,7 @@ class AlertForwardingRegressionConfig(CommonTestConfig):
             raise ValueError("alert forwarding E2E timeouts must be positive")
         return cls(
             **common.as_kwargs(),
-            operator_config=inputs.work_dir / "actraild.conf",
+            operator_config=directories.work_dir / "actraild.conf",
             web_port=resolve_test_port(
                 "ALERT_FORWARDING_E2E_WEB_PORT",
                 attempts=common.drain_attempts,

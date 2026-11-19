@@ -1,17 +1,52 @@
 # Virtual Container V2
 
-## Quick Run
+## 测试目标
+
+验证 Kata 虚机容器中的启动接口、权限和身份边界，以及 Guest 内 TLS 与 eBPF 观测的采集、落库和查询。
+
+## 场景设计
+
+每个 backend 顺序启动 base VM 和 data VM。base VM 覆盖 verify、deny、launch、namespace，data VM 覆盖 TLS、eBPF 和组合采集，分别核对实际工作负载及其观测结果。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储和查询观测记录 |
+| 主机 | Linux、root、KVM、containerd、Kata 与所选 VMM | 创建和管理虚机容器 |
+| 部署产物 | 与当前 checkout 匹配的 Guest 镜像、配置、manifest 和本机 profile | 启动 Guest 采集环境 |
+
+## 测试步骤摘要
+
+1. 检查宿主能力和当前 release 对应的部署产物。
+2. 校验部署契约，并执行 runtime、VMM、配置和 cgroup 的 preflight。
+3. 启动 base VM，依次执行接口、拒绝、启动和 namespace 场景。
+4. 启动 data VM，完成 TLS 首次发现交互后执行三个数据场景。
+5. 通过 viewer 核对 Guest 观测记录及归属。
+6. 停止 VM 并检查本轮资源清理。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 接口与权限 | base VM 运行四个接口场景 | Guest root daemon 与非 root workload 的允许、拒绝和身份行为符合接口契约 |
+| TLS 采集 | data VM 完成 TLS 工作负载 | TLS 明文被采集并可从所属 trace 查询 |
+| eBPF 采集 | data VM 完成进程及网络工作负载 | 对应 eBPF 数据可落库和查询 |
+| 组合采集 | TLS 与 eBPF 同时启用 | 两类数据均完整并关联到对应工作负载 |
+| 部署条件 | 外部 KVM 或 backend 能力缺失 | 报告 SKIPPED 并说明缺少的条件 |
+
+## 快速运行
 
 完成一次与当前 release 一致的虚机容器部署准备后，在仓库根目录执行：
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --case virtual_container \
   --color never
 ```
 
 `run-v2-tests.sh` 是虚机容器 V2 的宿主验收入口。它定位仓库和公共
-`test_all.py`，读取机器本地的 `local/kata/v2-test-profile.json`；当前用户不是 root
+`test_all.py`，通过 `--profile` 传入本次准备生成的测试配置；当前用户不是 root
 时只申请一次 sudo，并保留调用用户的 Cargo、Rustup 和 PATH。脚本先执行
 `release_install`，再校验内容寻址 artifact manifest，最后运行部署契约、Kata
 preflight 和完整接口/数据矩阵。
@@ -40,18 +75,6 @@ openEuler host
 ✓ release_install
 ▶ virtual_container...✓
 ```
-
-## 步骤摘要
-
-1. 检查 ARM64、KVM、containerd、Kata 3.32、shim、所选 VMM 和 source config。
-2. 构建并安装当前 AcTrail release。
-3. 生成内容寻址 guest image、bundle、runtime config、manifest 和本机 profile。
-4. 校验 profile、manifest 与当前 release 的 SHA-256 一致。
-5. 运行不访问 KVM 的部署契约和 Python 生命周期单元测试。
-6. 运行 preflight，验证 runtime/VMM/config/cgroup 组合。
-7. 启动一台 base VM，顺序执行 `verify/deny/launch/namespace`。
-8. 启动一台 data VM，先运行一次不判定的 TLS 首次发现交互，再顺序执行 `tls-only/ebpf-only/combo`。
-9. 检查日志和本轮资源清理结果。
 
 ## 手动测试
 
@@ -104,8 +127,8 @@ export VIRTUAL_CONTAINER_E2E_COLLECTOR_TIMEOUT_SECONDS=30
 设置后 data 矩阵会新增 `collector_egress` 结果：只统计本次 data VM 启动之后产生的
 span，超时未出现即失败；artifact 未带 `--otel-endpoint` 时也判失败。
 
-也可以让 prepare 把这些设置写进 `local/kata/v2-test-profile.json`，之后每次回归都自动
-断言外送，不需要再 export：给 `prepare-artifacts.py` 追加
+也可以让 prepare 把这些设置写进 `local/kata/v2-test-profile.json`，运行回归时通过
+`--profile local/kata/v2-test-profile.json` 加载后即可断言外送：给 `prepare-artifacts.py` 追加
 `--collector-traces-file /var/lib/actrail/otelcol/actrail-traces.json`；`network` 模式再追加
 `--cni-config /etc/actrail-cni-test/net.json`（profile 会同时记录 `host/cni-netns.sh`）。
 
@@ -362,6 +385,7 @@ preflight 校验 `/dev/kvm`、ARM64 KVM、containerd daemon、Kata runtime/shim 
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --case virtual_container \
   --no-cleanup \
   --color never
@@ -453,6 +477,7 @@ ownership label，再删除本轮 task/container，并等待删除前绑定的 s
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --no-cleanup \
   --color never
 ```

@@ -77,6 +77,7 @@ vsock 外送只在 vsock 部署包中启用 Guest 转发服务。
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --case virtual_container \
   --color never
 ```

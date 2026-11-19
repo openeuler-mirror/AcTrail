@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.kata_runtime import shim_binary
 from tests.e2e.common.kata_runtime.environment import (
     absolute_path,
@@ -41,10 +41,10 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> VirtualContainerXiaooConcurrencyConfig:
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY",
         )
         prefix = "VIRTUAL_CONTAINER_XIAOO_CONCURRENCY_E2E_"
@@ -96,7 +96,7 @@ class VirtualContainerXiaooConcurrencyConfig(CommonTestConfig):
                 f"{prefix}IMAGE_PULL_POLICY must be never, missing or always"
             ) from error
 
-        repo = inputs.repo.resolve()
+        repo = directories.repo.resolve()
         ctr_runtime = os.environ.get(
             f"{prefix}CTR_RUNTIME",
             os.environ.get("CTR_RUNTIME", CASE_CONSTANTS.ctr_runtime),

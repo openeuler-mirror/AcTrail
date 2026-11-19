@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 
 from .constants import CASE_CONSTANTS
 
 
 @dataclass(frozen=True)
-class ContainerAutoConfig(TestCaseInputs):
+class ContainerAutoConfig:
+    repo: Path
+    bin_dir: Path
+    work_dir: Path
     base_image: str
     timeout_seconds: int
     cleanup_grace_seconds: int
     rebuild_image: bool
 
     @classmethod
-    def from_environment(cls, inputs: TestCaseInputs) -> "ContainerAutoConfig":
+    def from_environment(cls, directories: TestRunDirectories) -> "ContainerAutoConfig":
         timeout_seconds = int(
             os.environ.get("CONTAINER_AUTO_E2E_TIMEOUT_SECONDS", str(CASE_CONSTANTS.timeout_seconds))
         )
@@ -26,9 +30,9 @@ class ContainerAutoConfig(TestCaseInputs):
         if timeout_seconds <= 0 or cleanup_grace_seconds <= 0:
             raise ValueError("container-auto timeouts must be positive")
         return cls(
-            repo=inputs.repo,
-            bin_dir=inputs.bin_dir,
-            work_dir=inputs.work_dir,
+            repo=directories.repo,
+            bin_dir=directories.bin_dir,
+            work_dir=directories.work_dir,
             base_image=os.environ.get(
                 "CONTAINER_AUTO_E2E_BASE_IMAGE",
                 CASE_CONSTANTS.base_image,

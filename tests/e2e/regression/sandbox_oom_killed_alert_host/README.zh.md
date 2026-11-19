@@ -1,11 +1,39 @@
 # Host `sandbox.resource.oom_killed` focused 回归
 
-该可选 case 只验证一次受控 memory-cgroup OOM 与对应的
-`sandbox.resource.oom_killed`（`critical`）公开告警投递。它不属于默认回归集合，
-不读取 Kata 机器本地 profile，也不依赖 VMM、xiaoO、LLM provider 或 actrailweb。
+## 测试目标
 
-case 会在内部创建 `comm=actrail-root` 的临时命名根并记录稳定谱系 marker，
-不需要仓库外的 helper binary 或 shell 函数。
+验证一次受控 memory-cgroup OOM 能产生且投递一条正确归属的 critical 告警。
+
+## 场景设计
+
+创建命名根进程和测试专属 32 MiB memory cgroup，把单个 Python allocator 放入其中触发内核 OOM。以进程退出和内核计数确认 OOM，再核对公开 subscriber 与独立 Alert SQLite。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储与查询 |
+| 主机 | Linux、root、BTF、/dev/vsock、vsock_loopback | 采集和传输 OOM 事件 |
+| memory cgroup | 可创建并限制 v1 或 v2 子 cgroup，存在 active swap 时支持独立 swap 限制 | 约束测试 allocator |
+| 工具 | awk 和 /bin/sh | 运行受控负载 |
+
+## 测试步骤摘要
+
+1. 探测 cgroup delegation 与 swap 限制能力，条件不足时跳过。
+2. 启动本轮命名根和观测链路，等待根发现稳定。
+3. 设置 32 MiB 测试 cgroup，启动单个 Python allocator。
+4. 确认 SIGKILL 和 OOM 计数增长。
+5. 按 victim PID 核对 subscriber 告警与数据库。
+6. 终止并回收负载进程组，验证测试 cgroup 删除。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 真实 OOM | allocator 位于受限 cgroup | 退出码 137，cgroup 和 /proc/vmstat 的 oom_kill 计数增长 |
+| 唯一投递 | subscriber 收到该 victim 的告警 | 恰好一条 sandbox.resource.oom_killed，等级 critical |
+| 身份归属 | 对照注入证据 | victim PID、python3、monitored 和 actrail-root 稳定 marker 匹配 |
+| 持久化一致性 | 告警已提交 | 独立 Alert SQLite 与公开投递内容一致 |
+| 清理 | 场景成功、超时或异常结束 | allocator 被回收，测试 cgroup 删除 |
 
 ## 快速运行
 
@@ -14,20 +42,20 @@ case 会在内部创建 `comm=actrail-root` 的临时命名根并记录稳定谱
 ```bash
 PYTHONDONTWRITEBYTECODE=1 \
 deploy/virtual-container/host/run-v2-tests.sh \
-  --no-profile \
   --case sandbox_oom_killed_alert_host \
   --color never \
   --fail-fast
 ```
 
 `run-v2-tests.sh` 会在需要时申请 sudo，并保留调用用户的 `CARGO_HOME`、
-`RUSTUP_HOME`、`~/.cargo/bin`、`~/.local/bin` 和现有 `PATH`。显式
-`--no-profile` 表示这个宿主 case 不读取 Kata 本机 profile。
+`RUSTUP_HOME`、`~/.cargo/bin`、`~/.local/bin` 和现有 `PATH`。该宿主 case 不需要本机 profile。
 
 如果绕过该入口直接调用 `tests/e2e/regression/test_all.py`，调用方仍须以 root
 运行，并自行确保 root 环境能够找到 Python、Cargo 和 Rustup。
 
-## 前置条件
+## 手动测试
+
+### 前置条件
 
 - Linux root、`/sys/kernel/btf/vmlinux`、`/dev/vsock` 和 `vsock_loopback`；
 - 可在 memory cgroup v1 或 v2 下创建并限制一个测试子 cgroup；宿主存在
@@ -39,7 +67,7 @@ deploy/virtual-container/host/run-v2-tests.sh \
 case 会先做 cgroup delegation 探测。外部内核能力不足时返回 `SKIPPED`；release 或
 仓库资产缺失时返回 `FAILED`。
 
-## 安全边界和验收
+### 注入范围与详细验收
 
 注入器只把一个 Python allocator 放入测试专属的 32 MiB memory cgroup。宿主存在
 active swap 时必须成功把该 cgroup 的 swap 限制为 0（v2）或把 memory+swap 总量限制

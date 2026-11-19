@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.e2e.common.core import TestCaseInputs, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestStatus
 
 from tests.e2e.regression.virtual_container.v2.config import (
     VirtualContainerConfig,
@@ -57,7 +57,7 @@ class VirtualContainerPrerequisitesTest(unittest.TestCase):
                 clear=True,
             ):
                 config = VirtualContainerConfig.from_environment(
-                    TestCaseInputs(root, root / "bin", root / "work")
+                    TestRunDirectories(root, root / "bin", root / "work")
                 )
             resolved = VirtualContainerPrerequisites(
                 config,
@@ -86,7 +86,7 @@ class VirtualContainerPrerequisitesTest(unittest.TestCase):
                 clear=True,
             ):
                 config = VirtualContainerConfig.from_environment(
-                    TestCaseInputs(root, root / "bin", root / "work")
+                    TestRunDirectories(root, root / "bin", root / "work")
                 )
             resolved = VirtualContainerPrerequisites(
                 config,

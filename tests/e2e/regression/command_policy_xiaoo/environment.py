@@ -1,3 +1,4 @@
+"""Own policy services and execute real XiaoO governance checks."""
 from __future__ import annotations
 
 import errno
@@ -11,8 +12,9 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.common.actrail_runtime import CommandResult
+from tests.e2e.common.actrail_runtime import CommandResult, LaunchOptions
 from tests.e2e.common.patch_builder import PatchBuilder
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import TestOutput, TestResult, TestStatus
 from tests.e2e.common.plugin_test_environment import (
     PluginRuntimeSpec,
@@ -96,7 +98,7 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             f"audit_enabled = {str(self.command_config.audit_enabled).lower()}\n",
             encoding="utf-8",
         )
-        provider_url = self._provider.start()
+        provider_url = self._scope.enter_context(self._provider).base_url
         self._write_xiaoo_config(provider_url)
         initial = super().prepare()
         with self.operator_config.open("rb") as stream:
@@ -264,40 +266,28 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
                 Path("/usr/bin"),
             )
         )
-        result = self.runtime.run(
-            self.runtime.control_command(
-                "launch",
-                "--seccomp-notify",
-                "required",
-                "--name",
-                trace_name,
-                "--",
-                self.command_config.xiaoo_binary,
-                "--cli",
-                "run",
-                "--config",
-                self._xiaoo_config,
-                "--tools",
-                "bash",
-                "--max-turns",
-                str(CASE_CONSTANTS.max_turns),
-                "--debug",
-                "--prompt",
-                "Use the Bash tool exactly once, then report its operating-system result.",
-            ),
-            timeout_seconds=self.command_config.launch_timeout_seconds,
-            environment=environment,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                f"real Xiaoo launch failed with {result.returncode}: {result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
+        options = LaunchOptions(name=trace_name, host_ebpf="auto", seccomp_notify="required")
+        with self.runtime.launch_scope(options):
+            with AgentFactory.xiaoo(
+                binary=self.command_config.xiaoo_binary,
+                environment=environment,
+                arguments=("--config", str(self._xiaoo_config), "--tools", "bash",
+                           "--max-turns", str(CASE_CONSTANTS.max_turns), "--debug"),
+            ).launchWithAcTrailCtl(stream_mode=False) as agent:
+                agent.run("Use the Bash tool exactly once, then report its operating-system result.")
+                agent.join_all(timeout=self.command_config.launch_timeout_seconds)
+                outcome = agent.results[-1]
+                launch = agent.launch_result
+            result = CommandResult(
+                tuple(str(arg) for arg in launch.process.args), agent.returncode,
+                outcome.output, "\n".join(filter(None, (outcome.error, agent.diagnostics))),
             )
-        match = TRACE_RE.search(result.output)
-        if match is None:
-            raise AssertionError(f"Xiaoo output omitted trace ID: {result.output}")
-        if "enforcement-command-execution-seccomp" not in result.output:
-            raise AssertionError("launch omitted command enforcement capability")
-        return int(match.group(1)), result
+        # 拒绝可能是预期结果，由各场景判断；启动能力必须独立核验。
+        if "enforcement-command-execution-seccomp" not in launch.required_capabilities:
+            raise AssertionError("launch omitted command-execution enforcement capability")
+        if result.returncode != 0:
+            raise AssertionError(f"real Xiaoo launch failed with {result.returncode}: {result.output}")
+        return launch.trace_id, result
 
     def require_denied(self, result: CommandResult) -> None:
         if self.marker.exists():
@@ -403,19 +393,6 @@ class CommandPolicyXiaooEnvironment(PluginTestEnvironment):
             f"native PATH lookup errors are incomplete: {observed}, expected {expected}"
         )
 
-    def cleanup(self) -> TestResult:
-        base = super().cleanup()
-        provider_failure = self._provider.stop()
-        if provider_failure is None:
-            return base
-        return TestResult(
-            TestStatus.COMPOSITE,
-            "command-policy environment cleanup",
-            {
-                "services": base,
-                "provider": TestResult(TestStatus.FAILED, provider_failure),
-            },
-        )
 
     def _install_plugin_package(self) -> None:
         source = (

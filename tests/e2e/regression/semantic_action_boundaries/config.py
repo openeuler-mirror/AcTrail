@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.core.loopback_port import resolve_test_port
 
 from .constants import CASE_CONSTANTS
@@ -17,25 +17,29 @@ class SemanticActionBoundariesConfig(CommonTestConfig):
     web_port: int
     plugin_package: str
     plugin_instance: str
+    agent_max_turns: int | None = CASE_CONSTANTS.agent_max_turns
 
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "SemanticActionBoundariesConfig":
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             "SEMANTIC_ACTION_BOUNDARIES",
         )
         configured_operator = os.environ.get(
             "SEMANTIC_ACTION_BOUNDARIES_E2E_OPERATOR_CONFIG"
+        )
+        configured_turns = os.environ.get(
+            "SEMANTIC_ACTION_BOUNDARIES_E2E_AGENT_MAX_TURNS"
         )
         return cls(
             **common.as_kwargs(),
             operator_config=(
                 Path(configured_operator)
                 if configured_operator
-                else inputs.work_dir / "actraild.conf"
+                else directories.work_dir / "actraild.conf"
             ),
             web_host=os.environ.get(
                 "SEMANTIC_ACTION_BOUNDARIES_E2E_WEB_HOST",
@@ -48,4 +52,9 @@ class SemanticActionBoundariesConfig(CommonTestConfig):
             ),
             plugin_package=CASE_CONSTANTS.plugin_package,
             plugin_instance=CASE_CONSTANTS.plugin_instance,
+            agent_max_turns=(
+                int(configured_turns)
+                if configured_turns is not None
+                else CASE_CONSTANTS.agent_max_turns
+            ),
         )

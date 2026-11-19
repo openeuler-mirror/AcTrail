@@ -1,5 +1,42 @@
 # Kata VMM 共享执行隔离告警场景
 
+## 测试目标
+
+验证 Cloud Hypervisor / Kata Guest 中真实 xiaoO 的资源与文件活动能形成完整的采集、存储和告警投递链路。
+
+## 场景设计
+
+由 containerd/Kata 启动 Cloud Hypervisor VM，等待 Guest system observer 就绪后显式连接 Host gateway，再启动非特权 xiaoO 工作负载。使用资源与文件活动触发五类告警，对照独立 SQLite 和公开 subscriber 的结果。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储和查询观测记录 |
+| 主机 | Linux、root、KVM、containerd、Kata 与所选 VMM | 创建和管理虚机容器 |
+| 部署产物 | 与当前 checkout 匹配的 Guest 镜像、配置、manifest 和本机 profile | 启动 Guest 采集环境 |
+| Guest observer | artifact 注入 actrail-sb 服务，Guest kernel 支持 BTF/eBPF | 采集 Guest 活动 |
+| xiaoO | artifact manifest 指定真实 CLI | 执行文件读写任务 |
+
+## 测试步骤摘要
+
+1. 检查宿主能力和对应 backend 的本机 profile、artifact。
+2. 启动 VM，等待 observer control socket 和 ready marker，确认初始未连接。
+3. 启动 Host gateway，等待传输端点就绪，再执行 Guest actrail-sb connect。
+4. 以 workload 身份启动真实 xiaoO，完成文件读写及资源告警场景。
+5. 对照告警数据库与公开 subscriber 的同次记录。
+6. 清理 workload、gateway、VM、daemon 和 alert proxy。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 连接顺序 | Guest observer 就绪，Host gateway 已监听 | 显式 connect 成功后启动 workload |
+| 实际任务 | 真实 xiaoO 运行 | 完成一次文件读取和一次文件写入 |
+| 告警覆盖 | 资源和文件场景完成 | 产生 high_cpu、oom_killed、oom_risk、high_read、high_write 五类告警 |
+| 告警一致性 | SQLite 已落盘且 subscriber 收到记录 | 对应告警的 source 与 extras 一致 |
+| 外部条件 | KVM、Kata/containerd 或所选 VMM 不可用 | 报告 SKIPPED 并说明原因 |
+| 测试配置 | 未配置 ARTIFACT_MANIFEST | 报告 SKIPPED，并提示准备本机 V2 测试 profile |
+
 Cloud Hypervisor 执行隔离用例支持 `x86_64` 和 `aarch64` 宿主；两种架构均需
 可用的 KVM，以及同架构的 Kata、VMM、Guest kernel 和 xiaoO 产物。
 
@@ -65,7 +102,9 @@ Guest system actrail-sb → VSOCK → Host actrail-vsock-gateway → actraild
 | StratoVirt | native AF_VSOCK port `43182` | Kata 共享目录 |
 | Firecracker | 发现 `/run/vc/firecracker/*/root/kata.hvsock`，把 base UDS 和 port 交给 gateway，由 gateway 监听 `<base>_43182` | artifact image 预装固定哈希 xiaoO；VM 启动后经 `ctr tasks exec` stdin 只制备小型资产，协调文件也经 Guest exec 访问，container spec 无 Host mount |
 
-## Guest observer 契约
+## 手动测试
+
+### Guest observer 契约
 
 artifact profile 对三个 backend 都要求 `sandbox_observer_enabled=true`。Guest image 内：
 
@@ -92,7 +131,7 @@ artifact profile 对三个 backend 都要求 `sandbox_observer_enabled=true`。G
 只管理 workload、gateway、Kata VM、daemon 与 alert proxy，不存在第二个 workload SB
 进程。
 
-## 准备与运行
+### 准备与运行
 
 在目标 Linux/KVM 主机从同一 checkout 构建 release，并按目标 backend 刷新内容寻址
 artifact。真实 xiaoO 和可引导、带 BTF/eBPF 的 data kernel 必须显式提供；快速运行第一步
@@ -107,7 +146,7 @@ combined archive 契约。每个 case 使用各自 profile。Firecracker 还要�
 `ok` 的 containerd `io.containerd.snapshotter.v1/devmapper` plugin；前置检查通过
 `ctr plugins list` 的精确 type/id filter 验证，不解析 containerd 配置文本。
 
-### 直接运行公共 `test_all.py`（仅调试）
+#### 直接运行公共 `test_all.py`（仅调试）
 
 如需绕过推荐 wrapper，复用本页快速运行开头定义的 `ACTRAIL_HOST_PATH`，
 并显式将它传给 sudo：

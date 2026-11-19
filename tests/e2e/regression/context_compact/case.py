@@ -1,99 +1,65 @@
+"""Verify stream compaction and the corresponding AcTrail observations."""
 from __future__ import annotations
 
 import json
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
-from tests.e2e.common.patch_builder import PatchBuilder
+from tests.e2e.common.core import TestRunDirectories, CommonTestConfig, TestCase, TestResult
 from tests.e2e.common.runner import TestingContextSingleton
-
-from .agents import CompactAgentCatalog
-from .claude import ClaudeSessionDriver
-from .config import ContextCompactConfig
-from .driver import OpenCodeSessionDriver
-from .scenario import SCENARIOS, AgentSpec
+from tests.e2e.common.testing_env import AgentBinaryDiscovery
+from .task import CompactionTask
 
 
 class ContextCompactCase(TestCase):
-    def __init__(self, config: ContextCompactConfig):
+    case_id = 'context_compact'
+    description = 'Verify Claude stream compaction and AcTrail compaction observations'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = CommonTestConfig.from_environment(directories, 'CONTEXT_COMPACT')
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        results: dict[str, TestResult] = {}
-        runtime: ActrailRuntime | None = None
-        try:
-            spec = self._select_spec(test_context)
-            if spec is None:
-                return TestResult(TestStatus.SKIPPED, "no available real agent in " + "/".join(self._config.agents))
-            patch = PatchBuilder().with_values({
-                "semantic_retention": {
-                    "l0_llm_call": {
-                        "context_compact": {
-                            "enabled": self._config.mode != "disabled",
-                        },
-                    },
-                },
-            }).build().save(self._config.work_dir / "compact-mode.toml")
-            runtime = ActrailRuntime.isolated(
-                self._config.repo, self._config.bin_dir,
-                self._config.command_timeout_seconds, test_context.output,
-                self._config.work_dir,
-                operator_config_patch=patch,
+        context = TestingContextSingleton.current()
+        with context.case("Claude context compaction") as case:
+            with case.step("Check Claude availability"):
+                discovery = AgentBinaryDiscovery(self._config.repo)
+                binary = discovery.resolve("CLAUDE_E2E_BINARY", "claude")
+                if binary is None:
+                    case.skip("Claude executable not found")
+                if not context.check_agent_availability(
+                    "claude", binary, discovery.environment(binary)
+                ):
+                    case.skip("Claude external availability check failed")
+
+            with case.step("Capture the Claude session"):
+                with ActrailRuntime.isolated(
+                    self._config.repo,
+                    self._config.bin_dir,
+                    self._config.command_timeout_seconds,
+                    context.output,
+                    self._config.work_dir,
+                ) as runtime:
+                    with case.step("Start AcTrail"):
+                        runtime.start_actraild()
+                    with case.step("Run the Claude session"):
+                        task = CompactionTask(self._config.launch_timeout_seconds)
+                        trace_id = task.run(case, binary)
+
+            # 数据只在 Runtime 停机排空之后检查。
+            with case.step("Check the compaction record") as step:
+                count = self._require_compaction(runtime, trace_id)
+                step.message = f"trace-{trace_id}: {count} context compaction action(s)"
+        return case.result
+
+    def _require_compaction(self, runtime: ActrailRuntime, trace_id: int) -> int:
+        output = runtime.run_checked(runtime.viewer_command(
+            "--output-format", "json", "actions", "--trace-id", str(trace_id)
+        ), echo=False).stdout
+        actions = json.loads(output)["actions"]
+        count = sum(action.get("kind") == "agent.context_compaction" for action in actions)
+        if count != 1:
+            raise AssertionError(
+                f"trace-{trace_id}: expected exactly one agent.context_compaction record, found {count}"
             )
-            runtime.prepare()
-            runs = []
-            for scenario in SCENARIOS:
-                try:
-                    driver = ClaudeSessionDriver if spec.name == "claude" else OpenCodeSessionDriver
-                    runs.append((scenario, driver(self._config, runtime, spec, scenario).run()))
-                except Exception as error:
-                    results[f"{spec.name}.{scenario.name}"] = TestResult(TestStatus.FAILED, str(error))
-            stopped = runtime.stop()
-            if stopped is None or stopped.returncode != 0:
-                raise RuntimeError("actraild did not stop and drain successfully")
-            for scenario, run in runs:
-                try:
-                    count = self._require_recorded_session(runtime, run.trace_id)
-                    results[f"{spec.name}.{scenario.name}"] = TestResult(
-                        TestStatus.PASSED, f"trace-{run.trace_id} agent.context_compaction={count}",
-                    )
-                except Exception as error:
-                    results[f"{spec.name}.{scenario.name}"] = TestResult(TestStatus.FAILED, str(error))
-        except Exception as error:
-            results["actrail"] = TestResult(TestStatus.FAILED, str(error))
-        finally:
-            if runtime is not None:
-                stopped = runtime.stop()
-                if stopped is not None and stopped.returncode != 0:
-                    results["runtime_stop"] = TestResult(TestStatus.FAILED, f"actraild stop exited with {stopped.returncode}")
-        return TestResult(TestStatus.COMPOSITE, f"real-agent context compaction {self._config.mode}", results)
-
-    def _require_recorded_session(self, runtime: ActrailRuntime, trace_id: int) -> int:
-        result = runtime.run_checked(runtime.viewer_command(
-            "--output-format", "json", "actions", "--trace-id", str(trace_id),
-        ), echo=False)
-        actions = json.loads(result.stdout)["actions"]
-        requests = [action for action in actions if action["kind"] == "llm.request"]
-        if not requests or not any(action["kind"] == "llm.response" for action in actions):
-            raise AssertionError(f"trace-{trace_id} is missing LLM requests or responses")
-        if not any(action["attributes"].get("llm.request.trajectory_id") for action in requests):
-            raise AssertionError(f"trace-{trace_id} has no request trajectory")
-        count = sum(action["kind"] == "agent.context_compaction" for action in actions)
-        if self._config.mode == "disabled" and count != 0:
-            raise AssertionError(f"trace-{trace_id} recorded context compaction while disabled")
-        if self._config.mode == "inference" and count == 0:
-            raise AssertionError(f"trace-{trace_id} has no agent.context_compaction actions")
         return count
-
-    def _select_spec(self, context: TestingContextSingleton) -> AgentSpec | None:
-        catalog = CompactAgentCatalog(self._config)
-        for name in self._config.agents:
-            spec = catalog.resolve(name)
-            if spec is None:
-                context.output.line(f"{name} executable not found; trying next candidate")
-                continue
-            context.output.line(f"checking {name} availability before starting capture")
-            if context.check_agent_availability(name, spec.binary, spec.environment):
-                context.output.line(f"selected context compaction agent: {name}")
-                return spec
-        return None

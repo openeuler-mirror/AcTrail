@@ -1,11 +1,14 @@
 # 真实 Xiaoo 精确网络策略回归
 
-该回归启动本地确定性 provider，取得其真实动态
-`127.0.0.1:<port>`，再通过 Web 为 `wasm.network-policy-dynamic` 授予同一个
-精确 endpoint 的 deny scope，并控制真实 Xiaoo 到 provider 的 `connect(2)`。
-`127.0.0.1:*` 是 IP 全端口 selector，不属于本测例。
+## 测试目标
 
-## 自动覆盖
+验证精确 endpoint 网络规则能拒绝真实 XiaoO 的连接，并在清除规则后恢复访问。
+
+## 场景设计
+
+启动本地 provider 并取得其实际动态端口。保持同一 provider、XiaoO 配置和 daemon，依次运行空规则、精确 deny 和清除规则三轮，用真实连接结果、任务 marker 与治理记录核对策略效果。
+
+### 场景检查
 
 测例按同一个 provider、Xiaoo 配置和 daemon 依次验证：
 
@@ -26,11 +29,34 @@
 6. Web 把配置清回空规则后，dry-run 回到 allow 且 source revision 再次递增；
    第三次真实 Xiaoo 恢复成功并重新创建 marker。
 
-本测例证明精确 endpoint
-规则控制真实 Xiaoo connect，但不把同 IP 的第二端口排他性、域名、CIDR、DNS、
-TLS SNI、代理最终目标、`sendto(2)`、AF_UNIX 或继承连接误写成当前覆盖。
+## 测试依赖
 
-## 自动运行
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、root 权限和可工作的 eBPF 环境 | 启动采集与治理 |
+| AcTrail | release 产物和测例使用的官方插件包 | 执行、保存和查询测试结果 |
+| XiaoO | 可执行的真实 CLI | 执行 Bash 或连接任务 |
+| 治理后端 | seccomp user notification 可用 | 执行实际访问裁决 |
+| 本地 provider | 可启动的流式服务 | 为真实 Agent 提供任务交互 |
+
+## 测试步骤摘要
+
+1. 刷新默认配置并启动 daemon、Web 与本地 provider，记录 provider 实际动态 endpoint。
+2. 按该精确 endpoint 授权插件，以空规则运行真实 XiaoO，核对任务成功及 marker 文件内容。
+3. 通过 Web Validate/Update 发布精确 deny 规则，核对 dry-run、owner、规则范围和 source revision。
+4. 重新运行真实 XiaoO，核对连接失败和 marker 不存在，再按 trace ID 检查每条目标 endpoint 治理事件的 connect、-EPERM 与端点归属。
+5. 清空规则后第三次运行 XiaoO，核对 revision 递增、连接恢复和 marker 内容。
+6. 停止 daemon、Web 与 provider，清理测试数据。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 允许基线 | 空规则 | dry-run allow，XiaoO 完成工具任务并写入 marker |
+| 规则发布 | 以实际 endpoint 发布 deny | owner、规则范围与 revision 可核对 |
+| 真实拒绝 | XiaoO 再次连接受控 endpoint | 连接失败、marker 不存在，治理记录为 connect、-EPERM 且端点完全一致 |
+| 恢复 | 清除规则后重跑 | source revision 递增，任务成功并创建 marker |
+
+## 快速运行
 
 独立运行：
 

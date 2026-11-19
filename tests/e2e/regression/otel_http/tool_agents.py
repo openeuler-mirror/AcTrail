@@ -7,7 +7,8 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.testing_env import AgentBinaryDiscovery, default_claude_model
+from tests.e2e.common.testing_env import AgentBinaryDiscovery
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.testing_env.constants import DEFAULTS
 
 from .constants import CASE_CONSTANTS
@@ -30,7 +31,6 @@ class ToolChainTask:
     """Two files where only the first names the second, so the agent reads them in turn."""
 
     first: Path
-    answer: str
 
     @classmethod
     def create(cls, directory: Path) -> "ToolChainTask":
@@ -41,14 +41,13 @@ class ToolChainTask:
         second.write_text(f"{answer}\n", encoding="utf-8")
         first = directory / "start.txt"
         first.write_text(f"The answer is in the file {second}\n", encoding="utf-8")
-        return cls(first, answer)
+        return cls(first)
 
     @property
     def prompt(self) -> str:
         return (
             f"Use a tool to read the file {self.first}. It names another file; "
-            "use a tool to read that file too. Reply with only the text of the "
-            "second file."
+            "use a tool to read that file too, then describe what you found."
         )
 
 
@@ -73,7 +72,7 @@ class ToolAgent:
                 "-p",
                 prompt,
                 "--model",
-                default_claude_model(),
+                AgentFactory.claude.get_default_llm_model(),
                 "--no-session-persistence",
                 "--permission-mode",
                 "dontAsk",
@@ -135,7 +134,7 @@ def resolve_tool_agent(
         return None
     if kind != "codex":
         return ToolAgent(kind, binary, discovery.environment(binary))
-    model = os.environ.get("CODEX_E2E_MODEL") or discovery.default_codex_model_for_binary(
+    model = AgentFactory.codex.get_default_llm_model(
         binary
     )
     return ToolAgent(kind, binary, discovery.codex_environment(binary), model)

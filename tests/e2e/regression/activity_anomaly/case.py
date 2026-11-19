@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .config import ActivityAnomalyConfig
@@ -9,7 +9,12 @@ from .task import ActivityAnomalyTask
 
 
 class ActivityAnomalyCase(TestCase):
-    def __init__(self, config: ActivityAnomalyConfig):
+    case_id = 'plugin_activity_anomaly'
+    description = 'Run one real Xiaoo loop and verify request growth, response growth, and command-duration alerts from the installed activity-anomaly plugin'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ActivityAnomalyConfig.from_environment(directories)
         self._config = config
         self._environment: ActivityAnomalyEnvironment | None = None
 
@@ -17,7 +22,7 @@ class ActivityAnomalyCase(TestCase):
         results: dict[str, TestResult] = {}
         try:
             test_context.report_progress(
-                "environment_prepare",
+                "Start the observation services",
                 "starting isolated services and loading installed activity plugin",
             )
             self._environment = ActivityAnomalyEnvironment(

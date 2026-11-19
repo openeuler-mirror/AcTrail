@@ -4,7 +4,7 @@ import os
 import shutil
 from pathlib import Path
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.execution_isolation.controlled_oom import (
     memory_cgroup_problem,
 )
@@ -15,8 +15,14 @@ from .config import SandboxOomKilledAlertHostConfig
 
 class SandboxOomKilledAlertHostCase(TestCase):
     """Public case seam for the focused OOM-killed alert scenario."""
+    case_id = 'sandbox_oom_killed_alert_host'
+    description = 'Validate one controlled host cgroup OOM as a focused sandbox.resource.oom_killed public alert'
+    default_enabled = False
 
-    def __init__(self, config: SandboxOomKilledAlertHostConfig) -> None:
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = SandboxOomKilledAlertHostConfig.from_environment(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:

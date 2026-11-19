@@ -4,9 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.mcp_test_support import STDIO_CAPTURE_ABI_MAX_BYTES
-from tests.e2e.common.testing_env import default_claude_model
+from tests.e2e.common.agents import AgentFactory
 
 from .constants import CASE_CONSTANTS
 
@@ -49,13 +49,13 @@ class ProbeClaudeMcpConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "ProbeClaudeMcpConfig":
-        common = CommonTestConfig.from_environment(inputs, "CLAUDE_MCP")
+        common = CommonTestConfig.from_environment(directories, "CLAUDE_MCP")
         configured_binary = os.environ.get("CLAUDE_E2E_BINARY")
         return cls(
             **common.as_kwargs(),
-            model=default_claude_model(),
+            model=AgentFactory.claude.get_default_llm_model(),
             claude_binary=Path(configured_binary) if configured_binary else None,
             artifact_root=Path(
                 os.environ.get(

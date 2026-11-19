@@ -10,23 +10,23 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 from tests.e2e.regression.resource_metrics_cgroup.case import (
     PATCH_CONFIG,
     ResourceMetricsCgroupCase,
 )
-from tests.e2e.regression.resource_metrics_cgroup.cgroup_v1 import ResourceMetricsCgroupV1Case
+from tests.e2e.regression.resource_metrics_cgroup.cgroup_v1 import ResourceMetricsCgroupV1Scenario
 
 
 class ResourceMetricsCgroupContractTest(unittest.TestCase):
     def test_patch_keeps_required_mode_and_delegated_service_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            inputs = TestCaseInputs(
+            directories = TestRunDirectories(
                 repo=Path("/repo"),
                 bin_dir=Path("target/release"),
                 work_dir=Path(directory),
             )
-            case = ResourceMetricsCgroupCase(inputs)
+            case = ResourceMetricsCgroupCase(directories)
 
             values = case._operator_values()
             patch = tomllib.loads(PATCH_CONFIG.read_text(encoding="utf-8"))
@@ -43,7 +43,7 @@ class CgroupV1ScopeDeletionTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.work = Path(temporary.name)
-        self.case = ResourceMetricsCgroupV1Case(TestCaseInputs(
+        self.case = ResourceMetricsCgroupV1Scenario(TestRunDirectories(
             repo=self.work, bin_dir=self.work, work_dir=self.work,
         ))
         self.scope = self.work / "scope"

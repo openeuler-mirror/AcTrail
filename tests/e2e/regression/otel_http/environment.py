@@ -1,3 +1,5 @@
+"""Prepare the real OTLP receiver, Agent recognition, and plugin runtime."""
+
 from __future__ import annotations
 
 import copy
@@ -6,6 +8,7 @@ from typing import Any
 
 from tests.e2e.common.core import TestOutput
 from tests.e2e.common.patch_builder import PatchBuilder
+from tests.e2e.common.testing_env import AgentBinaryDiscovery
 from tests.e2e.common.plugin_test_environment import (
     PluginRuntimeSpec,
     PluginTestEnvironment,
@@ -72,11 +75,25 @@ class OtelHttpEnvironment(PluginTestEnvironment):
         )
 
     def prepare(self) -> None:
+        # Register the executable behind the selected CLI before capture starts.
+        values: dict[str, Any] = {"storage": {"retention": {"enabled": False}}}
+        discovery = AgentBinaryDiscovery(self.config.repo)
+        commands: list[str] = []
+        xiaoo = discovery.resolve("XIAOO_E2E_BINARY", "xiaoo")
+        if xiaoo is not None:
+            commands.append(str(xiaoo))
+        codex = discovery.resolve("CODEX_E2E_BINARY", "codex")
+        if codex is not None:
+            native = discovery.codex_native_binary_for(codex)
+            if native is not None:
+                commands.append(str(native))
+        if commands:
+            values["agent_invocation"] = {"commands": commands}
         (
             PatchBuilder()
             .with_work_dir(self.config.work_dir)
             .with_runtime_timing()
-            .with_values({"storage": {"retention": {"enabled": False}}})
+            .with_values(values)
             .with_plugin_directory(self.config.repo / "examples" / "plugins" / "builtin")
             .build()
             .save(self._operator_config_patch)

@@ -1,9 +1,20 @@
+"""Own daemon configuration, lifecycle and AcTrail-controlled process launches."""
+
 from __future__ import annotations
 
 import subprocess
+import re
+import os
+import signal
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
+from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from types import TracebackType
+from typing import ClassVar, Literal, Self
 
 from tests.e2e.common.core import TestOutput
 from tests.e2e.common.patch_builder import PatchBuilder
@@ -24,6 +35,25 @@ class CommandResult:
 
 
 @dataclass(frozen=True)
+class LaunchPermissions:
+    """actrailctl 启动阶段报告的权限选择结果。"""
+
+    requested: str
+    selected: str
+    degraded: bool
+
+
+@dataclass(frozen=True)
+class LaunchResult:
+    """启动输出解析完成后的进程句柄及其 trace 身份。"""
+
+    process: subprocess.Popen[str]
+    trace_id: int
+    permissions: LaunchPermissions | None = None
+    required_capabilities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class AlertForwardingRuntimePaths:
     proxy_executable: Path
     proxy_config: Path
@@ -31,7 +61,46 @@ class AlertForwardingRuntimePaths:
     socket_path: Path
 
 
+class ToolAccess(Enum):
+    """Requested Agent tool permissions, mapped by each CLI adapter."""
+
+    READ_ONLY = "read_only"
+    WRITABLE = "writable"
+    NONE = "none"
+
+
+@dataclass(frozen=True)
+class LaunchOptions:
+    """Observation settings and scoped Agent execution options."""
+
+    name: str | None = None
+    host_ebpf: Literal["auto", "required", "disabled"] = "required"
+    seccomp_notify: Literal["auto", "required", "disabled"] = "auto"
+    tool_access: ToolAccess | None = None
+    max_turns: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_turns is not None and self.max_turns < 1:
+            raise ValueError("max_turns must be positive")
+
+    def arguments(self) -> list[str]:
+        arguments = [
+            "--host-ebpf",
+            self.host_ebpf,
+            "--seccomp-notify",
+            self.seccomp_notify,
+        ]
+        if self.name is not None:
+            arguments.extend(["--name", self.name])
+        return arguments
+
+
 class ActrailRuntime:
+    # 每个调用上下文独立保存作用域栈，嵌套退出后恢复外层 Runtime。
+    _contexts: ClassVar[ContextVar[tuple[ActrailRuntime, ...]]] = ContextVar(
+        "actrail_runtime_contexts", default=()
+    )
+
     def __init__(
         self,
         repo: Path,
@@ -42,6 +111,7 @@ class ActrailRuntime:
         operator_config_patch: Path | None = None,
         clean_control_state: bool = DEFAULTS.clean_control_state,
         operator_config_patches: list[Path] | None = None,
+        launch_options: LaunchOptions | None = None,
     ):
         self._repo = repo
         self._bin_dir = bin_dir if bin_dir.is_absolute() else repo / bin_dir
@@ -56,6 +126,7 @@ class ActrailRuntime:
         self._clean_control_state = clean_control_state
         self.actrailviewer = self._require_binary("actrailviewer")
         self._started = False
+        self._launch_options = launch_options or LaunchOptions()
 
     @classmethod
     def isolated(
@@ -73,6 +144,7 @@ class ActrailRuntime:
         alert_forwarding: AlertForwardingRuntimePaths | None = None,
         agent_invocation_commands: list[Path] | None = None,
         clean_control_state: bool = DEFAULTS.clean_control_state,
+        launch_options: LaunchOptions | None = None,
     ) -> "ActrailRuntime":
         work_dir = work_dir.resolve()
         if not work_dir.is_dir():
@@ -101,7 +173,46 @@ class ActrailRuntime:
             operator_config=operator_config,
             operator_config_patches=patches,
             clean_control_state=clean_control_state,
+            launch_options=launch_options,
         )
+
+    def __enter__(self) -> Self:
+        self._contexts.set((*self._contexts.get(), self))
+        return self
+
+    @classmethod
+    def current(cls) -> ActrailRuntime:
+        """取得当前 with 作用域中的 Runtime。"""
+        contexts = cls._contexts.get()
+        if not contexts:
+            raise RuntimeError("No active AcTrail runtime context")
+        return contexts[-1]
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Stop the daemon while preserving an exception from the test body."""
+        try:
+            result = self.stop()
+            if result is not None and result.returncode != 0:
+                raise RuntimeError(f"actraild stop failed: {result.output}")
+        except Exception as error:
+            if exception is None:
+                raise
+            exception.add_note(f"AcTrail runtime cleanup failed: {error}")
+        finally:
+            self._contexts.set(self._contexts.get()[:-1])
+
+    @property
+    def command_timeout_seconds(self) -> int:
+        return self._command_timeout_seconds
+
+    def start_actraild(self) -> list[CommandResult]:
+        """Refresh the default configuration with patches and start the daemon."""
+        return self.prepare()
 
     def prepare(self) -> list[CommandResult]:
         results = [
@@ -112,8 +223,9 @@ class ActrailRuntime:
             results.append(
                 self.run_checked([*self._control_command(), "clean"])
             )
-        results.append(self.run_checked([*self._daemon_command(), "start"]))
+        # A failed start may already have spawned the daemon; retain cleanup ownership.
         self._started = True
+        results.append(self.run_checked([*self._daemon_command(), "start"]))
         return results
 
     def stop(self) -> CommandResult | None:
@@ -129,6 +241,99 @@ class ActrailRuntime:
 
     def control_command(self, *arguments: Path | str) -> list[Path | str]:
         return [*self._control_command(), *arguments]
+
+    @contextmanager
+    def launch_scope(self, options: LaunchOptions):
+        """Bind this runtime and its launch options for one scenario."""
+        previous = self._launch_options
+        self._launch_options = options
+        token = self._contexts.set((*self._contexts.get(), self))
+        try:
+            yield
+        finally:
+            self._contexts.reset(token)
+            self._launch_options = previous
+
+    @property
+    def launch_options(self) -> LaunchOptions:
+        """Return the options for the current launch scope."""
+        return self._launch_options
+
+    def daemon_command(self, *arguments: Path | str) -> list[Path | str]:
+        """构造使用当前 Runtime 配置的 daemon 命令。"""
+        return [*self._daemon_command(), *arguments]
+
+    def launch_with_ctl(
+        self,
+        command: list[Path | str],
+        *,
+        environment: dict[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> LaunchResult:
+        """解析 AcTrail 启动前缀后，交付进程和 trace_id。
+
+        返回时 stdout 的下一段内容属于 agent。调用方接管进程和管道。
+        """
+        argv = self.control_command(
+            "launch", *self._launch_options.arguments(), "--",
+            *command,
+        )
+        process = subprocess.Popen(
+            [str(argument) for argument in argv],
+            cwd=cwd or self._repo,
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            start_new_session=True,
+        )
+        # 使用同一个文本流读取启动前缀，缓冲区中后续的 agent 数据仍可读取。
+        # 启动失败或超时时，进程尚未交付，由 Runtime 负责清理。
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="actrail-launch") as reader:
+            pending = reader.submit(self._parse_launch_output, process)
+            try:
+                return pending.result(timeout=self._command_timeout_seconds)
+            except BaseException as error:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                reader.shutdown(wait=True)
+                diagnostics = process.stderr.read()
+                if diagnostics:
+                    error.add_note(diagnostics)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    stream.close()
+                raise
+
+    @staticmethod
+    def _parse_launch_output(process: subprocess.Popen[str]) -> LaunchResult:
+        """actrailctl 在放行子进程前输出 trace 登记结果，读取到此为止。"""
+        startup_output = []
+        permissions = {}
+        capabilities = ()
+        for line in process.stdout:
+            if line.startswith("deployment_required_capabilities="):
+                capabilities = tuple(filter(None, line.partition("=")[2].strip().split(",")))
+            for name in ("requested", "selected", "degraded"):
+                prefix = f"deployment_permissions_{name}="
+                if line.startswith(prefix):
+                    permissions[name] = line[len(prefix):].strip()
+            matched = re.fullmatch(r"trace trace-(\d+) entered Active\r?\n?", line)
+            if matched:
+                selected = None
+                if len(permissions) == 3:
+                    selected = LaunchPermissions(
+                        requested=permissions["requested"],
+                        selected=permissions["selected"],
+                        degraded=permissions["degraded"] == "true",
+                    )
+                return LaunchResult(process, int(matched.group(1)), selected, capabilities)
+            startup_output.append(line)
+        raise RuntimeError("actrailctl exited before reporting an active trace:\n" + "".join(startup_output))
 
     def viewer_command(self, *arguments: Path | str) -> list[Path | str]:
         command: list[Path | str] = [self.actrailviewer]

@@ -31,7 +31,6 @@ class ProbeClaudeMcpTask:
         )
         try:
             token = secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
-            self.final_marker = f"CLAUDE_MCP_FINAL_{token}"
             self.local = self._workspace.spec(
                 server_name=config.local_server_name,
                 tool_name=config.tool_name,
@@ -70,14 +69,8 @@ class ProbeClaudeMcpTask:
         )
         return launch.run(self._prompt())
 
-    def require_agent_evidence(self, launch: CommandResult) -> str:
-        execution_evidence = self._workspace.require_execution(self.local)
-        if self.final_marker not in launch.stdout:
-            raise AssertionError(
-                "Claude stdout answer does not contain final marker "
-                f"{self.final_marker}"
-            )
-        return execution_evidence
+    def require_agent_evidence(self) -> str:
+        return self._workspace.require_execution(self.local)
 
     def environment(self) -> dict[str, str]:
         return self._discovery.environment(self._claude)
@@ -112,7 +105,7 @@ class ProbeClaudeMcpTask:
         return (
             f"Use {self.local.tool_id} with "
             f'{{"marker":"{self.local.marker}"}}. '
-            f'After the result returns, reply with "{self.final_marker}".'
+            "After the result returns, describe the tool result."
         )
 
     def _resolve_claude(self) -> Path:

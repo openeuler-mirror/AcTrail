@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.e2e.common.core import TestCaseInputs, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestStatus
 from tests.e2e.common.kata_runtime.process import CommandResult
 
 from tests.e2e.regression.virtual_container.v2.config import VirtualContainerConfig
@@ -28,7 +28,7 @@ class RunCommandDiagnosticTest(unittest.TestCase):
             (bin_dir / name).write_bytes(name.encode())
         with patch.dict("os.environ", {}, clear=True):
             config = VirtualContainerConfig.from_environment(
-                TestCaseInputs(root, bin_dir, root / "work")
+                TestRunDirectories(root, bin_dir, root / "work")
             )
         scenario = VirtualContainerScenario(config, Mock())
         runner = Mock()

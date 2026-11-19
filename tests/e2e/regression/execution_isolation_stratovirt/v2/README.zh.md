@@ -1,5 +1,42 @@
 # StratoVirt 执行隔离真实 xiaoO 测例
 
+## 测试目标
+
+验证 StratoVirt / Kata Guest 中真实 xiaoO 的资源与文件活动能形成完整的采集、存储和告警投递链路。
+
+## 场景设计
+
+由 containerd/Kata 启动 StratoVirt VM，等待 Guest system observer 就绪后显式连接 Host gateway，再启动非特权 xiaoO 工作负载。使用资源与文件活动触发五类告警，对照独立 SQLite 和公开 subscriber 的结果。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储和查询观测记录 |
+| 主机 | Linux、root、KVM、containerd、Kata 与所选 VMM | 创建和管理虚机容器 |
+| 部署产物 | 与当前 checkout 匹配的 Guest 镜像、配置、manifest 和本机 profile | 启动 Guest 采集环境 |
+| Guest observer | artifact 注入 actrail-sb 服务，Guest kernel 支持 BTF/eBPF | 采集 Guest 活动 |
+| xiaoO | artifact manifest 指定真实 CLI | 执行文件读写任务 |
+
+## 测试步骤摘要
+
+1. 检查宿主能力和对应 backend 的本机 profile、artifact。
+2. 启动 VM，等待 observer control socket 和 ready marker，确认初始未连接。
+3. 启动 Host gateway，等待传输端点就绪，再执行 Guest actrail-sb connect。
+4. 以 workload 身份启动真实 xiaoO，完成文件读写及资源告警场景。
+5. 对照告警数据库与公开 subscriber 的同次记录。
+6. 清理 workload、gateway、VM、daemon 和 alert proxy。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 连接顺序 | Guest observer 就绪，Host gateway 已监听 | 显式 connect 成功后启动 workload |
+| 实际任务 | 真实 xiaoO 运行 | 完成一次文件读取和一次文件写入 |
+| 告警覆盖 | 资源和文件场景完成 | 产生 high_cpu、oom_killed、oom_risk、high_read、high_write 五类告警 |
+| 告警一致性 | SQLite 已落盘且 subscriber 收到记录 | 对应告警的 source 与 extras 一致 |
+| 外部条件 | KVM、Kata/containerd 或所选 VMM 不可用 | 报告 SKIPPED 并说明原因 |
+| 测试配置 | 未配置 ARTIFACT_MANIFEST | 报告 SKIPPED，并提示准备本机 V2 测试 profile |
+
 ## 快速运行
 
 完成下文的宿主前置条件并构建当前 checkout 的 release 后，从仓库根目录
@@ -61,13 +98,15 @@ Cloud Hypervisor 或 Firecracker 的 Unix socket 规则。
 - `sandbox.process.high_read`
 - `sandbox.process.high_write`
 
-## 准备
+## 手动测试
+
+### 准备
 
 先在目标 Linux/KVM 主机上从同一 checkout 刷新 StratoVirt 产物；`--xiaoo` 必须指向
 要演示的真实 xiaoO。快速运行第一步的 `prepare-artifacts.py` 命令会生成
 内容寻址 artifact 和本机 profile。
 
-## 直接运行公共 `test_all.py`（仅调试）
+### 直接运行公共 `test_all.py`（仅调试）
 
 如需绕过推荐 wrapper，复用本页快速运行开头定义的 `ACTRAIL_HOST_PATH`，
 并显式将它传给 sudo：

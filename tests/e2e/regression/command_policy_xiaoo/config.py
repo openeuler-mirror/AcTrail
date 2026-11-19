@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.core.loopback_port import resolve_test_port
 
 from .constants import CASE_CONSTANTS
@@ -26,9 +26,9 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "CommandPolicyXiaooConfig":
-        common = CommonTestConfig.from_environment(inputs, "COMMAND_POLICY_XIAOO")
+        common = CommonTestConfig.from_environment(directories, "COMMAND_POLICY_XIAOO")
         xiaoo = os.environ.get("COMMAND_POLICY_XIAOO_E2E_BINARY") or shutil.which(
             "xiaoo"
         )
@@ -54,8 +54,8 @@ class CommandPolicyXiaooConfig(CommonTestConfig):
             raise RuntimeError(f"Bash executable is unavailable: {bash}")
         return cls(
             **common.as_kwargs(),
-            operator_config=inputs.work_dir / "actraild.conf",
-            operator_config_patch=inputs.work_dir / "actraild.patch.toml",
+            operator_config=directories.work_dir / "actraild.conf",
+            operator_config_patch=directories.work_dir / "actraild.patch.toml",
             xiaoo_binary=Path(xiaoo).resolve(),
             bash_executable=bash,
             web_host=os.environ.get(

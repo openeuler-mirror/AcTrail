@@ -70,7 +70,11 @@ class ContinuedAccessScenario:
             try:
                 for phase in ("initial", "deny", "restore"):
                     self.wait(self.root / f"ready-{phase}", agent)
-                    context.report_progress(phase, "real Xiaoo uses the same FDs across policy publication")
+                    context.report_progress({
+                        'initial': 'Check access through existing file descriptors',
+                        'deny': 'Check existing file descriptors after denying access',
+                        'restore': 'Check existing file descriptors after restoring access',
+                    }[phase], "real Xiaoo uses the same FDs across policy publication")
                     if phase != "initial":
                         self.publish("deny" if phase == "deny" else "allow")
                     for role in ("protected", "control"):

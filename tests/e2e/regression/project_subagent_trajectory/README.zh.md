@@ -16,7 +16,7 @@ GET /api/traces/{trace_id}/llm-trajectories
 边和统计值，再与整图接口逐项比较。这样可以同时发现漏节点、错误连边、聚合错误和
 字段语义退化。
 
-## 场景与职责边界
+## 场景设计
 
 真实 Agent 在隔离的 `sorting-workspace/` 中完成一个可在 Web 页面直接分析的排序任务：
 
@@ -50,22 +50,67 @@ benchmark 输入要求，以降低真实模型输出波动。
 确定性图断言/协议专项用例覆盖；本用例不会为了凑数伪造真实 Agent 行为。
 整图 API 支持 compaction 识别，related 弱关系未启用。
 
-## 自动化覆盖
+## 测试依赖
 
-### LLM 调用与投影完整性
+
+以下命令会安装最新 release、清理测试运行时数据并启动 daemon/Web/OTel receiver。
+只能在测试机执行，不要与生产实例共用运行目录。
+
+需要：
+
+- Rust/Cargo release 构建环境；
+- root 权限；
+- `curl`；
+- 已登录 Agent 为可选前提；自动发现不到任何可用 Agent 时真实场景规范跳过；
+- 对应 provider 的网络和凭据已经配置，但凭据不得写入仓库或 README。
+
+## 测试步骤摘要
+
+
+1. 未指定 Agent 时按 `opencode`、`claude`、`xiaoo` 顺序检查，缺失或不可用就尝试下一个，全部不可用则 SKIPPED；
+2. 启动全新的 daemon、Web API 和 OTel HTTP receiver；
+3. 配置 request/response 完整导出；
+4. 在隔离工作目录运行双排序子代理与主 Agent benchmark，并等待 trace 终态；
+5. 验证 call 配对、lineage 和单轨迹 endpoint；
+6. 请求整图 API，校验节点、边、统计和 capabilities，并验证独立上下文、append、工具结果增长、时间交错及完整状态；
+7. 用 Node 执行生产 Web 布局逻辑，核对请求节点与持久化 lineage 边。以真实子代理任务和请求上下文核对主任务与子任务归属。
+8. flush OTel exporter，验证每个 request/response 恰好导出一次。
+
+通过时结果中应包含：
+
+```text
+semantic-projection: PASSED
+trajectory-graph-api: PASSED
+web-persisted-trajectory: PASSED
+web-analysis-scenario: PASSED
+otel-export: PASSED
+```
+
+自动化依赖 Node.js 18 或更高版本，执行相同前端模块和真实 HTTP 数据链路；浏览器交互与 SVG 呈现按以下步骤手工验证。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 真实子代理场景 | 主 Agent 与两个子代理完成任务 | 能观测独立上下文、连续交互、工具结果增长与时间交错 |
+| 调用与投影 | 同次 trace 的 action 与 lineage 已落盘 | 调用正确配对，轨迹位置与关联一致 |
+| 整图 API | 对照持久化请求和逐请求 lineage | 节点、边、属性、顺序和统计均可重算且一致 |
+| 子任务归属 | 主 Agent 实际派发两个子任务 | 请求上下文与实际任务对应，主任务和子任务轨迹归属正确 |
+| Web 布局 | 生产前端读取真实接口数据 | 请求节点和持久化 lineage 边完整呈现 |
+| OTel 导出 | 导出已完成 | 每个请求和响应恰好导出一次，轨迹身份一致 |
+
+### 详细验收条件
+
+
+#### LLM 调用与投影完整性
 
 - 全部 `llm.call`、`llm.request`、`llm.response` 必须一一配对；
 - LLM action 必须进入终态；
 - 每个 request 的 action attribute、lineage 和单轨迹 endpoint 必须一致；
 - 每条 trajectory 的 position 连续，parent 形成连续链；
 - 排序子代理场景必须产生至少三条独立 trajectory。
-- 两个子代理的实际调用 prompt 必须超过 160 字符，各自在 Web 离线推断中得到唯一的
-  `delegation` 关联，且关联请求的完整内容包含相应 prompt。
-  Claude 在同一用户消息中附加独立系统提醒文本块时，关联仍须正确。
-- 运行时不得持久化 `agent.invocation.child_llm_request`；Node 执行生产前端推断类，
-  通过真实 Web HTTP 接口读取完整数据并核验关系，不模拟响应、不复制匹配算法。
+- 以主 Agent 实际派发的两个子任务及请求上下文核对任务归属。系统提醒等附加消息应保留其语义，任务关联应保持正确。
+- 通过真实 Web HTTP 接口取得图数据，执行生产前端布局逻辑，核对请求节点和持久化 lineage 边。
 
-### 整图 API 契约
+#### 整图 API 契约
 
 - `trace_id` 必须与请求一致，`partial` 必须为 `false`；
 - 图节点集合必须与全部持久化 `llm.request` 精确一致，不得遗漏、重复或混入其他节点；
@@ -80,28 +125,14 @@ benchmark 输入要求，以降低真实模型输出波动。
 - node、trajectory、append、fork、duplicate 计数及两个比例必须可由事实源重算；
 - capabilities 必须明确声明 strict-prefix 和 compaction detection 已启用，related 未启用。
 
-### OTel 导出
+#### OTel 导出
 
 - 每个 request/response 必须且只能导出一个 OTel span；
 - request span 的 trajectory ID 必须与持久化 lineage 一致；
 - HTTP 失败 exchange 与成功 exchange 使用同样的完整性要求。
 
-## 自动运行
+## 快速运行
 
-### 前提条件
-
-以下命令会安装最新 release、清理测试运行时数据并启动 daemon/Web/OTel receiver。
-只能在测试机执行，不要与生产实例共用运行目录。
-
-需要：
-
-- Rust/Cargo release 构建环境；
-- root 权限；
-- `curl`；
-- 已登录 Agent 为可选前提；自动发现不到任何可用 Agent 时真实场景规范跳过；
-- 对应 provider 的网络和凭据已经配置，但凭据不得写入仓库或 README。
-
-### Quick Run
 
 从仓库根目录运行自动 Agent 选择场景：
 
@@ -154,30 +185,7 @@ OpenCode 模型可由 `OPENCODE_E2E_MODEL` 配置；Claude 使用其通用模型
 
 测试不会向 LLM prompt 注入随机 marker。随机后缀只用于筛选本轮 OTel span。
 
-### 自动化执行步骤
-
-1. 未指定 Agent 时按 `opencode`、`claude`、`xiaoo` 顺序检查，缺失或不可用就尝试下一个，全部不可用则 SKIPPED；
-2. 启动全新的 daemon、Web API 和 OTel HTTP receiver；
-3. 配置 request/response 完整导出；
-4. 在隔离工作目录运行双排序子代理与主 Agent benchmark，并等待 trace 终态；
-5. 验证 call 配对、lineage 和单轨迹 endpoint；
-6. 请求整图 API，校验节点、边、统计和 capabilities，并验证独立上下文、append、工具结果增长、时间交错及完整状态；
-7. 用 Node 执行 Web 离线委派关联，验证完整长 prompt、唯一子请求及运行时无推断 link；
-8. flush OTel exporter，验证每个 request/response 恰好导出一次。
-
-通过时结果中应包含：
-
-```text
-semantic-projection: PASSED
-trajectory-graph-api: PASSED
-web-offline-delegation: PASSED
-web-analysis-scenario: PASSED
-otel-export: PASSED
-```
-
-自动化依赖 Node.js 18 或更高版本，执行相同前端模块和真实 HTTP 数据链路；浏览器交互与 SVG 呈现按以下步骤手工验证。
-
-## 手工验证
+## 手动测试
 
 手工检查应与自动回测使用同一接口。固定 Web 端口并保留现场：
 
@@ -222,7 +230,7 @@ jq '.stats, .edges, [.nodes[] | {
 
 也可以在浏览器打开 `http://127.0.0.1:18089`，进入对应 trace 后选择
 `LLM Trajectory` 标签页。页面节点数、轨迹数、append/fork 数应与上述 JSON 的
-`stats` 一致；完成原文读取后应出现两个 `Inferred delegation` 虚线关联；点击节点应打开现有 Action 详情面板。
+`stats` 一致。页面应保留 API 返回的请求节点和 lineage 边。点击节点应打开 Action 详情面板，可据实际任务内容核对主任务和子任务的请求上下文。
 
 `--no-cleanup` 会保留测试现场。检查结束后应按测试机既有运维流程清理，避免误删其他
 并行测试或开发数据。
@@ -249,10 +257,10 @@ jq '.stats, .edges, [.nodes[] | {
 
 ## 文件说明
 
-- `run_e2e.py`：注册独立回测入口；
+- `run_e2e.py`：独立运行入口；
 - `case.py`：编排环境、真实 Agent、图断言和 OTel 断言；
 - `scenario.py`：启动真实多子代理 workload；
 - `assertion.py`：以 action/lineage 为事实源校验整图 API；
-- `web/assertion.py`、`web/offline.mjs`：通过真实 HTTP 数据验证生产前端离线推断；
+- `web/assertion.py`、`web/trajectory.mjs`：通过真实 HTTP 数据验证生产前端布局中的请求节点与 lineage 边；
 - `agent.py`：OpenCode、Claude、xiaoO 启动适配；
 - `config.py`：环境变量和测试运行配置。

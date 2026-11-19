@@ -6,11 +6,11 @@ import os
 import platform
 import socket
 import subprocess
-import tomllib
 from pathlib import Path
 
 from ..core import TestOutput
-from ..testing_env import AgentBinaryDiscovery, default_claude_model
+from ..testing_env import AgentBinaryDiscovery
+from ..agents import AgentFactory
 
 from .constants import DEFAULTS
 
@@ -68,18 +68,17 @@ class EnvironmentProbe:
 
     def _agent_summary(self, name: str, binary: Path) -> str:
         native = binary.resolve()
+        model = getattr(AgentFactory, name).get_default_llm_model(binary) or ""
         if name == "codex":
             environment = self._discovery.codex_environment(binary)
             native = self._discovery.codex_native_binary_for(binary, use_override=False) or native
-            model = self._codex_model(binary)
+            model = model or "gpt-5.5"
+            os.environ.setdefault("CODEX_E2E_MODEL", model)
         else:
             environment = self._discovery.environment(binary)
-            model = (
-                default_claude_model()
-                if name == "claude"
-                else self._xiaoo_model(environment)
-            )
-        version = self._command_output([str(binary), "--version"], environment)
+        # XiaoO's version flag belongs to its CLI mode.
+        version_args = ["--cli", "--version"] if name == "xiaoo" else ["--version"]
+        version = self._command_output([str(binary), *version_args], environment)
         description = self._command_output(["file", "-L", "-b", str(native)], environment)
         description = ", ".join(
             field
@@ -112,25 +111,7 @@ class EnvironmentProbe:
             return ""
         return " ".join(result.stdout.split()) if result.returncode == 0 else ""
 
-    def _codex_model(self, binary: Path) -> str:
-        configured = os.environ.get("CODEX_E2E_MODEL")
-        if configured:
-            return configured
-        model = self._discovery.default_codex_model_for_binary(binary) or "gpt-5.5"
-        os.environ["CODEX_E2E_MODEL"] = model
-        return model
 
-    @staticmethod
-    def _xiaoo_model(environment: dict[str, str]) -> str:
-        path = Path(
-            environment.get("XIAOO_CONFIG")
-            or Path(environment["HOME"]) / ".config" / "xiaoo" / "config.toml"
-        )
-        try:
-            with path.open("rb") as stream:
-                return tomllib.load(stream)["llm"]["model"]
-        except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
-            return ""
 
     def _os_pretty_name(self) -> str | None:
         for path in self._OS_RELEASE_CANDIDATES:

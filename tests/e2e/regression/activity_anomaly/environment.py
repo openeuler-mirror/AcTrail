@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, TextIO
 
-from tests.e2e.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.e2e.common.actrail_runtime import ActrailRuntime
 from tests.e2e.common.core import TestOutput, TestResult, TestStatus
 from tests.e2e.common.plugin_test_environment import (
     PluginRuntimeSpec,
@@ -111,7 +111,7 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
         self._write_xiaoo_config(base_url)
         return base_url
 
-    def run_xiaoo(self, trace_name: str) -> tuple[int, CommandResult]:
+    def run_xiaoo(self, trace_name: str) -> tuple[int, str]:
         environment = os.environ.copy()
         for variable in (
             "ALL_PROXY",
@@ -140,6 +140,8 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
                 "bash",
                 "--max-turns",
                 str(CASE_CONSTANTS.max_turns),
+                "--format",
+                "json",
                 "--prompt",
                 "Execute each requested Bash tool, then return the final result.",
             ),
@@ -155,7 +157,17 @@ class ActivityAnomalyEnvironment(PluginTestEnvironment):
             raise AssertionError(
                 f"real Xiaoo output did not identify exactly one trace: {matches}"
             )
-        return int(matches[0]), result
+        # XiaoO's response event supplies the actual reply used to check capture.
+        reply = None
+        for line in result.stdout.splitlines():
+            if not line.startswith("{"):
+                continue
+            event = json.loads(line)
+            if event.get("type") == "response":
+                reply = event["data"]["raw_reply"]
+        if not reply:
+            raise AssertionError("XiaoO completed without a final response")
+        return int(matches[0]), reply
 
     def viewer_document(self, trace_id: int) -> dict[str, Any]:
         result = self.runtime.run(

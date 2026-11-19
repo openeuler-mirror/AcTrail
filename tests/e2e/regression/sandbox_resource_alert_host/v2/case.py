@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tests.e2e.common.agent_selection import AgentSelector
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.agents import AgentFactory
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .config import SandboxResourceAlertHostConfig
@@ -14,7 +14,12 @@ from .constants import CASE_CONSTANTS
 
 
 class SandboxResourceAlertHostCase(TestCase):
-    def __init__(self, config: SandboxResourceAlertHostConfig) -> None:
+    case_id = 'sandbox_resource_alert_host'
+    description = 'Run real xiaoO through host actrail-sb, native VSOCK gateway, daemon sandbox alert storage and alert-proxy'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = SandboxResourceAlertHostConfig.from_environment(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
@@ -24,7 +29,8 @@ class SandboxResourceAlertHostCase(TestCase):
         problem = self._host_problem()
         if problem is not None:
             return problem
-        agent = AgentSelector(self._config.repo).select(
+        agent = AgentFactory.auto(
+            self._config.repo,
             test_context,
             kinds=("xiaoo",),
         )

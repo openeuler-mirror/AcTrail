@@ -1,9 +1,40 @@
 # Container Auto V2
 
-该测例验证 Docker 容器内 `actrailctl launch` 对 host eBPF 和 seccomp notify
-权限的自动选择，以及跨容器 trace 隔离和 `required` 权限失败行为。
+## 测试目标
 
-## 运行
+验证容器启动时自动选择可用采集权限，并确保 trace 和注入通道遵守容器身份边界。
+
+## 场景设计
+
+在长驻 Docker 容器中执行 HTTPS 请求，覆盖 host eBPF 与 seccomp notify 的四种开关组合。通过其他容器访问目标 trace 和注入通道，再请求不可用的 required 权限，核对隔离与失败行为。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储和查询观测记录 |
+| 主机 | Linux、root、可工作的 eBPF 环境 | 采集容器活动 |
+| Docker | 可访问的 daemon 和测试镜像 | 运行隔离容器 |
+
+## 测试步骤摘要
+
+1. 检查主机与 Docker 条件，准备测试镜像。
+2. 刷新默认配置并应用对应场景补丁，启动 daemon。
+3. 依次运行四种权限组合，保存各次请求所属 trace。
+4. 尝试跨容器查询、删除 trace 和注入事件。
+5. 请求不可用的 required 权限，再恢复 host eBPF。
+6. 核对观测、拒绝证据和 daemon 状态，清理本轮资源。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 权限选择 | 分别开启或关闭 host eBPF 和 seccomp notify | 启动结果与可用权限组合一致 |
+| 采集内容 | 容器完成 HTTPS 请求 | TLS payload 属于对应 trace，eBPF 和 process-seccomp 事件符合开关组合 |
+| 身份与注入隔离 | 其他容器访问目标 trace 或伪造登记凭据 | 访问被拒绝并有审计证据，伪造 payload 入库数为零 |
+| required 权限 | 请求的权限不可用 | 启动失败并说明原因 |
+| 恢复 | 矩阵完成后重新启用 host eBPF | daemon 状态正常 |
+
+## 快速运行
 
 在仓库根目录执行：
 
@@ -23,7 +54,9 @@ sudo -E python3 tests/e2e/regression/container_auto/v2/run_e2e.py \
 - **镜像复用**：镜像标签由基础镜像、Dockerfile、启动器和 TLS-sync 运行库内容生成。
   `CONTAINER_AUTO_E2E_REBUILD_IMAGE=1` 强制重建。准备镜像时清理同仓库的其他旧标签。
 
-## 配置
+## 手动测试
+
+### 配置
 
 - **运行路径**：每轮创建随机 `/tmp/actrail-container-auto-v2.*` 目录。公共
   `PatchBuilder` 将 control socket、数据库、日志、导出目录和插件路径写入
@@ -56,7 +89,7 @@ sudo -E python3 tests/e2e/regression/container_auto/v2/run_e2e.py \
 以上命令中的 `BIN_DIR`、`RUNTIME_DIR` 和 `CASE_DIR` 分别对应本轮 release
 目录、随机运行目录和测例目录。`runtime.patch.toml` 由场景准备过程生成。
 
-## 验收
+### 权限矩阵与详细验收
 
 容器先以 `tail -f /dev/null` 长驻，再通过 `docker exec` 启动
 `actrailctl launch --host-ebpf auto --seccomp-notify auto -- /usr/bin/curl`。

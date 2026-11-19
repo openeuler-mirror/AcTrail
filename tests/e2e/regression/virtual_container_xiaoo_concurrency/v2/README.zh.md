@@ -1,17 +1,53 @@
 # Virtual Container xiaoO Concurrency V2
 
-## Quick Run
+## 测试目标
+
+验证两台 Kata VM 中真实 xiaoO 的并发执行、观测隔离和 VM 生命周期隔离。
+
+## 场景设计
+
+两台独立 data VM 各自运行 Guest daemon、本地 Provider 和 xiaoO。等待两个 Provider 就绪后统一释放 barrier，建立真实重叠窗口，分别保存 A/B 的实际回复，以回复正文、实际文件内容和 trace 身份验证隔离，再删除 VM A 检查 VM B。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | 当前 release 产物 | 采集、存储和查询观测记录 |
+| 主机 | Linux、root、KVM、containerd、Kata 与所选 VMM | 创建和管理虚机容器 |
+| 部署产物 | 与当前 checkout 匹配的 Guest 镜像、配置、manifest 和本机 profile | 启动 Guest 采集环境 |
+| xiaoO | artifact 包含真实 xiaoO | 运行两个独立任务 |
+| 资源 | 同时运行两台 VM，每台至少 2 vCPU | 建立并发窗口 |
+
+## 测试步骤摘要
+
+1. 检查宿主能力、profile 和包含 xiaoO 的 artifact。
+2. 启动两台 data VM，确认 workload 环境和各自 Provider 就绪。
+3. 统一释放 barrier，确认两个 xiaoO 同时活动。
+4. 完成任务，保存 A/B 的完整实际回复和文件内容，再按各自 trace 身份核对观测。
+5. 删除 VM A，确认 VM B 继续运行，再清理本轮资源。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 真实并发 | 两个 Provider 就绪后释放 barrier | 两台 VM 同时 Ready，两个 xiaoO 在同一窗口 Active |
+| 观测隔离 | 已保存两个 Agent 的实际回复与文件操作结果 | 各自 trace 的响应包含对应 Agent 的完整实际回复，文件观测匹配实际路径和内容 |
+| trace 完整性 | 采集完成 | 两条 trace 均 Completed/Clean，包含 eBPF/network 证据 |
+| 生命周期隔离 | 删除 VM A | VM B 继续运行 |
+| 可选 OpenCode | 启用免费模型 smoke，分别取得两个 Agent 的实际回复 | 对应 trace 的采集响应包含各自完整实际回复，归属与 workload 身份一致 |
+
+## 快速运行
 
 完成一次与当前 release 一致且包含 xiaoO 的 artifact 准备后，在仓库根目录执行：
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --case virtual_container_xiaoo_concurrency \
   --color never
 ```
 
-`run-v2-tests.sh` 是虚机容器 V2 的宿主验收入口。它读取
-`local/kata/v2-test-profile.json`，保留调用用户的 Cargo、Rustup 和 PATH，在需要时
+`run-v2-tests.sh` 是虚机容器 V2 的宿主验收入口。它将显式指定的 profile 传给公共 runner，
+保留调用用户的 Cargo、Rustup 和 PATH，在需要时
 申请一次 sudo，然后调用公共 `test_all.py`。选中本 case 后，runner 先执行
 `release_install`，懒加载并校验 manifest 中的 data Profile、workload bundle 和
 xiaoO，再启动双 VM 并发场景。
@@ -49,18 +85,6 @@ loopback，不读取模型 Token，也不访问公网。测试固定同时启动
 ✓ release_install
 ▶ virtual_container_xiaoo_concurrency...✓
 ```
-
-## 步骤摘要
-
-1. 验证 runtime 标识并检查 `/dev/kvm`、`ctr` CLI、Kata runtime、shim 和 VMM；外部能力缺失时跳过。
-2. 宿主能力具备时检查本机 profile、format 2 manifest、data Profile 和 xiaoO artifact。
-3. 在需要时重新生成包含 xiaoO 的内容寻址 artifact。
-4. 运行不启动 VM 的并发场景契约测试。
-5. 创建两台独立 Kata data VM，并验证两边 workload 均为 openEuler。
-6. 等待两个 Provider Ready，再统一释放 barrier。
-7. 在同一轮询窗口看到两个 `xiaoo.active`，证明 Agent 真实重叠。
-8. 验证 A/B response、文件 marker、trace 和 viewer 数据不会串线。
-9. 删除 VM A 后确认 VM B 仍在运行，再清理本轮全部资源。
 
 ## 手动测试
 
@@ -183,6 +207,7 @@ task/container。单元测试通过只能证明编排契约正确，不能替代
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --case virtual_container_xiaoo_concurrency \
   --no-cleanup \
   --color never
@@ -197,6 +222,7 @@ sudo -E env \
   "PATH=$HOME/.local/bin:$HOME/.cargo/bin:$PATH" \
   ACTRAIL_SKIP_JAVA_AGENT_BUILD=1 \
   python3 tests/e2e/regression/test_all.py \
+    --profile "$PROFILE" \
     --case virtual_container_xiaoo_concurrency \
     --bin-dir "$BIN_DIR" \
     --no-cleanup \
@@ -256,17 +282,15 @@ grep -F 'ACTRAIL_KATA_XIAOO_A_FILE_WRITE_OK' \
   "$RUN_DIR/coord/a/task-output.txt"
 grep -F 'ACTRAIL_KATA_XIAOO_B_FILE_WRITE_OK' \
   "$RUN_DIR/coord/b/task-output.txt"
-! grep -F 'ACTRAIL_KATA_XIAOO_B_' "$RUN_DIR/workload-a.log"
-! grep -F 'ACTRAIL_KATA_XIAOO_A_' "$RUN_DIR/workload-b.log"
 ```
 
 #### 脚本行为与预期结果
 
-A 日志必须包含 `ACTRAIL_KATA_XIAOO_A_RESPONSE_OK`，B 日志必须包含
-`ACTRAIL_KATA_XIAOO_B_RESPONSE_OK`；各自 task output 只能包含自己的文件 marker。
-两边都必须输出 `host_ebpf:enabled,seccomp_notify:disabled`、
-`deployment_permissions_degraded=false` 和 `KATA_XIAOO_WORKLOAD_OK`。任一 A/B marker
-出现在另一边都判为 cross-trace isolation 失败。
+分别从 A/B Agent 的执行结果取得完整实际回复，并按各自启动时记录的 trace 身份
+查询 LLM 响应。采集正文应包含对应 Agent 的完整实际回复。各自 task output 应包含
+该任务写入的文件内容，文件观测应对应实际路径和所属 VM。
+两边运行环境都应报告 `host_ebpf:enabled,seccomp_notify:disabled` 和
+`deployment_permissions_degraded=false`。用实际回复、文件和 VM 身份共同核对观测归属。
 
 ### 步骤7：验证 trace 和 VM 生命周期隔离
 
@@ -302,6 +326,7 @@ tail -n 300 \
 find "$RUN_DIR" -maxdepth 3 -type f -print
 
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --no-cleanup \
   --color never
 ```

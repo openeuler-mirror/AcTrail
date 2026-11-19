@@ -89,7 +89,7 @@ class Report:
         lines.extend([
             "", f"每个后端真实 listener 均收到 {expected_connections} 个 allow 连接（含预热），deny listener 未收到连接。",
             "工作负载逐次验证 allow 成功、deny 返回 EPERM/EACCES，并检查真实 Xiaoo 及工具后代的 seccomp 状态。",
-            "运行器停止自有 daemon、Web、provider 和 listener，默认清理临时工作目录；`--keep-work` 保留目录。", "",
+            "运行器停止自有 daemon、Web、provider 和 listener，清理临时工作目录。", "",
             f"这些数据仅覆盖本机、{mechanism}的 IPv4 TCP connect 策略及 audit=false。它们包含 Python、",
             "本地 listener、观测和调度开销，不是单个 LSM hook 的独立成本；不能直接推算文件、exec、",
             "逐请求 WASM 回调、规则发布高并发或开启审计的性能。两后端顺序执行，各只有一个真实 agent 进程，短测量窗口的波动仍可能存在。", "",
@@ -98,12 +98,13 @@ class Report:
             "context switches 仅统计工作进程自身，额外被动切换可能来自观测线程、listener 或其他调度竞争，",
             "不能仅凭切换次数把全部成本归因于控制机制。", "",
             "复现：", "", "```bash",
-            f"python3 tests/e2e/regression/lsm_access_control_xiaoo/performance/run.py run --policy-source {source} "
-            f"--backends {' '.join(data['backend_order'])} --count {data['count_per_decision_per_round']} "
-            f"--rounds {data['rounds']} --warmup {data['warmup_per_decision']}",
-            f"python3 tests/e2e/regression/lsm_access_control_xiaoo/performance/run.py report --input local/lsm_access_control/{self._source.name} "
-            f"--output local/lsm_access_control/{self._destination.name}", "```", "",
-            f"[原始数据及配置]({self._source.name}) · [测量脚本](../../tests/e2e/regression/lsm_access_control_xiaoo/performance/run.py)", "",
+            f"LSM_PERFORMANCE_E2E_POLICY_SOURCE={source} "
+            f"LSM_PERFORMANCE_E2E_BACKENDS='{' '.join(data['backend_order'])}' "
+            f"LSM_PERFORMANCE_E2E_COUNT={data['count_per_decision_per_round']} "
+            f"LSM_PERFORMANCE_E2E_ROUNDS={data['rounds']} "
+            f"LSM_PERFORMANCE_E2E_WARMUP={data['warmup_per_decision']} "
+            "python3 tests/e2e/regression/test_all.py --case lsm_access_control_xiaoo_performance --no-cleanup",
+            "```", "", f"[原始数据及配置]({self._source.name})", "",
         ])
         for item in data["measurements"]:
             log = item.get("xiaoo_log", f"benchmark-{item['backend']}.log")

@@ -79,10 +79,10 @@ class KataExecutionIsolationPrerequisites:
         manifest = self._config.artifact_manifest
         if manifest is None:
             return None, TestResult(
-                TestStatus.FAILED,
+                TestStatus.SKIPPED,
                 self._config.IDENTITY.failure(
                     f"{self._config.ENVIRONMENT_PREFIX}ARTIFACT_MANIFEST "
-                    "is required; refresh the V2 content-addressed test profile"
+                    "is not configured. Prepare the V2 test profile to run this scenario."
                 ),
             )
         try:

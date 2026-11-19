@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.docker import probe_docker_server
 from tests.e2e.common.runner import TestingContextSingleton
 
@@ -18,7 +18,12 @@ from .constants import CASE_CONSTANTS
 
 
 class ContainerAgentXiaooCase(TestCase):
-    def __init__(self, config: ContainerAgentXiaooConfig):
+    case_id = 'container_agent_xiaoo'
+    description = 'Run actraild in a nested PID namespace with two real Docker xiaoO agents'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ContainerAgentXiaooConfig.from_environment(directories)
         self._config = config
         self._runtime: Path | None = None
         case_dir = Path(__file__).resolve().parent
@@ -27,7 +32,7 @@ class ContainerAgentXiaooCase(TestCase):
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         test_context.report_progress(
-            "prerequisites",
+            "Check Docker, release binaries and XiaoO",
             "checking Docker, release binaries, and xiaoO",
         )
         artifact_error = self._artifact_error()
@@ -58,7 +63,7 @@ class ContainerAgentXiaooCase(TestCase):
         if self._config.rebuild_image:
             command.append("--rebuild-image")
         test_context.report_progress(
-            "container_runtime",
+            "Run XiaoO in two containers",
             "running two long-lived containers and real xiaoO agents",
         )
         process = subprocess.Popen(
@@ -90,7 +95,7 @@ class ContainerAgentXiaooCase(TestCase):
                 f"{process.returncode}:\n{self._failure_report(stderr)}",
             )
         test_context.report_progress(
-            "trace_validation",
+            "Check captured task bodies and request pairs",
             "checking complete outbound task bodies and valid request/reply pairs",
         )
         ContainerLlmEvidence(

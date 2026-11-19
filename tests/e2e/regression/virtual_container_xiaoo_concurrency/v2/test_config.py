@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 from tests.e2e.common.kata_runtime.image import PullPolicy
 from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.config import (
     VirtualContainerXiaooConcurrencyConfig,
@@ -31,7 +31,7 @@ class VirtualContainerXiaooConcurrencyConfigTest(unittest.TestCase):
                 clear=True,
             ):
                 config = VirtualContainerXiaooConcurrencyConfig.from_environment(
-                    TestCaseInputs(root, root / "bin", root / "work")
+                    TestRunDirectories(root, root / "bin", root / "work")
                 )
 
         self.assertEqual(config.backend, "stratovirt")
@@ -56,7 +56,7 @@ class VirtualContainerXiaooConcurrencyConfigTest(unittest.TestCase):
                 clear=True,
             ):
                 config = VirtualContainerXiaooConcurrencyConfig.from_environment(
-                    TestCaseInputs(root, root / "bin", root / "work")
+                    TestRunDirectories(root, root / "bin", root / "work")
                 )
             self.assertEqual(
                 config.opencode_free_model,
@@ -72,7 +72,7 @@ class VirtualContainerXiaooConcurrencyConfigTest(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, r"opencode/\*-free"):
                     VirtualContainerXiaooConcurrencyConfig.from_environment(
-                        TestCaseInputs(root, root / "bin", root / "work")
+                        TestRunDirectories(root, root / "bin", root / "work")
                     )
 
     def test_rejects_opencode_vsock_smoke_on_cloud_hypervisor(self) -> None:
@@ -92,7 +92,7 @@ class VirtualContainerXiaooConcurrencyConfigTest(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "requires stratovirt"):
                     VirtualContainerXiaooConcurrencyConfig.from_environment(
-                        TestCaseInputs(root, root / "bin", root / "work")
+                        TestRunDirectories(root, root / "bin", root / "work")
                     )
 
 

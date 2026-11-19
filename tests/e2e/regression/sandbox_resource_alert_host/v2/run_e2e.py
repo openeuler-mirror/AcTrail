@@ -1,30 +1,13 @@
 #!/usr/bin/env python3
-
-from __future__ import annotations
-
+"""Run this regression scenario independently."""
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 
-from tests.e2e.common.runner import TestDefinition, run_one
-
-from .case import SandboxResourceAlertHostCase
-from .config import SandboxResourceAlertHostConfig
-
-
-TEST_DEFINITION = TestDefinition(
-    name="sandbox_resource_alert_host",
-    description=(
-        "Run real xiaoO through host actrail-sb, native VSOCK gateway, daemon "
-        "sandbox alert storage and alert-proxy"
-    ),
-    build_case=lambda inputs: SandboxResourceAlertHostCase(
-        SandboxResourceAlertHostConfig.from_environment(inputs)
-    ),
-)
-
+from tests.e2e.common.runner import run_one
+from tests.e2e.regression.sandbox_resource_alert_host.v2.case import SandboxResourceAlertHostCase
 
 if __name__ == "__main__":
-    raise SystemExit(run_one(TEST_DEFINITION, REPO))
+    raise SystemExit(run_one(SandboxResourceAlertHostCase, REPO))

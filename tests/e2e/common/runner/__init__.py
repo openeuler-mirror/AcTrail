@@ -5,7 +5,6 @@ primitives live in tests.e2e.common.core.
 """
 
 from .run import (
-    TestDefinition,
     add_common_arguments,
     run_one,
     run_selected,
@@ -13,9 +12,11 @@ from .run import (
 from .testing_context import TestingContextSingleton
 
 __all__ = [
-    "TestDefinition",
     "TestingContextSingleton",
+    "TestCaseFactory",
     "add_common_arguments",
     "run_one",
     "run_selected",
 ]
+
+from .factory import TestCaseFactory

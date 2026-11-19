@@ -73,9 +73,8 @@ git pull --ff-only
 worktree 或目标提交后，必须在新目录重新运行下面的 preparer；不要复制兄弟目录的
 `local/kata/v2-test-profile.json`，否则 profile 可能继续引用旧代码、旧二进制或旧镜像。
 
-`run-v2-tests.sh` 默认要求当前 checkout 已存在
-`local/kata/v2-test-profile.json`，缺失时会在申请 sudo 和启动 runner 前退出，并指向
-本节的准备命令。显式传入 `--profile <path>` 或 `--no-profile` 时不使用该默认检查。
+`run-v2-tests.sh` 通过显式 `--profile <path>` 加载本次准备生成的测试配置。
+省略该参数时直接使用当前运行环境。
 
 先使用公共 V2 runner 同款 installer 构建并安装当前 release。不要用一次包含多个 package
 的 `cargo build` 代替这一步；Cargo feature 集合不同可能生成不同的 TLS sync runtime，
@@ -154,7 +153,7 @@ root 权限完成 loop mount 和 containerd 操作；发布完成后会依据 `S
 不会隐式重建。运行两个完整用例：
 
 ```bash
-deploy/virtual-container/host/run-v2-tests.sh --color never
+deploy/virtual-container/host/run-v2-tests.sh --profile local/kata/v2-test-profile.json --color never
 ```
 
 准备和测试不会自动安装/替换宿主 Kata、VMM、内核或系统软件包。宿主一次性安装、
@@ -365,7 +364,7 @@ host/v2_artifacts_support/store.py 部署包目录的加锁、备份恢复、进
                         current 链接切换和旧产物清理。
 host/v2_artifacts_support/manifest.py 部署包 manifest 格式与校验；V2 runner 通过
                         tests/e2e/common/kata_runtime 复用，部署代码不依赖 tests。
-host/run-v2-tests.sh    读取本机 profile，一条命令运行两个虚机容器 V2 cases。
+host/run-v2-tests.sh    通过 --profile 指定测试配置，一条命令运行两个虚机容器 V2 cases。
 host/cni-netns.sh       用 CNI 配置为一台虚拟机创建或删除网络命名空间（单节点参考实现）。
 host/connect_proxy.py   只放行指定域名和端口的 HTTP CONNECT 代理，供 workload 访问外网。
 guest/prepare-guest-bundle.sh 汇集 release 二进制、私有动态库闭包和 otel-http

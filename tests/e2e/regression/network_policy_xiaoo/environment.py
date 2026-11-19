@@ -1,3 +1,4 @@
+"""Own policy services and execute real XiaoO governance checks."""
 from __future__ import annotations
 
 import errno
@@ -13,8 +14,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from tests.e2e.common.actrail_runtime import CommandResult
+from tests.e2e.common.actrail_runtime import CommandResult, LaunchOptions
 from tests.e2e.common.patch_builder import PatchBuilder
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import TestOutput, TestResult, TestStatus
 from tests.e2e.common.plugin_test_environment import (
     PluginRuntimeSpec,
@@ -78,7 +80,7 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         self._install_plugin_package()
         self._rules.write_text("", encoding="utf-8")
         self._write_operator_patch()
-        provider_url = self._provider.start()
+        provider_url = self._scope.enter_context(self._provider).base_url
         self._provider_endpoint = self._endpoint(provider_url)
         if not self._provider_endpoint.startswith("127.0.0.1:"):
             raise RuntimeError(
@@ -185,40 +187,28 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
         environment["no_proxy"] = CASE_CONSTANTS.no_proxy_hosts
         environment["ACTRAIL_XIAOO_NETWORK_POLICY_KEY"] = "local-test-key"
         environment["PATH"] = "/usr/bin"
-        result = self.runtime.run(
-            self.runtime.control_command(
-                "launch",
-                "--seccomp-notify",
-                "required",
-                "--name",
-                trace_name,
-                "--",
-                self.network_config.xiaoo_binary,
-                "--cli",
-                "run",
-                "--config",
-                self._xiaoo_config,
-                "--tools",
-                "bash",
-                "--max-turns",
-                str(CASE_CONSTANTS.max_turns),
-                "--debug",
-                "--prompt",
-                "Use the Bash tool exactly once, then report its operating-system result.",
-            ),
-            timeout_seconds=self.network_config.launch_timeout_seconds,
-            environment=environment,
-        )
-        trace_ids = TRACE_RE.findall(result.output)
-        if len(trace_ids) != 1:
-            raise AssertionError(
-                f"Xiaoo output did not contain exactly one trace ID: {result.output}"
+        options = LaunchOptions(name=trace_name, host_ebpf="auto", seccomp_notify="required")
+        with self.runtime.launch_scope(options):
+            with AgentFactory.xiaoo(
+                binary=self.network_config.xiaoo_binary,
+                environment=environment,
+                arguments=("--config", str(self._xiaoo_config), "--tools", "bash",
+                           "--max-turns", str(CASE_CONSTANTS.max_turns), "--debug"),
+            ).launchWithAcTrailCtl(stream_mode=False) as agent:
+                agent.run("Use the Bash tool exactly once, then report its operating-system result.")
+                agent.join_all(timeout=self.network_config.launch_timeout_seconds)
+                outcome = agent.results[-1]
+                launch = agent.launch_result
+            result = CommandResult(
+                tuple(str(arg) for arg in launch.process.args), agent.returncode,
+                outcome.output, "\n".join(filter(None, (outcome.error, agent.diagnostics))),
             )
-        if "enforcement-network-connect-seccomp" not in result.output:
+        # 拒绝可能是预期结果，由各场景判断；启动能力必须独立核验。
+        if "enforcement-network-connect-seccomp" not in launch.required_capabilities:
             raise AssertionError("launch omitted network-connect enforcement capability")
-        if "seccomp_notify:enabled" not in result.output:
+        if launch.permissions is None or "seccomp_notify:enabled" not in launch.permissions.selected:
             raise AssertionError("launch did not select seccomp user-notify")
-        return int(trace_ids[0]), result
+        return launch.trace_id, result
 
     def require_allowed(self, result: CommandResult) -> None:
         if result.returncode != 0:
@@ -378,19 +368,6 @@ class NetworkPolicyXiaooEnvironment(PluginTestEnvironment):
             if cleaned.returncode != 0:
                 raise AssertionError(f"trace cleanup failed: {cleaned.output}")
 
-    def cleanup(self) -> TestResult:
-        base = super().cleanup()
-        provider_failure = self._provider.stop()
-        if provider_failure is None:
-            return base
-        return TestResult(
-            TestStatus.COMPOSITE,
-            "network-policy environment cleanup",
-            {
-                "services": base,
-                "provider": TestResult(TestStatus.FAILED, provider_failure),
-            },
-        )
 
     def _install_plugin_package(self) -> None:
         source = self.network_config.plugin_package

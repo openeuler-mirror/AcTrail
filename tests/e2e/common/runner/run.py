@@ -5,31 +5,23 @@ import os
 import shutil
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import TextIO
 
 from ..core import (
     CaseProgressReporter,
     TestCase,
-    TestCaseInputs,
+    TestRunDirectories,
     TestOutput,
     TestResult,
     TestStatus,
 )
 from .environment_probe import EnvironmentProbe
+from .factory import TestCaseFactory
 from .testing_context import TestingContextSingleton
 
 from .constants import DEFAULTS
 from ..core.constants import DEFAULTS as COMMON_DEFAULTS
-
-
-@dataclass(frozen=True)
-class TestDefinition:
-    name: str
-    description: str
-    build_case: Callable[[TestCaseInputs], TestCase]
-    skip_if_skipped: tuple[str, ...] = ()
 
 
 class Tee:
@@ -121,7 +113,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run_one(
-    definition: TestDefinition,
+    definition: type[TestCase],
     repo: Path,
     argv: list[str] | None = None,
 ) -> int:
@@ -144,7 +136,7 @@ def run_one(
 
 
 def run_selected(
-    definitions: list[TestDefinition],
+    definitions: list[type[TestCase]],
     repo: Path,
     bin_dir: Path,
     color_mode: str,
@@ -198,14 +190,14 @@ def run_selected(
         failed = False
         completed_results: dict[str, TestResult] = {}
         for definition in definitions:
-            case_work_dir = work_root / definition.name
+            case_work_dir = work_root / definition.case_id
             if show_details:
-                console.heading(f"▶ {definition.name}")
+                console.heading(f"▶ {definition.case_id}")
             else:
-                console.progress(definition.name)
-            log_path = log_dir / f"{definition.name}.log"
+                console.progress(definition.case_id)
+            log_path = log_dir / f"{definition.case_id}.log"
             with log_path.open("w", encoding="utf-8") as log:
-                log.write(f"test: {definition.name}\n")
+                log.write(f"test: {definition.case_id}\n")
                 log.write(f"description: {definition.description}\n")
                 runtime_stream = Tee(log, console.stream) if show_details else log
                 case_output = TestOutput(color_mode="never", stream=runtime_stream)
@@ -234,8 +226,8 @@ def run_selected(
                             )
                             if result is None:
                                 _prepare_case_work_dir(case_work_dir, work_root)
-                                case = definition.build_case(
-                                    TestCaseInputs(repo, bin_dir, case_work_dir)
+                                case = TestCaseFactory.create(
+                                    definition.case_id, TestRunDirectories(repo, bin_dir, case_work_dir)
                                 )
                                 result = case.run(context)
                         except Exception as error:
@@ -245,7 +237,7 @@ def run_selected(
                         if cleanup_cases and case is not None:
                             try:
                                 context.report_progress(
-                                    "cleanup",
+                                    "Clean up test resources",
                                     "running cleanup hooks",
                                 )
                                 cleanup_result = case.cleanup(context)
@@ -286,10 +278,10 @@ def run_selected(
                                     )
                     if result is None:
                         raise RuntimeError(
-                            f"test case returned no result: {definition.name}"
+                            f"test case returned no result: {definition.case_id}"
                         )
                 TestOutput(color_mode="never", stream=log).result(
-                    definition.name,
+                    definition.case_id,
                     result,
                 )
             if cleanup_cases:
@@ -309,13 +301,13 @@ def run_selected(
                         },
                     )
             if show_details:
-                console.result(definition.name, result)
+                console.result(definition.case_id, result)
             else:
                 console.progress_result(result)
                 if cleanup_cases and result.has_failure():
-                    console.result(definition.name, result)
+                    console.result(definition.case_id, result)
             case_failed = result.has_failure()
-            completed_results[definition.name] = result
+            completed_results[definition.case_id] = result
             failed = failed or case_failed
             if fail_fast and case_failed:
                 break
@@ -331,7 +323,7 @@ def run_selected(
 
 
 def _dependency_skip_result(
-    definition: TestDefinition,
+    definition: type[TestCase],
     completed_results: dict[str, TestResult],
 ) -> TestResult | None:
     skipped = [

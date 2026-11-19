@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from tests.e2e.common.core import TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
 from tests.e2e.common.llm_trajectory.assertion import (
@@ -23,10 +23,15 @@ from .web.assertion import PersistedTrajectoryWebAssertion
 
 
 class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
+    case_id = 'project_subagent_trajectory'
+    description = 'Verify sorting-subagent LLM projection and trajectory graph API'
+
+
     _TRAJECTORY_ID = "llm.request.trajectory_id"
 
-    def __init__(self, config: ProjectSubagentTrajectoryConfig):
-        super().__init__(config)
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ProjectSubagentTrajectoryConfig.from_environment(directories)
+        super().__init__(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
@@ -44,7 +49,7 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 )
 
             test_context.report_progress(
-                "environment_prepare",
+                "Start the observation services",
                 "starting refreshed daemon, Web API, and OTel HTTP receiver",
             )
             self._environment = TrajectoryTestEnvironment(
@@ -68,7 +73,7 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 self._config.trace_random_bytes,
             )
             test_context.report_progress(
-                "agent_launch",
+                "Run the sorting and benchmark task with subagents",
                 f"running {agent.name} with two sorting subagents and a benchmark",
             )
             scenario.run()
@@ -84,7 +89,7 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 trace_id,
             )
             test_context.report_progress(
-                "projection_assertions",
+                "Check delegation and model call relationships",
                 "proving delegation, global call pairing, and trajectory topology",
             )
             evidence = self._wait_for_scenario(assertion, trace_id)
@@ -102,7 +107,7 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
                 "lineage-derived fields and statistics",
             )
             test_context.report_progress(
-                "web-persisted-trajectory",
+                "Compare the Web trajectory with stored calls",
                 "checking the Web layout against persisted request lineage",
             )
             nodes = PersistedTrajectoryWebAssertion(self._environment, trace_id).require()
@@ -119,7 +124,7 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
             )
 
             test_context.report_progress(
-                "export_flush",
+                "Flush and verify exported requests and responses",
                 "flushing and verifying every request and response export",
             )
             self._environment.finish_buffered_export()
@@ -163,12 +168,12 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
             agent = ProjectSubagentAgent.resolve(name, discovery)
             if agent is None:
                 test_context.report_progress(
-                    "agent_selection",
+                    "Find an available Agent",
                     f"{name} executable not found; trying next candidate",
                 )
                 continue
             test_context.report_progress(
-                "agent_availability",
+                "Check Agent availability",
                 f"checking {name} availability before starting capture",
             )
             if test_context.check_agent_availability(
@@ -178,7 +183,7 @@ class ProjectSubagentTrajectoryCase(TrajectoryCaseSupport):
             ):
                 return agent
             test_context.report_progress(
-                "agent_selection",
+                "Find an available Agent",
                 f"{name} is unavailable; trying next candidate",
             )
         return None

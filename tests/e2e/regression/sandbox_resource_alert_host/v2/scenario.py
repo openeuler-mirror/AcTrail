@@ -8,7 +8,7 @@ import socket
 import time
 from pathlib import Path
 
-from tests.e2e.common.agent_selection import AgentSelection
+from tests.e2e.common.agents import Agent
 from tests.e2e.common.core import TestResult, TestStatus
 from tests.e2e.common.core.loopback_port import resolve_test_port
 from tests.e2e.common.execution_isolation import (
@@ -42,7 +42,7 @@ class SandboxResourceAlertHostScenario:
         self,
         config: SandboxResourceAlertHostConfig,
         context: TestingContextSingleton,
-        agent: AgentSelection,
+        agent: Agent,
     ) -> None:
         self._config = config
         self._context = context

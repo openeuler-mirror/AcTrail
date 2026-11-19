@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ProbeDcodeLlmConstants:
     run_agent_echo: bool = True
-    marker_random_bytes: int = 5
+    prompt: str = "Why do some leaves change color in autumn?"
     launch_diagnostic_tail_characters: int = 4000
 
 

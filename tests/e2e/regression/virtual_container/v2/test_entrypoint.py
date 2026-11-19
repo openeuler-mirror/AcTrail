@@ -3,10 +3,10 @@ from __future__ import annotations
 import unittest
 
 from tests.e2e.regression.virtual_container.run_e2e import (
-    TEST_DEFINITION as ROOT_DEFINITION,
+    VirtualContainerCase as ROOT_DEFINITION,
 )
 from tests.e2e.regression.virtual_container.v2.run_e2e import (
-    TEST_DEFINITION as V2_DEFINITION,
+    VirtualContainerCase as V2_DEFINITION,
 )
 
 

@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from tests.e2e.common.core import TestCase, TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import TestCase, TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.common.runner import TestingContextSingleton
 from .constants import CASE_CONSTANTS as C
@@ -53,11 +53,15 @@ def _quote(path: Path) -> str:
 
 class CheckpointBtrfsCase(TestCase):
     """Launch Agents with a Btrfs scope on a loop device and save, restore and delete their files."""
+    case_id = 'checkpoint_btrfs'
+    description = "Save and restore a launched Agent's files with the Btrfs checkpoint backend"
 
-    def __init__(self, inputs: TestCaseInputs):
-        self._inputs = inputs
+
+
+    def __init__(self, directories: TestRunDirectories):
+        self._directories = directories
         self._library = self._backend_library()
-        self._work = inputs.work_dir
+        self._work = directories.work_dir
         self._mnt = self._work / "mnt"
         self._project = self._mnt / "workspaces/project"
         self._file = self._project / "a.txt"
@@ -73,19 +77,19 @@ class CheckpointBtrfsCase(TestCase):
         self._first_trace = self._llm_trace = ""
 
     def _binary(self, name: str) -> Path:
-        directory = self._inputs.bin_dir
-        return (directory if directory.is_absolute() else self._inputs.repo / directory) / name
+        directory = self._directories.bin_dir
+        return (directory if directory.is_absolute() else self._directories.repo / directory) / name
 
     def _backend_library(self) -> Path:
         if configured := os.environ.get(C.library_env):
             return Path(configured).resolve()
         target = Path(os.environ.get("CARGO_TARGET_DIR") or "target")
         if not target.is_absolute():
-            target = self._inputs.repo / target
+            target = self._directories.repo / target
         return (target / "release" / C.library_filename).resolve()
 
     def _run(self, *command, timeout: float = C.command_timeout_seconds) -> subprocess.CompletedProcess:
-        completed = subprocess.run([str(part) for part in command], cwd=self._inputs.repo,
+        completed = subprocess.run([str(part) for part in command], cwd=self._directories.repo,
                                    capture_output=True, text=True, timeout=timeout)
         if completed.returncode:
             raise AssertionError(f"{' '.join(map(str, command))} exited with {completed.returncode}: "
@@ -101,7 +105,7 @@ class CheckpointBtrfsCase(TestCase):
 
     def _start(self, command: list[str], log: Path | None = None) -> subprocess.Popen:
         output = log.open("w", encoding="utf-8") if log else subprocess.DEVNULL
-        process = subprocess.Popen(command, cwd=self._inputs.repo, stdout=output, stderr=subprocess.STDOUT,
+        process = subprocess.Popen(command, cwd=self._directories.repo, stdout=output, stderr=subprocess.STDOUT,
                                    start_new_session=True)
         self._processes.append(process)
         return process
@@ -250,7 +254,7 @@ class CheckpointBtrfsCase(TestCase):
     def _refused_restore(self, trace: str) -> None:
         restore = subprocess.run([str(self._binary("actrailctl")), "--config", str(self._config), "checkpoint",
                                   "restore", trace, "checkpoint-0"],
-                                 cwd=self._inputs.repo, capture_output=True, text=True,
+                                 cwd=self._directories.repo, capture_output=True, text=True,
                                  timeout=C.command_timeout_seconds)
         if restore.returncode == 0:
             raise AssertionError(f"a restore of {trace} was accepted")
@@ -262,7 +266,7 @@ class CheckpointBtrfsCase(TestCase):
         scopes.write_text(self._scope("outside", outside), encoding="utf-8")
         ran = outside / "ran"
         launch = subprocess.run(self._launch("checkpoint-e2e-bad", f"touch {_quote(ran)}", scopes),
-                                cwd=self._inputs.repo, capture_output=True, text=True, timeout=C.launch_timeout_seconds)
+                                cwd=self._directories.repo, capture_output=True, text=True, timeout=C.launch_timeout_seconds)
         if launch.returncode == 0:
             raise AssertionError("a launch with a scope outside allowed_workspace_roots succeeded")
         if "connect_failed" not in launch.stderr:
@@ -420,7 +424,19 @@ class CheckpointBtrfsCase(TestCase):
         results: dict[str, TestResult] = {}
         try:
             for name, step in steps:
-                context.report_progress(name)
+                context.report_progress({
+                    'setup': 'Prepare the Btrfs checkpoint environment',
+                    'initial_checkpoint': 'Check the initial checkpoint',
+                    'manual_save': 'Save a checkpoint manually',
+                    'delete': 'Delete a checkpoint',
+                    'trace_end': 'Check checkpoints after the trace ends',
+                    'connect_failure': 'Check checkpoint behavior after connection failure',
+                    'llm_boundary': 'Check checkpoints at LLM request boundaries',
+                    'forced_restore': 'Check forced checkpoint restore',
+                    'web': 'Check checkpoint Web APIs',
+                    'running_restore': 'Restore a checkpoint while the process runs',
+                    'daemon_restart': 'Check checkpoint history after daemon restart',
+                }[name])
                 try:
                     results[name] = TestResult(TestStatus.PASSED, step())
                 except Exception as error:
