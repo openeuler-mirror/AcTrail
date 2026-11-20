@@ -17,7 +17,8 @@ wit_bindgen::generate!({
 });
 
 use actrail::plugin::types::{
-    AlertDraft, AlertWriteRequest, ConfigReadStatus, PathObservationState, TraceFileStateStatus,
+    AlertDraft, AlertWriteRequest, ConfigReadStatus, FileChangeRecord, PathObservationState,
+    TraceFileStateStatus,
 };
 use exports::actrail::plugin::observation_consumer::{
     Guest as ObservationGuest, ObservationBatch, ObservationReport,
@@ -87,9 +88,10 @@ impl FileLeakagePlugin {
 
     fn observe(&mut self, batch: ObservationBatch) -> Result<(), String> {
         let has_candidate_write = batch.semantic_actions.iter().any(|action| {
-            action.file_change.as_ref().is_some_and(|change| {
-                change.successful && matches!(change.operation.as_str(), "write" | "writev")
-            })
+            action
+                .file_change
+                .as_ref()
+                .is_some_and(Self::is_successful_write)
         });
         if !has_candidate_write {
             return Ok(());
@@ -104,7 +106,7 @@ impl FileLeakagePlugin {
             let Some(change) = action.file_change else {
                 continue;
             };
-            if !change.successful || !matches!(change.operation.as_str(), "write" | "writev") {
+            if !Self::is_successful_write(&change) {
                 continue;
             }
             if change.path_state != PathObservationState::Complete {
@@ -126,6 +128,14 @@ impl FileLeakagePlugin {
             self.save_candidate(&batch.trace_id, &alert_token, path, action.action_id)?;
         }
         Ok(())
+    }
+
+    fn is_successful_write(change: &FileChangeRecord) -> bool {
+        change.successful
+            && matches!(
+                change.operation.as_str(),
+                "write" | "writev" | "write_summary"
+            )
     }
 
     fn save_candidate(
