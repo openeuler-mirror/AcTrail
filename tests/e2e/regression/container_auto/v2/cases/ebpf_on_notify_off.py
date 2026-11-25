@@ -10,7 +10,7 @@ class EbpfOnNotifyOffCase:
     expected_notify = "disabled"
     custom_seccomp = False
     host_ebpf_enabled = True
-    progress_step = "ebpf_on_notify_off"
+    progress_step = "Check capture with eBPF enabled and seccomp notify disabled"
     progress_message = "checking host eBPF enabled and seccomp notify disabled"
 
     def run(self, scenario: Any) -> None:

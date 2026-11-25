@@ -16,7 +16,7 @@ Agent 运行在 Kata 虚拟机内的 workload 容器中。AcTrail 采集守护�
 
 **部署包**是 prepare 脚本生成的目录，代码中称为 artifact，包含 Guest 镜像、Kata 配置和 AcTrail 客户端。Collector 地址在生成时写入 Guest 镜像，因此每种「后端 × 外送方式」组合各需一个部署包，多个部署包可以在同一主机上并存。
 
-prepare 先校验已有部署包：有效就复用，不存在或校验失败就重建并覆盖同一哈希目录。部署包目录名是内容哈希，输入一变目录名就变，因此部署时加 `--activate`：成功后把固定链接 `$REPO/local/kata/current/<后端>-<network|vsock>` 指向本次部署包，后续启动命令始终通过这个固定路径使用最新的部署包，同时清理未使用的旧部署包；所有固定链接指向的、输入源文件所在的、仓库自动化回归 profile 引用的、以及正在被进程使用的部署包都会保留，无法确认使用状态时也保留并记录原因。
+prepare 先校验已有部署包：有效就复用，不存在或校验失败就重建并覆盖同一哈希目录。部署包目录名是内容哈希，输入一变目录名就变，因此部署时加 `--activate`：成功后把固定链接 `$REPO/local/kata/current/<后端>-<network|vsock>` 指向本次部署包，后续启动命令始终通过这个固定路径使用最新的部署包，同时清理未使用的旧部署包。仍被引用或使用的部署包会保留，无法确认使用状态时也保留并记录原因。
 
 ### 1.1 通道
 
@@ -437,8 +437,8 @@ test -f $REPO/local/kata/current/$BACKEND-network/configuration-data.toml && ech
 - **`--hypervisor`**：必须显式指定。Kata 默认配置中的 StratoVirt 路径 `/opt/kata/bin/stratovirt` 不存在。
 - **内核版本**：使用 3.5 取出的 6.18.56，位于 `/opt/actrail-guest-kernel`；不要指向 `/opt/kata-3.32.0/share/kata-containers/` 下的 6.18.35。
 - **内核格式**：x86_64 上 StratoVirt 使用压缩内核 `vmlinuz`，Cloud Hypervisor 使用 ELF 内核 `vmlinux`。aarch64 的 Kata 包中 `vmlinux-*` 为 ARM64 Image 格式，两种后端的默认配置都引用它，`vmlinuz-*` 只是它的 gzip 压缩版，因此两种后端都使用 `vmlinux`。均使用带 BTF 的 `-debug` 版本，数据采集需要。
-- **`--base-*`、`--data-*`**：prepare 会同时生成 base 和 data 两份虚拟机配置。**后续只用 data**（`configuration-data.toml`）；base 供仓库自动化回归使用，参数填与 data 相同的值即可。两份配置的源镜像相同，部署包中只有一张 Guest 镜像 `guest.img`，两份配置共用。
-- **`--activate`**：部署时使用。不加时（仓库自动化回归的用法）不更新固定链接、不清理旧部署包，并写入回归使用的 `local/kata/v2-test-profile.json`；加上后不写该文件，清理旧部署包时保留 `local/kata/v2-test-profile*.json` 引用的部署包。
+- **`--base-*`、`--data-*`**：prepare 会同时生成 base 和 data 两份虚拟机配置。本部署流程使用 data（`configuration-data.toml`），base 参数填与 data 相同的值即可。两份配置的源镜像相同，部署包中只有一张 Guest 镜像 `guest.img`，两份配置共用。
+- **`--activate`**：成功生成部署包后更新固定链接，并清理未使用的旧部署包。
 - **外送属性**：不指定 `--otel-attribute-mode` 时为 `metadata-only`，只外送动作类型、状态和时间。需要外送命令行、消息预览等内容时见 4.2。
 - 再次执行本步时，输入未变且部署包有效则直接复用（日志含 `artifact_cache=hit`）。
 

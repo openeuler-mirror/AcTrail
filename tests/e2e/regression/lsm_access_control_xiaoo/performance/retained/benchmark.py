@@ -15,7 +15,6 @@ from pathlib import Path
 from tests.e2e.common.actrail_runtime import ActrailRuntime
 from tests.e2e.common.core import TestOutput
 from tests.e2e.common.patch_builder import PatchBuilder
-from tests.e2e.common.runner import TestingContextSingleton
 from ...services import WorkloadProvider
 from ..paths import REPO
 
@@ -92,7 +91,7 @@ class RetainedBenchmark:
         peer = DrainPeer(self.args.timeout)
         result_path = work / "measurements.json"
         command = shlex.join([
-            sys.executable, str(Path(__file__).with_name("run.py")), "worker",
+            sys.executable, str(Path(__file__).with_name("worker_entry.py")),
             "--backend", backend, "--file", str(work / "file"), "--port", str(peer.port),
             "--count", str(self.args.count), "--rounds", str(self.args.rounds),
             "--warmup", str(self.args.warmup), "--timeout", str(self.args.timeout),
@@ -140,12 +139,8 @@ class RetainedBenchmark:
                 finally:
                     peer.close()
 
-    def run(self):
+    def run(self, context):
         self.args.output.parent.mkdir(parents=True, exist_ok=True)
-        context = TestingContextSingleton(
-            lock_path=Path("/run/lock/actrail-v2-regression.lock"),
-            lock_timeout_seconds=self.args.timeout, lock_poll_seconds=0.1, output=self.output,
-        )
         root = Path(tempfile.mkdtemp(prefix="actrail-retained-"))
         data = {"kernel": platform.release(), "architecture": platform.machine(),
                 "scope": "same binaries, fresh defaults; control off vs LSM empty/explicit rules; identical observation; audit off",
@@ -161,5 +156,4 @@ class RetainedBenchmark:
                 ) for operation in ("read", "write", "send")}
                 print(f"{backend}: median of round means (us): {means}", flush=True)
         finally:
-            context.close()
             shutil.rmtree(root)

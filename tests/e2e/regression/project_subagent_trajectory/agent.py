@@ -4,7 +4,8 @@ import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from tests.e2e.common.testing_env import AgentBinaryDiscovery, default_claude_model
+from tests.e2e.common.testing_env import AgentBinaryDiscovery
+from tests.e2e.common.agents import AgentFactory
 
 from .constants import CASE_CONSTANTS
 
@@ -73,8 +74,7 @@ class ProjectSubagentAgent(ABC):
             "Delegate exactly two independent implementation tasks: (1) one child writes "
             "`bubble_sort.py` with a tested bubble_sort function; (2) one child writes "
             "`binary_insertion_sort.py` with a tested binary_insertion_sort function. "
-            "Start both children before waiting for either result. The prompt passed to "
-            "each child must contain more than 200 characters, including "
+            "Start both children before waiting for either result. Give each child "
             "the implementation requirements, output filename, and self-check instructions. "
             "After both finish, the "
             "main agent must read both files, write `benchmark.py`, run a fair benchmark "
@@ -104,7 +104,7 @@ class OpenCodeProjectSubagentAgent(ProjectSubagentAgent):
             "--dir",
             repository,
         ]
-        model = os.environ.get("OPENCODE_E2E_MODEL", CASE_CONSTANTS.model).strip()
+        model = (AgentFactory.opencode.get_default_llm_model(self.binary) or CASE_CONSTANTS.model).strip()
         if model:
             argv.extend(("--model", model))
         argv.append(prompt)
@@ -134,7 +134,7 @@ class ClaudeProjectSubagentAgent(ProjectSubagentAgent):
             "--output-format",
             "text",
             "--model",
-            default_claude_model(),
+            AgentFactory.claude.get_default_llm_model(),
             "--no-session-persistence",
             "--safe-mode",
             "--permission-mode",

@@ -1,1 +1,1 @@
-"""Real-agent context compaction regression."""
+"""Observe real Claude context compaction through AcTrail."""

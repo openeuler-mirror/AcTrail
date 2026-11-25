@@ -1,3 +1,4 @@
+"""Own plugin-test services and restore them when their scope exits."""
 from __future__ import annotations
 
 import copy
@@ -5,6 +6,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, TextIO
 from urllib.parse import urlsplit
@@ -69,6 +71,26 @@ class PluginTestEnvironment:
         self._plugin_loaded = False
         self._original_config: dict[str, Any] | None = None
         self._loaded_plugin: dict[str, Any] | None = None
+
+    def __enter__(self):
+        self._scope = ExitStack()
+        self._scope.enter_context(self.runtime)
+        # 子类的 receiver/provider 也由其 cleanup 负责，准备失败同样会清理。
+        self._scope.push(self._exit_cleanup)
+        return self
+
+    def __exit__(self, exception_type, exception, traceback):
+        return self._scope.__exit__(exception_type, exception, traceback)
+
+    def _exit_cleanup(self, exception_type, exception, traceback) -> None:
+        try:
+            result = self.cleanup()
+            if result is not None and result.has_failure():
+                raise RuntimeError(result.message)
+        except Exception as error:
+            if exception is None:
+                raise
+            exception.add_note(f"environment cleanup failed: {error}")
 
     def prepare(self) -> dict[str, Any]:
         if not self.config.work_dir.is_dir():

@@ -59,8 +59,7 @@ EVENT_KIND_NET = 2
 class Workload:
     suffix: str
     trace_name: str
-    request_marker: str
-    response_marker: str
+    provider_response: str
     task_prompt: str
     write_marker: str
     container_name: str
@@ -69,6 +68,16 @@ class Workload:
     output_path: Path
     input_text: str
     hold_seconds: float
+
+    @property
+    def reply_path(self) -> Path:
+        return self.config_path.parent / f"container-{self.suffix}.reply"
+
+    def actual_reply(self) -> str:
+        reply = self.reply_path.read_text(encoding="utf-8").strip()
+        if not reply:
+            raise RuntimeError(f"{self.container_name} returned an empty reply")
+        return reply
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,11 +159,10 @@ def main() -> int:
         Workload(
             suffix="a",
             trace_name="container-a-release-summary",
-            request_marker="ACTRAIL_TASK_A_SUMMARIZE_RELEASE_NOTES",
-            response_marker="ACTRAIL_TASK_A_RELEASE_SUMMARY_COMPLETE",
+            provider_response="ACTRAIL_TASK_A_RELEASE_SUMMARY_COMPLETE",
             task_prompt=(
                 "Task A: summarize release-note input prepared by the file workload. "
-                "Return ACTRAIL_TASK_A_SUMMARIZE_RELEASE_NOTES."
+                "Describe the release changes in your own words."
             ),
             write_marker="ACTRAIL_TASK_A_FILE_WRITE_COMPLETE",
             container_name=f"actrail-multi-xiaoo-a-{run_id}",
@@ -173,11 +181,10 @@ def main() -> int:
         Workload(
             suffix="b",
             trace_name="container-b-security-review",
-            request_marker="ACTRAIL_TASK_B_REVIEW_SECURITY_POLICY",
-            response_marker="ACTRAIL_TASK_B_SECURITY_REVIEW_COMPLETE",
+            provider_response="ACTRAIL_TASK_B_SECURITY_REVIEW_COMPLETE",
             task_prompt=(
                 "Task B: review the security-policy input prepared by the file workload. "
-                "Return ACTRAIL_TASK_B_REVIEW_SECURITY_POLICY."
+                "Explain the security implications in your own words."
             ),
             write_marker="ACTRAIL_TASK_B_FILE_WRITE_COMPLETE",
             container_name=f"actrail-multi-xiaoo-b-{run_id}",
@@ -218,7 +225,7 @@ def main() -> int:
         for workload in workloads:
             provider, listen_url = start_provider(
                 provider_script,
-                workload.response_marker,
+                workload.provider_response,
                 args.ready_timeout_seconds,
                 repo,
             )
@@ -473,7 +480,7 @@ def prepare_agent_image(
 
 def start_provider(
     script: Path,
-    response_marker: str,
+    response_text: str,
     timeout: float,
     cwd: Path,
 ) -> tuple[subprocess.Popen[str], str]:
@@ -488,7 +495,7 @@ def start_provider(
             "--bind-port",
             str(CASE_CONSTANTS.provider_port),
             "--local-stream-response-text",
-            response_marker,
+            response_text,
             "--local-stream-reasoning-tokens",
             str(CASE_CONSTANTS.provider_reasoning_tokens),
             "--response-chunk-delay-seconds",
@@ -605,6 +612,7 @@ def start_workload(
             LOCAL_API_KEY_ENV: LOCAL_API_KEY,
             "ACTRAIL_XIAOO_CONFIG": str(workload.config_path),
             "ACTRAIL_XIAOO_PROMPT": workload.task_prompt,
+            "ACTRAIL_TASK_RESPONSE": str(workload.reply_path),
             "ACTRAIL_TASK_INPUT": str(workload.input_path),
             "ACTRAIL_TASK_OUTPUT": str(workload.output_path),
             "ACTRAIL_TASK_WRITE_MARKER": workload.write_marker,
@@ -975,10 +983,8 @@ def wait_for_trace_evidence(
     last_error = "no evidence query was run"
     while time.monotonic() < deadline:
         try:
-            trace_by_workload = identify_traces_by_response_marker(
+            trace_by_workload = identify_workload_traces(
                 database,
-                actrailviewer,
-                config,
                 workloads,
             )
             for workload in workloads:
@@ -993,49 +999,23 @@ def wait_for_trace_evidence(
     raise RuntimeError(f"trace evidence did not become complete: {last_error}")
 
 
-def identify_traces_by_response_marker(
+def identify_workload_traces(
     database: Path,
-    actrailviewer: Path,
-    config: Path,
     workloads: list[Workload],
 ) -> dict[str, int]:
     result: dict[str, int] = {}
+    # Match the names supplied to actrailctl launch, independently of response content.
     with sqlite3.connect(database) as connection:
-        trace_ids = [
-            int(row[0])
-            for row in connection.execute(
-                """
-                SELECT trace_id
-                FROM traces
-                WHERE profile_name LIKE ?
-                  AND display_name IN (?, ?)
-                ORDER BY trace_id
-                """,
-                (f"{PROFILE_NAME}%", *BUSINESS_TRACE_NAMES),
+        for workload in workloads:
+            rows = connection.execute(
+                "SELECT trace_id FROM traces WHERE profile_name LIKE ? AND display_name = ?",
+                (f"{PROFILE_NAME}%", workload.trace_name),
             ).fetchall()
-        ]
-    actions_by_trace = {
-        trace_id: load_trace_actions(actrailviewer, config, trace_id)
-        for trace_id in trace_ids
-    }
-    for workload in workloads:
-        matches = [
-            trace_id
-            for trace_id, actions in actions_by_trace.items()
-            if any(
-                action.get("kind") == "llm.response"
-                and workload.response_marker
-                in action.get("attributes", {}).get("llm.response.content_text", "")
-                for action in actions
-            )
-        ]
-        if len(matches) != 1:
-            raise RuntimeError(
-                f"response marker {workload.response_marker} matched traces {matches}"
-            )
-        result[workload.suffix] = matches[0]
+            if len(rows) != 1:
+                raise RuntimeError(f"{workload.trace_name} matched traces {rows}")
+            result[workload.suffix] = int(rows[0][0])
     if len(set(result.values())) != len(workloads):
-        raise RuntimeError(f"workload markers collapsed into one trace: {result}")
+        raise RuntimeError(f"workloads share a trace: {result}")
     return result
 
 
@@ -1154,11 +1134,8 @@ def load_trace_actions(
 
 def verify_outputs(outputs: dict[str, str], workloads: list[Workload]) -> None:
     for workload in workloads:
-        output = outputs[workload.suffix]
-        if workload.response_marker not in output:
-            raise RuntimeError(
-                f"{workload.container_name} output lacks {workload.response_marker}: {output}"
-            )
+        if workload.actual_reply() not in outputs[workload.suffix]:
+            raise RuntimeError(f"{workload.container_name} launch output lacks its actual reply")
 
 
 def verify_file_outputs(workloads: list[Workload]) -> None:
@@ -1186,12 +1163,12 @@ def verify_no_cross_trace_llm_actions(
             action
             for action in actions
             if action.get("kind") == "llm.response"
-            and workload.response_marker
+            and workload.actual_reply()
             in action.get("attributes", {}).get("llm.response.content_text", "")
         ]
         if not own_responses:
             raise RuntimeError(
-                f"trace-{trace_id} lacks response marker {workload.response_marker}"
+                f"trace-{trace_id} lacks its actual Agent reply"
             )
         for other in workloads:
             if other.suffix == workload.suffix:
@@ -1201,11 +1178,12 @@ def verify_no_cross_trace_llm_actions(
                 request_preview = attributes.get("llm.request.message_preview", "")
                 response_text = attributes.get("llm.response.content_text", "")
                 if (
-                    other.request_marker in request_preview
-                    or other.response_marker in response_text
+                    f"Task {other.suffix.upper()}:" in request_preview
+                    or (other.actual_reply() != workload.actual_reply()
+                        and other.actual_reply() in response_text)
                 ):
                     raise RuntimeError(
-                        f"trace-{trace_id} contains LLM markers owned by container "
+                        f"trace-{trace_id} contains LLM content owned by container "
                         f"{other.suffix}"
                     )
 

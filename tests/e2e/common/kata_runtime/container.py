@@ -118,12 +118,18 @@ class KataTestContainer:
         return self.start()
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        del exc_value, traceback
+        # 保留故障现场，同时保证 diagnostics 本身失败也不会跳过 close。
+        if exc_value is not None:
+            try:
+                exc_value.add_note("VM diagnostics:\n" + self.diagnostics())
+            except Exception as error:
+                exc_value.add_note(f"VM diagnostics failed: {error}")
         try:
             self.close()
-        except Exception:
-            if exc_type is None:
+        except Exception as error:
+            if exc_value is None:
                 raise
+            exc_value.add_note(f"VM cleanup failed: {error}")
 
     def start(self) -> KataTestContainer:
         if self._state is not _State.NEW:

@@ -9,14 +9,17 @@ from .constants import DEFAULTS
 
 
 @dataclass(frozen=True)
-class TestCaseInputs:
+class TestRunDirectories:
     repo: Path
     bin_dir: Path
     work_dir: Path
 
 
 @dataclass(frozen=True)
-class CommonTestConfig(TestCaseInputs):
+class CommonTestConfig:
+    repo: Path
+    bin_dir: Path
+    work_dir: Path
     command_timeout_seconds: int
     launch_timeout_seconds: int
     drain_attempts: int
@@ -25,16 +28,16 @@ class CommonTestConfig(TestCaseInputs):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
         environment_prefix: str,
     ) -> "CommonTestConfig":
         def value(name: str, default: str) -> str:
             return os.environ.get(f"{environment_prefix}_E2E_{name}", default)
 
         return cls(
-            repo=inputs.repo,
-            bin_dir=inputs.bin_dir,
-            work_dir=inputs.work_dir,
+            repo=directories.repo,
+            bin_dir=directories.bin_dir,
+            work_dir=directories.work_dir,
             command_timeout_seconds=int(value("COMMAND_TIMEOUT_SECONDS", str(DEFAULTS.command_timeout_seconds))),
             launch_timeout_seconds=int(value("LAUNCH_TIMEOUT_SECONDS", str(DEFAULTS.launch_timeout_seconds))),
             drain_attempts=int(value("DRAIN_ATTEMPTS", str(DEFAULTS.drain_attempts))),

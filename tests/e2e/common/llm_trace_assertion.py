@@ -1,3 +1,5 @@
+"""Verify recorded LLM exchanges and trace identity in end-to-end tests."""
+
 from __future__ import annotations
 
 import json
@@ -74,7 +76,16 @@ class LLMTraceAssertion:
                 f"{agent_name} stdout answer does not contain marker {self._marker}"
             )
 
-    def require_finalized_exchange(self, trace_id: int) -> tuple[int, int]:
+    def require_finalized_exchange(
+        self,
+        trace_id: int,
+        *,
+        reply_text: str,
+        request_protocol_id: str | None = None,
+    ) -> None:
+        reply_text = reply_text.strip()
+        if not reply_text:
+            raise AssertionError("Agent completed the task without returning reply text")
         traces = self._read_json(
             self._runtime.viewer_command(
                 "--output-format",
@@ -99,7 +110,8 @@ class LLMTraceAssertion:
         )
         actions = self._llm_actions(document)
         self._require_terminal_actions(document, actions)
-        return self._require_paired_exchange(document, actions)
+        pairs = self._require_paired_exchange(document, actions)
+        self._require_reply_exchange(pairs, reply_text, request_protocol_id)
 
     def _read_json(self, command: list[Path | str]) -> dict:
         output = self._runtime.run_checked(command, echo=False).stdout
@@ -133,7 +145,7 @@ class LLMTraceAssertion:
         self,
         document: dict,
         actions: list[dict],
-    ) -> tuple[int, int]:
+    ) -> list[tuple[dict, dict]]:
         calls = [action for action in actions if action.get("kind") == "llm.call"]
         requests = [action for action in actions if action.get("kind") == "llm.request"]
         responses = [action for action in actions if action.get("kind") == "llm.response"]
@@ -147,17 +159,12 @@ class LLMTraceAssertion:
                 f"{len(calls)} call(s), {len(requests)} request(s), "
                 f"{len(responses)} response(s)"
             )
-        pairs = self._require_one_to_one_call_links(
+        return self._require_one_to_one_call_links(
             document,
             calls,
             requests,
             responses,
         )
-        if self._marker is None:
-            self._require_successful_exchange(pairs)
-        else:
-            self._require_marker_exchange(pairs)
-        return len(requests), len(responses)
 
     def _llm_actions(self, document: dict) -> list[dict]:
         return [
@@ -318,8 +325,10 @@ class LLMTraceAssertion:
             request_id = next(iter(call_requests))
             request = requests_by_id[request_id]
             if call_responses:
-                paired_responses.update(call_responses)
                 response_id = next(iter(call_responses))
+                if response_id in paired_responses:
+                    raise AssertionError(f"LLM response {response_id} belongs to multiple calls")
+                paired_responses.add(response_id)
                 response = responses_by_id[response_id]
                 pairs.append((request, response))
                 continue
@@ -348,11 +357,27 @@ class LLMTraceAssertion:
                 "connector state"
             )
 
-    def _require_marker_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
-        if self._marker is None:
-            raise AssertionError("marker exchange validation was not configured")
+    def _require_reply_exchange(
+        self,
+        pairs: list[tuple[dict, dict]],
+        reply_text: str,
+        request_protocol_id: str | None,
+    ) -> None:
         for request, response in pairs:
+            if response.get("status") != "success" or response.get("completeness") != "complete":
+                continue
+            response_attributes = response.get("attributes", {})
+            if not any(
+                reply_text in response_attributes.get(key, "")
+                for key in self._RESPONSE_OUTPUT_ATTRIBUTES
+            ):
+                continue
             request_attributes = request.get("attributes", {})
+            if (
+                request_protocol_id is not None
+                and request_attributes.get("llm.request.protocol_id") != request_protocol_id
+            ):
+                continue
             request_has_canonical_content = (
                 request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
                 == "canonical_blocks"
@@ -368,47 +393,21 @@ class LLMTraceAssertion:
                 )
                 > 0
             )
-            request_has_capture_limited_metadata = (
-                request.get("status") == "success"
+            if request_has_canonical_content:
+                return
+            # Terminal validation has already checked the metadata of capture-limited requests.
+            if (
+                request_protocol_id is None
+                and request.get("status") == "success"
                 and request.get("completeness") == "capture_limited"
-                and request_attributes.get(self._REQUEST_CONTENT_STATE_ATTRIBUTE)
-                == "unavailable"
-                and "llm.request.canonical_body_json" not in request_attributes
-                and "llm.request.content_format_version" not in request_attributes
-                and "llm.request.block_count" not in request_attributes
-                and request_attributes.get("http.request.method", "").upper()
-                == "POST"
-                and request_attributes.get("url.path")
-                in self._CAPTURE_LIMITED_ROUTES
-            )
-            response_attributes = response.get("attributes", {})
-            response_contains_marker = any(
-                self._marker in response_attributes.get(key, "")
-                for key in self._RESPONSE_OUTPUT_ATTRIBUTES
-            )
-            if (
-                request_has_canonical_content
-                or request_has_capture_limited_metadata
-            ) and (
-                response_contains_marker
-                and response.get("status") == "success"
-                and response.get("completeness") == "complete"
             ):
                 return
-        raise AssertionError(
-            "no LLM call links a canonical or capture-limited metadata request "
-            f"to a successful complete normalized response containing {self._marker}"
+        request_evidence = (
+            f"a canonical {request_protocol_id} request"
+            if request_protocol_id is not None
+            else "a canonical or capture-limited request"
         )
-
-    def _require_successful_exchange(self, pairs: list[tuple[dict, dict]]) -> None:
-        for request, response in pairs:
-            if (
-                request.get("status") == "success"
-                and request.get("completeness")
-                in {"complete", "capture_limited"}
-                and response.get("status") == "success"
-                and response.get("completeness")
-                in {"complete", "capture_limited"}
-            ):
-                return
-        raise AssertionError("trace has no successful usable LLM exchange")
+        raise AssertionError(
+            f"no LLM call links {request_evidence} to a successful, complete response "
+            "containing the Agent's actual reply"
+        )

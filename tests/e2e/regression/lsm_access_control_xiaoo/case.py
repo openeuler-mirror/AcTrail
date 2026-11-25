@@ -11,7 +11,7 @@ from pathlib import Path
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
 from tests.e2e.common.patch_builder import PatchBuilder
-from tests.e2e.common.core import CommonTestConfig, TestCase, TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import CommonTestConfig, TestCase, TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .dynamic import DynamicPolicies
@@ -22,8 +22,13 @@ from .constants import CASE_CONSTANTS
 
 
 class LsmAccessControlXiaooCase(TestCase):
-    def __init__(self, inputs: TestCaseInputs):
-        self._config = CommonTestConfig.from_environment(inputs, "LSM_ACCESS_CONTROL_XIAOO")
+    case_id = 'lsm_access_control_xiaoo'
+    description = 'Real Xiaoo file, exec, and network enforcement through BPF LSM with bpf-copy observation'
+    default_enabled = False
+
+
+    def __init__(self, directories: TestRunDirectories):
+        self._config = CommonTestConfig.from_environment(directories, "LSM_ACCESS_CONTROL_XIAOO")
         executable = os.environ.get("LSM_ACCESS_CONTROL_XIAOO_E2E_BINARY") or shutil.which("xiaoo")
         if executable is None:
             raise RuntimeError("real Xiaoo executable is not available")
@@ -145,7 +150,7 @@ class LsmAccessControlXiaooCase(TestCase):
                 )
                 for decision in ("deny", "allow"):
                     context.report_progress(
-                        f"xiaoo_{decision}", f"{selection}: refreshing defaults and checking file/exec/connect {decision}"
+                        f"Check XiaoO file, command and network access with {decision} rules", f"{selection}: refreshing defaults and checking file/exec/connect {decision}"
                     )
                     self._write_rules(decision, port)
                     self._results.unlink(missing_ok=True)
@@ -320,7 +325,7 @@ class LsmAccessControlXiaooCase(TestCase):
         raise AssertionError(f"LSM audit missing={sorted(missing)}, captured bpf-copy payload={has_payload}")
 
     def _run_dynamic(self, context: TestingContextSingleton, results: dict, port: int) -> None:
-        context.report_progress("dynamic_prepare", "loading the real managed file/command/network policy plugins")
+        context.report_progress("Load dynamic access policy plugins", "loading the real managed file/command/network policy plugins")
         for domain in ("file", "network"):
             (self._work / f"{domain}.rules").write_text("", encoding="utf-8")
         (self._work / "command.rules").write_text(
@@ -350,7 +355,10 @@ class LsmAccessControlXiaooCase(TestCase):
             ("capacity_rejection", lambda: self._dynamic.require_capacity_rejected(self._capacity)),
         ) if self._selection.name == "lsm" else ()
         for name, reject in rejections:
-            context.report_progress(name, "rejecting invalid publication and checking the current policy")
+            context.report_progress({
+                'argv_rejection': 'Check rejection of unsupported command arguments',
+                'capacity_rejection': 'Check rejection of policies exceeding capacity',
+            }[name], "rejecting invalid publication and checking the current policy")
             reject()
             if name == "argv_rejection":
                 self._dynamic.require_identifier_rejected()
@@ -374,7 +382,17 @@ class LsmAccessControlXiaooCase(TestCase):
         self, name: str, decision: str, rules: dict[str, str],
         context: TestingContextSingleton, results: dict,
     ) -> None:
-        context.report_progress(name, f"real Xiaoo verifies file/exec/connect/mkdir/rmdir {decision}")
+        context.report_progress({
+            'dynamic_deny': 'Check access after publishing deny rules',
+            'argv_rejection': 'Check access after rejecting command arguments',
+            'capacity_rejection': 'Check access after rejecting excess policy capacity',
+            'dynamic_gray_unavailable': 'Check access when gray policy support is unavailable',
+            'network_exact_allow': 'Check an explicit network allow exception',
+            'network_exact_deny': 'Check an explicit network deny exception',
+            'network_owner_conflicts': 'Check access after a network policy owner conflict',
+            'dynamic_allow': 'Check access after publishing allow rules',
+            'owner_unload': 'Check access after unloading policy owners',
+        }[name], f"real Xiaoo verifies file/exec/connect/mkdir/rmdir {decision}")
         trace_id = self._run_xiaoo(name)
         self._require_workload(decision, directories=True)
         self._require_evidence(trace_id, decision, rules)
@@ -394,7 +412,7 @@ class LsmAccessControlXiaooCase(TestCase):
             )
             for decision in ("allow", "deny"):
                 name = f"ipv6_24_{decision}_deny_on_error_{deny_on_error}"
-                context.report_progress(name, "fresh defaults; real Xiaoo connects with a 24-byte IPv6 sockaddr")
+                context.report_progress(f"Check IPv6 {decision} rules with denial on error set to {deny_on_error}", "fresh defaults; real Xiaoo connects with a 24-byte IPv6 sockaddr")
                 self._write_rules(decision, port)
                 self._runtime.prepare()
                 trace_id = self._run_xiaoo(name)
@@ -461,3 +479,7 @@ class LsmAccessControlXiaooCase(TestCase):
             TestStatus.FAILED if failures else TestStatus.PASSED,
             "; ".join(failures) if failures else "LSM daemon, provider, and TCP witness stopped",
         )
+
+# Import benchmark scenarios for automatic registration.
+from .performance.case import LsmPerformanceCase, LsmRetainedPerformanceCase
+from .continued.fastopen.case import LsmFastOpenCase

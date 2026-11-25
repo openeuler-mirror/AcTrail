@@ -4,8 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
-from tests.e2e.common.testing_env import default_claude_model
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
+from tests.e2e.common.agents import AgentFactory
 
 
 @dataclass(frozen=True)
@@ -16,12 +16,12 @@ class ProbeClaudeLLMConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "ProbeClaudeLLMConfig":
-        common = CommonTestConfig.from_environment(inputs, "CLAUDE")
+        common = CommonTestConfig.from_environment(directories, "CLAUDE")
         configured_binary = os.environ.get("CLAUDE_E2E_BINARY")
         return cls(
             **common.as_kwargs(),
-            model=default_claude_model(),
+            model=AgentFactory.claude.get_default_llm_model(),
             claude_binary=Path(configured_binary) if configured_binary else None,
         )

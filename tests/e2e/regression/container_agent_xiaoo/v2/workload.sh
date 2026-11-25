@@ -9,8 +9,9 @@ if [ "$ACTRAIL_TASK_HOLD_SECONDS" != "0" ]; then
     sleep "$ACTRAIL_TASK_HOLD_SECONDS"
 fi
 
-exec /root/.cargo/bin/xiaoo --cli run \
+/root/.cargo/bin/xiaoo --cli run \
     --config "$ACTRAIL_XIAOO_CONFIG" \
     --no-tools \
     --max-turns 1 \
-    --prompt "$ACTRAIL_XIAOO_PROMPT"
+    --prompt "$ACTRAIL_XIAOO_PROMPT" >"$ACTRAIL_TASK_RESPONSE"
+cat "$ACTRAIL_TASK_RESPONSE"

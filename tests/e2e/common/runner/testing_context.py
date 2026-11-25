@@ -18,6 +18,7 @@ from typing import Iterator, Mapping
 from tests.e2e.common.testing_env import AgentAvailability
 
 from ..core import CaseProgressReporter, TestOutput, TestResult, TestStatus
+from .case_scope import CaseScope
 
 
 class _RegressionLockWait:
@@ -157,6 +158,17 @@ class TestingContextSingleton:
     _lease_guard = threading.RLock()
     _lease_owner_thread_id: int | None = None
     _lease_owner_thread_name: str | None = None
+
+    @classmethod
+    def current(cls) -> TestingContextSingleton:
+        """借用已经取得租约的测试上下文，不重复获取租约。"""
+        if cls._instance is None:
+            raise RuntimeError("No active testing context")
+        return cls._instance
+
+    def case(self, name: str) -> CaseScope:
+        """创建负责步骤结果与失败收束的用例作用域。"""
+        return CaseScope(name)
 
     def __new__(
         cls,

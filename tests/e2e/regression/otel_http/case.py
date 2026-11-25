@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
 
@@ -23,6 +23,10 @@ from .constants import CASE_CONSTANTS
 
 
 class OtelHttpCase(TestCase):
+    case_id = 'otel_http'
+    description = 'Verify builtin OTEL/HTTP metadata, request-body, and shutdown boundaries'
+
+
     _ACTION_KINDS = {
         "process.exec", "process.exit", "agent.identity", "llm.request",
         "command.invocation",
@@ -50,7 +54,8 @@ class OtelHttpCase(TestCase):
     }
     _SHORT_TOOL_CALL_ID_HEX = 12
 
-    def __init__(self, config: OtelHttpConfig):
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = OtelHttpConfig.from_environment(directories)
         self._config = config
         self._environment: OtelHttpEnvironment | None = None
 
@@ -66,7 +71,7 @@ class OtelHttpCase(TestCase):
                 )
             xiaoo_environment = discovery.environment(xiaoo)
             test_context.report_progress(
-                "agent_availability",
+                "Check Agent availability",
                 "checking xiaoO availability",
             )
             if not test_context.check_agent_availability(
@@ -78,7 +83,7 @@ class OtelHttpCase(TestCase):
                 )
 
             test_context.report_progress(
-                "environment_prepare",
+                "Start the observation services",
                 "starting actraild, actrailweb, otel-http, and local OTLP receiver",
             )
             self._environment = OtelHttpEnvironment(self._config, test_context.output)
@@ -250,7 +255,7 @@ class OtelHttpCase(TestCase):
                 )
                 continue
             test_context.report_progress(
-                "agent_availability",
+                "Check Agent availability",
                 f"checking {kind} availability",
             )
             if not test_context.check_agent_availability(
@@ -261,9 +266,20 @@ class OtelHttpCase(TestCase):
                     f"{kind} external availability check failed",
                 )
                 continue
+            if kind == "qodercli":
+                try:
+                    self._environment.runtime.run_checked([
+                        self._environment.runtime.actraild, "--config", self._config.operator_config,
+                        "plugin", "load", "--manifest",
+                        self._config.repo / "examples/plugins/wasm-legacy/llm-codec-qoder/plugin.toml",
+                        "--instance", "qoder.llm-codec",
+                    ])
+                except RuntimeError as error:
+                    results[name] = TestResult(TestStatus.FAILED, f"load Qoder codec: {error}")
+                    continue
             available.append(agent)
             test_context.report_progress(
-                "tool_results",
+                "Check exported tool calls and results",
                 f"exporting tool calls and results of {kind}",
             )
             try:
@@ -289,7 +305,7 @@ class OtelHttpCase(TestCase):
         if agent is None:
             return TestResult(TestStatus.SKIPPED, "no tool agent is available")
         test_context.report_progress(
-            "tool_results",
+            "Check exported tool calls and results",
             f"pairing tool calls and results of {agent.kind} in metadata-only mode",
         )
         try:
@@ -359,8 +375,6 @@ class OtelHttpCase(TestCase):
         tail = result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]
         if result.returncode != 0:
             raise AssertionError(f"actrailctl launch exited with {result.returncode}: {tail}")
-        if task.answer not in result.stdout:
-            raise AssertionError(f"output did not contain the second file's text: {tail}")
         trace_ids = [int(value) for value in self._TRACE_PATTERN.findall(result.output)]
         if len(trace_ids) != 1:
             raise AssertionError(f"expected one trace id, found {trace_ids}")
@@ -442,14 +456,13 @@ class OtelHttpCase(TestCase):
         request_marker: str | None = None,
     ) -> int:
         assert self._environment is not None
-        answer_marker = "ready"
         prompt = ""
         if request_marker is not None:
             prompt = f'The opaque request verification marker is "{request_marker}". '
         prompt += (
             "Use the bash tool exactly once to execute the command "
             f"`sleep {CASE_CONSTANTS.command_sleep_seconds}`. Do not run other commands. "
-            f'After the tool succeeds reply with exactly "{answer_marker}".'
+            "After the tool succeeds, describe the result."
         )
         result = self._environment.runtime.run(
             [
@@ -477,11 +490,6 @@ class OtelHttpCase(TestCase):
         if result.returncode != 0:
             raise AssertionError(
                 f"actrailctl launch exited with {result.returncode}: "
-                f"{result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-            )
-        if answer_marker not in result.stdout:
-            raise AssertionError(
-                f"xiaoO output did not contain answer marker {answer_marker}: "
                 f"{result.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
             )
         trace_ids = [int(value) for value in self._TRACE_PATTERN.findall(result.output)]

@@ -1,34 +1,26 @@
-# OTEL/HTTP V2 回归
+# OTEL/HTTP 回归测试
 
-# Quick Run
+## 测试目标
 
-在仓库根目录以 root 执行：
+验证 AcTrail 能按配置向 OTLP/HTTP 接收端导出真实 Agent 的观测记录，正确保留调用关联、trace 标识和终态，并遵守内容导出范围。
 
-```bash
-python3 tests/e2e/regression/test_all.py \
-  --case otel_http \
-  --color never
-```
+## 场景设计
 
-公共 V2 runner 会先执行 `scripts/install-release.sh`，再创建隔离工作目录，启动真实
-`actraild`、`actrailweb`、builtin `otel-http` 插件和本地 OTLP/HTTP JSON
-receiver，通过 `actrailctl launch` 运行两轮真实 xiaoO 对话，最后让每个已安装的支持
-Agent 执行一个需要两次工具调用的读文件任务。运行前需要确保 `xiaoo` 位于 `PATH`，或
-通过 `XIAOO_E2E_BINARY` 指定可执行文件，并且 xiaoO 的 provider 配置可用。其他 Agent
-按 `PATH` 查找，也可用 `PI_E2E_BINARY`、`OPENCODE_E2E_BINARY`、`CLAUDE_E2E_BINARY`、
-`CODEX_E2E_BINARY`、`QODERCLI_E2E_BINARY`、`DCODE_E2E_BINARY`、`GROK_E2E_BINARY`
-指定；未安装或可用性检测失败的 Agent 记为 SKIPPED。冷缓存机器可能长时间
-停留在 release、TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用
-CPU，就不是测试卡死。
+使用真实 XiaoO 分别执行 metadata-only 与 full 两轮任务，在接收端核对实际收到的 OTLP JSON。通过唯一任务标记核对请求正文，通过持久化记录核对 trace 标识，通过真实命令与工具结果核对 Span 内容。进一步让可用 Agent 按先后依赖读取两个文件，验证工具调用与结果的一一对应。
 
-只运行该 case 并显示详细过程：
+测试准备阶段定位选定的 XiaoO 可执行文件及 Codex CLI 对应的 native 可执行文件，并在启动 daemon 前登记到 Agent 识别配置。Codex 任务通过正常 CLI 入口运行。
 
-```bash
-python3 tests/e2e/regression/otel_http/run_e2e.py \
-  --color never
-```
+## 测试依赖
 
-# 步骤摘要
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、root 权限和可工作的 eBPF 环境 | 启动采集与治理 |
+| AcTrail | release 产物和测例使用的官方插件包 | 执行、保存和查询测试结果 |
+| Agent 与模型服务 | XiaoO 及可用的工具型 Agent，模型认证可用 | 产生真实请求、命令与工具结果 |
+| 接收端 | 本地 OTLP/HTTP JSON receiver | 记录实际导出数据 |
+
+## 测试步骤摘要
 
 1. 检查 release binaries、官方 `otel-http` 插件包和 root/eBPF 测试权限。
 2. 在隔离目录初始化、清理并启动 AcTrail，同时启动 `actrailweb` 和本地
@@ -49,8 +41,8 @@ python3 tests/e2e/regression/otel_http/run_e2e.py \
 9. 插件使用 `full`，只启用 `process.exec`、`process.exit`、`llm.tool_call`、
    `llm.tool_result`。依次用已安装的 xiaoO、Pi、OpenCode、Claude Code、Codex CLI、
    Qoder CLI、deepagents-code、Grok 执行读文件任务：第二个文件的路径只写在第一个文件
-   里，Agent 必须先读第一个文件，再根据结果读第二个文件。每个 Agent 一轮，触发
-   `finish` 后验证回复是第二个文件的内容、每个 `llm.tool_call` 恰好有一个
+   里，Agent 必须先读第一个文件，再根据结果读第二个文件。每个 Agent 执行一轮，
+   保存 Agent 的实际回复和工具执行结果。触发 `finish` 后核对两次真实读取对应的调用与结果，并验证每个 `llm.tool_call` 恰好有一个
    `llm.tool_call.id` 相同的 `llm.tool_result`，该结果带着的 `llm.tool_call.name`
    与对应的 `llm.tool_call` 相同，且 `llm.tool_call.id` 是 `llm.tool_call.protocol_id`
    的 SHA-256 前 12 位十六进制；工具 span 不再重复父节点的 action ID（不带
@@ -63,16 +55,53 @@ python3 tests/e2e/regression/otel_http/run_e2e.py \
 11. 验证接收的 action kinds 均在配置的 allow-list 内。
 12. 卸载插件，停止 Web、daemon 和 receiver，清理隔离测试数据。
 
-# 手动测试
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 导出时点 | trace 尚未结束，随后触发 finish | 结束前不提前发送，终态单次导出 |
+| 内容范围 | 分别选择 metadata-only 和 full | metadata-only 遵守白名单，full 的有效请求 JSON 包含真实任务标记 |
+| Trace 标识 | 接收端收到 OTLP 数据 | 128-bit UUIDv4 traceId 与持久化 otel_trace_id 一致 |
+| 工具关联 | Agent 完成两次有依赖的读取 | 两次真实读取各有同 ID、同名称的调用与结果，工具返回内容与实际读取的文件一致 |
+| 动作筛选 | 配置 action allow-list | 接收端仅收到启用的动作类型 |
+| 命令内容 | 对照 Web 命令详情与接收 Span | action ID 唯一，状态、完整性和起止时间一致 |
+
+## 快速运行
+
+在仓库根目录以 root 执行：
+
+```bash
+python3 tests/e2e/regression/test_all.py \
+  --case otel_http \
+  --color never
+```
+
+公共 V2 runner 会先执行 `scripts/install-release.sh`，再创建隔离工作目录，启动真实
+`actraild`、`actrailweb`、builtin `otel-http` 插件和本地 OTLP/HTTP JSON
+receiver，通过 `actrailctl launch` 运行两轮真实 xiaoO 对话，最后让每个已安装的支持
+Agent 执行一个需要两次工具调用的读文件任务。运行前需要确保 `xiaoo` 位于 `PATH`，或
+通过 `XIAOO_E2E_BINARY` 指定可执行文件，并且 xiaoO 的 provider 配置可用。其他 Agent
+按 `PATH` 查找，也可用 `PI_E2E_BINARY`、`OPENCODE_E2E_BINARY`、`CLAUDE_E2E_BINARY`、
+`CODEX_E2E_BINARY`、`QODERCLI_E2E_BINARY`、`DCODE_E2E_BINARY`、`GROK_E2E_BINARY`
+指定。Codex native 路径也可通过 `CODEX_E2E_NATIVE_BINARY` 指定。未安装或可用性检测失败的 Agent 记为 SKIPPED。冷缓存机器可能长时间
+停留在 release、TLS runtime 或 WASM 插件编译阶段；只要 `cargo`/`rustc` 仍在占用
+CPU，就不是测试卡死。
+
+只运行该 case 并显示详细过程：
+
+```bash
+python3 tests/e2e/regression/otel_http/run_e2e.py \
+  --color never
+```
+
+## 手动测试
 
 以下命令复现自动测试中的 metadata-only、生命周期和 trace identity 轮次，以及工具
 调用与工具结果导出轮次（步骤7）。自动用例还会切换到 `full` 再运行一轮，在真实
 receiver 边界验证 canonical request body 和唯一 user marker。所有命令均从仓库根目录、在同一个 root shell 中执行，以便保留
 步骤间的环境变量和后台进程 PID。
 
-## 步骤1：检查测试前提并构建 release
+### 步骤1：检查测试前提并构建 release
 
-### 手动指令
+#### 手动指令
 
 ```bash
 test "$(id -u)" -eq 0
@@ -91,14 +120,14 @@ test -x target/release/actrailviewer
 test -x target/release/actrailweb
 ```
 
-### 预期结果
+#### 预期结果
 
 当前用户为 root；官方插件资产存在；release 安装成功；四个测试所需二进制均可执行。
 首次运行可能需要较长时间编译 release、TLS runtime 和官方 WASM 插件。
 
-## 步骤2：创建隔离配置并启动 AcTrail
+### 步骤2：创建隔离配置并启动 AcTrail
 
-### 手动指令
+#### 手动指令
 
 ```bash
 REPO="$(pwd -P)"
@@ -127,14 +156,14 @@ PYTHONPATH="$REPO" python3.11 "$WORK/create_patch.py" "$WORK" "$REPO"
 "$BIN/actraild" --config "$WORK/actraild.conf" start
 ```
 
-### 预期结果
+#### 预期结果
 
 所有命令成功。daemon 打印 pid 和 control socket，socket、pid、日志、SQLite 和
 export 路径全部位于 `/tmp/actrail-otel-http-manual`。
 
-## 步骤3：启动本地 receiver 和 Web
+### 步骤3：启动本地 receiver 和 Web
 
-### 手动指令
+#### 手动指令
 
 创建一个只接受 `/v1/traces` OTLP JSON 请求、并持续保存接收结果的本地 receiver：
 
@@ -203,14 +232,14 @@ WEB_BASE=http://127.0.0.1:18080
 curl -fsS "$WEB_BASE/api/plugins/catalog" > "$WORK/catalog.json"
 ```
 
-### 预期结果
+#### 预期结果
 
 receiver 打印类似 `http://127.0.0.1:PORT/v1/traces` 的临时 endpoint；
 `actrailweb` 监听 `127.0.0.1:18080`；catalog 请求成功并返回 JSON。
 
-## 步骤4：发现、加载并配置 otel-http
+### 步骤4：发现、加载并配置 otel-http
 
-### 手动指令
+#### 手动指令
 
 ```bash
 INSTANCE=manual.otel-http
@@ -308,19 +337,18 @@ jq -e '
 ' "$WORK/config-updated.json"
 ```
 
-### 预期结果
+#### 预期结果
 
 catalog 中存在 activation-ready 的 `otel-http`；加载后实例状态为 `active`；schema
 显示配置默认值；本地明文 endpoint 通过显式 `allow_insecure=true` 被接受；仅
 `process.exec`、`process.exit` 被启用；批次上限为 4096、超时为 60 秒。
 
-## 步骤5：启动真实 trace 并确认没有提前发送
+### 步骤5：启动真实 trace 并确认没有提前发送
 
-### 手动指令
+#### 手动指令
 
 ```bash
 CASE_MARKER="OTEL_HTTP_MANUAL_$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
-ANSWER_MARKER="ready"
 XIAOO_BIN="${XIAOO_E2E_BINARY:-$(command -v xiaoo)}"
 test -x "$XIAOO_BIN"
 LAUNCH_OUTPUT="$(
@@ -334,11 +362,10 @@ LAUNCH_OUTPUT="$(
     --cli run \
     --no-tools \
     --max-turns 1 \
-    --prompt "Reply with exactly \"$ANSWER_MARKER\" and nothing else. Do not use tools." \
+    --prompt "Explain briefly why temporary files are useful." \
     2>&1
 )"
 printf '%s\n' "$LAUNCH_OUTPUT"
-printf '%s\n' "$LAUNCH_OUTPUT" | grep -F "$ANSWER_MARKER"
 
 TRACE_IDS="$(
   printf '%s\n' "$LAUNCH_OUTPUT" |
@@ -388,15 +415,15 @@ EARLY_SPANS="$(
 test "$EARLY_SPANS" -eq 0
 ```
 
-### 预期结果
+#### 预期结果
 
-真实 xiaoO 对话成功退出并输出 answer marker；输出中恰好出现一个
+真实 xiaoO 对话成功完成并返回文本。launch 输出中恰好出现一个
 `trace trace-N entered Active`；trace 最终为
 `Exited/Clean` 或 `Completed/Clean`；receiver 中该 marker 的 span 数量为 0。
 
-## 步骤6：触发 finish 并验证 OTLP 数据
+### 步骤6：触发 finish 并验证 OTLP 数据
 
-### 手动指令
+#### 手动指令
 
 ```bash
 curl -fsS \
@@ -513,7 +540,7 @@ curl -fsS "$WEB_BASE/api/plugins/runtime" |
   '
 ```
 
-### 预期结果
+#### 预期结果
 
 更新配置成功并触发旧 consumer 的 `finish`；receiver 收到 2 个 span；
 `process.exec=1`、`process.exit=1`，action ID 唯一，状态全部为终态，span 名称等于
@@ -521,7 +548,7 @@ action kind，没有超出 metadata-only 白名单的属性；所有 span 使用
 `traceId`，且该值与 SQLite 的 16-byte `otel_trace_id` 一致；插件保持 `active` 且
 `dropped_records=0`。
 
-## 步骤7：验证工具调用与工具结果导出
+### 步骤7：验证工具调用与工具结果导出
 
 本步骤以 Claude Code 为例，换成其他 Agent 时只替换 `AGENT_CMD`，各 Agent 开启工具的
 启动参数见下表。
@@ -537,7 +564,7 @@ action kind，没有超出 metadata-only 白名单的属性；所有 span 使用
 | deepagents-code | `dcode -n "$PROMPT" -q --no-mcp` |
 | Grok | `grok -p "$PROMPT" --always-approve --no-subagents --disable-web-search --max-turns 8` |
 
-### 手动指令
+#### 手动指令
 
 ```bash
 curl -fsS \
@@ -571,7 +598,7 @@ ANSWER="TOOL_CHAIN_$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
 SECOND="$CHAIN/$(python3 -c 'import secrets; print(secrets.token_hex(8))').txt"
 printf '%s\n' "$ANSWER" > "$SECOND"
 printf 'The answer is in the file %s\n' "$SECOND" > "$CHAIN/start.txt"
-PROMPT="Use a tool to read the file $CHAIN/start.txt. It names another file; use a tool to read that file too. Reply with only the text of the second file."
+PROMPT="Use a tool to read the file $CHAIN/start.txt. It names another file; use a tool to read that file too. Summarize what you found."
 TOOLS_MARKER="OTEL_HTTP_TOOLS_MANUAL_$(python3 -c 'import secrets; print(secrets.token_hex(6))')"
 AGENT_CMD=(claude -p "$PROMPT" --model sonnet --no-session-persistence
   --permission-mode dontAsk --allowedTools Read,Bash)
@@ -583,7 +610,7 @@ LAUNCH_OUTPUT="$(
     launch --name "$TOOLS_MARKER" --host-ebpf required --seccomp-notify auto \
     -- "${AGENT_CMD[@]}" 2>&1
 )"
-printf '%s\n' "$LAUNCH_OUTPUT" | grep -F "$ANSWER"
+printf '%s\n' "$LAUNCH_OUTPUT" > "$WORK/tool-launch.log"
 TOOLS_TRACE_ID="$(
   printf '%s\n' "$LAUNCH_OUTPUT" |
     sed -n 's/.*trace trace-\([0-9][0-9]*\) entered Active.*/\1/p' | tail -n1
@@ -661,17 +688,17 @@ print({"tool_calls": len(calls), "tool_results": len(result_ids)})
 PY
 ```
 
-### 预期结果
+#### 预期结果
 
-Agent 的输出包含第二个文件的内容；receiver 中该 trace 至少有一个 `llm.tool_call`，
+Agent 成功完成两次文件读取。根据实际工具执行结果核对读取路径与内容，receiver 中该 trace 有对应的 `llm.tool_call`，
 每个 `llm.tool_call` 恰好对应一个 `llm.tool_call.id` 相同的 `llm.tool_result`，没有
 缺失或重复，结果带着的 `llm.tool_call.name` 与对应的 `llm.tool_call` 相同。读文件任务需要两次工具调用，
 后一次请求同时带着历史中的前一个工具结果，因此该检查也覆盖了"只取模型最近一次输出
 之后的工具结果"这一规则。
 
-## 步骤8：清理测试进程和隔离数据
+### 步骤8：清理测试进程和隔离数据
 
-### 手动指令
+#### 手动指令
 
 ```bash
 curl -fsS -X POST \
@@ -693,12 +720,12 @@ case "$WORK" in
 esac
 ```
 
-### 预期结果
+#### 预期结果
 
 插件进入 `stopped`；Web、daemon 和 receiver 均退出；AcTrail 清理命令只操作隔离
 配置，最后删除固定的 `/tmp/actrail-otel-http-manual` 手动测试目录。
 
-# 覆盖范围
+## 覆盖范围
 
 本用例验证 builtin OTEL/HTTP 的插件发现、配置安全策略、真实 action 输入、批次
 flush、终态 one-shot、metadata-only 出境约束、full 模式 canonical request

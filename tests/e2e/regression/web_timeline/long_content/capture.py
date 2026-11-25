@@ -1,9 +1,9 @@
 """Capture a real long user message and locate its persisted canonical string."""
-from constants import CASE_CONSTANTS as C
+from tests.e2e.regression.web_timeline.constants import CASE_CONSTANTS as C
 import json
 import re
 
-from content import CapturedRequest
+from tests.e2e.regression.web_timeline.content import CapturedRequest
 
 
 class LongContentCapture:

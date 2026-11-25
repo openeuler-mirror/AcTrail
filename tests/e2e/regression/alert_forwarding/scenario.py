@@ -7,7 +7,8 @@ import time
 import uuid
 from typing import Any
 
-from tests.e2e.common.agent_selection import AgentSelector
+from tests.e2e.common.agents import AgentFactory
+from tests.e2e.common.actrail_runtime import LaunchOptions
 from tests.e2e.common.core import TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
@@ -27,7 +28,7 @@ class AlertForwardingScenario:
 
     def run(self) -> dict[str, TestResult]:
         self._test_context.report_progress(
-            "subscriber_fanout",
+            "Connect both alert subscribers",
             "connecting two authenticated external subscribers",
         )
         first = self._environment.connect_subscriber("alert-e2e-a")
@@ -36,7 +37,7 @@ class AlertForwardingScenario:
         second.wait_for_heartbeat(self._environment.config.alert_timeout_seconds)
 
         self._test_context.report_progress(
-            "script_trigger",
+            "Run the failing command to trigger an alert",
             "running the real failing-command workload at threshold one",
         )
         marker = "ALERT_FORWARDING_SCRIPT_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
@@ -69,7 +70,7 @@ class AlertForwardingScenario:
         }
 
         self._test_context.report_progress(
-            "category_filter",
+            "Check alert forwarding by category",
             "retaining the stored alert while excluding it from forwarding",
         )
         self._environment.configure_forwarding(["unmatched.e2e.category"])
@@ -84,7 +85,7 @@ class AlertForwardingScenario:
         )
 
         self._test_context.report_progress(
-            "disconnect_recovery",
+            "Check recovery after the alert proxy disconnects",
             "forcing proxy disconnect, observing disable, and enabling a fresh proxy",
         )
         previous_pid = self._environment.profile.require_running()
@@ -112,14 +113,15 @@ class AlertForwardingScenario:
         )
 
         self._test_context.report_progress(
-            "real_agent",
+            "Run the task with a real Agent",
             "running an alert-producing command through a real agent when available",
         )
         results["real-agent-alert"] = self._run_real_agent(recovered)
         return results
 
     def _run_real_agent(self, subscriber) -> TestResult:
-        agent = AgentSelector(self._environment.config.repo).select(
+        agent = AgentFactory.auto(
+            self._environment.config.repo,
             self._test_context,
             kinds=("opencode", "codex"),
         )
@@ -133,11 +135,14 @@ class AlertForwardingScenario:
             "Execute exactly this shell command once, then report its result: "
             f"ls {missing}"
         )
-        trace_id, _ = self._environment.launch_command(
-            "ALERT_FORWARDING_AGENT_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes),
-            agent.command(prompt),
-            environment=agent.environment,
+        options = LaunchOptions(
+            name="ALERT_FORWARDING_AGENT_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes),
         )
+        with self._environment.runtime.launch_scope(options):
+            with agent.launchWithAcTrailCtl(stream_mode=False) as running:
+                running.run(prompt)
+                running.join_all(self._environment.config.launch_timeout_seconds)
+                trace_id = running.launch_result.trace_id
         actions = self._environment.viewer_actions(trace_id)
         if not self._agent_executed_command(actions, missing):
             return TestResult(

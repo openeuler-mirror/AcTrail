@@ -15,7 +15,7 @@ from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.common.core import (
     CommonTestConfig,
     TestCase,
-    TestCaseInputs,
+    TestRunDirectories,
     TestResult,
     TestStatus,
 )
@@ -28,9 +28,13 @@ from .constants import CASE_CONSTANTS
 
 class FilePolicyXiaooCase(TestCase):
     """Exercise default complete LSM control and explicit fanotify file control."""
+    case_id = 'file_policy_xiaoo'
+    description = 'Run real Xiaoo file writes under default complete LSM and explicit fanotify rules'
 
-    def __init__(self, inputs: TestCaseInputs):
-        self._config = CommonTestConfig.from_environment(inputs, "FILE_POLICY_XIAOO")
+
+
+    def __init__(self, directories: TestRunDirectories):
+        self._config = CommonTestConfig.from_environment(directories, "FILE_POLICY_XIAOO")
         executable = os.environ.get("FILE_POLICY_XIAOO_E2E_BINARY") or shutil.which("xiaoo")
         if executable is None:
             raise RuntimeError("real Xiaoo executable is not available")
@@ -76,7 +80,7 @@ class FilePolicyXiaooCase(TestCase):
                     current = f"{variant}_{decision}"
                     self._marker.write_text("", encoding="utf-8")
                     context.report_progress(
-                        f"xiaoo_{decision}",
+                        f"Check XiaoO file access with {decision} rules",
                         f"refreshing default configuration and exercising file {decision}",
                     )
                     self._rules.write_text(
@@ -95,7 +99,7 @@ class FilePolicyXiaooCase(TestCase):
                         f"{variant}: real Xiaoo trace-{trace_id} file open {decision} and selected backend audit verified",
                     )
                     current = f"{variant}_{decision}_resource_storage"
-                    context.report_progress(current, "checking column storage, host readback and shared trace events")
+                    context.report_progress("Check stored resource and trace records", "checking column storage, host readback and shared trace events")
                     storage = self._require_resource_storage()
                     results[current] = TestResult(
                         TestStatus.PASSED, storage,

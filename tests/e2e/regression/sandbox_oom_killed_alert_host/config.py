@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 
 from .constants import CASE_CONSTANTS
 
@@ -18,10 +18,10 @@ class SandboxOomKilledAlertHostConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "SandboxOomKilledAlertHostConfig":
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             "SANDBOX_OOM_KILLED_ALERT_HOST",
         )
         prefix = "SANDBOX_OOM_KILLED_ALERT_HOST_E2E_"

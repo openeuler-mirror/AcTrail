@@ -25,7 +25,12 @@ class BoundaryAlertsScenario:
             ("alerts_periodic", False, CASE_CONSTANTS.periodic_alert_window_ms, CASE_CONSTANTS.alert_max_groups),
             ("alerts_capacity", False, CASE_CONSTANTS.alert_window_ms, CASE_CONSTANTS.capacity_alert_max_groups),
         ):
-            context.report_progress(name, "fresh defaults; real Xiaoo repeats file, command and network denials")
+            context.report_progress({
+                'alerts_trace_tail': 'Check denial alerts when the trace ends',
+                'alerts_without_audit': 'Check denial alerts with audit disabled',
+                'alerts_periodic': 'Check periodic denial alerts',
+                'alerts_capacity': 'Check denial alert group capacity',
+            }[name], "fresh defaults; real Xiaoo repeats file, command and network denials")
             case._audit_enabled = audit
             case._alert_window_ms = window
             case._alert_max_groups = capacity

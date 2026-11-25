@@ -1,30 +1,13 @@
 #!/usr/bin/env python3
-
-from __future__ import annotations
-
+"""Run this regression scenario independently."""
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO))
 
-from tests.e2e.common.runner import TestDefinition, run_one
-
-from tests.e2e.common.execution_isolation.kata.case import KataExecutionIsolationCase
-from .config import CloudHypervisorExecutionIsolationConfig
-
-
-TEST_DEFINITION = TestDefinition(
-    name="execution_isolation_cloud_hypervisor",
-    description=(
-        "Optional Cloud Hypervisor VMM coverage using the Kata lifecycle "
-        "profile and a real xiaoO sandbox observation path"
-    ),
-    build_case=lambda inputs: KataExecutionIsolationCase(
-        CloudHypervisorExecutionIsolationConfig.from_environment(inputs)
-    ),
-)
-
+from tests.e2e.common.runner import run_one
+from tests.e2e.regression.execution_isolation_cloud_hypervisor.v2.case import ExecutionIsolationCloudHypervisorCase
 
 if __name__ == "__main__":
-    raise SystemExit(run_one(TEST_DEFINITION, REPO))
+    raise SystemExit(run_one(ExecutionIsolationCloudHypervisorCase, REPO))

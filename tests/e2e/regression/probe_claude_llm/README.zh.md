@@ -1,224 +1,55 @@
-# Probe Claude LLM
+# 回归测试：Claude LLM 交互采集
 
-# Quick Run
+## 测试目标
 
-在仓库根目录执行：
+验证 AcTrail 能采集 Claude 发出的模型请求和收到的响应，并将它们关联到对应的 LLM 调用。
+
+## 场景设计
+
+通过 AcTrail 启动 Claude 流式会话，执行一次真实的文本任务。以 Claude 实际返回的文本作为响应正文的核对依据。AcTrail 停止后，按启动时取得的 trace ID 核对落盘的请求、响应及其关联。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、可工作的 eBPF 环境、root 权限 | 采集 Claude 活动 |
+| AcTrail | 可运行的 release 产物 `actraild`、`actrailctl`、`actrailviewer` | 启动采集、保存并查询观测记录 |
+| Claude | 支持流式 JSON 输入和输出的 CLI | 执行文本任务并返回实际回复 |
+| 模型服务 | 已配置认证，服务可访问 | 执行真实的模型请求 |
+
+## 测试步骤摘要
+
+1. **检查 Claude 可用性。** 直接运行 Claude 完成一次模型请求。Claude 缺失或可用性检查失败时，用例标记为 `SKIPPED`。
+2. **准备观测环境。** 用 `actrailctl init` 刷新默认配置。用 `actraild start` 启动守护进程。
+3. **启动 Claude 会话。** 通过 `actrailctl launch` 启动 Claude，以 CLI 参数关闭工具。记录启动结果中的 trace ID。
+4. **执行文本任务。** 向 Claude 提出一个简短的开放式问题。等待任务成功结束，取得 Claude 的实际回复文本。
+5. **完成数据采集。** 结束 Claude 会话后停止守护进程，等待观测记录落盘。
+6. **核对观测记录。** 使用 `actrailviewer` 查询第 3 步取得的 trace ID。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| Trace 终态 | 守护进程已停止 | trace 状态为 `Completed` 或 `Exited`，健康状态为 `Clean` |
+| 调用关联 | trace 下的 LLM 请求和响应 | 至少有一组请求和响应。每条 `llm.call` 关联一条 `llm.request`，并最多关联一条 `llm.response`。所有请求和响应都有对应的调用记录 |
+| 任务内容 | Claude 成功完成任务并返回文本 | 至少一条响应为 `success/complete`，正文包含第 4 步取得的完整回复文本。同一调用的请求保留规范化内容，或在采集受限时保留有效的请求元数据 |
+| 采集收尾 | 守护进程已停止 | LLM 请求、响应与 SSE 流均已收尾。因对端提前关闭（`PeerClosed`）而保留 `error/partial` 的响应可用同一 trace、进程和流中已结束的入站 HTTP 记录核实 |
+
+## 快速运行
+
+### 测试所用环境变量
+
+| 环境变量 | 未设置时测试框架的行为 | 用途 |
+| --- | --- | --- |
+| `CLAUDE_E2E_COMMAND_TIMEOUT_SECONDS` | 等待 30 秒 | AcTrail 命令的等待时限 |
+| `CLAUDE_E2E_LAUNCH_TIMEOUT_SECONDS` | 等待 180 秒 | Claude 文本任务的等待时限 |
+| `CLAUDE_E2E_BINARY` | 自动发现 Claude 可执行文件 | 指定 Claude 可执行文件路径 |
+| `CLAUDE_E2E_MODEL` | 使用 `ANTHROPIC_MODEL`，未设置时使用 `sonnet` | 指定本次测试使用的模型 |
+| `ACTRAIL_TEST_AGENT_AVAILABILITY_TIMEOUT_SECONDS` | 等待 60 秒 | Claude 可用性检查的等待时限 |
+
+### 运行指令
+
+从仓库根目录执行以下命令。
 
 ```bash
 sudo -E python3 tests/e2e/regression/probe_claude_llm/run_e2e.py
 ```
-
-脚本从 `CLAUDE_E2E_BINARY` 或当前环境查找 Claude，先执行外部可用性
-检查，再通过单层 `actrailctl launch` 捕获一次无会话、无工具的 Claude 请求。
-未显式设置 `CLAUDE_E2E_MODEL` 时，会回退读取 `ANTHROPIC_MODEL`，再回退到
-`sonnet`。
-
-# 步骤摘要
-
-1. 检查 AcTrail release binaries 和 Claude 外部可用性。
-2. 执行 `actrailctl init -f → actraild stop → actrailctl clean → actraild start`。
-3. 生成随机 marker，并通过 `actrailctl launch` 请求 Claude 原样回答。
-4. 验证 Claude 标准输出包含 marker，并提取唯一 trace id。
-5. 安全停止 daemon，等待 trace 和 post-trace 数据排空。
-6. 验证 trace 为 `Exited/Clean`。
-7. 验证终态 `llm.call/request/response` 完整配对，主 response 为
-   `success/complete` 且包含 marker，
-   request 具有 canonical content 证据。
-
-后台标题等辅助请求允许在响应未完成时关闭。其 LLM response 保留
-`PeerClosed`、`error/partial`，并须关联到同一 trace、process 和 stream 中
-已经结束的 `error/partial` 入站 HTTP action。辅助请求仍参与配对校验；
-包含主任务 marker 的响应必须完整成功。
-
-# 手动测试
-
-本测例只涉及本地 CLI、daemon 和 viewer，没有需要浏览器操作的页面；Bash
-命令就是最直接的手动复现方式。以下命令均从仓库根目录执行。
-
-## 步骤1：检查测试前提
-
-### 手动指令
-
-```bash
-test -x target/release/actraild
-test -x target/release/actrailctl
-test -x target/release/actrailviewer
-CLAUDE_BIN="${CLAUDE_E2E_BINARY:-$(command -v claude)}"
-test -n "$CLAUDE_BIN"
-"$CLAUDE_BIN" \
-  -p 'Reply with exactly "CLAUDE_PREFLIGHT_OK" and nothing else.' \
-  --model "${CLAUDE_E2E_MODEL:-sonnet}" \
-  --no-session-persistence \
-  --safe-mode \
-  --permission-mode dontAsk \
-  --tools ""
-```
-
-### 预期结果
-
-三个 AcTrail 二进制均存在且可执行；Claude 命令退出状态为成功，标准输出包含
-`CLAUDE_PREFLIGHT_OK`。Claude 缺失、未登录、model/provider 不可用或网络不可达
-属于外部条件不满足，自动测试会标记为 `SKIPPED`。
-
-## 步骤2：初始化并启动 AcTrail
-
-### 手动指令
-
-```bash
-sudo -E target/release/actrailctl init -f
-sudo -E target/release/actraild stop
-sudo -E target/release/actrailctl clean
-sudo -E target/release/actraild start
-```
-
-### 预期结果
-
-四条命令均成功；最后一条输出 daemon pid 和
-`/run/actrail/control.sock`。AcTrail 二进制缺失或 daemon 无法启动应判为
-`FAILED`，不是 `SKIPPED`。
-
-## 步骤3：生成 marker 并运行 Claude
-
-### 手动指令
-
-```bash
-CASE_MARKER="A$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
-LAUNCH_OUTPUT="$(
-  sudo -E target/release/actrailctl launch -- \
-    "$CLAUDE_BIN" \
-    "Reply with exactly \"$CASE_MARKER\" and nothing else. Do not use tools." \
-    --print \
-    --output-format text \
-    --model "${CLAUDE_E2E_MODEL:-sonnet}" \
-    --no-session-persistence \
-    --safe-mode \
-    --permission-mode dontAsk \
-    --tools "" 2>&1
-)"
-printf '%s\n' "$LAUNCH_OUTPUT"
-```
-
-### 预期结果
-
-输出中出现 `trace trace-N entered Active`，Claude 随后只回答
-`$CASE_MARKER`，命令最终成功退出。该命令不得创建可恢复的 Claude session。
-
-## 步骤4：验证回答并提取 trace id
-
-### 手动指令
-
-```bash
-printf '%s\n' "$LAUNCH_OUTPUT" | rg -F "$CASE_MARKER"
-TRACE_ID="$(
-  printf '%s\n' "$LAUNCH_OUTPUT" |
-    sed -n 's/.*trace trace-\([0-9][0-9]*\) entered Active.*/\1/p'
-)"
-test "$(printf '%s\n' "$TRACE_ID" | sed '/^$/d' | wc -l)" -eq 1
-printf 'trace-%s\n' "$TRACE_ID"
-```
-
-### 预期结果
-
-marker 查找成功，只提取到一个数字 trace id。
-
-## 步骤5：安全停止 daemon
-
-### 手动指令
-
-```bash
-sudo -E target/release/actraild stop
-```
-
-### 预期结果
-
-命令成功；daemon 在退出前完成 trace 收尾、post-trace 任务和告警写入排空。
-
-## 步骤6：验证 trace 最终状态
-
-### 手动指令
-
-```bash
-sudo -E target/release/actrailviewer --output-format json traces |
-  jq --argjson trace_id "$TRACE_ID" '
-    .traces[]
-    | select(.trace_id_raw == $trace_id)
-    | {trace_id, state, health}
-  '
-```
-
-### 预期结果
-
-只显示目标 trace，且 `state` 为 `Exited`、`health` 为 `Clean`。
-
-## 步骤7：验证 LLM action 与 marker
-
-### 手动指令
-
-```bash
-sudo -E target/release/actrailviewer --output-format json actions \
-  --trace-id "$TRACE_ID" > /tmp/actrail-claude-actions.json
-
-jq --arg marker "$CASE_MARKER" '
-  [.actions[] | select(.kind == "llm.call")] as $calls
-  | [.actions[] | select(.kind == "llm.request")] as $requests
-  | [.actions[] | select(.kind == "llm.response")] as $responses
-  | {
-      calls: ($calls | length),
-      requests: ($requests | length),
-      responses: ($responses | length),
-      nonterminal: [
-        .actions[]
-        | select(
-            (.kind == "llm.call"
-             or .kind == "llm.request"
-             or .kind == "llm.response"
-             or .kind == "sse.stream")
-            and .status == "in_progress"
-          )
-        | .action_id
-      ],
-      call_links: [
-        .links[]
-        | select(
-            .valid == true
-            and (.role == "llm.call.request" or .role == "llm.call.response")
-          )
-        | {
-            call: .parent_action_id,
-            role,
-            child: .child_action_id
-          }
-      ],
-      canonical_requests: [
-        $requests[]
-        | select(
-            .attributes["llm.request.content_state"] == "canonical_blocks"
-            and .status == "success" and .completeness == "complete"
-            and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
-            and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
-            and (((.attributes["llm.request.payload_bytes"] // "0")
-                  | tonumber) > 0)
-          )
-        | .action_id
-      ],
-      marker_responses: [
-        $responses[]
-        | select(
-            .status == "success" and .completeness == "complete"
-            and (
-              ((.attributes["llm.response.content_text"] // "") | contains($marker))
-              or ((.attributes["llm.response.output_text"] // "") | contains($marker))
-            )
-          )
-        | .action_id
-      ]
-    }
-' /tmp/actrail-claude-actions.json
-```
-
-### 预期结果
-
-`calls`、`requests`、`responses` 均大于零且数量相同；`nonterminal` 为空；
-`call_links` 中每个 call 恰好有一个 request link 和一个 response link，且没有
-request/response 被重复使用；`canonical_requests` 和 `marker_responses`
-均非空。

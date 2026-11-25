@@ -59,7 +59,15 @@ class NetworkSemanticsScenario(ContinuedAccessScenario):
             try:
                 for phase in self.phases:
                     self.wait(self.root / f"ready-{phase}", agent)
-                    context.report_progress(phase, "real Xiaoo checks protocol and operation separation")
+                    context.report_progress({
+                        'empty': 'Check network access without operation rules',
+                        'tcp': 'Check TCP access rules',
+                        'udp': 'Check UDP access rules',
+                        'connect': 'Check network connect permissions',
+                        'bind': 'Check network bind permissions',
+                        'listen': 'Check network listen permissions',
+                        'restore': 'Check network access after restoring permissions',
+                    }[phase], "real Xiaoo checks protocol and operation separation")
                     document = {"rules": self.rules(phase)}
                     if not lsm and self.requires_lsm and document["rules"]:
                         before = dynamic.api.config(owner)

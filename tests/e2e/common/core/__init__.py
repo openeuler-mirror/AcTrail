@@ -4,7 +4,7 @@ This is the dependency-free contract layer: regression cases and the runner
 package import these primitives; nothing here imports the runner.
 """
 
-from .config import CommonTestConfig, TestCaseInputs
+from .config import CommonTestConfig, TestRunDirectories
 from .errors import AgentBinaryNotFoundError
 from .output import (
     CaseProgressReporter,
@@ -17,7 +17,7 @@ __all__ = [
     "CaseProgressReporter",
     "CommonTestConfig",
     "TestCase",
-    "TestCaseInputs",
+    "TestRunDirectories",
     "TestOutput",
     "TestResult",
     "TestStatus",

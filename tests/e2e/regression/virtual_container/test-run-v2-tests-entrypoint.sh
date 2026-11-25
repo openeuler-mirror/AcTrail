@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify that the public V2 entrypoint explains checkout-local preparation.
+# Verify that the public V2 entrypoint reaches the runner without a profile.
 set -euo pipefail
 
 ROOT_DIR="${ACTRAIL_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
@@ -111,17 +111,9 @@ missing_output="$({
 missing_rc=$?
 set -e
 
-[[ "$missing_rc" -eq 2 ]] \
-  || fail "missing profile exited $missing_rc instead of 2: $missing_output"
-[[ ! -e "$WORK_DIR/sudo-called" ]] \
-  || fail "missing profile reached sudo instead of failing before execution"
-grep -Fq 'missing machine-local V2 profile' <<<"$missing_output" \
-  || fail "missing profile diagnostic is absent"
-grep -Fq 'local/kata/v2-test-profile.json' <<<"$missing_output" \
-  || fail "missing profile diagnostic omits the expected path"
-grep -Fq 'prepare-artifacts.py' <<<"$missing_output" \
-  || fail "missing profile diagnostic omits the preparation command"
-grep -Fq 'same checkout' <<<"$missing_output" \
-  || fail "missing profile diagnostic omits the checkout-local requirement"
+[[ "$missing_rc" -eq 86 ]] \
+  || fail "runner without a profile exited $missing_rc instead of 86: $missing_output"
+[[ -e "$WORK_DIR/sudo-called" ]] \
+  || fail "runner without a profile did not request runner privileges"
 
 echo "RUN_V2_TESTS_ENTRYPOINT_TEST_OK"

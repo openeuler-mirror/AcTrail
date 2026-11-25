@@ -1,9 +1,12 @@
+"""Run a real Claude task through the shared Agent and AcTrail lifecycle."""
+
 from __future__ import annotations
 
-import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.e2e.common.actrail_runtime import CommandResult
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import AgentBinaryNotFoundError
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
 
@@ -12,44 +15,44 @@ from .config import ProbeClaudeLLMConfig
 from .constants import CASE_CONSTANTS
 
 
+@dataclass(frozen=True)
+class ProbeClaudeLLMResult(CommandResult):
+    """Claude 任务输出及启动时取得的 trace_id。"""
+
+    trace_id: int
+
+
 class ProbeClaudeLLMTask:
-    def __init__(self, config: ProbeClaudeLLMConfig, runtime: ActrailRuntime):
+    def __init__(self, config: ProbeClaudeLLMConfig):
         self._config = config
-        self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._discovery = AgentBinaryDiscovery(config.repo)
         self._claude = self._resolve_claude()
 
-    def run(self) -> CommandResult:
-        return self._runtime.run(
-            self._command(),
-            timeout_seconds=self._config.launch_timeout_seconds,
+    def run(self) -> ProbeClaudeLLMResult:
+        agent = AgentFactory.claude(
+            binary=self._claude,
+            arguments=("--model", self._config.model, "--tools", ""),
             environment=self.environment(),
+        )
+        with agent.launchWithAcTrailCtl():
+            agent.run(CASE_CONSTANTS.prompt)
+            agent.join_all(self._config.launch_timeout_seconds)
+            result = agent.results[0]
+
+        stderr = agent.diagnostics
+        if result.error:
+            stderr += f"\n{result.error}\n"
+        return ProbeClaudeLLMResult(
+            argv=agent.command,
+            returncode=agent.returncode or int(not result.succeeded),
+            stdout=result.output,
+            stderr=stderr,
+            trace_id=agent.launch_result.trace_id,
         )
 
     @property
     def binary(self) -> Path:
         return self._claude
-
-    def _command(self) -> list[Path | str]:
-        return [
-            self._runtime.actrailctl,
-            "launch",
-            "--",
-            self._claude,
-            f'Reply with exactly "{self.marker}" and nothing else. Do not use tools.',
-            "--print",
-            "--output-format",
-            "text",
-            "--model",
-            self._config.model,
-            "--no-session-persistence",
-            "--safe-mode",
-            "--permission-mode",
-            "dontAsk",
-            "--tools",
-            "",
-        ]
 
     def _resolve_claude(self) -> Path:
         configured = self._config.claude_binary

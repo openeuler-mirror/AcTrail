@@ -1,133 +1,60 @@
+"""Verify Codex MCP execution and finalized evidence with scoped resources."""
 from __future__ import annotations
 
 from pathlib import Path
-
-from tests.e2e.common.actrail_runtime import ActrailRuntime
-from tests.e2e.common.core import AgentBinaryNotFoundError, TestCase, TestResult, TestStatus
+from tests.e2e.common.actrail_runtime import ActrailRuntime, LaunchOptions
+from tests.e2e.common.core import TestRunDirectories, AgentBinaryNotFoundError, TestCase, TestResult
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.mcp_test_support import McpTraceAssertion
-
 from .config import ProbeCodexMcpConfig
 from .task import ProbeCodexMcpTask
 
-from .constants import CASE_CONSTANTS
-
 
 class ProbeCodexMcpCase(TestCase):
-    def __init__(self, config: ProbeCodexMcpConfig) -> None:
+    case_id = 'probe_codex_mcp'
+    description = 'Run a real Codex stdio MCP call and verify its fixed semantic graph'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ProbeCodexMcpConfig.from_environment(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        results: dict[str, TestResult] = {}
-        runtime: ActrailRuntime | None = None
-        task: ProbeCodexMcpTask | None = None
-        try:
-            try:
-                task = ProbeCodexMcpTask(self._config)
-            except AgentBinaryNotFoundError as error:
-                return TestResult(TestStatus.SKIPPED, str(error))
-            runtime = ActrailRuntime.isolated(
-                self._config.repo,
-                self._config.bin_dir,
-                self._config.command_timeout_seconds,
-                test_context.output,
-                self._config.work_dir,
-                operator_config_patch=Path(__file__).with_name("patch_config.toml"),
-                agent_invocation_commands=[task.native_binary],
-            )
-            if not test_context.check_agent_availability(
-                "codex",
-                task.binary,
-                task.environment(),
-            ):
-                return TestResult(
-                    TestStatus.SKIPPED,
-                    "Codex external availability check failed",
-                )
-
-            lifecycle = runtime.prepare()
-            results["runtime_lifecycle"] = TestResult(
-                TestStatus.PASSED,
-                f"{len(lifecycle)} lifecycle commands completed",
-            )
-            launch = task.run(runtime)
-            if launch.returncode != 0:
-                raise AssertionError(
-                    f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-                )
-            results["launch"] = TestResult(
-                TestStatus.PASSED,
-                "actrailctl launch and Codex exited successfully",
-            )
-            if task.tool_execution_count() == 0:
-                no_tool = "NO_MCP_TOOL" in launch.stdout
-                reason = (
-                    "Codex did not execute "
-                    f"{task.local.tool_id}"
-                )
-                if no_tool:
-                    reason += "; Codex reported NO_MCP_TOOL"
-                return TestResult(
-                    TestStatus.SKIPPED,
-                    reason,
-                )
-            execution_evidence = task.require_agent_evidence(launch)
-            results["probe_execution"] = TestResult(
-                TestStatus.PASSED,
-                execution_evidence,
-            )
-            assertion = McpTraceAssertion(runtime)
-            trace_id = assertion.require_trace_id(launch)
-            stopped = runtime.stop()
-            if stopped is None or stopped.returncode != 0:
-                returncode = None if stopped is None else stopped.returncode
-                raise AssertionError(
-                    f"actraild safe stop exited with {returncode}"
-                )
-            results["runtime_stop"] = TestResult(
-                TestStatus.PASSED,
-                "actraild drained and stopped successfully",
-            )
-            summary = assertion.require_finalized_semantics(
-                trace_id,
-                task.expected_calls,
-            )
-            results["mcp_semantics"] = TestResult(
-                TestStatus.PASSED,
-                f"trace-{trace_id} has {summary.tool_calls} exact stdio MCP graph",
-            )
-            assertion.require_diagnostic(
-                trace_id,
-                "mcp_stdio_candidate_stream_discarded",
-                "candidate_truncated",
-            )
-            results["mcp_diagnostic"] = TestResult(
-                TestStatus.PASSED,
-                f"trace-{trace_id} records recoverable stdout truncation",
-            )
-            return TestResult(
-                TestStatus.COMPOSITE,
-                "Codex stdio MCP tool-call semantic recognition",
-                results,
-            )
-        except Exception as error:
-            results["failure"] = TestResult(TestStatus.FAILED, str(error))
-            return TestResult(
-                TestStatus.COMPOSITE,
-                "Codex stdio MCP tool-call semantic recognition",
-                results,
-            )
-        finally:
-            if task is not None:
+        context = TestingContextSingleton.current()
+        with context.case("Codex stdio MCP tool-call semantic recognition") as case:
+            with case.step("Locate Codex"):
                 try:
-                    task.close()
-                except Exception as error:
-                    results["cleanup"] = TestResult(TestStatus.FAILED, str(error))
-            if runtime is not None:
-                stopped = runtime.stop()
-                if stopped is not None and stopped.returncode != 0:
-                    results["runtime_stop"] = TestResult(
-                        TestStatus.FAILED,
-                        f"actraild stop exited with {stopped.returncode}",
+                    task = ProbeCodexMcpTask(self._config)
+                except AgentBinaryNotFoundError as error:
+                    case.skip(str(error))
+            with task:
+                with case.step("Check Codex availability"):
+                    if not context.check_agent_availability("codex", task.binary, task.environment()):
+                        case.skip("Codex external availability check failed")
+                with ActrailRuntime.isolated(
+                    self._config.repo, self._config.bin_dir,
+                    self._config.command_timeout_seconds, context.output, self._config.work_dir,
+                    operator_config_patch=Path(__file__).with_name("patch_config.toml"),
+                    agent_invocation_commands=[task.native_binary],
+                    launch_options=LaunchOptions(host_ebpf="auto"),
+                ) as runtime:
+                    with case.step("Start AcTrail"):
+                        runtime.start_actraild()
+                    with case.step("Ask Codex to use the MCP tool"):
+                        launch, result = task.run()
+                    with case.step("Check that Codex ran the MCP tool") as step:
+                        if task.tool_execution_count() == 0:
+                            reason = f"Codex did not execute {task.local.tool_id}"
+                            if task.replied_no_tool(result.output):
+                                reason += "; Codex reported NO_MCP_TOOL"
+                            case.skip(reason)
+                        step.message = task.require_agent_evidence()
+                assertion = McpTraceAssertion(runtime)
+                with case.step("Check the recorded MCP tool calls") as step:
+                    summary = assertion.require_finalized_semantics(launch.trace_id, task.expected_calls)
+                    step.message = f"trace-{launch.trace_id}: {summary.tool_calls} exact stdio MCP graph"
+                with case.step("Check the truncated MCP stream diagnostic"):
+                    assertion.require_diagnostic(
+                        launch.trace_id, "mcp_stdio_candidate_stream_discarded", "candidate_truncated",
                     )
+        return case.result

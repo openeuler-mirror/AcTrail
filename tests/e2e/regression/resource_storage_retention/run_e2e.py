@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
+"""Run this regression scenario independently."""
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
-from tests.e2e.common.runner import TestDefinition, run_one
+from tests.e2e.common.runner import run_one
 from tests.e2e.regression.resource_storage_retention.case import ResourceStorageRetentionCase
 
-TEST_DEFINITION = TestDefinition(
-    name="resource_storage_retention",
-    description="Validate resource SQLite backlog cleanup, fresh rows and profile/boot reclamation",
-    build_case=ResourceStorageRetentionCase,
-)
-
 if __name__ == "__main__":
-    raise SystemExit(run_one(TEST_DEFINITION, REPO))
+    raise SystemExit(run_one(ResourceStorageRetentionCase, REPO))

@@ -12,7 +12,6 @@ class AgentDefaults:
     codex_reasoning_effort: str = "low"
     claude_model: str = "sonnet"
     xiaoo_max_turns: int = 1
-    probe_all: bool = False
     native_binary_override: bool = True
     candidates: tuple[tuple[str, str, str], ...] = (
         ("xiaoo", "XIAOO_E2E_BINARY", "xiaoo"),

@@ -1,29 +1,26 @@
+"""Prepare Pi discovery for the LLM probe."""
 from __future__ import annotations
 
 import os
-import secrets
 import shutil
 from pathlib import Path
 
-from tests.e2e.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import AgentBinaryNotFoundError
 
 from .config import ProbePiLLMConfig
 
-from .constants import CASE_CONSTANTS
-
 
 class ProbePiLLMTask:
-    def __init__(self, config: ProbePiLLMConfig, runtime: ActrailRuntime):
+    def __init__(self, config: ProbePiLLMConfig):
         self._config = config
-        self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._pi = self._resolve_pi()
 
-    def run(self) -> CommandResult:
-        return self._runtime.run(
-            self._command(),
-            timeout_seconds=self._config.launch_timeout_seconds,
+    def create_agent(self):
+        """Pi 协议和启动命令由具体适配器封装。"""
+        return AgentFactory.pi(
+            binary=self._pi,
+            arguments=("--no-tools", "--no-mcp"),
             environment=self.environment(),
         )
 
@@ -34,17 +31,6 @@ class ProbePiLLMTask:
     @staticmethod
     def environment() -> dict[str, str]:
         return os.environ.copy()
-
-    def _command(self) -> list[Path | str]:
-        return [
-            self._runtime.actrailctl,
-            "launch",
-            "--",
-            self._pi,
-            "-p",
-            f'Reply with exactly "{self.marker}" and nothing else. Do not use tools.',
-            "--no-session",
-        ]
 
     @staticmethod
     def _resolve_pi() -> Path:

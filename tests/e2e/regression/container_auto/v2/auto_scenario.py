@@ -97,20 +97,20 @@ class ContainerAutoScenario:
             EbpfOffNotifyOffCase().run(self)
 
             self._test_context.report_progress(
-                "peer_isolation",
+                "Check control and TLS peer isolation",
                 "checking cross-container control and TLS peer isolation",
             )
             self._ensure_host_ebpf(False)
             self._verify_peer_isolation()
 
             self._test_context.report_progress(
-                "required_permissions",
+                "Check failures for missing permissions",
                 "checking required permission failures are explicit",
             )
             self._verify_required_permission_guards()
 
             self._test_context.report_progress(
-                "daemon_restore",
+                "Restore automatic host eBPF selection",
                 "restoring automatic host eBPF selection",
             )
             self._ensure_host_ebpf(True)
@@ -166,13 +166,13 @@ class ContainerAutoScenario:
         removed_images = build.prune_other_versions()
         if removed_images:
             self._test_context.report_progress(
-                "container_image_prune",
+                "Remove stale container images",
                 f"removed stale image versions: {', '.join(removed_images)}",
             )
         reference = build.ensure()
         self._image = ContainerImage(build.image_name, build.version)
         self._test_context.report_progress(
-            "container_image",
+            "Select the container image",
             f"using content-addressed image {reference}",
         )
 
@@ -494,7 +494,7 @@ sys.stdout.buffer.write(client.recv(65536))
             self._daemon_log, self._database, offset
         )
         self._test_context.report_progress(
-            "tls_peer_rejection",
+            "Check rejection of forged TLS peers",
             f"audited: {rejection_reason}; forged payloads stored=0",
         )
 

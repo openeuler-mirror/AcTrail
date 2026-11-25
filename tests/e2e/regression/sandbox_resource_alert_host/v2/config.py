@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 
 from .constants import CASE_CONSTANTS
 
@@ -30,10 +30,10 @@ reasoning_effort = "{CASE_CONSTANTS.llm_reasoning_effort}"
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "SandboxResourceAlertHostConfig":
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             "SANDBOX_RESOURCE_ALERT_HOST",
         )
         prefix = "SANDBOX_RESOURCE_ALERT_HOST_E2E_"

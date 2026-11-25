@@ -1,52 +1,29 @@
+"""Prepare Qoder CLI for the LLM capture probe."""
 from __future__ import annotations
 
-import os
-import shutil
 from pathlib import Path
 
-from tests.e2e.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import AgentBinaryNotFoundError
-
+from tests.e2e.common.testing_env import AgentBinaryDiscovery
 from .config import ProbeQoderCliLLMConfig
 
 
 class ProbeQoderCliLLMTask:
-    def __init__(self, config: ProbeQoderCliLLMConfig, runtime: ActrailRuntime):
-        self._config = config
-        self._runtime = runtime
-        self._qodercli = self._resolve_qodercli()
-
-    def run(self) -> CommandResult:
-        return self._runtime.run(
-            self._command(),
-            timeout_seconds=self._config.launch_timeout_seconds,
-            environment=self.environment(),
-        )
+    def __init__(self, config: ProbeQoderCliLLMConfig):
+        self._discovery = AgentBinaryDiscovery(config.repo)
+        self._binary = self._discovery.resolve("QODERCLI_E2E_BINARY", "qodercli")
+        if self._binary is None:
+            raise AgentBinaryNotFoundError("Qoder CLI executable not found")
 
     @property
     def binary(self) -> Path:
-        return self._qodercli
+        return self._binary
 
-    @staticmethod
-    def environment() -> dict[str, str]:
-        return os.environ.copy()
+    def environment(self) -> dict[str, str]:
+        return self._discovery.environment(self._binary)
 
-    def _command(self) -> list[Path | str]:
-        return [
-            self._runtime.actrailctl,
-            "launch",
-            "--",
-            self._qodercli,
-            "--no-session-persistence",
-            "-p",
-            "请简短回复，确认已经收到这条测试消息。",
-            "--tools",
-            "",
-        ]
-
-    @staticmethod
-    def _resolve_qodercli() -> Path:
-        discovered = shutil.which("qodercli")
-        if discovered:
-            return Path(discovered)
-        raise AgentBinaryNotFoundError("qodercli executable not found in PATH")
+    def create_agent(self):
+        return AgentFactory.qodercli(
+            binary=self._binary, environment=self.environment(), arguments=("--tools", ""),
+        )

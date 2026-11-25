@@ -1,203 +1,57 @@
-# Probe Qoder CLI LLM
+# 回归测试：Qoder CLI LLM 交互采集
 
-# Quick Run
+## 测试目标
 
-在仓库根目录执行：
+验证 AcTrail 能通过 Qoder LLM 编解码插件采集 Qoder CLI 的模型请求和响应，并将它们关联到对应的 LLM 调用。
+
+## 场景设计
+
+使用刷新后的默认采集配置启动 AcTrail，并加载 Qoder LLM 编解码插件。通过 AcTrail 启动 Qoder CLI 流式会话，执行一次开放式文本任务。以 Qoder CLI 实际返回的助手文本核对插件解码后的响应正文。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、可工作的 eBPF 环境、root 权限 | 采集 Qoder CLI 活动 |
+| AcTrail | 可运行的 release 产物 `actraild`、`actrailctl`、`actrailviewer` | 启动采集、保存并查询观测记录 |
+| Qoder CLI | 支持流式 JSON 输入和输出的 CLI | 执行文本任务并返回实际回复 |
+| Qoder LLM 编解码插件 | 仓库内的[插件清单](../../../../examples/plugins/wasm-legacy/llm-codec-qoder/plugin.toml)和同目录的 WASM 产物 | 解码 Qoder 模型请求和流式响应 |
+| 模型服务 | Qoder CLI 已配置认证，服务可访问 | 执行真实的模型请求 |
+
+## 测试步骤摘要
+
+1. **检查 Qoder CLI 可用性。** 直接运行 Qoder CLI 完成一次模型请求。Qoder CLI 缺失或可用性检查失败时，用例标记为 `SKIPPED`。
+2. **准备观测环境。** 在测例工作目录用 `actrailctl init` 生成默认配置。用 `actraild start` 启动守护进程。
+3. **加载 Qoder LLM 编解码插件。** 从仓库内的插件清单加载实例 `qoder.llm-codec`。
+4. **启动 Qoder CLI 会话。** 通过 `actrailctl launch` 启动流式会话，关闭工具和会话保存。记录启动结果中的 trace ID。
+5. **执行文本任务。** 提交一个简短的开放式问题。等待任务成功结束，从最终的 `result` 事件取得实际回复文本。
+6. **完成数据采集。** 结束 Qoder CLI 会话后停止守护进程，等待观测记录落盘。
+7. **核对观测记录。** 使用 `actrailviewer` 查询第 4 步取得的 trace ID。
+
+   | 检查项 | 条件 | 预期结果 |
+   | --- | --- | --- |
+   | Trace 终态 | 守护进程已停止 | trace 状态为 `Completed` 或 `Exited`，健康状态为 `Clean` |
+   | 调用关联 | trace 下的 LLM 请求和响应 | 每条 `llm.call` 关联一条 `llm.request`，最多关联一条 `llm.response`。每条请求或响应仅关联到一条调用。无响应的调用保持 `unknown/partial`，无结束时间 |
+   | 任务内容 | Qoder CLI 成功完成任务并返回文本 | 至少一条 `success/complete` 响应的正文包含实际回复全文。同一调用的请求保留插件解码后的规范化内容 |
+   | 采集收尾 | 守护进程已停止 | LLM 请求、响应和 SSE 流处于终态 |
+
+## 快速运行
+
+### 测试所用环境变量
+
+| 环境变量 | 未设置时测试框架的行为 | 用途 |
+| --- | --- | --- |
+| `QODERCLI_E2E_COMMAND_TIMEOUT_SECONDS` | 等待 30 秒 | AcTrail 命令的等待时限 |
+| `QODERCLI_E2E_LAUNCH_TIMEOUT_SECONDS` | 等待 180 秒 | Qoder CLI 文本任务的等待时限 |
+| `QODERCLI_E2E_BINARY` | 自动发现 Qoder CLI 可执行文件 | 指定 Qoder CLI 路径 |
+| `ACTRAIL_TEST_AGENT_AVAILABILITY_TIMEOUT_SECONDS` | 等待 60 秒 | Qoder CLI 可用性检查的等待时限 |
+
+### 运行指令
+
+从仓库根目录执行以下命令。
 
 ```bash
 sudo -E env "HOME=$HOME" "PATH=$PATH" \
   python3 tests/e2e/regression/probe_qodercli_llm/run_e2e.py
 ```
-
-脚本从当前环境的 `PATH` 解析默认 `qodercli`，先执行外部可用性检查，再通过
-单层 `actrailctl launch` 执行：
-
-```bash
-qodercli --no-session-persistence -p "prompt" --tools ""
-```
-
-# 步骤摘要
-
-1. 检查 AcTrail release binaries 和 Qoder CLI 外部可用性。
-2. 初始化、清理并启动 AcTrail，加载 Qoder LLM codec。
-3. 生成随机 marker，以无会话、无工具模式请求 Qoder CLI 原样回答。
-4. 验证标准输出包含 marker，并提取唯一 trace id。
-5. 安全停止 daemon，验证 trace 为 `Exited/Clean`。
-6. 验证终态 LLM actions 完整配对，response 包含 marker，request 具有
-   canonical content 证据。
-
-# 手动测试
-
-本测例没有浏览器交互面，使用 Bash 直接复现。以下命令均从仓库根目录执行。
-
-## 步骤1：检查测试前提
-
-### 手动指令
-
-```bash
-test -x target/release/actraild
-test -x target/release/actrailctl
-test -x target/release/actrailviewer
-QODERCLI_BIN="$(command -v qodercli)"
-test -n "$QODERCLI_BIN"
-"$QODERCLI_BIN" \
-  --no-session-persistence \
-  -p 'Reply with exactly "QODERCLI_PREFLIGHT_OK" and nothing else.' \
-  --tools ""
-```
-
-### 预期结果
-
-AcTrail binaries 均可执行；环境默认 Qoder CLI 成功输出
-`QODERCLI_PREFLIGHT_OK`，不保存 session，也不调用工具。Qoder CLI 缺失、
-未登录、model/provider 不可用或网络不可达时，自动测试标记为 `SKIPPED`。
-
-## 步骤2：初始化并启动 AcTrail
-
-### 手动指令
-
-```bash
-sudo -E target/release/actrailctl init -f
-sudo -E target/release/actraild stop
-sudo -E target/release/actrailctl clean
-sudo -E target/release/actraild start
-sudo -E target/release/actraild plugin load \
-  --manifest examples/plugins/wasm-legacy/llm-codec-qoder/plugin.toml \
-  --instance qoder.llm-codec
-```
-
-### 预期结果
-
-所有命令成功，daemon 正在监听 `/run/actrail/control.sock`，插件实例
-`qoder.llm-codec` 已加载。AcTrail 自身缺失、启动失败或 codec 加载失败属于
-`FAILED`。
-
-## 步骤3：生成 marker 并运行 Qoder CLI
-
-### 手动指令
-
-```bash
-CASE_MARKER="A$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
-LAUNCH_OUTPUT="$(
-  sudo -E target/release/actrailctl launch -- \
-    "$QODERCLI_BIN" \
-    --no-session-persistence \
-    -p "Reply with exactly \"$CASE_MARKER\" and nothing else. Do not use tools." \
-    --tools "" 2>&1
-)"
-printf '%s\n' "$LAUNCH_OUTPUT"
-```
-
-### 预期结果
-
-输出中出现 `trace trace-N entered Active`，Qoder CLI 输出 `$CASE_MARKER` 并
-成功退出；运行结束后没有新增可恢复 session。
-
-## 步骤4：验证回答并提取 trace id
-
-### 手动指令
-
-```bash
-printf '%s\n' "$LAUNCH_OUTPUT" | rg -F "$CASE_MARKER"
-TRACE_ID="$(
-  printf '%s\n' "$LAUNCH_OUTPUT" |
-    sed -n 's/.*trace trace-\([0-9][0-9]*\) entered Active.*/\1/p'
-)"
-test "$(printf '%s\n' "$TRACE_ID" | sed '/^$/d' | wc -l)" -eq 1
-printf 'trace-%s\n' "$TRACE_ID"
-```
-
-### 预期结果
-
-marker 查找成功，只提取到一个数字 trace id。
-
-## 步骤5：安全停止并验证 trace
-
-### 手动指令
-
-```bash
-sudo -E target/release/actraild stop
-sudo -E target/release/actrailviewer --output-format json traces |
-  jq --argjson trace_id "$TRACE_ID" '
-    .traces[]
-    | select(.trace_id_raw == $trace_id)
-    | {trace_id, state, health}
-  '
-```
-
-### 预期结果
-
-daemon 成功停止；目标 trace 的 `state` 为 `Exited`、`health` 为 `Clean`。
-
-## 步骤6：验证 LLM action 与 marker
-
-### 手动指令
-
-```bash
-sudo -E target/release/actrailviewer --output-format json actions \
-  --trace-id "$TRACE_ID" > /tmp/actrail-qodercli-actions.json
-
-jq --arg marker "$CASE_MARKER" '
-  [.actions[] | select(.kind == "llm.call")] as $calls
-  | [.actions[] | select(.kind == "llm.request")] as $requests
-  | [.actions[] | select(.kind == "llm.response")] as $responses
-  | {
-      calls: ($calls | length),
-      requests: ($requests | length),
-      responses: ($responses | length),
-      nonterminal: [
-        .actions[]
-        | select(
-            (.kind == "llm.call"
-             or .kind == "llm.request"
-             or .kind == "llm.response"
-             or .kind == "sse.stream")
-            and .status == "in_progress"
-          )
-        | .action_id
-      ],
-      call_links: [
-        .links[]
-        | select(
-            .valid == true
-            and (.role == "llm.call.request" or .role == "llm.call.response")
-          )
-        | {
-            call: .parent_action_id,
-            role,
-            child: .child_action_id
-          }
-      ],
-      canonical_requests: [
-        $requests[]
-        | select(
-            .attributes["llm.request.content_state"] == "canonical_blocks"
-            and .status == "success" and .completeness == "complete"
-            and (((.attributes["llm.request.content_format_version"] // "0") | tonumber) > 0)
-            and (((.attributes["llm.request.block_count"] // "-1") | tonumber) >= 0)
-            and (((.attributes["llm.request.payload_bytes"] // "0")
-                  | tonumber) > 0)
-          )
-        | .action_id
-      ],
-      marker_responses: [
-        $responses[]
-        | select(
-            ((.attributes["llm.response.content_text"] // "") | contains($marker))
-            or ((.attributes["llm.response.output_text"] // "") | contains($marker))
-          )
-        | .action_id
-      ]
-    }
-' /tmp/actrail-qodercli-actions.json
-```
-
-### 预期结果
-
-三个 action 计数均大于零且相等；`nonterminal` 为空；`call_links` 中每个
-call 恰好有一个 request link 和一个 response link，且没有 request/response
-被重复使用；`canonical_requests` 和 `marker_responses` 均非空。
-
-如果 Qoder CLI 已正常回答、trace 也是 `Exited/Clean`，但三个 action 计数为
-零，这不是外部条件缺失，而是 AcTrail 没有将捕获到的通信投影为 LLM actions，
-测例应判定为 `FAILED`。

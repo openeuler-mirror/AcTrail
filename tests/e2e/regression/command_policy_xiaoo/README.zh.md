@@ -1,10 +1,14 @@
 # 真实 Xiaoo 动态命令策略回归
 
-该 v2 回归使用 Web Configuration 为 `wasm.command-policy-dynamic` 只授予 `/usr/bin/bash` 的 deny scope，并发布 `args=["-c","*"]` 的规则，再驱动真实 Xiaoo 发起 Bash tool call。末尾 `*` 匹配任意剩余参数；测试不伪造 Agent 或 seccomp 通知。
+## 测试目标
 
-本地确定性流式 provider 只负责向真实 Xiaoo 返回一次 Bash tool request。Xiaoo 工具进程、主线程和非 leader 线程的 `execve`、seccomp user notification、daemon 决策、SQLite 审计和 Web 告警均走实际运行路径。
+验证通过 Web 发布的命令规则能限制真实 XiaoO 的 Bash 工具执行，并在撤销规则后恢复访问。
 
-## 自动断言
+## 场景设计
+
+先为 Bash 的 -c 参数范围发布 deny 规则，再由真实 XiaoO 发起 Bash 调用。用 marker 文件的实际结果、系统调用错误和治理记录核对拒绝效果，同时以 --version 和非 leader 线程执行验证规则范围与进程归属。
+
+### 场景检查
 
 测试依次验证：
 
@@ -17,7 +21,34 @@
 7. CLI 事件包含 `seccomp-user-notify` Enforcement；Web alerts 包含 high severity 的 `command.execution.boundary-violation`。
 8. Web 卸载 policy owner 后，第二次真实 Xiaoo Bash tool 成功并创建 marker。
 
-## 运行
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、root 权限和可工作的 eBPF 环境 | 启动采集与治理 |
+| AcTrail | release 产物和测例使用的官方插件包 | 执行、保存和查询测试结果 |
+| XiaoO | 可执行的真实 CLI | 执行 Bash 或连接任务 |
+| 治理后端 | seccomp user notification 可用 | 执行实际访问裁决 |
+| 本地 provider | 可启动的流式服务 | 为真实 Agent 提供任务交互 |
+
+## 测试步骤摘要
+
+1. 刷新默认配置，启动 daemon、Web 和本地 provider，配置命令执行的 seccomp 治理。
+2. 通过 Web 验证 Bash deny scope 和候选规则授权，发布匹配 -c 参数的规则，记录 owner 与 revision。
+3. 分别从主线程和非 leader 线程执行 Bash --version，核对未匹配参数的执行保持允许。
+4. 让真实 XiaoO 通过 Bash 写入 marker 文件，核对 EPERM、文件不存在、seccomp 治理记录和 Web 边界告警。
+5. 卸载 policy owner 后再次执行相同真实工具任务，核对文件成功创建及完整内容。
+6. 停止 daemon、Web 与 provider，清理测试数据。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 授权与发布 | 缺少 scope 或候选含越权规则 | 拒绝加载或整批更新，已有配置与 revision 保持一致 |
+| 参数范围 | 同一 Bash 以 --version 运行 | leader 与非 leader 线程执行均允许 |
+| 真实拒绝 | XiaoO 发起匹配 -c 的 Bash 调用 | 返回 EPERM，marker 不存在，记录 seccomp 治理事件与边界告警 |
+| 撤销恢复 | 卸载规则 owner 后重新调用 | 真实工具成功并创建 marker |
+
+## 快速运行
 
 从仓库根目录通过聚合入口运行：
 
@@ -78,7 +109,7 @@ mkdir -p "$REPO/temp"
 rm -f "$MARKER"
 
 "$XIAOO_BIN" --cli run --no-tools --max-turns 1 \
-  --prompt 'Reply with exactly "XIAOO_COMMAND_POLICY_READY" and nothing else.'
+  --prompt 'Explain briefly why temporary files are useful.'
 
 actrailctl init -f
 actraild stop

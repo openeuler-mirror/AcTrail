@@ -47,7 +47,13 @@ class FileNamesScenario(FileSemanticsScenario):
             try:
                 for phase in self.phases:
                     self.wait(self.root / f"ready-{phase}", agent)
-                    context.report_progress(phase, "real Xiaoo checks rename/link names and objects")
+                    context.report_progress({
+                        'initial': 'Check rename and link access before policy changes',
+                        'source': 'Check source permissions for rename and link',
+                        'target': 'Check destination permissions for rename and link',
+                        'overwrite': 'Check permissions when overwriting a destination',
+                        'restore': 'Check rename and link access after restoring permissions',
+                    }[phase], "real Xiaoo checks rename/link names and objects")
                     self.prepare(phase)
                     (self.root / f"go-{phase}").touch()
                     destination = self.root / f"result-{phase}.json"

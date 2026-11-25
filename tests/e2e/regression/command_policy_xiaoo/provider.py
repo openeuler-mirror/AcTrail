@@ -1,3 +1,4 @@
+"""Own the local XiaoO provider process and its readiness handshake."""
 from __future__ import annotations
 
 import select
@@ -27,6 +28,22 @@ class LocalXiaooProvider:
         self._process: subprocess.Popen[str] | None = None
         self._stderr: TextIO | None = None
         self.base_url: str | None = None
+
+    def __enter__(self):
+        try:
+            self.start()
+        except BaseException as error:
+            self.__exit__(type(error), error, error.__traceback__)
+            raise
+        return self
+
+    def __exit__(self, exception_type, exception, traceback) -> None:
+        failure = self.stop()
+        if failure:
+            if exception is not None:
+                exception.add_note(failure)
+            else:
+                raise RuntimeError(failure)
 
     def start(self) -> str:
         if not self._proxy.is_file():

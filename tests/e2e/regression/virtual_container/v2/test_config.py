@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 from tests.e2e.common.kata_runtime.image import PullPolicy
 from tests.e2e.regression.virtual_container.v2.config import (
     VirtualContainerConfig,
@@ -16,7 +16,7 @@ class VirtualContainerConfigTest(unittest.TestCase):
     def test_parses_selected_backend_without_touching_filesystem(self) -> None:
         with tempfile.TemporaryDirectory(prefix="actrail-v2-config.") as raw_dir:
             root = Path(raw_dir)
-            inputs = TestCaseInputs(root, root / "bin", root / "work")
+            directories = TestRunDirectories(root, root / "bin", root / "work")
             missing_config = root / "not-created.toml"
             with patch.dict(
                 "os.environ",
@@ -30,7 +30,7 @@ class VirtualContainerConfigTest(unittest.TestCase):
                 },
                 clear=True,
             ):
-                config = VirtualContainerConfig.from_environment(inputs)
+                config = VirtualContainerConfig.from_environment(directories)
 
         self.assertEqual(config.backends, ("stratovirt",))
         self.assertEqual(config.image_pull_policy, PullPolicy.NEVER)
@@ -38,7 +38,7 @@ class VirtualContainerConfigTest(unittest.TestCase):
         self.assertEqual(config.settle_seconds, 0)
 
     def test_rejects_duplicate_backends(self) -> None:
-        inputs = TestCaseInputs(Path("/repo"), Path("/bin"), Path("/work"))
+        directories = TestRunDirectories(Path("/repo"), Path("/bin"), Path("/work"))
         with patch.dict(
             "os.environ",
             {
@@ -47,10 +47,10 @@ class VirtualContainerConfigTest(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "must not contain duplicates"):
-                VirtualContainerConfig.from_environment(inputs)
+                VirtualContainerConfig.from_environment(directories)
 
     def test_rejects_firecracker_without_shared_filesystem_support(self) -> None:
-        inputs = TestCaseInputs(Path("/repo"), Path("/bin"), Path("/work"))
+        directories = TestRunDirectories(Path("/repo"), Path("/bin"), Path("/work"))
         with patch.dict(
             "os.environ",
             {"VIRTUAL_CONTAINER_E2E_BACKENDS": "firecracker"},
@@ -60,7 +60,7 @@ class VirtualContainerConfigTest(unittest.TestCase):
                 ValueError,
                 "unsupported virtual-container backend.*firecracker",
             ):
-                VirtualContainerConfig.from_environment(inputs)
+                VirtualContainerConfig.from_environment(directories)
 
 
 if __name__ == "__main__":

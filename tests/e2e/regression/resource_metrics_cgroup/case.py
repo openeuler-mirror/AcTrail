@@ -10,14 +10,14 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from tests.e2e.common.core import TestCase, TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import TestCase, TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.resource_storage_assertion import (
     assert_restart_storage, assert_workload_columns, profile_snapshot,
 )
 from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.regression.resource_metrics_cgroup.cgroup_v1 import (
-    ResourceMetricsCgroupV1Case,
+    ResourceMetricsCgroupV1Scenario,
 )
 from tests.e2e.regression.resource_storage_retention.case import ResourceStorageRetentionCase
 
@@ -31,22 +31,22 @@ PATCH_CONFIG = Path(__file__).with_name("patch_config.toml")
 class ResourceMetricsCase(TestCase):
     """Release-binary acceptance for daemon-owned cgroup-v2 trace scopes."""
 
-    def __init__(self, inputs: TestCaseInputs, *, patch_configs: tuple[Path, ...]) -> None:
-        self._inputs = inputs
+    def __init__(self, directories: TestRunDirectories, *, patch_configs: tuple[Path, ...]) -> None:
+        self._directories = directories
         self._patch_configs = patch_configs
         self._unit = f"actrail-resource-metrics-v2-{os.getpid()}"
         self._service = f"{self._unit}.service"
-        self._config = inputs.work_dir / "actraild.conf"
-        self._socket = inputs.work_dir / "run/control.sock"
-        self._pid_file = inputs.work_dir / "run/actraild.pid"
-        self._database = inputs.work_dir / "data/actrail.sqlite"
+        self._config = directories.work_dir / "actraild.conf"
+        self._socket = directories.work_dir / "run/control.sock"
+        self._pid_file = directories.work_dir / "run/actraild.pid"
+        self._database = directories.work_dir / "data/actrail.sqlite"
         self._cgroup = Path("/sys/fs/cgroup/system.slice") / self._service
-        self._v1: ResourceMetricsCgroupV1Case | None = None
+        self._v1: ResourceMetricsCgroupV1Scenario | None = None
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         # cgroup v1 hosts run the managed v1 scenarios instead.
         if not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
-            self._v1 = ResourceMetricsCgroupV1Case(self._inputs)
+            self._v1 = ResourceMetricsCgroupV1Scenario(self._directories)
             return self._v1.run(test_context)
         problem = self._prerequisite_problem()
         if problem is not None:
@@ -66,10 +66,18 @@ class ResourceMetricsCase(TestCase):
                     self._config.parent / "actrail-resources.sqlite", 1, self._resource_samples(1),
                 )),
                 ("resource_api", lambda: assert_resource_api(
-                    self._inputs, self._config, {trace: self._resource_samples(trace) for trace in (1, 2)},
+                    self._directories, self._config, {trace: self._resource_samples(trace) for trace in (1, 2)},
                 )),
             ):
-                test_context.report_progress(current, f"checking managed cgroup-v2 {current}")
+                test_context.report_progress({
+                    'exact': 'Check resource sample accuracy',
+                    'isolation': 'Check resource isolation between traces',
+                    'restart': 'Check resource sampling after daemon restart',
+                    'timeout': 'Check resource sampling timeout',
+                    'lost': 'Check handling of a lost cgroup',
+                    'column_storage': 'Check stored resource columns',
+                    'resource_api': 'Check resource API results',
+                }[current], f"checking managed cgroup-v2 {current}")
                 results[current] = TestResult(TestStatus.PASSED, check())
             return TestResult(
                 TestStatus.COMPOSITE, "cgroup-v2 resource metrics", results,
@@ -122,8 +130,8 @@ class ResourceMetricsCase(TestCase):
 
     def _prepare_config(self) -> None:
         for directory in ("run", "data", "log", "export", "plugins"):
-            (self._inputs.work_dir / directory).mkdir(parents=True, exist_ok=True)
-        patch = self._inputs.work_dir / "operator.patch.toml"
+            (self._directories.work_dir / directory).mkdir(parents=True, exist_ok=True)
+        patch = self._directories.work_dir / "operator.patch.toml"
         PatchBuilder().with_values(self._operator_values()).build().save(patch)
         self._command(
             (
@@ -139,7 +147,7 @@ class ResourceMetricsCase(TestCase):
         )
 
     def _operator_values(self) -> dict[str, object]:
-        work = self._inputs.work_dir
+        work = self._directories.work_dir
         return {
             "control": {
                 "socket_path": str(self._socket),
@@ -166,7 +174,7 @@ class ResourceMetricsCase(TestCase):
                 "--property=KillMode=process",
                 "--property=Restart=on-failure",
                 f"--property=RestartSec={CASE_CONSTANTS.service_restart_milliseconds}ms",
-                f"--property=WorkingDirectory={self._inputs.repo}",
+                f"--property=WorkingDirectory={self._directories.repo}",
                 str(self._binary("actraild")),
                 "--config",
                 str(self._config),
@@ -192,7 +200,7 @@ class ResourceMetricsCase(TestCase):
 
     def _run_exact_case(self) -> str:
         process = self._launch_process("exact", child_seconds=CASE_CONSTANTS.run_exact_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_exact_case_parent_seconds)
-        self._wait_until(lambda: (self._inputs.work_dir / "child-cgroup-exact").exists(),
+        self._wait_until(lambda: (self._directories.work_dir / "child-cgroup-exact").exists(),
                          "exact workload did not start")
         scope = self._trace_scope_path(1)
         (scope / "workload/nested/leaf").mkdir(parents=True)
@@ -222,7 +230,7 @@ class ResourceMetricsCase(TestCase):
     def _run_restart_case(self) -> str:
         process = self._launch_process("restart", child_seconds=CASE_CONSTANTS.run_restart_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_restart_case_parent_seconds)
         self._wait_until(
-            lambda: (self._inputs.work_dir / "child-cgroup-restart").is_file(),
+            lambda: (self._directories.work_dir / "child-cgroup-restart").is_file(),
             "restart workload did not start",
         )
         self._wait_until(
@@ -272,7 +280,7 @@ class ResourceMetricsCase(TestCase):
     def _run_timeout_case(self) -> str:
         self._launch("timeout", child_seconds=CASE_CONSTANTS.run_timeout_case_child_seconds, parent_seconds=CASE_CONSTANTS.run_timeout_case_parent_seconds)
         child_pid = int(
-            (self._inputs.work_dir / "child-pid-timeout").read_text(encoding="utf-8")
+            (self._directories.work_dir / "child-pid-timeout").read_text(encoding="utf-8")
         )
         self._wait_for_trace(3, "orphaned")
         if not Path(f"/proc/{child_pid}").exists():
@@ -280,7 +288,7 @@ class ResourceMetricsCase(TestCase):
         payloads = self._resource_payloads(3)
         self._assert_final(payloads, coverage="partial", timed_out=True)
         self._wait_until(
-            lambda: (self._inputs.work_dir / "child-done-timeout").is_file(),
+            lambda: (self._directories.work_dir / "child-done-timeout").is_file(),
             "timeout descendant did not finish naturally",
             timeout=CASE_CONSTANTS.run_timeout_case_timeout,
         )
@@ -296,7 +304,7 @@ class ResourceMetricsCase(TestCase):
         old_pid = self._service_pid()
         os.kill(old_pid, signal.SIGSTOP)
         try:
-            self._wait_until(lambda: (self._inputs.work_dir / "child-done-lost").exists(),
+            self._wait_until(lambda: (self._directories.work_dir / "child-done-lost").exists(),
                              "lost-scope workload did not exit")
             scope = self._trace_scope_path(4)
             # This is the exact disposable scope created by this acceptance run.
@@ -348,22 +356,22 @@ class ResourceMetricsCase(TestCase):
                 "--",
                 shutil.which("python3") or "python3",
                 str(Path(__file__).with_name("workload.py")),
-                str(self._inputs.work_dir),
+                str(self._directories.work_dir),
                 suffix,
                 str(child_seconds),
                 str(parent_seconds),
             ),
-            cwd=self._inputs.repo,
+            cwd=self._directories.repo,
             text=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
     def _assert_launch_membership(self, suffix: str) -> None:
-        parent = (self._inputs.work_dir / f"parent-cgroup-{suffix}").read_text(
+        parent = (self._directories.work_dir / f"parent-cgroup-{suffix}").read_text(
             encoding="utf-8"
         )
-        child = (self._inputs.work_dir / f"child-cgroup-{suffix}").read_text(
+        child = (self._directories.work_dir / f"child-cgroup-{suffix}").read_text(
             encoding="utf-8"
         )
         if parent != child or "/traces/trace-" not in parent or not parent.endswith(
@@ -458,7 +466,7 @@ class ResourceMetricsCase(TestCase):
                 "--config",
                 str(self._config),
             ),
-            cwd=self._inputs.repo,
+            cwd=self._directories.repo,
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -492,15 +500,15 @@ class ResourceMetricsCase(TestCase):
         )
 
     def _binary(self, name: str) -> Path:
-        directory = self._inputs.bin_dir
+        directory = self._directories.bin_dir
         if not directory.is_absolute():
-            directory = self._inputs.repo / directory
+            directory = self._directories.repo / directory
         return directory / name
 
     def _command(self, command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             command,
-            cwd=self._inputs.repo,
+            cwd=self._directories.repo,
             check=True,
             capture_output=True,
             text=True,
@@ -523,18 +531,22 @@ class ResourceMetricsCase(TestCase):
 
 
 class ResourceMetricsCgroupCase(ResourceMetricsCase):
-    def __init__(self, inputs: TestCaseInputs) -> None:
-        super().__init__(inputs, patch_configs=(PATCH_CONFIG,))
+    case_id = 'resource_metrics_cgroup'
+    description = 'Validate release-binary exact, timeout, and restart cgroup-v2 resource accounting, or managed cgroup-v1 scopes on v1 hosts, plus resource SQLite retention'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        super().__init__(directories, patch_configs=(PATCH_CONFIG,))
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         result = super().run(test_context)
         if result.effective_status() is not TestStatus.PASSED:
             return result
-        inputs = TestCaseInputs(
-            repo=self._inputs.repo,
-            bin_dir=self._inputs.bin_dir,
-            work_dir=self._inputs.work_dir / "retention",
+        directories = TestRunDirectories(
+            repo=self._directories.repo,
+            bin_dir=self._directories.bin_dir,
+            work_dir=self._directories.work_dir / "retention",
         )
-        test_context.report_progress("retention", "checking resource backlog cleanup in an isolated database")
-        result.details["retention"] = ResourceStorageRetentionCase(inputs).run(test_context)
+        test_context.report_progress("Check resource data retention", "checking resource backlog cleanup in an isolated database")
+        result.details["retention"] = ResourceStorageRetentionCase(directories).run(test_context)
         return result

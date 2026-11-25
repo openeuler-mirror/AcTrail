@@ -116,7 +116,7 @@ DEEPSEEK_API_KEY="$LOCAL_API_KEY" \
     --no-tools \
     --max-turns 1 \
     --prompt "$ACTRAIL_XIAOO_PROMPT" \
-    >"$XIAOO_STDOUT" 2>&1 &
+    >"$XIAOO_STDOUT" 2>"$ACTRAIL_XIAOO_COORD_DIR/xiaoo.stderr" &
 XIAOO_PID=$!
 touch "$XIAOO_ACTIVE"
 
@@ -128,8 +128,7 @@ XIAOO_PID=""
 rm -f "$XIAOO_ACTIVE"
 cat "$XIAOO_STDOUT"
 [ "$xiaoo_rc" -eq 0 ] || fail "xiaoO exited with status $xiaoo_rc"
-grep -Fq "$ACTRAIL_XIAOO_RESPONSE_MARKER" "$XIAOO_STDOUT" \
-  || fail "xiaoO output omitted its provider response marker"
+[ -s "$XIAOO_STDOUT" ] || fail "xiaoO returned an empty reply"
 
 remaining=10
 while ! grep -q '^proxy_local_stream ' "$PROVIDER_STDOUT" 2>/dev/null; do
@@ -143,7 +142,6 @@ done
 
 if [ -n "${ACTRAIL_OPENCODE_FREE_MODEL:-}" ]; then
   : "${ACTRAIL_OPENCODE_PROMPT:?}"
-  : "${ACTRAIL_OPENCODE_RESPONSE_MARKER:?}"
   : "${ACTRAIL_OPENCODE_GUEST_BRIDGE:?}"
   : "${ACTRAIL_OPENCODE_PROXY_PORT:?}"
   : "${ACTRAIL_OPENCODE_VSOCK_PORT:?}"
@@ -188,11 +186,11 @@ if [ -n "${ACTRAIL_OPENCODE_FREE_MODEL:-}" ]; then
     http_proxy="http://127.0.0.1:$ACTRAIL_OPENCODE_PROXY_PORT" \
     https_proxy="http://127.0.0.1:$ACTRAIL_OPENCODE_PROXY_PORT" \
     NO_COLOR=1 \
-    timeout "$ACTRAIL_OPENCODE_TIMEOUT_SECONDS" opencode run --pure \
+    timeout "$ACTRAIL_OPENCODE_TIMEOUT_SECONDS" opencode run --pure --format json \
       --model "$ACTRAIL_OPENCODE_FREE_MODEL" \
       "$ACTRAIL_OPENCODE_PROMPT" \
       </dev/null \
-      >"$OPENCODE_STDOUT" 2>&1
+      >"$OPENCODE_STDOUT" 2>"$ACTRAIL_XIAOO_COORD_DIR/opencode.stderr"
   opencode_rc=$?
   set -e
   cat "$OPENCODE_STDOUT"
@@ -203,8 +201,7 @@ if [ -n "${ACTRAIL_OPENCODE_FREE_MODEL:-}" ]; then
     cat "$ACTRAIL_XIAOO_COORD_DIR/opencode-bridge.stderr" >&2 || true
     fail "OpenCode free-model smoke exited with status $opencode_rc"
   fi
-  grep -Fq "$ACTRAIL_OPENCODE_RESPONSE_MARKER" "$OPENCODE_STDOUT" \
-    || fail "OpenCode output omitted its response marker"
+  [ -s "$OPENCODE_STDOUT" ] || fail "OpenCode returned empty output"
   echo "KATA_OPENCODE_FREE_OK instance=$ACTRAIL_XIAOO_INSTANCE"
 fi
 

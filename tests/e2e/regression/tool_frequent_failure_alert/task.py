@@ -1,3 +1,4 @@
+"""Verify tool alert evidence with separately reported scenario steps."""
 from __future__ import annotations
 
 import json
@@ -7,7 +8,8 @@ import sqlite3
 import time
 from typing import Any
 
-from tests.e2e.common.agent_selection import AgentSelector
+from tests.e2e.common.agents import AgentFactory
+from tests.e2e.common.actrail_runtime import LaunchOptions
 from tests.e2e.common.core import TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.tool_alert_lifecycle import CommandTerminalEvidence
@@ -63,115 +65,80 @@ class ToolFrequentFailureAlertTask:
     def __init__(
         self,
         environment: ToolFrequentFailureAlertEnvironment,
-        test_context: TestingContextSingleton,
     ):
         self._environment = environment
-        self._test_context = test_context
 
-    def run(self) -> dict[str, TestResult]:
-        results: dict[str, TestResult] = {}
-
-        self._test_context.report_progress(
-            "installed_package",
-            "verifying install-release.sh installed package",
-        )
-        results["installed-package"] = self._check_installed_package()
-
-        self._test_context.report_progress(
-            "direct_mixed_round",
-            "three successful and three failing ls commands must alert",
-        )
-        mixed_trace_id, payload = self._run_positive_round(
-            "MIXED",
-            self._MISSING_PATHS,
-            successful_paths=("/etc/hostname",) * 3,
-        )
-        results["direct-mixed-alert-persisted"] = TestResult(
-            TestStatus.PASSED,
-            f"trace-{mixed_trace_id} persisted one mixed-outcome alert: "
-            "failures=3 total=6 rate=0.5",
-        )
-
-        self._test_context.report_progress(
-            "definition",
-            "verifying alert definition registration",
-        )
-        self._assert_definition()
-        results["direct-alert-definition"] = TestResult(
-            TestStatus.PASSED,
-            "frequent-failure definition is registered for the plugin",
-        )
-
-        self._test_context.report_progress(
-            "payload",
-            "verifying frequent-failure alert payload",
-        )
-        self._assert_payload(
-            payload,
-            expected_total_count=6,
-            expected_failure_rate=0.5,
-        )
-        results["direct-alert-payload"] = TestResult(
-            TestStatus.PASSED,
-            "payload reports failures=3 total=6 rate=0.5 for tool=ls",
-        )
-
-        self._test_context.report_progress(
-            "evidence",
-            "verifying unique alert evidence references commands and exits",
-        )
-        self._assert_evidence(payload)
-        results["terminal-command-registration"] = CommandTerminalEvidence(self._environment).verify(
-            mixed_trace_id, payload, self._MISSING_PATHS
-        )
-        results["direct-alert-evidence"] = TestResult(
-            TestStatus.PASSED,
-            "alert evidence has unique command/exit action ids",
-        )
-
-        self._test_context.report_progress(
-            "direct_insufficient_round",
-            "failures below the window threshold must not alert",
-        )
-        results["direct-no-alert-below-threshold"] = self._run_no_alert_round(
-            "INSUFFICIENT",
-            ["bash", "-c", "; ".join(f"ls {p}" for p in self._INSUFFICIENT_PATHS)],
-        )
-
-        self._test_context.report_progress(
-            "direct_cooldown_round",
-            "failures beyond threshold must not repeat alerts",
-        )
-        results["direct-cooldown-single-alert"] = self._run_cooldown_round()
-
-        self._test_context.report_progress(
-            "plugin_observed",
-            "checking plugin consumed observation records",
-        )
-        observed = self._plugin_observed_records()
-        if observed <= 0:
-            results["plugin-observed"] = TestResult(
-                TestStatus.FAILED,
-                f"plugin observed_records={observed}, expected > 0",
+    def run(self, case) -> None:
+        with case.step("Check the installed plugin package") as step:
+            step.message = 'verifying install-release.sh installed package'
+            result = self._check_installed_package()
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check alerts for a mix of successes and failures") as step:
+            step.message = 'three successful and three failing ls commands must alert'
+            mixed_trace_id, payload = self._run_positive_round(
+                "MIXED",
+                self._MISSING_PATHS,
+                successful_paths=("/etc/hostname",) * 3,
             )
-        else:
-            results["plugin-observed"] = TestResult(
+            step.status = TestStatus.PASSED
+            step.message = (f"trace-{mixed_trace_id} persisted one mixed-outcome alert: "
+                            "failures=3 total=6 rate=0.5")
+        with case.step("Check the registered alert definition") as step:
+            step.message = 'verifying alert definition registration'
+            self._assert_definition()
+            step.status = TestStatus.PASSED
+            step.message = ("frequent-failure definition is registered for the plugin")
+        with case.step("Check the alert payload") as step:
+            step.message = 'verifying frequent-failure alert payload'
+            self._assert_payload(
+                payload,
+                expected_total_count=6,
+                expected_failure_rate=0.5,
+            )
+            step.status = TestStatus.PASSED
+            step.message = ("payload reports failures=3 total=6 rate=0.5 for tool=ls")
+        with case.step("Check the alert evidence") as step:
+            step.message = 'verifying unique alert evidence references commands and exits'
+            self._assert_evidence(payload)
+            step.details["terminal-command-registration"] = CommandTerminalEvidence(self._environment).verify(
+                mixed_trace_id, payload, self._MISSING_PATHS
+            )
+            step.details["direct-alert-evidence"] = TestResult(
                 TestStatus.PASSED,
-                f"plugin observed_records={observed}",
+                "alert evidence has unique command/exit action ids",
             )
-
-        self._test_context.report_progress(
-            "direct_installed_package_round",
-            "loading the plugin from the installed package",
-        )
-        results["direct-installed-package-round"] = self._run_installed_package_round()
-
-        self._test_context.report_progress(
-            "real_agent",
-            "running the unified failing-command prompt through a real agent",
-        )
-        results["real-agent"] = self._run_real_agent_round()
-        return results
+        with case.step("Check that failures below the threshold do not raise an alert") as step:
+            step.message = 'failures below the window threshold must not alert'
+            result = self._run_no_alert_round(
+                            "INSUFFICIENT",
+                            ["bash", "-c", "; ".join(f"ls {p}" for p in self._INSUFFICIENT_PATHS)],
+                        )
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check that cooldown suppresses repeat alerts") as step:
+            step.message = 'failures beyond threshold must not repeat alerts'
+            result = self._run_cooldown_round()
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check that the plugin received observations") as step:
+            step.message = 'checking plugin consumed observation records'
+            observed = self._plugin_observed_records()
+            if observed <= 0:
+                step.details["plugin-observed"] = TestResult(
+                    TestStatus.FAILED,
+                    f"plugin observed_records={observed}, expected > 0",
+                )
+            else:
+                step.details["plugin-observed"] = TestResult(
+                    TestStatus.PASSED,
+                    f"plugin observed_records={observed}",
+                )
+        with case.step("Check alerts from the installed plugin") as step:
+            step.message = 'loading the plugin from the installed package'
+            result = self._run_installed_package_round()
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check alerts from commands run by an Agent") as step:
+            step.message = 'running the unified failing-command prompt through a real agent'
+            result = self._run_real_agent_round()
+            step.status, step.message, step.details = result.status, result.message, result.details
 
     def _check_installed_package(self) -> TestResult:
         package = self._environment.installed_package_dir
@@ -303,14 +270,14 @@ class ToolFrequentFailureAlertTask:
         )
 
     def _run_real_agent_round(self) -> TestResult:
-        agent = AgentSelector(self._environment.config.repo).select(
-            self._test_context,
-            kinds=("opencode", "codex"),
+        agent = AgentFactory.auto(
+            self._environment.config.repo,
+            TestingContextSingleton.current(),
         )
         if agent is None:
             return TestResult(
                 TestStatus.SKIPPED,
-                "no usable tool-capable agent binary in opencode/codex",
+                "no available Agent among the default candidates",
             )
 
         # 直接命令回归使用 parent_scope=any；真实 Agent 轮必须切换到
@@ -327,12 +294,14 @@ class ToolFrequentFailureAlertTask:
                     f"TOOL_FREQUENT_ALERT_AGENT_{attempt}_"
                     + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
                 )
-                launch = self._launch(
-                    marker,
-                    agent.command(self._AGENT_PROMPT),
-                    environment=agent.environment,
-                )
-                trace_id = self._require_trace_id(launch)
+                with self._environment.runtime.launch_scope(LaunchOptions(name=marker, host_ebpf="auto")):
+                    with AgentFactory.create(
+                        agent.kind, binary=agent.binary, environment=agent.environment,
+                    ).launchWithAcTrailCtl(stream_mode=False) as running:
+                        running.run(self._AGENT_PROMPT)
+                        running.join_all(timeout=self._environment.config.launch_timeout_seconds)
+
+                        trace_id = running.launch_result.trace_id
                 self._wait_terminal(trace_id)
                 actions = self._environment.viewer_actions(trace_id)
                 tool_call_count = self._agent_llm_tool_call_count(actions)

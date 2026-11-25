@@ -1,9 +1,9 @@
+"""Prepare XiaoO discovery and scenario arguments for the LLM probe."""
 from __future__ import annotations
 
-import secrets
 from pathlib import Path
 
-from tests.e2e.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import AgentBinaryNotFoundError
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
 
@@ -13,38 +13,22 @@ from .constants import CASE_CONSTANTS
 
 
 class ProbeXiaooLLMTask:
-    def __init__(self, config: ProbeXiaooLLMConfig, runtime: ActrailRuntime):
+    def __init__(self, config: ProbeXiaooLLMConfig):
         self._config = config
-        self._runtime = runtime
-        self.marker = f"A{secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)}"
         self._discovery = AgentBinaryDiscovery(config.repo)
         self._xiaoo = self._resolve_xiaoo()
 
-    def run(self) -> CommandResult:
-        return self._runtime.run(
-            self._command(),
-            timeout_seconds=self._config.launch_timeout_seconds,
+    def create_agent(self):
+        """场景参数透传给 XiaoO，进程生命周期由适配器负责。"""
+        return AgentFactory.xiaoo(
+            binary=self._xiaoo,
+            arguments=("--no-tools", "--max-turns", str(CASE_CONSTANTS.max_turns)),
             environment=self.environment(),
         )
 
     @property
     def binary(self) -> Path:
         return self._xiaoo
-
-    def _command(self) -> list[Path | str]:
-        return [
-            self._runtime.actrailctl,
-            "launch",
-            "--",
-            self._xiaoo,
-            "--cli",
-            "run",
-            "--no-tools",
-            "--max-turns",
-            str(CASE_CONSTANTS.max_turns),
-            "--prompt",
-            f'Reply with exactly "{self.marker}" and nothing else. Do not use tools.',
-        ]
 
     def _resolve_xiaoo(self) -> Path:
         configured = self._config.xiaoo_binary

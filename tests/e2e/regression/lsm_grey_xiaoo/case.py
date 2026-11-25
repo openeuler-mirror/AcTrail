@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from tests.e2e.common.core import CommonTestConfig, TestCase, TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import CommonTestConfig, TestCase, TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.common.plugin_test_environment import PluginRuntimeSpec, PluginTestEnvironment
 from tests.e2e.regression.lsm_access_control_xiaoo.services import WorkloadProvider
@@ -24,8 +24,13 @@ from tests.e2e.regression.lsm_grey_xiaoo.argv_case import ArgvCase
 
 
 class LsmGreyXiaooCase(TestCase):
-    def __init__(self, inputs: TestCaseInputs):
-        self.config = CommonTestConfig.from_environment(inputs, "LSM_GREY_XIAOO")
+    case_id = 'lsm_grey_xiaoo'
+    description = 'Real Xiaoo LSM authorization through a WASM plugin and external HTTP security service'
+    default_enabled = False
+
+
+    def __init__(self, directories: TestRunDirectories):
+        self.config = CommonTestConfig.from_environment(directories, "LSM_GREY_XIAOO")
         executable = os.environ.get("LSM_GREY_XIAOO_E2E_BINARY") or shutil.which("xiaoo")
         if executable is None:
             raise RuntimeError("set LSM_GREY_XIAOO_E2E_BINARY to the real Xiaoo executable")
@@ -379,3 +384,6 @@ class LsmGreyXiaooCase(TestCase):
                 failures.append(str(result))
         return TestResult(TestStatus.FAILED if failures else TestStatus.PASSED,
                           "; ".join(failures) or "services stopped and traces cleaned")
+
+# Import the additional scenario so its class is registered on discovery.
+from .modes_case import LsmGreyModesCase
