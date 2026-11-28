@@ -1,16 +1,42 @@
-# V2 tests
+# 端到端测试
 
-V2 测试结果遵循以下统一判定原则：
+端到端测试通过启动 AcTrail、执行实际任务并查询观测结果，验证活动采集、治理控制和结果展示。每个测例先确定要验证的能力，再建立场景，以实际执行结果核对 AcTrail 的记录或行为。
 
-- `SKIPPED`：外部测试条件不满足，测试无法有效执行。例如可选 agent
-  二进制缺失或不可执行、agent 未认证、provider/model 不可用，或者外部网络不可达。
-- `PASSED`：外部条件满足，测试完整执行，并且所有 AcTrail 行为和采集断言均通过。
-- `FAILED`：测试已经具备执行条件，但 AcTrail 启动、运行、采集、输出或断言失败；
-  测试代码自身异常也属于失败。
+## 选择测试
 
-AcTrail 自身是被测对象，不属于可选外部条件。`actraild`、`actrailctl`、
-`actrailviewer` 或其他测试要求的 AcTrail release 产物缺失时必须判定为
-`FAILED`，不能降级为 `SKIPPED`。
+从[回归测试目录](regression/README.md)选择测例，先阅读对应文档中的测试目标、场景设计、依赖和预期结果。它们说明本次运行需要建立哪些条件，以及依据什么判断通过。
 
-当前 V2 regression 测试的运行方法见
-[`regression/README.md`](regression/README.md)。
+测例文档中的快速运行提供执行命令和配置。手动测试章节提供页面操作或记录检查步骤。
+
+## 运行测试
+
+回归入口需要 Python 3.11 或更高版本。运行前按测例的依赖说明准备 AcTrail release 产物、所需权限，以及 Agent、模型服务或其他外部环境。
+
+在仓库根目录列出测例。
+
+```bash
+python3 tests/e2e/regression/test_all.py --list
+```
+
+选择一个测例运行，例如 Claude 模型交互采集。
+
+```bash
+sudo -E python3 tests/e2e/regression/test_all.py \
+  --case probe_claude_llm
+```
+
+默认集合、运行参数和日志位置见[回归运行说明](regression/README.md)。
+
+## 判定结果
+
+| 结果 | 判定依据 |
+| --- | --- |
+| 通过（`PASSED`） | 场景条件已建立，测例执行完成，预期的 AcTrail 行为和观测记录均通过检查 |
+| 跳过（`SKIPPED`） | 所需外部条件不满足，例如 Agent 缺失、认证不可用、模型服务不可达或缺少所需运行环境。输出说明具体原因 |
+| 失败（`FAILED`） | AcTrail 启动、运行、采集或结果检查失败，或测试代码发生异常 |
+
+测例要求的 AcTrail release 产物缺失时，结果为失败（`FAILED`）。跳过的测例需要具备相应条件后重新运行，才能取得该项能力的验收结果。
+
+## 编写测例
+
+先在测例文档中明确测试目标、场景、步骤和预期结果，再让代码实现这些检查。新增测例的入口约定及 Agent 使用方式见[添加测例](regression/README.md#添加测例)。

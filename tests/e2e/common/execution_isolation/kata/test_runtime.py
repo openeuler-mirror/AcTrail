@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.e2e.common.core import TestCaseInputs, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestStatus
 from tests.e2e.common.process import CommandResult, SubprocessRunner
 from tests.e2e.regression.execution_isolation_firecracker.v2.config import (
     FirecrackerExecutionIsolationConfig,
@@ -1144,7 +1144,7 @@ class SharedAlertRuntimeTest(unittest.TestCase):
             root = Path(raw)
             with patch.dict(os.environ, {}, clear=True):
                 config = CloudHypervisorExecutionIsolationConfig.from_environment(
-                    TestCaseInputs(root, root, root)
+                    TestRunDirectories(root, root, root)
                 )
             prerequisite_module = (
                 "tests.e2e.common.execution_isolation.kata."
@@ -1275,9 +1275,9 @@ class SharedAlertRuntimeTest(unittest.TestCase):
 
     @staticmethod
     def _firecracker_config(root: Path) -> FirecrackerExecutionIsolationConfig:
-        inputs = TestCaseInputs(root, root, root)
+        directories = TestRunDirectories(root, root, root)
         with patch.dict(os.environ, {}, clear=True):
-            return FirecrackerExecutionIsolationConfig.from_environment(inputs)
+            return FirecrackerExecutionIsolationConfig.from_environment(directories)
 
 
 if __name__ == "__main__":

@@ -158,8 +158,7 @@ class ExecutionIsolationSetup:
             "ACTRAIL_XIAOO_BIN": "/opt/actrail-execution/xiaoo-root",
             "ACTRAIL_XIAOO_CONFIG": "/opt/actrail-execution/xiaoo.toml",
             "ACTRAIL_XIAOO_PROMPT": (
-                "Use the Bash tool calls requested by the provider, then reply "
-                f"with exactly {identity.XIAOO_RESPONSE_MARKER}."
+                "Complete the file read and write tasks using Bash, then summarize the result."
             ),
             "ACTRAIL_XIAOO_RESPONSE_MARKER": identity.XIAOO_RESPONSE_MARKER,
             "ACTRAIL_XIAOO_COORD_DIR": "/run/actrail-execution",

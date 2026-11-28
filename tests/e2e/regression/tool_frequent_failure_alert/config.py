@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 
 from .constants import CASE_CONSTANTS
 
@@ -21,10 +21,10 @@ class ToolFrequentFailureAlertConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "ToolFrequentFailureAlertConfig":
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             "TOOL_FREQUENT_FAILURE_ALERT",
         )
         configured_operator = os.environ.get(
@@ -35,10 +35,10 @@ class ToolFrequentFailureAlertConfig(CommonTestConfig):
             operator_config=(
                 Path(configured_operator)
                 if configured_operator
-                else inputs.work_dir / "actraild.conf"
+                else directories.work_dir / "actraild.conf"
             ),
             plugin_manifest=(
-                inputs.repo
+                directories.repo
                 / "examples"
                 / "plugins"
                 / "wasm-legacy"

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ProbeClaudeLlmConstants:
-    marker_random_bytes: int = 5
+    prompt: str = "What causes the phases of the Moon?"
     launch_diagnostic_tail_characters: int = 4000
 
 

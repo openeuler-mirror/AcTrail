@@ -1,3 +1,4 @@
+"""Own the daemon, proxy and subscriber used to verify sandbox alerts."""
 from __future__ import annotations
 
 import json
@@ -99,7 +100,18 @@ class SandboxAlertPath:
                 RESOURCE_ALERT_INSTANCE_ID,
             )
         )
-        self._started = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception, traceback) -> None:
+        errors = self.stop()
+        if errors:
+            message = "\n".join(errors)
+            if exception is not None:
+                exception.add_note(message)
+            else:
+                raise RuntimeError(message)
 
     @property
     def daemon_port(self) -> int:
@@ -116,7 +128,6 @@ class SandboxAlertPath:
     def start(self, ready_timeout_seconds: float) -> None:
         self._write_plugin_config()
         self._runtime.prepare()
-        self._started = True
         self._proxy.require_running()
         self._subscriber.connect(ready_timeout_seconds)
         self._subscriber.subscribe(
@@ -132,14 +143,22 @@ class SandboxAlertPath:
 
     def stop(self) -> list[str]:
         errors: list[str] = []
-        self._subscriber.close()
-        if self._web is not None:
-            self._web.stop()
-        if self._started:
+        # 各资源独立退出，某一步失败不阻断其他清理。
+        for name, close in (
+            ("subscriber", self._subscriber.close),
+            ("web", self._web.stop if self._web is not None else None),
+        ):
+            if close is not None:
+                try:
+                    close()
+                except Exception as error:
+                    errors.append(f"{name}: {error}")
+        try:
             stopped = self._runtime.stop()
             if stopped is not None and stopped.returncode != 0:
                 errors.append("daemon: " + stopped.output[-1000:])
-            self._started = False
+        except Exception as error:
+            errors.append(f"daemon: {error}")
         try:
             self._proxy.terminate()
         except Exception as error:

@@ -1,5 +1,11 @@
 # 真实 Xiaoo 按操作选择访问控制后端
 
+## 测试目标
+
+验证各操作选择的访问控制后端能执行静态与动态策略，准确记录治理结果，并在规则更新和 owner 卸载时维持正确的访问行为。
+
+## 场景设计
+
 使用真实 Xiaoo、本地 streaming provider 和实际文件、ELF、TCP 操作，验证独立 BPF LSM 访问控制。
 
 每次启动 daemon 都通过 `actrailctl init -f` 刷新默认配置，并依次传入多个 `--patch`。公共构建器生成隔离路径和运行参数补丁，`configuration/patch_config.toml` 设置观测行为，各后端子目录的 `patch_config.toml` 设置能力与操作后端。
@@ -43,6 +49,34 @@ IPv4 TCP 服务绑定 `127.0.0.2`，静态网络规则使用 `127.0.0.2:*` 验�
 - 工作负载至真实 Xiaoo 的进程祖先及线程，其 Seccomp 状态与选中操作一致。
 - daemon 的 fanotify 和 seccomp listener FD 与实际配置一致。
 - 动态候选发布失败保留已有配置与规则 revision，owner 卸载撤销内核生效策略。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | release 产物和场景所需的官方插件 | 运行真实治理和观测 |
+| 主机 | Linux、root、eBPF 与 BPF LSM | 执行内核访问控制 |
+| XiaoO | 可用的真实 CLI | 驱动实际工作负载 |
+| 内核能力 | 所需 LSM hook/helper、BTF，继承 Seccomp 状态为 0 | 运行后端组合对照 |
+
+## 测试步骤摘要
+
+1. 选择操作后端组合，刷新默认配置并启动隔离 daemon。
+2. 通过真实 XiaoO 执行静态 deny 与 allow，核对系统调用结果及文件、网络效果。
+3. 加载官方动态策略插件，发布五类操作规则，验证候选拒绝、规则优先级与 owner 边界。
+4. 发布 allow，再发布 deny 并卸载 owner，核对访问恢复和策略 revision。
+5. 按 trace ID 对照治理审计、进程祖先、采集 payload 和实际后端状态。
+6. 停止服务并清理工作目录。专项场景按后文开关分别运行。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 拒绝与允许 | 真实工作负载执行受控操作 | deny 返回权限错误且无成功效果，allow 操作成功 |
+| 后端选择 | 按操作配置 LSM、fanotify 或 seccomp | 审计、listener 和线程 Seccomp 状态符合配置 |
+| 发布边界 | 候选越权、无效或超过容量 | 候选被拒绝，已生效规则和 revision 保持一致 |
+| 撤销 | 卸载动态规则 owner | 对应操作恢复默认 allow |
+
+## 快速运行
 
 ```bash
 python3 tests/e2e/regression/lsm_access_control_xiaoo/run_e2e.py --color never
@@ -121,7 +155,7 @@ python3 tests/e2e/regression/lsm_access_control_xiaoo/run_e2e.py --color never
 TCP Fast Open 使用独立网络命名空间运行同一真实 agent 场景：
 
 ```bash
-python3 tests/e2e/regression/lsm_access_control_xiaoo/continued/fastopen/run.py
+python3 tests/e2e/regression/test_all.py --case lsm_access_control_xiaoo_fastopen
 ```
 
 启动器先创建并核验独立网络命名空间，再启用 loopback 和该命名空间的 TFO 客户端、服务端开关。服务端和客户端设置 socket 级 no-cookie 选项。客户端从全新、未连接的 socket 直接调用 `sendto(..., MSG_FASTOPEN, ...)`，并通过 `SO_SNDTIMEO` 限制阻塞时间。
@@ -177,3 +211,13 @@ python3 tests/e2e/regression/lsm_access_control_xiaoo/run_e2e.py --color never
 ```
 
 将后端改为 `fanotify_seccomp` 可验证 connect 的 CIDR 与端口区间控制及拒绝审计。
+
+## 统一回归入口
+
+`--case lsm_access_control_xiaoo_fastopen` 运行独立网络命名空间 Fast Open 验收。
+`LSM_FASTOPEN_E2E_LAUNCH_TIMEOUT_SECONDS` 设置整个子进程超时，默认 180 秒。
+
+`--case lsm_access_control_xiaoo_performance` 运行 TCP 性能验收，
+`--case lsm_access_control_xiaoo_retained_performance` 运行持有文件和 socket 性能验收。
+配置分别使用 `LSM_PERFORMANCE_E2E_` 和 `LSM_RETAINED_PERFORMANCE_E2E_` 前缀。
+详细参数见对应性能目录文档。

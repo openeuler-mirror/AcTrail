@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Self
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.kata_runtime import shim_binary
 from tests.e2e.common.kata_runtime.environment import (
     absolute_path,
@@ -50,10 +50,10 @@ class KataExecutionIsolationConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> Self:
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             cls.CONFIG_NAMESPACE,
         )
         prefix = cls.ENVIRONMENT_PREFIX

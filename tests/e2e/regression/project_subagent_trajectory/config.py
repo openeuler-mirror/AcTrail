@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.core.loopback_port import resolve_test_port
 from tests.e2e.common.llm_trajectory.config import TrajectoryTestConfig
 
@@ -19,10 +19,10 @@ class ProjectSubagentTrajectoryConfig(TrajectoryTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "ProjectSubagentTrajectoryConfig":
         common = CommonTestConfig.from_environment(
-            inputs,
+            directories,
             "PROJECT_SUBAGENT_TRAJECTORY",
         )
         configured_operator = os.environ.get(
@@ -59,7 +59,7 @@ class ProjectSubagentTrajectoryConfig(TrajectoryTestConfig):
             operator_config=(
                 Path(configured_operator)
                 if configured_operator
-                else inputs.work_dir / "actraild.conf"
+                else directories.work_dir / "actraild.conf"
             ),
             web_host=os.environ.get(
                 "PROJECT_SUBAGENT_TRAJECTORY_E2E_WEB_HOST",

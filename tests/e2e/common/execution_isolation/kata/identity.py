@@ -21,7 +21,6 @@ class ExecutionIsolationIdentity:
     def workload_markers(cls) -> tuple[str, ...]:
         return (
             f"KATA_XIAOO_PROVIDER_READY instance={cls.CASE}",
-            cls.XIAOO_RESPONSE_MARKER,
             cls.NAMED_ROOT_MARKER,
             f"{cls.AGENT_TOOLS_MARKER} instance={cls.CASE}",
             f"KATA_XIAOO_WORKLOAD_OK instance={cls.CASE}",

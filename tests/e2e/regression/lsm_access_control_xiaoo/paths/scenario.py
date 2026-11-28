@@ -192,7 +192,16 @@ class PathBindingScenario:
 
     def _verify(self, phase: str, bound: str, alias: str, network: str, context, results: dict) -> None:
         name = f"{self.source}_{phase}"
-        context.report_progress(name, f"real Xiaoo verifies path binding to {bound}, alias to {alias}")
+        context.report_progress({
+            'static_bound_b': 'Check initial static path bindings',
+            'dynamic_bound_b': 'Check initial published path bindings',
+            'static_retarget_c_network_deny': 'Check static path bindings after alias and network policy changes',
+            'dynamic_retarget_c_network_deny': 'Check published path bindings after alias and network policy changes',
+            'static_network_owner_unloaded': 'Check static path bindings after unloading the network policy',
+            'dynamic_network_owner_unloaded': 'Check published path bindings after unloading the network policy',
+            'static_republished_c': 'Check static path bindings after restarting capture',
+            'dynamic_republished_c': 'Check path bindings after republishing policies',
+        }[name], f"real Xiaoo verifies path binding to {bound}, alias to {alias}")
         probes = []
         expected = {}
         for operation, domain in (("open", "file"), ("exec", "exec")):

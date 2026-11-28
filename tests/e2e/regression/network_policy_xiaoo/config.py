@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 
 from .constants import CASE_CONSTANTS
 
@@ -24,9 +24,9 @@ class NetworkPolicyXiaooConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "NetworkPolicyXiaooConfig":
-        common = CommonTestConfig.from_environment(inputs, "NETWORK_POLICY_XIAOO")
+        common = CommonTestConfig.from_environment(directories, "NETWORK_POLICY_XIAOO")
         xiaoo = os.environ.get("NETWORK_POLICY_XIAOO_E2E_BINARY") or shutil.which(
             "xiaoo"
         )
@@ -47,8 +47,8 @@ class NetworkPolicyXiaooConfig(CommonTestConfig):
             raise RuntimeError("network-policy Xiaoo timeouts must be positive")
         return cls(
             **common.as_kwargs(),
-            operator_config=inputs.work_dir / "actraild.conf",
-            operator_config_patch=inputs.work_dir / "actraild.patch.toml",
+            operator_config=directories.work_dir / "actraild.conf",
+            operator_config_patch=directories.work_dir / "actraild.patch.toml",
             plugin_package=(plugin_root / "network-policy-dynamic").resolve(),
             xiaoo_binary=Path(xiaoo).resolve(),
             web_host=os.environ.get(

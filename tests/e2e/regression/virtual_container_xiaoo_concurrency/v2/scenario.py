@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 import shutil
@@ -96,7 +97,7 @@ class DualKataXiaooScenario:
         try:
             if self._config.opencode_free_model is not None:
                 self._context.report_progress(
-                    "opencode_egress",
+                    "Start the CONNECT proxy and VSOCK bridge",
                     "starting allow-listed Host CONNECT proxy and VSOCK bridge",
                 )
                 host_services.extend(self._start_opencode_egress())
@@ -105,14 +106,14 @@ class DualKataXiaooScenario:
                     "allow-listed OpenCode HTTPS egress is ready",
                 )
             self._context.report_progress(
-                "assets",
+                "Prepare the Agent and provider fixtures",
                 "preparing deterministic local xiaoO/provider fixtures",
             )
             self._prepare_assets()
             capabilities = CtrCapabilities.detect(self._runner)
 
             self._context.report_progress(
-                "vms",
+                "Start two independent Kata VMs",
                 "starting two independent Kata VMs",
             )
             for instance in DUAL_VM_INSTANCES:
@@ -146,7 +147,7 @@ class DualKataXiaooScenario:
                 )
 
             self._context.report_progress(
-                "providers",
+                "Wait for both guest providers",
                 "waiting for both in-VM providers",
             )
             self._wait_for_paths(
@@ -170,7 +171,7 @@ class DualKataXiaooScenario:
             for instance in DUAL_VM_INSTANCES:
                 (self._coord_root / instance / "release").touch()
             self._context.report_progress(
-                "overlap",
+                "Check that both Agents run concurrently",
                 "proving both xiaoO processes are simultaneously active",
             )
             self._wait_for_paths(
@@ -216,7 +217,7 @@ class DualKataXiaooScenario:
             )
 
             self._context.report_progress(
-                "traces",
+                "Read the trace from each guest",
                 "reading each trace from its own guest-root viewer",
             )
             for instance in DUAL_VM_INSTANCES:
@@ -406,8 +407,7 @@ class DualKataXiaooScenario:
             "ACTRAIL_XIAOO_BIN": "/opt/actrail-xiaoo/xiaoo",
             "ACTRAIL_XIAOO_CONFIG": f"/opt/actrail-xiaoo/xiaoo-{instance}.toml",
             "ACTRAIL_XIAOO_PROMPT": (
-                f"Reply with exactly ACTRAIL_KATA_XIAOO_{upper}_RESPONSE_OK "
-                "and nothing else."
+                f"Describe one benefit of isolating workload {instance} in its own VM."
             ),
             "ACTRAIL_XIAOO_RESPONSE_MARKER": (
                 f"ACTRAIL_KATA_XIAOO_{upper}_RESPONSE_OK"
@@ -438,11 +438,7 @@ class DualKataXiaooScenario:
                         self._config.opencode_free_model
                     ),
                     "ACTRAIL_OPENCODE_PROMPT": (
-                        f"Reply with exactly ACTRAIL_KATA_OPENCODE_{upper}_OK "
-                        "and nothing else."
-                    ),
-                    "ACTRAIL_OPENCODE_RESPONSE_MARKER": (
-                        f"ACTRAIL_KATA_OPENCODE_{upper}_OK"
+                        f"Explain how VM isolation protects workload {instance}."
                     ),
                     "ACTRAIL_OPENCODE_GUEST_BRIDGE": (
                         "/opt/actrail-xiaoo/guest-bridge.sh"
@@ -524,7 +520,6 @@ class DualKataXiaooScenario:
             output,
             (
                 f"KATA_XIAOO_PROVIDER_READY instance={instance}",
-                f"ACTRAIL_KATA_XIAOO_{upper}_RESPONSE_OK",
                 f"KATA_XIAOO_WORKLOAD_OK instance={instance}",
                 "deployment_permissions_selected="
                 "host_ebpf:enabled,seccomp_notify:disabled",
@@ -536,7 +531,6 @@ class DualKataXiaooScenario:
             require_markers(
                 output,
                 (
-                    f"ACTRAIL_KATA_OPENCODE_{upper}_OK",
                     f"KATA_OPENCODE_FREE_OK instance={instance}",
                 ),
                 context=f"OpenCode workload {instance}",
@@ -552,7 +546,6 @@ class DualKataXiaooScenario:
         reject_markers(
             outputs["a"],
             (
-                "ACTRAIL_KATA_XIAOO_B_RESPONSE_OK",
                 "ACTRAIL_KATA_XIAOO_B_FILE_WRITE_OK",
             ),
             context="VM A",
@@ -560,7 +553,6 @@ class DualKataXiaooScenario:
         reject_markers(
             outputs["b"],
             (
-                "ACTRAIL_KATA_XIAOO_A_RESPONSE_OK",
                 "ACTRAIL_KATA_XIAOO_A_FILE_WRITE_OK",
             ),
             context="VM B",
@@ -609,6 +601,37 @@ class DualKataXiaooScenario:
                 f"VM {instance} trace lacks eBPF/network evidence: "
                 f"events={counts.events} network_events={counts.network_events}"
             )
+        self._validate_responses(vm, instance, trace_id)
+
+    def _validate_responses(self, vm: KataTestContainer, instance: str, trace_id) -> None:
+        result = self._guest.capture(
+            vm.container_id,
+            "/usr/local/bin/actrailviewer --config /etc/actrail/operator.conf "
+            f"--output-format json actions --trace-id {trace_id}",
+            timeout=self._config.runtime_timeout_seconds,
+        )
+        if result.returncode:
+            raise RuntimeError(f"VM {instance} actions query failed: {result.diagnostic}")
+        document = json.loads(result.stdout)
+        replies = [(self._coord_root / instance / "xiaoo.stdout").read_text().strip()]
+        if self._config.opencode_free_model is not None:
+            events = (self._coord_root / instance / "opencode.stdout").read_text().splitlines()
+            texts = [json.loads(line) for line in events if line.strip()]
+            if any(event.get("type") == "error" for event in texts):
+                raise RuntimeError(f"VM {instance} OpenCode reported an error")
+            replies.append("\n".join(
+                event.get("part", {}).get("text", "")
+                for event in texts if event.get("type") == "text"
+            ).strip())
+        for reply in replies:
+            if not reply or not any(
+                action.get("kind") == "llm.response"
+                and action.get("status") == "success"
+                and action.get("completeness") == "complete"
+                and reply in action.get("attributes", {}).get("llm.response.content_text", "")
+                for action in document["actions"]
+            ):
+                raise RuntimeError(f"VM {instance} trace lacks the complete actual Agent reply")
 
     def _wait_for_paths(
         self,

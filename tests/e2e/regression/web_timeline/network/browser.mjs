@@ -46,7 +46,10 @@ class NetworkBrowserAcceptance {
     const target = await response.json();
     assert.equal(target.kind, 'http.message');
     assert.equal(target.title, this.expected.title);
-    await page.locator('input[type=search]').first().fill(this.expected.path);
+    // Load a detailed window around the observed request before locating its label.
+    await timeline.jump(target.start_time_unix_nanos);
+    await page.locator('.flame-zoom-controls button').last().click();
+    await timeline.settle();
     const hit = await timeline.select(target, 'Network');
     const title = hit.title;
     assert(title.includes(this.expected.title), 'HTTP canvas label lost method or request path');

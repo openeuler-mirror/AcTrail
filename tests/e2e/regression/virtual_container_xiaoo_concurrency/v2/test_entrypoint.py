@@ -3,10 +3,10 @@ from __future__ import annotations
 import unittest
 
 from tests.e2e.regression.virtual_container_xiaoo_concurrency.run_e2e import (
-    TEST_DEFINITION as ROOT_DEFINITION,
+    VirtualContainerXiaooConcurrencyCase as ROOT_DEFINITION,
 )
 from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.run_e2e import (
-    TEST_DEFINITION as V2_DEFINITION,
+    VirtualContainerXiaooConcurrencyCase as V2_DEFINITION,
 )
 from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.scenario import (
     DUAL_VM_INSTANCES,

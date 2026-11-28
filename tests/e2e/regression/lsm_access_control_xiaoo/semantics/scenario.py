@@ -57,7 +57,10 @@ class FileSemanticsScenario:
                     details = str(error) + (log.read_text() if log.exists() else "")
                     if "requires access_control.file.open backend lsm" not in details:
                         raise
-                    context.report_progress(mode, "static read rule rejected at admission")
+                    context.report_progress({
+                        'fanotify': 'Check rejection of static read rules with fanotify',
+                        'open-disabled': 'Check rejection of static read rules with open enforcement disabled',
+                    }[mode], "static read rule rejected at admission")
                 else:
                     runtime.stop()
                     raise AssertionError(f"{mode} accepted an unsupported static read rule")
@@ -103,7 +106,15 @@ class FileSemanticsScenario:
             try:
                 for phase in self.phases:
                     self.wait(self.root / f"ready-{phase}", agent)
-                    context.report_progress(phase, "real Xiaoo checks independent file permissions")
+                    context.report_progress({
+                        'empty': 'Check file access without operation rules',
+                        'open': 'Check file open permissions',
+                        'write': 'Check file write permissions',
+                        'read': 'Check file read permissions',
+                        'delete': 'Check file deletion permissions',
+                        'attr': 'Check file attribute permissions',
+                        'restore': 'Check file access after restoring permissions',
+                    }[phase], "real Xiaoo checks independent file permissions")
                     rules = [] if phase in ("empty", "restore") or (not lsm and phase != "open") else [{
                         "rule_id": f"semantics-{phase}", "operation": phase, "decision": "deny",
                         "path": f"{self.root}/remove/**" if phase == "delete" else str(self.root / "protected"), "priority": 20,

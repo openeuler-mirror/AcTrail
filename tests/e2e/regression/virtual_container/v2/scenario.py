@@ -67,7 +67,7 @@ class VirtualContainerScenario:
         results: dict[str, TestResult] = {}
         contract_bundle = self._tmp_dir / "contract-guest-bundle"
         self._context.report_progress(
-            "contracts",
+            "Prepare the shared guest bundle",
             "preparing the shared guest bundle fixture",
         )
         results["guest_bundle_fixture"] = self._run_command(
@@ -109,8 +109,26 @@ class VirtualContainerScenario:
             ("openeuler_image_builder", "test-openeuler-image-builder-contract.sh"),
             ("guest_bundle_rebuild", "test-prepare-guest-bundle.sh"),
         )
+        contract_titles = {
+            "guest_systemd": "Check guest systemd services",
+            "guest_otel_endpoint": "Check the guest OTEL endpoint",
+            "host_collector": "Check the host collector",
+            "vsock_egress": "Check VSOCK egress",
+            "guest_rootfs_install": "Check guest root filesystem installation",
+            "workload_interface": "Check the workload interface",
+            "workload_bundle": "Check workload bundle preparation",
+            "pid_namespace_assertion": "Check PID namespace verification",
+            "preflight_backend": "Check VM backend prerequisites",
+            "preflight_cgroup": "Check cgroup prerequisites",
+            "local_test_profile": "Check the local test profile",
+            "v2_runner_entrypoint": "Check the V2 test entrypoint",
+            "runtime_config_paths": "Check runtime configuration paths",
+            "kata_3_32_host": "Check Kata 3.32 host support",
+            "openeuler_image_builder": "Check the openEuler image builder",
+            "guest_bundle_rebuild": "Check guest bundle rebuilding",
+        }
         for name, script in static_contracts:
-            self._context.report_progress("contracts", name)
+            self._context.report_progress(contract_titles[name], name)
             results[name] = self._run_command(
                 [str(self._case_dir / script)],
                 environment=environment,
@@ -175,7 +193,7 @@ class VirtualContainerScenario:
         results: dict[str, TestResult] = {}
         progress_backend = _progress_backend(backend.name)
         self._context.report_progress(
-            f"{progress_backend}.preflight",
+            f"Check {progress_backend} runtime prerequisites",
             "validating host runtime and deployment paths",
         )
         results["preflight"] = self._run_command(
@@ -198,7 +216,7 @@ class VirtualContainerScenario:
         if self._capabilities is None:
             self._capabilities = CtrCapabilities.detect(self._runner)
         self._context.report_progress(
-            f"{progress_backend}.base",
+            f"Start the {progress_backend} interface VM",
             "starting one reusable interface VM",
         )
         try:
@@ -229,7 +247,7 @@ class VirtualContainerScenario:
                 results,
             )
         self._context.report_progress(
-            f"{progress_backend}.data",
+            f"Start the {progress_backend} data VM",
             "starting one reusable guest-root data VM",
         )
         try:
@@ -266,9 +284,15 @@ class VirtualContainerScenario:
             self._runner,
             self._capabilities,
         ) as vm:
+            interface_titles = {
+                "verify": "Check workload interface access",
+                "deny": "Check rejection without the required group",
+                "launch": "Launch the workload command",
+                "namespace": "Check workload PID isolation",
+            }
             for case in INTERFACE_CASES:
                 self._context.report_progress(
-                    f"{_progress_backend(backend.name)}.if.{case.name}",
+                    f"{interface_titles[case.name]} with {_progress_backend(backend.name)}",
                     "running in reusable base VM",
                 )
                 title = self._trace_title(backend.name, f"interface-{case.name}")
@@ -347,7 +371,7 @@ class VirtualContainerScenario:
             tls_case = next((case for case in DATA_CASES if case.needs_tls), None)
             if tls_case is not None:
                 self._context.report_progress(
-                    f"{_progress_backend(backend.name)}.data.tls",
+                    f"Discover TLS probes in {_progress_backend(backend.name)}",
                     "running the unchecked first TLS discovery exchange",
                 )
                 try:
@@ -359,8 +383,7 @@ class VirtualContainerScenario:
                     )
             for case in DATA_CASES:
                 self._context.report_progress(
-                    f"{_progress_backend(backend.name)}.data."
-                    f"{_progress_data_case(case.name)}",
+                    f"{_progress_data_case(case.name)} with {_progress_backend(backend.name)}",
                     "running in reusable data VM",
                 )
                 try:
@@ -398,7 +421,7 @@ class VirtualContainerScenario:
                 "Guest artifact was prepared without --otel-endpoint",
             )
         self._context.report_progress(
-            f"{_progress_backend(backend)}.data.collector",
+            f"Wait for exported spans from {_progress_backend(backend)}",
             f"waiting for spans in {traces_file}",
         )
         try:
@@ -824,13 +847,14 @@ class VirtualContainerScenario:
 
 def _progress_backend(backend: str) -> str:
     return {
-        "cloud-hypervisor": "cloud",
-        "stratovirt": "strato",
+        "cloud-hypervisor": "Cloud Hypervisor",
+        "stratovirt": "StratoVirt",
     }[backend]
 
 
 def _progress_data_case(case: str) -> str:
     return {
-        "tls-only": "tls",
-        "ebpf-only": "ebpf",
+        "tls-only": "Check TLS capture",
+        "ebpf-only": "Check eBPF capture",
+        "combo": "Check combined TLS and eBPF capture",
     }.get(case, case)

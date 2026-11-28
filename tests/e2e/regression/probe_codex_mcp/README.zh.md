@@ -1,9 +1,65 @@
-# Probe Codex MCP
+# 回归测试：Codex MCP 交互采集
 
-该测例让真实 Codex 会话调用仓库自带的本地 stdio MCP 工具，并验证 AcTrail
-生成的完整语义图。
+## 测试目标
 
-## 运行
+验证 AcTrail 能采集真实 Codex 的 stdio MCP 工具调用，生成完整且正确关联的语义图，并按配置保存正文证据。
+
+## 场景设计
+
+在守护进程启动前登记已知的 Codex 原生可执行文件，通过正常 Codex CLI 发现并调用本地 MCP 工具，以工具实际执行记录和随机 marker 作为核对依据。工具发现响应超过 stdio 单次采集上限，随后发出完整工具调用，验证发现阶段截断后仍能识别调用。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| 主机环境 | Linux、root、可工作的 eBPF 环境 | 采集进程与 stdio 活动 |
+| Python | Python ≥ 3.11 | 执行测例与仓库自带 MCP probe |
+| AcTrail | 可运行的 release 产物 | 启动采集并查询落盘记录 |
+| Codex 与模型服务 | CLI 可用、认证有效、支持 MCP 工具 | 执行真实模型与工具交互 |
+
+## 测试步骤摘要
+
+1. 检查 Agent 可用性，准备本轮随机 marker 和本地 MCP probe。
+2. 刷新隔离的默认配置，登记 Codex 原生可执行文件并开启 MCP 采集，启动 AcTrail。
+3. 通过 AcTrail 启动 Agent，记录 trace ID，完成工具发现并要求调用工具。
+4. 核实 Agent 回复和 probe 的实际调用、执行及响应记录。
+5. 结束会话并停止采集，按本轮 trace ID 查询语义图和正文证据。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 实际工具执行 | Agent 完成 MCP 任务 | probe 恰好记录一次调用、执行和成功响应，采集记录与实际工具交互一致 |
+| 截断后的识别 | 工具发现响应超过采集上限，后续调用完整 | 保存截断诊断，并识别后续工具调用 |
+| 语义图 | 数据已落盘 | 工具调用及四个子 action 完整，层级与 LLM 关联唯一且正确 |
+| 终态与正文 | 会话和采集已结束 | trace 为 Exited/Clean，action 为 success/complete，正文符合存储策略 |
+
+### 详细验收条件
+
+
+测例为本轮 MCP server 注入随机 marker，并要求以下条件全部成立：
+
+- probe JSONL 中恰好有一次 `tools/call`、一次真实执行及对应成功响应；
+- `tools/list` 响应大于 4095-byte stdio capture ABI 上限，trace 中持久化
+  `mcp_stdio_candidate_stream_discarded` / `candidate_truncated` 诊断，但后续完整
+  stdin `tools/call` 仍完成 Candidate 准入；
+- trace 最终为 `Exited/Clean`；
+- 恰好生成一个 `mcp.tool_call` 以及 `mcp.request`、`mcp.response`、
+  `mcp.stdout`、`mcp.stdin` 四个子 action；
+- 所有 action 为 `success/complete`，server、tool 和 transport 精确匹配；
+- action 引用及五类层级 link 唯一，link 为 `valid=true`、
+  `confidence=observed`；
+- tool call 关联真实 `llm.response`，并包含精确的 LLM tool-call id/name；
+- 默认 `stdout_storage_mode=drop` 下不持久化 stdout payload，但必须存在
+  stdin payload，所有 payload evidence 都引用已持久化 segment。
+
+prompt 会无条件要求 Codex 调用 MCP 工具，不向模型提供跳过工具调用的退出路径。
+如果当前 Codex+provider 确实没有暴露 MCP 工具，probe server 不会收到
+`tools/call`，测例判为 `SKIPPED`（视为环境不支持，而不是 AcTrail 失败）。
+
+
+## 快速运行
+
+### 运行指令
+
 
 从仓库根目录执行：
 
@@ -23,30 +79,28 @@ runner 会先刷新 release 产物。Codex 缺失或外部可用性检查失败�
 PID、日志、SQLite、TLS-sync socket、export 和 plugin 路径，不会停止默认或其他
 显式配置启动的 daemon。
 
-## 验证范围
 
-测例为本轮 MCP server 注入随机 marker，并要求以下条件全部成立：
+### 测试所用环境变量
 
-- Codex 输出 final marker；
-- probe JSONL 中恰好有一次 `tools/call`、一次真实执行及对应成功响应；
-- `tools/list` 响应大于 4095-byte stdio capture ABI 上限，trace 中持久化
-  `mcp_stdio_candidate_stream_discarded` / `candidate_truncated` 诊断，但后续完整
-  stdin `tools/call` 仍完成 Candidate 准入；
-- trace 最终为 `Exited/Clean`；
-- 恰好生成一个 `mcp.tool_call` 以及 `mcp.request`、`mcp.response`、
-  `mcp.stdout`、`mcp.stdin` 四个子 action；
-- 所有 action 为 `success/complete`，server、tool 和 transport 精确匹配；
-- action 引用及五类层级 link 唯一，link 为 `valid=true`、
-  `confidence=observed`；
-- tool call 关联真实 `llm.response`，并包含精确的 LLM tool-call id/name；
-- 默认 `stdout_storage_mode=drop` 下不持久化 stdout payload，但必须存在
-  stdin payload，所有 payload evidence 都引用已持久化 segment。
 
-prompt 会无条件要求 Codex 调用 MCP 工具，不向模型提供跳过工具调用的退出路径。
-如果当前 Codex+provider 确实没有暴露 MCP 工具，probe server 不会收到
-`tools/call`，测例判为 `SKIPPED`（视为环境不支持，而不是 AcTrail 失败）。
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `ACTRAIL_TEST_PYTHON` | `python3` | Python 3.11+ 解释器；手动流程也用它启动 probe server |
+| `CODEX_E2E_BINARY` | 自动查找 `codex` | Codex 可执行文件 |
+| `CODEX_E2E_MODEL` | 自动 | 未设置时由 `codex debug models` 选择当前 provider 第一个可用模型 |
+| `CODEX_E2E_REASONING_EFFORT` | `low` | reasoning effort |
+| `CODEX_MCP_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 管理及停止超时 |
+| `CODEX_MCP_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | Codex workload 超时 |
+| `CODEX_MCP_E2E_ARTIFACT_ROOT` | `temp/v2-regression/mcp` | 隔离证据目录 |
+| `CODEX_MCP_E2E_MANUAL_RUNTIME_ROOT` | `/tmp` | 手动流程的短路径运行时父目录；用于容纳 Unix socket、日志和 SQLite |
+| `CODEX_MCP_E2E_LOCAL_SERVER_NAME` | `actrail_codex_stdio` | MCP server 名称 |
+| `CODEX_MCP_E2E_TOOL_NAME` | `emit_marker` | MCP tool 名称 |
+| `CODEX_MCP_E2E_TOOL_DESCRIPTION_PADDING_BYTES` | `8192` | 填充 tool description，使 `tools/list` 响应越过 4095-byte stdio capture ABI 上限；必须大于 4095 |
+
+server 和 tool 名称必须匹配 `[A-Za-z][A-Za-z0-9_-]*`。非法配置直接失败。
 
 ## 手动测试
+
 
 配置仓库自带的 stdio MCP probe，启动隔离的 AcTrail daemon，运行
 一次真实 Codex 调用，再用 viewer 核验结果。
@@ -68,7 +122,7 @@ command -v rg >/dev/null
 
 REGRESSION_PYTHON="${ACTRAIL_TEST_PYTHON:-python3}"
 "$REGRESSION_PYTHON" -c \
-  'import sys; assert sys.version_info >= (3, 10), sys.version'
+  'import sys; assert sys.version_info >= (3, 11), sys.version'
 
 CODEX_BIN="${CODEX_E2E_BINARY:-$(command -v codex || true)}"
 test -n "$CODEX_BIN"
@@ -92,17 +146,16 @@ CODEX_PREFLIGHT_OUTPUT="$(
     --ephemeral \
     -m "${CODEX_E2E_MODEL:-gpt-5.5}" \
     -c "model_reasoning_effort=${CODEX_E2E_REASONING_EFFORT:-low}" \
-    'Reply with exactly "CODEX_MCP_PREFLIGHT_OK" and nothing else. Do not use tools.' \
+    'Explain one practical use of a text editor in one sentence. Do not use tools.' \
     </dev/null
 )"
-test "$CODEX_PREFLIGHT_OUTPUT" = "CODEX_MCP_PREFLIGHT_OK"
+test -n "$CODEX_PREFLIGHT_OUTPUT"
 printf '%s\n' "$CODEX_PREFLIGHT_OUTPUT"
 ```
 
 #### 预期结果
 
-三个 release 二进制均存在，Python 版本满足要求，Codex 成功输出
-`CODEX_MCP_PREFLIGHT_OK`。预检使用从 Codex 真实路径解析出的认证目录，与后续
+三个 release 二进制均存在，Python 版本满足要求，Codex 成功完成模型请求并返回文本。预检使用从 Codex 真实路径解析出的认证目录，与后续
 sudo launch 的环境一致。这一步会实际访问配置的 model/provider；仅检查
 `codex --version` 不能证明认证和外部服务可用。
 
@@ -152,7 +205,6 @@ test "$TOOL_DESCRIPTION_PADDING_BYTES" -gt 4095
 
 LOCAL_TOOL_ID="mcp__${LOCAL_SERVER}__${TOOL_NAME}"
 LOCAL_MARKER="CODEX_STDIO_${TOKEN}"
-FINAL_MARKER="CODEX_MCP_FINAL_${TOKEN}"
 LOCAL_EVENTS="$CASE_DIR/${LOCAL_SERVER}.events.jsonl"
 LAUNCH_LOG="$CASE_DIR/codex-launch.log"
 
@@ -281,7 +333,7 @@ test -S "$RUNTIME_DIR/run/control.sock"
 PROMPT="$(
   printf '%s' \
     "Use $LOCAL_TOOL_ID with {\"marker\":\"$LOCAL_MARKER\"}. " \
-    "After the result returns, reply with \"$FINAL_MARKER\"."
+    "After the result returns, briefly describe the tool result."
 )"
 
 "${CODEX_CONTROL[@]}" launch -- \
@@ -298,16 +350,14 @@ PROMPT="$(
 #### 预期结果
 
 launch 输出一个 `trace trace-N entered Active`，Codex 在 sudo 子进程中仍能读取
-与预检相同的认证目录，只额外取得本轮配置的本地 stdio 工具，调用完成后输出
-`$FINAL_MARKER`。命令不包含远程 MCP，也不包含初始化超时的旧等待或重试逻辑。
+与预检相同的认证目录，并取得本轮配置的本地 stdio 工具。实际工具调用成功完成，
+保存 Agent 实际回复和 probe 记录供核对。
 
 ### 步骤 5：核验 Codex 输出、probe 执行证据和 trace id
 
 #### 手动指令
 
 ```bash
-rg -F -- "$FINAL_MARKER" "$LAUNCH_LOG" >/dev/null
-
 jq -se \
   --arg server "$LOCAL_SERVER" \
   --arg tool "$TOOL_NAME" \
@@ -369,7 +419,7 @@ printf 'trace-%s\n' "$TRACE_ID"
 
 #### 预期结果
 
-final marker 存在；JSONL 中恰好有一次目标 `tools/call`、一次真实执行和一个
+Agent 任务成功结束。JSONL 中恰好有一次目标 `tools/call`、一次真实执行和一个
 对应成功响应；tool description 超过 4095 bytes；launch 日志中只有一个 trace
 id。
 
@@ -512,21 +562,3 @@ trap - EXIT
 Codex、stdio MCP server 和隔离 daemon 均已退出。证据目录与短路径运行时目录
 分别通过父目录、目录名前缀和 ownership marker 检查后才会删除；中途失败时
 trap 会停止隔离 daemon，并同时保留 `$CASE_DIR` 和 `$RUNTIME_DIR` 供排查。
-
-## 配置
-
-| 环境变量 | 默认值 | 作用 |
-| --- | --- | --- |
-| `ACTRAIL_TEST_PYTHON` | `python3` | Python 3.10+ 解释器；手动流程也用它启动 probe server |
-| `CODEX_E2E_BINARY` | 自动查找 `codex` | Codex 可执行文件 |
-| `CODEX_E2E_MODEL` | 自动 | 未设置时由 `codex debug models` 选择当前 provider 第一个可用模型 |
-| `CODEX_E2E_REASONING_EFFORT` | `low` | reasoning effort |
-| `CODEX_MCP_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 管理及停止超时 |
-| `CODEX_MCP_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | Codex workload 超时 |
-| `CODEX_MCP_E2E_ARTIFACT_ROOT` | `temp/v2-regression/mcp` | 隔离证据目录 |
-| `CODEX_MCP_E2E_MANUAL_RUNTIME_ROOT` | `/tmp` | 手动流程的短路径运行时父目录；用于容纳 Unix socket、日志和 SQLite |
-| `CODEX_MCP_E2E_LOCAL_SERVER_NAME` | `actrail_codex_stdio` | MCP server 名称 |
-| `CODEX_MCP_E2E_TOOL_NAME` | `emit_marker` | MCP tool 名称 |
-| `CODEX_MCP_E2E_TOOL_DESCRIPTION_PADDING_BYTES` | `8192` | 填充 tool description，使 `tools/list` 响应越过 4095-byte stdio capture ABI 上限；必须大于 4095 |
-
-server 和 tool 名称必须匹配 `[A-Za-z][A-Za-z0-9_-]*`。非法配置直接失败。

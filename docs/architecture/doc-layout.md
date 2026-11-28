@@ -307,7 +307,7 @@
 │           │       └── [x] README.zh.md # 测试指南
 │           ├── [x] file_policy_xiaoo/ # 文件治理
 │           │   └── [x] README.zh.md # 测试指南
-│           ├── [x] http_llm_sources/ # 协议消息来源
+│           ├── [x] network_request_coverage/ # 失败模型请求与普通网络请求观测
 │           │   └── [x] README.zh.md # 测试指南
 │           ├── [x] lsm_access_control_xiaoo/ # 访问控制后端
 │           │   ├── [x] README.zh.md # 测试指南

@@ -5,12 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.e2e.common.core import TestCaseInputs, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestStatus
 from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.case import (
     VirtualContainerXiaooConcurrencyCase,
-)
-from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.config import (
-    VirtualContainerXiaooConcurrencyConfig,
 )
 
 
@@ -19,10 +16,9 @@ class VirtualContainerXiaooConcurrencyCaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="actrail-xiaoo-no-kvm.") as raw_dir:
             root = Path(raw_dir)
             with patch.dict("os.environ", {}, clear=True):
-                config = VirtualContainerXiaooConcurrencyConfig.from_environment(
-                    TestCaseInputs(root, root / "bin", root / "work")
+                case = VirtualContainerXiaooConcurrencyCase(
+                    TestRunDirectories(root, root / "bin", root / "work")
                 )
-            case = VirtualContainerXiaooConcurrencyCase(config)
             with patch(
                 "tests.e2e.regression.virtual_container_xiaoo_concurrency.v2."
                 "case.os.access",
@@ -73,10 +69,9 @@ class VirtualContainerXiaooConcurrencyCaseTest(unittest.TestCase):
                 },
                 clear=True,
             ):
-                config = VirtualContainerXiaooConcurrencyConfig.from_environment(
-                    TestCaseInputs(root, root / "bin", root / "work")
+                case = VirtualContainerXiaooConcurrencyCase(
+                    TestRunDirectories(root, root / "bin", root / "work")
                 )
-            case = VirtualContainerXiaooConcurrencyCase(config)
             with patch(
                 "tests.e2e.regression.virtual_container_xiaoo_concurrency.v2."
                 "case.shutil.which",

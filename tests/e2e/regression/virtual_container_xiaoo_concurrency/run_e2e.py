@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+"""Run the active regression scenario."""
 import sys
 from pathlib import Path
 
@@ -7,14 +7,7 @@ REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
 from tests.e2e.common.runner import run_one
-from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2 import (  # noqa: E402
-    run_e2e as v2_entrypoint,
-)
-
-TEST_DEFINITION = v2_entrypoint.TEST_DEFINITION
-
-__all__ = ["TEST_DEFINITION"]
-
+from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.case import VirtualContainerXiaooConcurrencyCase
 
 if __name__ == "__main__":
-    raise SystemExit(run_one(TEST_DEFINITION, REPO))
+    raise SystemExit(run_one(VirtualContainerXiaooConcurrencyCase, REPO))

@@ -5,13 +5,16 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 
 from .constants import CASE_CONSTANTS
 
 
 @dataclass(frozen=True)
-class ContainerAgentXiaooConfig(TestCaseInputs):
+class ContainerAgentXiaooConfig:
+    repo: Path
+    bin_dir: Path
+    work_dir: Path
     xiaoo_bin: Path | None
     image: str
     timeout_seconds: int
@@ -21,7 +24,7 @@ class ContainerAgentXiaooConfig(TestCaseInputs):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> "ContainerAgentXiaooConfig":
         raw_xiaoo = os.environ.get(
             "CONTAINER_AGENT_XIAOO_BINARY",
@@ -52,9 +55,9 @@ class ContainerAgentXiaooConfig(TestCaseInputs):
                 "CONTAINER_AGENT_XIAOO_E2E_CLEANUP_GRACE_SECONDS must be positive"
             )
         return cls(
-            repo=inputs.repo,
-            bin_dir=inputs.bin_dir,
-            work_dir=inputs.work_dir,
+            repo=directories.repo,
+            bin_dir=directories.bin_dir,
+            work_dir=directories.work_dir,
             xiaoo_bin=xiaoo_bin,
             image=os.environ.get(
                 "CONTAINER_AGENT_XIAOO_IMAGE",

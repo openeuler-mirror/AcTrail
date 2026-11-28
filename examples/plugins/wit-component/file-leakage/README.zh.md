@@ -1,6 +1,6 @@
 # 文件泄露告警插件
 
-这个官方 WIT Component 只观察成功的 `write`/`writev` 文件操作。运行期间，它在插件自己的有界状态中保存工作目录和额外允许目录之外的候选路径；trace 进入终态后，它检查这些候选文件是否仍然存在，并通过 AcTrail 的异步告警入口写入 `file.leakage` 告警。
+这个官方 WIT Component 观察成功的 `write`、`writev` 和 `write_summary` 文件操作。运行期间，它在插件自己的有界状态中保存工作目录和额外允许目录之外的候选路径；trace 进入终态后，它检查这些候选文件是否仍然存在，并通过 AcTrail 的异步告警入口写入 `file.leakage` 告警。
 
 告警不是 semantic action。插件提交的内容进入独立的 `alerts` 表；一次提交对应一条告警记录，不按 trace 或告警类型去重。告警提交携带 trace 的授权 token，因此可以在 trace 结束后提交，且不依赖 trace retention 的执行时机。
 
@@ -47,7 +47,7 @@ export CONFIG="$HOME/.config/actrail/operator.conf"
 sudo target/release/actrailctl --config "$CONFIG" init --force
 ```
 
-确认 capture profile 至少包含文件基础观测能力，并且插件发现目录与安装目录一致：
+确认 capture profile 包含文件基础观测能力，开启文件写入观测，并让插件发现目录与安装目录一致：
 
 ```toml
 [capture]
@@ -55,6 +55,9 @@ capabilities = ["proc-lifecycle", "fs-access-basic"]
 
 [enforcement]
 enabled = false
+
+[file_observation.collection.write]
+observed = true
 
 [plugins.discovery]
 directory = ["~/.actrail/plugins"]

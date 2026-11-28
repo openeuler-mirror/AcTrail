@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.docker import probe_docker_server
 from tests.e2e.common.runner import TestingContextSingleton
 
@@ -17,7 +17,12 @@ from .constants import CASE_CONSTANTS
 
 
 class ContainerAutoCase(TestCase):
-    def __init__(self, config: ContainerAutoConfig):
+    case_id = 'container_auto'
+    description = 'Verify Docker host-eBPF and seccomp-notify auto-selection'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ContainerAutoConfig.from_environment(directories)
         self._config = config
         self._case_dir = Path(__file__).resolve().parent
         self._scenario_path = self._case_dir / "auto_scenario.py"
@@ -25,7 +30,7 @@ class ContainerAutoCase(TestCase):
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
         test_context.report_progress(
-            "deployment_contract",
+            "Check container deployment contracts",
             "checking one-command deployment and distribution contracts",
         )
         contract_problem = self._deployment_contract_problem()
@@ -35,7 +40,7 @@ class ContainerAutoCase(TestCase):
         if problem is not None:
             return problem
         test_context.report_progress(
-            "prerequisites",
+            "Check Docker and release binaries",
             "checking Docker and release binaries",
         )
         ContainerAutoScenario(self._config, test_context).run()

@@ -6,10 +6,17 @@ use model_core::diagnostics::DiagnosticRecord;
 use model_core::event::{DomainEvent, EventPayload, NetPayload};
 use model_core::process::{ExitObservationSource, ProcessMembership};
 
+use super::traces::ProcessDisplayIndex;
 use crate::json;
 
-pub(super) fn event_json(event: &DomainEvent) -> String {
+pub(super) fn event_json(event: &DomainEvent, display: &ProcessDisplayIndex) -> String {
     let mut output = String::from("{");
+    json::field(
+        &mut output,
+        "pid",
+        &json::optional_number(display.host_pid(event.envelope.process)),
+    );
+    output.push(',');
     json::field(
         &mut output,
         "id",
@@ -59,8 +66,27 @@ pub(super) fn event_json(event: &DomainEvent) -> String {
     output
 }
 
-pub(super) fn process_json(membership: &ProcessMembership) -> String {
+pub(super) fn process_json(
+    membership: &ProcessMembership,
+    display: &ProcessDisplayIndex,
+) -> String {
     let mut output = String::from("{");
+    json::field(
+        &mut output,
+        "pid",
+        &json::optional_number(display.host_pid(membership.identity)),
+    );
+    output.push(',');
+    json::field(
+        &mut output,
+        "parent_pid",
+        &json::optional_number(
+            membership
+                .inherited_from
+                .and_then(|parent| display.host_pid(parent)),
+        ),
+    );
+    output.push(',');
     json::field(
         &mut output,
         "process_id",

@@ -114,6 +114,7 @@ artifact 和本机 profile，再通过唯一的公共 V2 入口运行接口矩�
 
 ```bash
 deploy/virtual-container/host/run-v2-tests.sh \
+  --profile local/kata/v2-test-profile.json \
   --case virtual_container \
   --color never
 ```

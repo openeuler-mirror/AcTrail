@@ -1,133 +1,60 @@
+"""Run Dcode with scoped lifecycle management and verify finalized LLM capture."""
 from __future__ import annotations
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
-from tests.e2e.common.core import AgentBinaryNotFoundError, TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, AgentBinaryNotFoundError, TestCase, TestResult
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.llm_trace_assertion import LLMTraceAssertion
-
 from .config import ProbeDcodeLLMConfig
-from .task import ProbeDcodeLLMTask
-
 from .constants import CASE_CONSTANTS
+from .task import ProbeDcodeLLMTask
 
 
 class ProbeDcodeLLMCase(TestCase):
-    def __init__(self, config: ProbeDcodeLLMConfig):
+    case_id = 'probe_dcode_llm'
+    description = 'Run dcode through actrailctl launch and verify LLM capture'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ProbeDcodeLLMConfig.from_environment(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
-        results: dict[str, TestResult] = {}
-        runtime: ActrailRuntime | None = None
-        try:
-            runtime = ActrailRuntime.isolated(
-                self._config.repo,
-                self._config.bin_dir,
-                self._config.command_timeout_seconds,
-                test_context.output,
-                self._config.work_dir,
-            )
-            try:
-                task = ProbeDcodeLLMTask(self._config, runtime, test_context.output)
-            except AgentBinaryNotFoundError as error:
-                return TestResult(TestStatus.SKIPPED, str(error))
-            test_context.report_progress(
-                "agent_availability",
-                "checking dcode availability",
-            )
-            if not task.check_availability():
-                return TestResult(
-                    TestStatus.SKIPPED,
-                    "dcode external availability check failed",
+        context = TestingContextSingleton.current()
+        with context.case("Dcode launch and LLM capture") as case:
+            with case.step("Check Dcode availability"):
+                try:
+                    task = ProbeDcodeLLMTask(self._config)
+                except AgentBinaryNotFoundError as error:
+                    case.skip(str(error))
+                if not context.check_agent_availability(
+                    "dcode", task.binary, task.environment()
+                ):
+                    case.skip("Dcode external availability check failed")
+
+            with case.step("Capture Dcode activity"):
+                with ActrailRuntime.isolated(
+                    self._config.repo, self._config.bin_dir,
+                    self._config.command_timeout_seconds, context.output,
+                    self._config.work_dir,
+                ) as runtime:
+                    with case.step("Start AcTrail"):
+                        runtime.start_actraild()
+                    with case.step("Send a request with Dcode"):
+                        with task.create_agent().launchWithAcTrailCtl(stream_mode=False) as agent:
+                            agent.run(CASE_CONSTANTS.prompt)
+                            agent.join_all(self._config.launch_timeout_seconds)
+                            result = agent.results[-1]
+                            if not result.succeeded:
+                                raise AssertionError(result.error or "Dcode task failed")
+                            launch = agent.launch_result
+                        if agent.returncode != 0:
+                            raise AssertionError(f"Dcode launch exited with {agent.returncode}")
+
+            # Runtime 退出完成停机和排空后，检查最终请求响应。
+            with case.step("Check the recorded LLM exchange"):
+                LLMTraceAssertion(runtime).require_finalized_exchange(
+                    launch.trace_id,
+                    reply_text=result.output,
                 )
-
-            test_context.report_progress(
-                "runtime_prepare",
-                "preparing actraild runtime",
-            )
-            lifecycle = runtime.prepare()
-            results["runtime_lifecycle"] = TestResult(
-                TestStatus.PASSED,
-                f"{len(lifecycle)} lifecycle commands completed",
-            )
-
-            test_context.report_progress(
-                "agent_launch",
-                "launching dcode",
-            )
-            launch = task.run()
-            if launch.returncode != 0:
-                raise AssertionError(
-                    f"actrailctl launch exited with {launch.returncode}\n"
-                    f"{launch.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-                )
-            results["launch"] = TestResult(
-                TestStatus.PASSED,
-                "actrailctl launch and dcode exited successfully",
-            )
-
-            test_context.report_progress(
-                "launch_validation",
-                "validating answer marker and trace id",
-            )
-            assertion = LLMTraceAssertion(
-                runtime,
-                task.marker,
-            )
-            assertion.require_answer_marker(launch, "dcode")
-            results["answer_marker"] = TestResult(
-                TestStatus.PASSED,
-                f"dcode stdout answer contains {task.marker}",
-            )
-
-            trace_id = assertion.require_trace_id(
-                launch,
-                expected_count=1,
-                selected_index=0,
-            )
-            test_context.report_progress(
-                "runtime_stop",
-                "stopping actraild and draining trace",
-            )
-            stopped = runtime.stop()
-            if stopped is None or stopped.returncode != 0:
-                returncode = None if stopped is None else stopped.returncode
-                raise AssertionError(
-                    f"actraild safe stop exited with {returncode}"
-                )
-            results["runtime_stop"] = TestResult(
-                TestStatus.PASSED,
-                "actraild drained trace finalization and stopped successfully",
-            )
-
-            test_context.report_progress(
-                "trace_validation",
-                "validating finalized LLM exchange",
-            )
-            request_count, response_count = (
-                assertion.require_finalized_exchange(trace_id)
-            )
-            results["llm_exchange"] = TestResult(
-                TestStatus.PASSED,
-                f"trace-{trace_id} has {request_count} terminal paired request(s), "
-                f"{response_count} response(s), and a linked marker exchange",
-            )
-            return TestResult(
-                TestStatus.COMPOSITE,
-                "dcode launch and LLM capture",
-                results,
-            )
-        except Exception as error:
-            results["failure"] = TestResult(TestStatus.FAILED, str(error))
-            return TestResult(
-                TestStatus.COMPOSITE,
-                "dcode launch and LLM capture",
-                results,
-            )
-        finally:
-            if runtime is not None:
-                stopped = runtime.stop()
-                if stopped is not None and stopped.returncode != 0:
-                    results["runtime_stop"] = TestResult(
-                        TestStatus.FAILED,
-                        f"actraild stop exited with {stopped.returncode}",
-                    )
+        return case.result

@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.kata_runtime.backend import shared_filesystem_backends
 from tests.e2e.common.kata_runtime.environment import (
     absolute_path,
@@ -46,9 +46,9 @@ class VirtualContainerConfig(CommonTestConfig):
     @classmethod
     def from_environment(
         cls,
-        inputs: TestCaseInputs,
+        directories: TestRunDirectories,
     ) -> VirtualContainerConfig:
-        common = CommonTestConfig.from_environment(inputs, "VIRTUAL_CONTAINER")
+        common = CommonTestConfig.from_environment(directories, "VIRTUAL_CONTAINER")
         _validate_common_timeouts(common)
 
         scope = os.environ.get("VIRTUAL_CONTAINER_E2E_SCOPE", CASE_CONSTANTS.scope)
@@ -148,7 +148,7 @@ class VirtualContainerConfig(CommonTestConfig):
         if not config_dirs:
             raise ValueError("KATA_CONFIG_DIRS must contain at least one path")
 
-        repo = inputs.repo.resolve()
+        repo = directories.repo.resolve()
         return cls(
             **common.as_kwargs(),
             scope=scope,

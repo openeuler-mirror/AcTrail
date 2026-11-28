@@ -51,7 +51,7 @@ class SandboxOomKilledAlertHostScenario:
         try:
             self._run_dir.mkdir(parents=True)
             self._context.report_progress(
-                "alert_path",
+                "Start the alert service and subscriber",
                 "starting isolated daemon, alert proxy and public subscriber",
             )
             alert_path = self._create_alert_path()
@@ -59,7 +59,7 @@ class SandboxOomKilledAlertHostScenario:
             self._wait_tcp(alert_path.daemon_port)
 
             self._context.report_progress(
-                "sandbox_transport",
+                "Start the sandbox service and VSOCK gateway",
                 "starting actrail-sb and native VSOCK gateway",
             )
             profile = SandboxAgentProfile(
@@ -83,7 +83,7 @@ class SandboxOomKilledAlertHostScenario:
             )
 
             self._context.report_progress(
-                "oom_injection",
+                "Trigger an out-of-memory kill in the test cgroup",
                 "running one test-owned 32 MiB memory-cgroup OOM",
             )
             oom = ControlledHostOom(
@@ -97,7 +97,7 @@ class SandboxOomKilledAlertHostScenario:
                 timeout_seconds=self._config.runtime_timeout_seconds,
             )
             self._context.report_progress(
-                "public_delivery",
+                "Wait for the out-of-memory kill alert",
                 "waiting for the matching critical OOM-killed alert",
             )
             delivery = alert_path.wait_for_oom_killed_delivery(
@@ -117,7 +117,7 @@ class SandboxOomKilledAlertHostScenario:
             self._require_alive(gateway, "native VSOCK gateway")
             self._require_alive(sandbox_agent, "actrail-sb")
             self._context.report_progress(
-                "database_correlation",
+                "Compare the delivered alert with stored records",
                 "correlating the public delivery with independent storage",
             )
             record = alert_path.assert_persisted_delivery(delivery)

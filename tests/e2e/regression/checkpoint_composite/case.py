@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from tests.e2e.common.core import TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestResult, TestStatus
 from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.regression.checkpoint_btrfs.case import CheckpointBtrfsCase
@@ -21,9 +21,14 @@ from .xiaoo import XiaooSession
 
 class CheckpointCompositeCase(CheckpointBtrfsCase):
     """Use the Btrfs fixture's filesystem, control commands and cleanup."""
+    case_id = 'checkpoint_composite'
+    description = 'Save and restore real Xiaoo context and Btrfs files together'
+    default_enabled = False
 
-    def __init__(self, inputs: TestCaseInputs):
-        super().__init__(inputs)
+
+
+    def __init__(self, directories: TestRunDirectories):
+        super().__init__(directories)
         self._xiaoo = XiaooSession(self._work / "xiaoo")
         target = self._library.parent / "libactrail_ckpt_cxt_xiaoo.so"
         self._context_library = Path(os.environ.get("ACTRAIL_CHECKPOINT_XIAOO_LIBRARY", target))
@@ -137,7 +142,7 @@ class CheckpointCompositeCase(CheckpointBtrfsCase):
                                  self._context_config(trace_config), encoding="utf-8")
         ran = self._work / "invalid-launch-ran"
         result = subprocess.run(self._launch(self._xiaoo.name + "-invalid",
-            f"touch {shlex.quote(str(ran))}", launch_config), cwd=self._inputs.repo,
+            f"touch {shlex.quote(str(ran))}", launch_config), cwd=self._directories.repo,
             capture_output=True, text=True, timeout=BTRFS.launch_timeout_seconds)
         if result.returncode == 0 or ran.exists():
             raise AssertionError("a Trace changed runtime settings and executed its process")
@@ -346,7 +351,20 @@ class CheckpointCompositeCase(CheckpointBtrfsCase):
                  ("restore_other", self._restore_other), ("trace_end", self._end_other)]
         try:
             for name, step in steps:
-                context.report_progress(name)
+                context.report_progress({
+                    'setup': 'Prepare the composite checkpoint environment',
+                    'files_only': 'Check file checkpoints before context capture',
+                    'launch': 'Start XiaoO',
+                    'context_boundary': 'Initialize Agent context capture',
+                    'save_alpha': 'Save the initial file and Agent context',
+                    'change_beta': 'Change the file and Agent context',
+                    'launch_other': 'Start a second trace',
+                    'reject_runtime_override': 'Check rejection of runtime overrides',
+                    'restore_alpha': 'Restore the initial file and Agent context',
+                    'delete_disconnect': 'Check checkpoint deletion and disconnection',
+                    'restore_other': 'Restore the second trace',
+                    'trace_end': 'Check checkpoints after the second trace ends',
+                }[name])
                 try:
                     results[name] = TestResult(TestStatus.PASSED, step())
                 except Exception as error:

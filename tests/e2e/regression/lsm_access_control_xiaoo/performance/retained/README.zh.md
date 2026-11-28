@@ -1,19 +1,57 @@
 # 持续访问检查的性能测量
 
+## 测试目标
+
+测量已打开文件和已建立连接上的持续访问检查成本，并验证读取、写入和发送实际完成。
+
+## 场景设计
+
+在同一组 release 产物下，对照关闭控制与开启 LSM。文件描述符和 TCP 连接在计时前建立，工作负载由真实 XiaoO 启动，各组保留相同观测配置。
+
 该测例使用同一组 release 二进制，对比关闭文件和网络控制与开启 LSM 控制时的持续访问成本。每组通过 `actrailctl init -f` 刷新默认配置，启动真实 Xiaoo，并让 Bash 工具执行工作负载。
 
 文件描述符和 TCP 连接在计时前建立。计时操作是读取 1 字节、写入 1 字节和 `sendall` 发送 64 字节。每组保留相同的进程、网络和 socket bpf-copy 采集，关闭控制审计。测试检查文件写入结果与服务端收到的完整字节数。输出还记录 CPU 时间、上下文切换、真实 agent 祖先和每轮延迟。
 
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| AcTrail | release 产物和场景所需的官方插件 | 运行真实治理和观测 |
+| 主机 | Linux、root、eBPF 与 BPF LSM | 执行内核访问控制 |
+| XiaoO | 可用的真实 CLI | 驱动实际工作负载 |
+| 工作负载服务 | 可绑定的本地 listener | 核对真实连接或接收字节 |
+
+## 测试步骤摘要
+
+1. 按配置顺序运行关闭控制与开启 LSM 的对照组，每组刷新默认配置并启动真实 XiaoO。
+2. 由 Bash 工作负载打开文件并建立 TCP 连接，在计时前完成描述符与连接准备。
+3. 完成预热后，分轮测量读取 1 字节、写入 1 字节和通过已有连接发送 64 字节。
+4. 核对实际文件写入与服务端接收字节数，记录真实 Agent 祖先、CPU 时间、上下文切换和每轮延迟。
+5. 保存 measurements.json，停止服务并按运行参数保留结果。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 工作负载 | 重复读取、写入和发送 | 文件写入正确，服务端收到完整字节数 |
+| 测量范围 | 描述符与连接已建立 | 计时覆盖持续访问操作，记录每轮延迟 |
+| 可核对性 | 全部测量完成 | 保存 CPU、上下文切换和真实 Agent 祖先信息 |
+
+## 快速运行
+
+从仓库根目录执行。
+
 ```bash
-python3 tests/e2e/regression/lsm_access_control_xiaoo/performance/retained/run.py run \
-  --count 1000 \
-  --rounds 5 \
-  --warmup 100
+LSM_RETAINED_PERFORMANCE_E2E_COUNT=1000 \
+LSM_RETAINED_PERFORMANCE_E2E_ROUNDS=5 \
+LSM_RETAINED_PERFORMANCE_E2E_WARMUP=100 \
+python3 tests/e2e/regression/test_all.py --case lsm_access_control_xiaoo_retained_performance --no-cleanup
 ```
 
-入口使用现有 `target/release` 工件。`--bin-dir` 和 `--xiaoo` 可指定实际二进制。默认执行顺序为 `off lsm lsm off`，可通过 `--order` 调整。`--count` 默认 300，`--rounds` 默认 3，`--warmup` 默认 50。超时参数沿用上级性能测例的默认值，可通过 `--timeout`、`--command-timeout`、`--launch-timeout` 设置。
-
-原始结果默认保存到 `local/lsm_access_control/retained.json`，可通过 `--output` 指定路径。临时配置、工作文件和测试服务在结束时清理。
+参数使用 `LSM_RETAINED_PERFORMANCE_E2E_` 前缀。`ORDER` 默认 `off lsm lsm off`，
+可用空格分隔的 `off`、`empty`、`lsm` 指定执行顺序。
+`XIAOO`、`COUNT`、`ROUNDS`、`WARMUP`、`TIMEOUT`、`COMMAND_TIMEOUT`、`LAUNCH_TIMEOUT`
+的默认值与上级性能文档一致。`--bin-dir` 指定 release 工件。
+结果保存在测例工作目录的 `measurements.json`。
 
 ## 本机测量
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 from tests.e2e.common.process import CommandResult
 from tests.e2e.common.execution_isolation.kata.scenario.setup import (
     ExecutionIsolationSetup,
@@ -25,7 +25,7 @@ from tests.e2e.regression.execution_isolation_firecracker.v2.config import (
     FirecrackerExecutionIsolationConfig,
 )
 from tests.e2e.regression.execution_isolation_firecracker.v2.run_e2e import (
-    TEST_DEFINITION as FIRECRACKER_TEST_DEFINITION,
+    ExecutionIsolationFirecrackerCase as FIRECRACKER_TEST_DEFINITION,
 )
 from tests.e2e.regression.execution_isolation_stratovirt.v2.config import (
     StratoVirtExecutionIsolationConfig,
@@ -46,9 +46,9 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_firecracker_definition_builds_shared_kata_alert_case(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             with patch.dict(os.environ, {}, clear=True):
-                case = FIRECRACKER_TEST_DEFINITION.build_case(inputs)
+                case = FIRECRACKER_TEST_DEFINITION(directories)
 
         self.assertIsInstance(case, KataExecutionIsolationCase)
         self.assertEqual(case._config.BACKEND, "firecracker")
@@ -56,7 +56,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_firecracker_uses_its_kata_runtime_profile_and_vm_root(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             runtime_config = root / "configuration-firecracker.toml"
             with patch.dict(
                 os.environ,
@@ -68,7 +68,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 clear=True,
             ):
                 config = FirecrackerExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
 
         self.assertEqual(config.runtime_config, runtime_config)
@@ -79,7 +79,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_kata_alert_scenario_requires_guest_system_observer(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             manifest = root / "manifest.json"
             with patch.dict(
                 os.environ,
@@ -91,7 +91,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 clear=True,
             ):
                 config = CloudHypervisorExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             deployment = SimpleNamespace(
                 data_config=root / "configuration-data.toml",
@@ -114,10 +114,10 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_xiaoo_workload_container_remains_unprivileged(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             with patch.dict(os.environ, {}, clear=True):
                 config = StratoVirtExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             deployment = SimpleNamespace(
                 data_config=root / "configuration-data.toml",
@@ -143,7 +143,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_firecracker_uses_manifest_workload_image_archive(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             profile_archive = root / "stale-profile-workload.tar"
             manifest_archive = root / "manifest-workload.tar"
             with patch.dict(
@@ -156,7 +156,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 clear=True,
             ):
                 config = FirecrackerExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             deployment = SimpleNamespace(
                 data_config=root / "configuration-data.toml",
@@ -181,7 +181,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_firecracker_rejects_a_stale_profile_workload_archive(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             profile_archive = root / "stale-profile-workload.tar"
             manifest_archive = root / "manifest-workload.tar"
             with patch.dict(
@@ -197,7 +197,7 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
                 clear=True,
             ):
                 config = FirecrackerExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             deployment = SimpleNamespace(
                 data_config=root / "configuration-data.toml",
@@ -222,10 +222,10 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_stratovirt_uses_native_af_vsock(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             with patch.dict(os.environ, {}, clear=True):
                 config = StratoVirtExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             runner = _RecordingRunner()
             setup = ExecutionIsolationSetup(
@@ -247,10 +247,10 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_cloud_hypervisor_uses_runtime_uds(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             with patch.dict(os.environ, {}, clear=True):
                 config = CloudHypervisorExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             runner = _RecordingRunner()
             setup = ExecutionIsolationSetup(
@@ -274,10 +274,10 @@ class ExecutionIsolationVmmAdapterTest(unittest.TestCase):
     def test_firecracker_uses_base_uds_and_concrete_vsock_port(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            inputs = TestCaseInputs(root, root, root)
+            directories = TestRunDirectories(root, root, root)
             with patch.dict(os.environ, {}, clear=True):
                 config = FirecrackerExecutionIsolationConfig.from_environment(
-                    inputs
+                    directories
                 )
             runner = _RecordingRunner()
             setup = ExecutionIsolationSetup(

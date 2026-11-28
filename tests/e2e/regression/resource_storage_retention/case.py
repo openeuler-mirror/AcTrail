@@ -1,12 +1,13 @@
+"""Verify production resource retention with scoped checks and daemon cleanup."""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 import sqlite3
 import subprocess
 import time
 
-from tests.e2e.common.core import TestCase, TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import TestCase, TestRunDirectories, TestResult
 from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.common.runner import TestingContextSingleton
 from .constants import CASE_CONSTANTS as C
@@ -14,20 +15,25 @@ from .constants import CASE_CONSTANTS as C
 
 class ResourceStorageRetentionCase(TestCase):
     """Seed a backlog, then exercise production cleanup through real host writes."""
+    case_id = 'resource_storage_retention'
+    description = 'Validate resource SQLite backlog cleanup, fresh rows and profile/boot reclamation'
+    default_enabled = False
 
-    def __init__(self, inputs: TestCaseInputs):
-        self._inputs = inputs
-        self._database = inputs.work_dir / "data/resources.sqlite"
-        self._config = inputs.work_dir / "actraild.conf"
-        self._log = inputs.work_dir / "log/retention-daemon.log"
+
+
+    def __init__(self, directories: TestRunDirectories):
+        self._directories = directories
+        self._database = directories.work_dir / "data/resources.sqlite"
+        self._config = directories.work_dir / "actraild.conf"
+        self._log = directories.work_dir / "log/retention-daemon.log"
         self._daemon: subprocess.Popen | None = None
 
     def _binary(self, name: str) -> Path:
-        directory = self._inputs.bin_dir
-        return (directory if directory.is_absolute() else self._inputs.repo / directory) / name
+        directory = self._directories.bin_dir
+        return (directory if directory.is_absolute() else self._directories.repo / directory) / name
 
     def _prepare(self) -> None:
-        work = self._inputs.work_dir
+        work = self._directories.work_dir
         for directory in ("data", "log", "run", "plugins"):
             (work / directory).mkdir(parents=True, exist_ok=True)
         patch = work / "retention.patch.toml"
@@ -55,7 +61,7 @@ class ResourceStorageRetentionCase(TestCase):
         }).build().save(patch)
         command = subprocess.run(
             [str(self._binary("actrailctl")), "--config", str(self._config), "init", "--force", "--patch", str(patch)],
-            cwd=self._inputs.repo, capture_output=True, text=True, timeout=C.command_timeout_seconds,
+            cwd=self._directories.repo, capture_output=True, text=True, timeout=C.command_timeout_seconds,
         )
         if command.returncode:
             raise RuntimeError(f"retention config initialization failed: {command.stdout}{command.stderr}")
@@ -63,7 +69,7 @@ class ResourceStorageRetentionCase(TestCase):
     def _seed(self) -> tuple:
         now = time.time_ns()
         old = now - C.max_age_seconds * 2 * 1_000_000_000
-        schema = self._inputs.repo / "crates/core/resource_profiling/src/storage/database/sqlite/schema.sql"
+        schema = self._directories.repo / "crates/core/resource_profiling/src/storage/database/sqlite/schema.sql"
         with closing(sqlite3.connect(self._database)) as connection:
             connection.executescript(schema.read_text(encoding="utf-8"))
             connection.execute("CREATE TABLE resource_samples(id INTEGER PRIMARY KEY, payload TEXT)")
@@ -118,7 +124,7 @@ class ResourceStorageRetentionCase(TestCase):
             try:
                 reply = subprocess.run(
                     [str(self._binary("actrailctl")), "--config", str(self._config), "list-traces"],
-                    cwd=self._inputs.repo, capture_output=True, text=True,
+                    cwd=self._directories.repo, capture_output=True, text=True,
                     timeout=C.control_request_timeout_seconds,
                 )
             except subprocess.TimeoutExpired as error:
@@ -130,64 +136,62 @@ class ResourceStorageRetentionCase(TestCase):
             time.sleep(C.poll_seconds)
         raise TimeoutError(f"retention daemon did not become ready: {last_reply}; {self._log.read_text()[-2000:]}")
 
-    def run(self, context: TestingContextSingleton) -> TestResult:
-        results: dict[str, TestResult] = {}
-        current = "setup"
+    @contextmanager
+    def _running_daemon(self):
+        with self._log.open("w", encoding="utf-8") as log:
+            self._daemon = subprocess.Popen(
+                [str(self._binary("actraild")), "--config", str(self._config), "run"],
+                cwd=self._directories.repo, stdout=log, stderr=subprocess.STDOUT,
+            )
         try:
-            self._prepare()
-            fresh = self._seed()
-            started = time.monotonic()
-            with self._log.open("w", encoding="utf-8") as log:
-                self._daemon = subprocess.Popen(
-                    [str(self._binary("actraild")), "--config", str(self._config), "run"],
-                    cwd=self._inputs.repo, stdout=log, stderr=subprocess.STDOUT,
-                )
-            current = "startup"
-            context.report_progress(current, "waiting for a successful daemon control request before reading resource storage")
-            # Storage initialization (including WAL setup) precedes control service readiness.
-            self._wait_for_daemon()
-            current = "expired_samples"
-            context.report_progress(current, "waiting for real host writes to clear both resource backlogs")
-            with closing(sqlite3.connect(self._database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
-                while True:
-                    remaining = tuple(connection.execute(f"SELECT count(*) FROM {table} WHERE id<=0").fetchone()[0]
-                                      for table in ("resource_host_samples", "resource_workload_samples"))
-                    if remaining == (0, 0):
-                        break
-                    if self._daemon.poll() is not None or time.monotonic() - started > C.cleanup_timeout_seconds:
-                        raise AssertionError(f"expired rows remain: host/workload={remaining}; {self._log.read_text()[-2000:]}")
-                    time.sleep(C.poll_seconds)
-                writes = connection.execute("SELECT count(*) FROM resource_host_samples WHERE id>2").fetchone()[0]
-                results[current] = TestResult(TestStatus.PASSED, f"{C.expired_per_table + 1} expired rows per table cleared in {time.monotonic() - started:.2f}s across {writes} host writes with batch={C.batch_size}")
-                current = "fresh_samples"
-                if self._fresh_rows(connection) != fresh:
-                    raise AssertionError("retention changed or deleted fresh resource samples")
-                results[current] = TestResult(TestStatus.PASSED, "all four fresh sample rows preserved field for field")
-                current = "profiles_and_boots"
-                profiles = connection.execute("SELECT trace_id FROM resource_trace_profiles ORDER BY trace_id").fetchall()
-                boots = connection.execute("SELECT boot_key FROM resource_host_boots WHERE boot_key IN (901,902,903) ORDER BY boot_key").fetchall()
-                if profiles != [(900002,), (900003,)] or boots != [(902,), (903,)]:
-                    raise AssertionError(f"profile/boot reclamation disagrees with surviving samples: {profiles}, {boots}")
-                results[current] = TestResult(TestStatus.PASSED, "expired-only profile/boot reclaimed; mixed and fresh profile/boot retained")
-                current = "metadata_keys"
-                if connection.execute("SELECT key_id,key FROM resource_metadata_keys").fetchall() != [(1, "retention-preserve-key")]:
-                    raise AssertionError("retention reclaimed metadata dictionary keys")
-                results[current] = TestResult(TestStatus.PASSED, "metadata dictionary preserved")
-                current = "legacy_table"
-                if connection.execute("SELECT name FROM sqlite_master WHERE name='resource_samples'").fetchone():
-                    raise AssertionError("opening the column store did not drop the legacy sample table")
-                results[current] = TestResult(TestStatus.PASSED, "legacy prototype sample table dropped")
-                if self._daemon.poll() is not None:
-                    raise AssertionError(f"retention daemon exited unexpectedly: {self._log.read_text()[-2000:]}")
-        except Exception as error:
-            results[current] = TestResult(TestStatus.FAILED, str(error))
+            yield
         finally:
-            if self._daemon is not None and self._daemon.poll() is None:
+            if self._daemon.poll() is None:
                 self._daemon.terminate()
                 try:
                     self._daemon.wait(timeout=C.stop_timeout_seconds)
                 except subprocess.TimeoutExpired:
                     self._daemon.kill()
                     self._daemon.wait(timeout=C.kill_timeout_seconds)
-                    results["cleanup"] = TestResult(TestStatus.FAILED, "retention daemon required SIGKILL")
-        return TestResult(TestStatus.COMPOSITE, "resource SQLite retention", results)
+                    raise RuntimeError("retention daemon required SIGKILL")
+
+    def run(self, context: TestingContextSingleton) -> TestResult:
+        context = TestingContextSingleton.current()
+        with context.case("resource SQLite retention") as case:
+            with case.step("Prepare the test database"):
+                self._prepare()
+                fresh = self._seed()
+            started = time.monotonic()
+            with self._running_daemon():
+                with case.step("Wait for AcTrail to start"):
+                    self._wait_for_daemon()
+                with closing(sqlite3.connect(self._database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+                    with case.step("Wait for expired samples to be removed") as step:
+                        while True:
+                            remaining = tuple(connection.execute(f"SELECT count(*) FROM {table} WHERE id<=0").fetchone()[0]
+                                              for table in ("resource_host_samples", "resource_workload_samples"))
+                            if remaining == (0, 0):
+                                break
+                            if self._daemon.poll() is not None or time.monotonic() - started > C.cleanup_timeout_seconds:
+                                raise AssertionError(f"expired rows remain: host/workload={remaining}; {self._log.read_text()[-2000:]}")
+                            time.sleep(C.poll_seconds)
+                        writes = connection.execute("SELECT count(*) FROM resource_host_samples WHERE id>2").fetchone()[0]
+                        step.message = f"{C.expired_per_table + 1} expired rows per table cleared across {writes} host writes with batch={C.batch_size}"
+                    with case.step("Check that fresh samples are preserved"):
+                        if self._fresh_rows(connection) != fresh:
+                            raise AssertionError("retention changed or deleted fresh resource samples")
+                    with case.step("Check profile and boot record retention"):
+                        profiles = connection.execute("SELECT trace_id FROM resource_trace_profiles ORDER BY trace_id").fetchall()
+                        boots = connection.execute("SELECT boot_key FROM resource_host_boots WHERE boot_key IN (901,902,903) ORDER BY boot_key").fetchall()
+                        if profiles != [(900002,), (900003,)] or boots != [(902,), (903,)]:
+                            raise AssertionError(f"profile/boot reclamation disagrees with surviving samples: {profiles}, {boots}")
+                    with case.step("Check that metadata keys are preserved"):
+                        if connection.execute("SELECT key_id,key FROM resource_metadata_keys").fetchall() != [(1, "retention-preserve-key")]:
+                            raise AssertionError("retention reclaimed metadata dictionary keys")
+                    with case.step("Check that the legacy samples table is removed"):
+                        if connection.execute("SELECT name FROM sqlite_master WHERE name='resource_samples'").fetchone():
+                            raise AssertionError("opening the column store did not drop the legacy sample table")
+                    with case.step("Check that AcTrail is still running"):
+                        if self._daemon.poll() is not None:
+                            raise AssertionError(f"retention daemon exited unexpectedly: {self._log.read_text()[-2000:]}")
+        return case.result

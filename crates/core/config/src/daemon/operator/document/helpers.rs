@@ -29,9 +29,15 @@ pub(super) fn required_non_empty<'a>(key: &'static str, raw: &'a str) -> Result<
     Ok(raw)
 }
 
-pub(super) fn parse_octal(key: &'static str, raw: &str) -> Result<u32, String> {
-    u32::from_str_radix(required_non_empty(key, raw)?, 8)
-        .map_err(|error| format!("invalid {key}: {error}"))
+pub(super) fn parse_socket_mode(key: &'static str, raw: &str) -> Result<u32, String> {
+    let mode = u32::from_str_radix(required_non_empty(key, raw)?, 8)
+        .map_err(|error| format!("invalid {key}: {error}"))?;
+    if mode & !0o660 != 0 {
+        return Err(format!(
+            "invalid {key}: socket permissions must fit within 0660"
+        ));
+    }
+    Ok(mode)
 }
 
 pub(super) fn require_positive_u32(key: &'static str, value: u32) -> Result<u32, String> {

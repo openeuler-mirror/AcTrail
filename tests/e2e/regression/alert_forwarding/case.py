@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .config import AlertForwardingRegressionConfig
@@ -9,7 +9,12 @@ from .scenario import AlertForwardingScenario
 
 
 class AlertForwardingCase(TestCase):
-    def __init__(self, config: AlertForwardingRegressionConfig):
+    case_id = 'alert_forwarding'
+    description = 'Verify daemon auto-launch, subscriber fanout, and a real low-threshold stored-alert forwarding path'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = AlertForwardingRegressionConfig.from_environment(directories)
         self._config = config
         self._environment: AlertForwardingEnvironment | None = None
 
@@ -17,7 +22,7 @@ class AlertForwardingCase(TestCase):
         results: dict[str, TestResult] = {}
         try:
             test_context.report_progress(
-                "environment_prepare",
+                "Start the observation services",
                 "starting isolated daemon, auto-launched proxy, and real alert plugin",
             )
             self._environment = AlertForwardingEnvironment(

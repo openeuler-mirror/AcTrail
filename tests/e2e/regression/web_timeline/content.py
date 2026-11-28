@@ -1,5 +1,5 @@
 """Read expected request content from a real captured SQLite database."""
-from constants import CASE_CONSTANTS as C
+from tests.e2e.regression.web_timeline.constants import CASE_CONSTANTS as C
 import json
 
 

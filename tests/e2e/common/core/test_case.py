@@ -1,9 +1,12 @@
+"""Define test results, case behavior and automatic case registration."""
 from __future__ import annotations
 
 from abc import ABC, ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
+
+from .config import TestRunDirectories
 
 if TYPE_CHECKING:
     from tests.e2e.common.runner.testing_context import TestingContextSingleton
@@ -39,16 +42,17 @@ class TestResult:
 
 
 class TestCaseMeta(ABCMeta):
-    """
-    Metaclass for TestCase to ensure that all subclasses implement the run method.
-    """
+    """Register cases that implement the complete abstract interface."""
 
     __name2cls__ = dict()
 
     def __new__(mcs, name, bases, namespace):
         cls = super().__new__(mcs, name, bases, namespace)
         if not cls.__abstractmethods__:
-            mcs.__name2cls__[name] = cls
+            case_id = cls.case_id
+            if case_id in mcs.__name2cls__:
+                raise ValueError(f"duplicate test case: {case_id}")
+            mcs.__name2cls__[case_id] = cls
         return cls
 
     def get_test_case_class_by_name(cls, name: str) -> type[TestCase]:
@@ -70,6 +74,22 @@ class TestCase(ABC, metaclass=TestCaseMeta):
     """
     Abstract base class for test cases.
     """
+
+    description: ClassVar[str]
+    default_enabled = True
+    skip_if_skipped: tuple[str, ...] = ()
+
+    @abstractmethod
+    def __init__(self, directories: TestRunDirectories) -> None:
+        """Build scenario configuration from run directories and its environment."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def case_id(self) -> str:
+        """Unique registry key, implemented as a concrete case's class attribute."""
+        raise NotImplementedError
+
 
     @abstractmethod
     def run(self, test_context: TestingContextSingleton) -> TestResult:

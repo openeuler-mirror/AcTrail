@@ -35,9 +35,9 @@ class ContainerLlmEvidence:
                     trace_ids = re.findall(r"trace trace-(\d+) entered Active", text)
                     if len(trace_ids) != 1:
                         raise AssertionError("container output must identify one trace")
-                    # The original scenario has already verified this final answer
-                    # against its own workload marker before returning successfully.
-                    reply = text.strip().splitlines()[-1].strip()
+                    reply = output.with_suffix(".reply").read_text().strip()
+                    if not reply:
+                        raise AssertionError("container Agent returned an empty reply")
                     report["traces"].append(self._require_trace(db, int(trace_ids[0]), reply))
             traces = report["traces"]
             if len({row["trace_id"] for row in traces}) != 2:

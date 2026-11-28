@@ -1,17 +1,21 @@
+"""Own alert plugin instances and the isolated daemon scope."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
 from typing import Any
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
-from tests.e2e.common.core import TestOutput, TestResult, TestStatus
+from tests.e2e.common.core import TestOutput
+from tests.e2e.common.tool_alert_lifecycle.plugin_package import ToolAlertPluginPackage
+
+from tests.e2e.common.plugin_instance import PluginInstance, PluginInstanceSpec
 
 from .config import ToolConsecutiveFailureAlertConfig
 
 from .constants import CASE_CONSTANTS
-
 
 class ToolConsecutiveFailureAlertEnvironment:
     def __init__(
@@ -21,6 +25,9 @@ class ToolConsecutiveFailureAlertEnvironment:
     ):
         self.config = config
         self.output = output
+        self._repo_package = ToolAlertPluginPackage(
+            config.repo, config.work_dir, config.plugin_manifest
+        )
         self.runtime = ActrailRuntime.isolated(
             config.repo,
             config.bin_dir,
@@ -28,8 +35,12 @@ class ToolConsecutiveFailureAlertEnvironment:
             output,
             config.work_dir,
         )
-        self._plugin_loaded = False
-        self._installed_plugin_loaded = False
+        self._repo_plugin = PluginInstance(PluginInstanceSpec(
+            self._repo_package.manifest, config.plugin_instance, ("alert-write",)
+        ))
+        self._installed_plugin = PluginInstance(PluginInstanceSpec(
+            self.installed_manifest, config.installed_plugin_instance, ("alert-write",)
+        ))
 
     @property
     def database(self) -> Path:
@@ -54,83 +65,24 @@ class ToolConsecutiveFailureAlertEnvironment:
         )
 
     def prepare(self) -> None:
+        self._repo_package.prepare()
         self.runtime.prepare()
         self.load_repo_plugin()
 
-    def load_repo_plugin(self) -> None:
-        if self._plugin_loaded:
-            return
-        load = self.runtime.run_checked(self.plugin_load_command())
-        if "loaded instance=" not in load.output:
-            raise AssertionError(
-                "plugin load did not report a loaded instance: "
-                f"{load.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-            )
-        self._plugin_loaded = True
+    def load_repo_plugin(self, plugin_config: Path | None = None) -> None:
+        self._repo_plugin.load(plugin_config)
 
     def unload_repo_plugin(self) -> None:
-        if not self._plugin_loaded:
-            return
-        result = self.runtime.run(
-            self.plugin_unload_command(),
-            echo=False,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                f"plugin unload exited with {result.returncode}: "
-                f"{result.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}"
-            )
-        self._plugin_loaded = False
+        self._repo_plugin.unload()
 
-    def plugin_load_command(self) -> list[Path | str]:
-        return self._plugin_load_command(
-            self.config.plugin_manifest,
-            self.config.plugin_instance,
-        )
-
-    def _plugin_load_command(
-        self,
-        manifest: Path,
-        instance: str,
-    ) -> list[Path | str]:
-        return [
-            self.runtime.actraild,
-            "--config",
-            self.config.operator_config,
-            "plugin",
-            "load",
-            "--manifest",
-            manifest,
-            "--instance",
-            instance,
-            "--grant",
-            "alert-write",
-        ]
+    def plugin_load_command(self, *, plugin_config: Path | None = None) -> list[Path | str]:
+        return self._repo_plugin.load_command(plugin_config)
 
     def plugin_unload_command(self) -> list[Path | str]:
-        return self._plugin_unload_command(self.config.plugin_instance)
-
-    def _plugin_unload_command(self, instance: str) -> list[Path | str]:
-        return [
-            self.runtime.actraild,
-            "--config",
-            self.config.operator_config,
-            "plugin",
-            "unload",
-            "--instance",
-            instance,
-        ]
+        return self._repo_plugin.unload_command()
 
     def plugin_status_command(self) -> list[Path | str]:
-        return [
-            self.runtime.actraild,
-            "--config",
-            self.config.operator_config,
-            "plugin",
-            "status",
-            "--instance",
-            self.config.plugin_instance,
-        ]
+        return self._repo_plugin.status_command()
 
     def launch_command(
         self,
@@ -149,50 +101,13 @@ class ToolConsecutiveFailureAlertEnvironment:
         ]
 
     def load_installed_plugin(self) -> None:
-        if self._installed_plugin_loaded:
-            return
-        load = self.runtime.run_checked(
-            self._plugin_load_command(
-                self.installed_manifest,
-                self.config.installed_plugin_instance,
-            )
-        )
-        if "loaded instance=" not in load.output:
-            raise AssertionError(
-                "installed package load did not report a loaded instance: "
-                f"{load.output[-CASE_CONSTANTS.launch_diagnostic_tail_characters:]}"
-            )
-        self._installed_plugin_loaded = True
+        self._installed_plugin.load()
 
     def unload_installed_plugin(self) -> None:
-        if not self._installed_plugin_loaded:
-            return
-        result = self.runtime.run(
-            self._plugin_unload_command(
-                self.config.installed_plugin_instance,
-            ),
-            echo=False,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                f"installed package unload exited with {result.returncode}: "
-                f"{result.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}"
-            )
-        self._installed_plugin_loaded = False
+        self._installed_plugin.unload()
 
     def plugin_status(self) -> dict[str, str]:
-        result = self.runtime.run(self.plugin_status_command(), echo=False)
-        if result.returncode != 0:
-            raise AssertionError(
-                f"plugin status exited with {result.returncode}: "
-                f"{result.output[-CASE_CONSTANTS.command_diagnostic_tail_characters:]}"
-            )
-        fields: dict[str, str] = {}
-        for token in result.stdout.split():
-            if "=" in token:
-                key, value = token.split("=", 1)
-                fields[key] = value
-        return fields
+        return self._repo_plugin.status()
 
     def viewer_actions(self, trace_id: int) -> list[dict[str, Any]]:
         result = self.runtime.run(
@@ -230,32 +145,13 @@ class ToolConsecutiveFailureAlertEnvironment:
             )
         return actions
 
-    def cleanup(self) -> TestResult | None:
-        failures: list[str] = []
-        if self._installed_plugin_loaded:
-            try:
-                self.unload_installed_plugin()
-            except Exception as error:
-                failures.append(f"installed package unload exception: {error}")
-        if self._plugin_loaded:
-            try:
-                unload = self.runtime.run(
-                    self.plugin_unload_command(),
-                    echo=False,
-                )
-                if unload.returncode != 0:
-                    failures.append(f"plugin unload: {unload.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}")
-            except Exception as error:
-                failures.append(f"plugin unload exception: {error}")
-        stop = self.runtime.stop()
-        if stop is not None and stop.returncode != 0:
-            failures.append(f"daemon stop: {stop.output[-CASE_CONSTANTS.brief_diagnostic_tail_characters:]}")
-        if failures:
-            return TestResult(
-                TestStatus.FAILED,
-                "; ".join(failures),
-            )
-        return TestResult(
-            TestStatus.PASSED,
-            "plugin unloaded and daemon stopped",
-        )
+    def __enter__(self):
+        self._scope = ExitStack()
+        self._scope.enter_context(self.runtime)
+        # 注册卸载顺序后再准备环境，部分启动失败也会释放资源。
+        self._scope.push(self._repo_plugin)
+        self._scope.push(self._installed_plugin)
+        return self
+
+    def __exit__(self, exception_type, exception, traceback):
+        return self._scope.__exit__(exception_type, exception, traceback)

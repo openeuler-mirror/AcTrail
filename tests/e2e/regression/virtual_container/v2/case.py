@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .config import VirtualContainerConfig
@@ -9,7 +9,12 @@ from .scenario import VirtualContainerScenario
 
 
 class VirtualContainerCase(TestCase):
-    def __init__(self, config: VirtualContainerConfig):
+    case_id = 'virtual_container'
+    description = 'Validate deployment contracts and run the reusable Kata V2 interface/data matrix'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = VirtualContainerConfig.from_environment(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
@@ -30,7 +35,7 @@ class VirtualContainerCase(TestCase):
         scenario = VirtualContainerScenario(self._config, test_context)
         try:
             test_context.report_progress(
-                "contracts",
+                "Check deployment and VM lifecycle contracts",
                 "running deployment and no-KVM lifecycle contracts",
             )
             results["contracts"] = scenario.run_contracts()
@@ -47,7 +52,7 @@ class VirtualContainerCase(TestCase):
                     results,
                 )
             test_context.report_progress(
-                "artifacts",
+                "Check deployment artifacts",
                 "validating release, bundles, images and runtime configs",
             )
             deployment, deployment_problem = prerequisites.resolve_deployment()
@@ -64,7 +69,7 @@ class VirtualContainerCase(TestCase):
                     "deprecated mutable paths match the current release",
                 )
                 test_context.report_progress(
-                    "artifacts",
+                    "Check deployment artifacts",
                     "deprecated legacy paths in use; prepare a format 2 profile",
                 )
             else:
@@ -79,7 +84,7 @@ class VirtualContainerCase(TestCase):
             )
 
             test_context.report_progress(
-                "backends",
+                "Resolve the selected VM backends",
                 "resolving each selected backend independently",
             )
             for name, backend in prerequisites.resolve_backends(

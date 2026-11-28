@@ -2,7 +2,11 @@
 
 ## 测试目标
 
-该用例验证 `wasm-legacy/tool-frequent-failure-alert` 插件的端到端告警链路：
+验证工具失败达到配置阈值时生成正确告警，并正确处理成功结果、冷却和真实 Agent 的执行证据。
+
+## 场景设计
+
+在配置的时间窗口内执行同一工具的混合成功与失败、低于阈值和冷却场景，再通过真实 Agent 对话触发工具失败。以真实命令、退出和 LLM 工具调用证据核对聚合计数与告警。
 
 - 插件通过 `alert-write` 授权加载，消费 `agent.identity`、`llm.response`、
   `command.invocation`、`process.exit`、`mcp.tool_call` 与
@@ -19,17 +23,17 @@
 - `scripts/install-release.sh` 安装出的官方插件包可被发现并从安装目录加载；
 - 真实 Agent 轮用统一提示词驱动 Agent 执行三条失败命令，检查工具调用证据和告警。
 
-## 判定语义
+### 判定语义
 
 - AcTrail 自身产物缺失或不可执行（`actraild`、`actrailctl`、
   `actrailviewer`、release 安装的插件包）判定为 `FAILED`；
-- 真实 Agent 缺失或不可用（`opencode`、`codex` 均未找到）时，真实 Agent
+- Factory 默认候选 Agent 均缺失或不可用时，真实 Agent
   子项判定为 `SKIPPED`；
 - 真实 Agent 轮无告警且未观测到三条失败命令时，判定为 `SKIPPED`；
 - 已观测到三条失败命令但无告警，或已有告警但失败命令、LLM 工具调用任一
   不足三条时，判定为 `FAILED`。
 
-## 回测组成
+### 回测组成
 
 | 回测层次 | 运行配置 | 执行主体 | 自动断言 |
 | --- | --- | --- | --- |
@@ -39,41 +43,24 @@
 真实 Agent 轮启动 Agent CLI 与模型对话，从同一 trace 的 LLM 响应、命令和
 进程退出动作中核对三次工具调用。
 
-# Quick Run
+## 测试依赖
 
-混合正向轮通过 `bash -c 'exec ls <path>'` 执行三条成功命令和三条失败命令。
-`terminal-command-registration` 核对同一逻辑进程的 bash 阶段终态和 ls 阶段，
-告警中的命令证据均属于实际 ls，并包含三个失败 ls 的 action ID。
-该轮预期失败数为 3、总数为 6、失败率为 0.5，生成一条告警。
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| Python | Python ≥ 3.11 | 运行测试执行器 |
+| 主机环境 | Linux、root 权限和可工作的 eBPF 环境 | 启动采集与治理 |
+| AcTrail | release 产物和测例使用的官方插件包 | 执行、保存和查询测试结果 |
+| Agent 与模型服务 | 可用的真实工具型 Agent 及认证 | 执行真实 Agent 回合 |
 
-在仓库根目录以 root 执行：
-
-```bash
-sudo -E python3.11 tests/e2e/regression/test_all.py \
-  --case tool_frequent_failure_alert
-```
-
-公共 runner 会先执行 `scripts/install-release.sh`（构建并安装官方插件包），再
-创建隔离工作目录，启动真实 `actraild`，加载插件后依次跑混合正向、低于
-阈值、冷却、安装包和可选真实 Agent 轮次。首次运行包含 release、TLS runtime
-和 WASM 插件构建，编译耗时取决于本机缓存。
-
-只运行该 case 并显示详细过程：
-
-```bash
-sudo -E python3.11 \
-  tests/e2e/regression/tool_frequent_failure_alert/run_e2e.py
-```
-
-# 步骤摘要
+## 测试步骤摘要
 
 1. 检查 release 二进制（`actraild`、`actrailctl`、`actrailviewer`）与
    root/eBPF 测试权限。
 2. 断言 `scripts/install-release.sh` 已把插件安装到
    `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}/tool-frequent-failure-alert/`
    （manifest、wasm、两个 payload schema）。
-3. 在隔离目录初始化、清理并启动 AcTrail。
-4. 从仓库示例目录加载插件，携带测试专用配置
+3. 在隔离目录组装插件包，初始化、清理并启动 AcTrail。
+4. 从隔离目录加载插件，携带测试专用配置
    `tool-frequent-failure-alert.e2e.config.json`（`tool_scope=agent_children`、
    `parent_scope=any`），并授予 `alert-write`。
 5. 混合正向轮：同一 `ls` 工具先成功三次、再失败三次，断言定义注册、恰好
@@ -84,28 +71,63 @@ sudo -E python3.11 \
 6. 低于阈值轮：同一 trace 只有两条失败 `ls`，断言无告警。
 7. 冷却矩阵：单 trace 连续五条失败命令，断言告警数为 1，并核对存储的
    `command.invocation` 数量。
-8. 断言仓库实例 `observed_records > 0`。
-9. 安装包轮：卸载仓库实例，加载安装目录实例跑一轮正向，断言安装产物
-   可用；完成后卸载安装目录实例并加载仓库实例。
+8. 断言隔离目录的插件实例 `observed_records > 0`。
+9. 安装包轮先卸载隔离目录的插件实例，再加载安装目录的插件并跑一轮正向验证。
+   完成后卸载安装包实例，并从隔离目录重新加载插件。
 10. 真实 Agent 轮（可选）：切换到
     `tool-frequent-failure-alert.agent.e2e.config.json`
-    （`tool_scope=llm_and_mcp`、`parent_scope=agent_child`），再探测
-    `opencode`/`codex`，用统一提示词驱动其执行三条失败命令，覆盖工具命令/
+    （`tool_scope=llm_and_mcp`、`parent_scope=agent_child`），通过 Factory 按默认顺序
+    选择可用 Agent，复用本次运行的可用性检查结果。用统一提示词驱动其执行三条失败命令，覆盖工具命令/
     退出早于流式 `llm.response` 最终化的延迟归因，以及重复 tool call 去重和
     顺序工具调用；最多执行两次。告警 payload 满足 `failure_count=3`、
     `total_count=3`、`failure_rate=1.0`，并至少包含三组命令/退出证据。
     轮次结果按[判定语义](#判定语义)确定。
 11. 卸载插件、停止 daemon、清理。
 
-# 手动测试
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 混合结果 | 同一工具成功三次、失败三次 | 一条告警，failure_count=3、total_count=6、failure_rate=0.5 |
+| 低于阈值 | 窗口内仅失败两次 | 无告警 |
+| 冷却 | 同一 trace 连续失败五次 | 仅产生一条告警 |
+| 真实 Agent | 实际产生三次失败工具调用 | failure_count=3、total_count=3、failure_rate=1.0，命令与退出证据完整 |
+| 安装包 | 加载 release 安装目录中的插件 | 正向场景同样通过 |
 
-以下步骤手动运行插件加载、命令执行和告警查询，均在仓库根目录的同一个 root shell 中执行。
+## 快速运行
+
+混合正向轮通过 `bash -c 'exec ls <path>'` 执行三条成功命令和三条失败命令。
+`terminal-command-registration` 核对同一逻辑进程的 bash 阶段终态和 ls 阶段，
+告警中的命令证据均属于实际 ls，并包含三个失败 ls 的 action ID。
+该轮预期失败数为 3、总数为 6、失败率为 0.5，生成一条告警。
+
+在仓库根目录以 root 运行回归。
+
+```bash
+sudo -E python3.11 tests/e2e/regression/test_all.py \
+  --case tool_frequent_failure_alert
+```
+
+公共 runner 会先执行 `scripts/install-release.sh` 构建并安装官方插件包。用例将
+`${CARGO_TARGET_DIR:-target}/wasm32-wasip2/release/` 中的 WASM 与仓库的 manifest、
+schema 组装到隔离工作目录，再启动真实 `actraild`。加载插件后依次跑混合正向、
+低于阈值、冷却、安装包和可选真实 Agent 轮次。首次运行的编译耗时取决于本机缓存。
+
+只运行该 case 并显示详细过程：
+
+```bash
+sudo -E python3.11 \
+  tests/e2e/regression/tool_frequent_failure_alert/run_e2e.py
+```
+
+## 手动测试
+
+按[插件编译说明](../../../../examples/plugins/wasm-legacy/tool-frequent-failure-alert/README.zh.md#编译)生成示例目录中的 WASM。
+在仓库根目录用同一个 root shell 执行以下命令。
 手动测试工作目录为 `/tmp/actrail-frequent-alert-manual`，命令通过该目录下的
 `actraild.conf` 操作隔离实例。
 
-## 步骤1：检查测试前提并构建 release
+### 步骤1：检查测试前提并构建 release
 
-### 手动指令
+#### 手动指令
 
 ```bash
 test "$(id -u)" -eq 0
@@ -119,15 +141,15 @@ test -f examples/plugins/wasm-legacy/tool-frequent-failure-alert/actrail_tool_fr
 bash scripts/install-release.sh
 ```
 
-### 预期结果
+#### 预期结果
 
 当前用户为 root；三个测试所需二进制均可执行；插件 manifest 与 wasm 产物
 存在；安装脚本成功并把插件安装到
 `${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}`。
 
-## 步骤2：确认安装包并创建隔离配置启动 daemon
+### 步骤2：确认安装包并创建隔离配置启动 daemon
 
-### 手动指令
+#### 手动指令
 
 ```bash
 PLUGIN_ROOT="${ACTRAIL_PLUGIN_DIR:-$HOME/.actrail/plugins}"
@@ -180,14 +202,14 @@ EOF
 "$BIN/actraild" --config "$WORK/actraild.conf" start
 ```
 
-### 预期结果
+#### 预期结果
 
 安装包四件套（manifest、wasm、两个 payload schema）存在；四条 AcTrail 命令全部成功，daemon 打印 pid 与 control
 socket；SQLite 与日志均位于 `/tmp/actrail-frequent-alert-manual`。
 
-## 步骤3：加载插件
+### 步骤3：加载插件
 
-### 手动指令
+#### 手动指令
 
 ```bash
 "$BIN/actraild" --config "$WORK/actraild.conf" plugin load \
@@ -197,7 +219,7 @@ socket；SQLite 与日志均位于 `/tmp/actrail-frequent-alert-manual`。
   --grant alert-write
 ```
 
-### 预期结果
+#### 预期结果
 
 输出 `loaded instance=manual.frequent-alert`、`warnings=none`。
 
@@ -207,9 +229,9 @@ socket；SQLite 与日志均位于 `/tmp/actrail-frequent-alert-manual`。
 > （如 `bash`）。生产默认配置为 `llm_and_mcp` + `agent_child`，只统计
 > LLM/宿主回填的工具执行。
 
-## 步骤4：混合正向轮（三次成功与三次失败触发告警）
+### 步骤4：混合正向轮（三次成功与三次失败触发告警）
 
-### 手动指令
+#### 手动指令
 
 ```bash
 FAILURE_MARKER="TOOL_FREQUENT_ALERT_MIXED_$(date +%s%N)"
@@ -255,7 +277,7 @@ JOIN alert_definitions d ON a.alert_definition_id = d.alert_definition_id
 WHERE a.trace_id = $TRACE_ID AND d.definition_key = 'frequent-failure';"
 ```
 
-### 预期结果
+#### 预期结果
 
 六次执行使用同一个工具名 `ls`。恰好一条告警；`failures=3`、`total=6`、
 `failure_rate=0.5`、`tool_name=ls`、
@@ -268,9 +290,9 @@ WHERE a.trace_id = $TRACE_ID AND d.definition_key = 'frequent-failure';"
 （截断 + 密钥片段替换），且 payload 始终不含 `command.line` 等工具参数
 明文。
 
-## 步骤5：低于阈值轮（失败次数不足不告警）
+### 步骤5：低于阈值轮（失败次数不足不告警）
 
-### 手动指令
+#### 手动指令
 
 ```bash
 LOW_MARKER="TOOL_FREQUENT_ALERT_LOW_$(date +%s%N)"
@@ -291,14 +313,14 @@ sqlite3 "$WORK/data/actrail.sqlite" \
    WHERE a.trace_id = $LOW_TRACE_ID AND d.definition_key = 'frequent-failure';"
 ```
 
-### 预期结果
+#### 预期结果
 
 两条失败低于窗口阈值 3，查询结果为 `0`。窗口内的成功事件计入调用总数，
 失败率按失败数除以调用总数计算。
 
-## 步骤6：冷却矩阵（超过阈值的失败不重复告警）
+### 步骤6：冷却矩阵（超过阈值的失败不重复告警）
 
-### 手动指令
+#### 手动指令
 
 ```bash
 COOLDOWN_MARKER="TOOL_FREQUENT_ALERT_COOLDOWN_$(date +%s%N)"
@@ -323,14 +345,14 @@ sqlite3 "$WORK/data/actrail.sqlite" \
   jq '[.actions[] | select(.kind == "command.invocation")] | length'
 ```
 
-### 预期结果
+#### 预期结果
 
 告警数为 `1`：第三次失败触发告警并重置窗口，第四、五次失败位于冷却期。
 viewer 中 `command.invocation` 数量为 6（bash + 5 条 `ls`）。
 
-## 步骤7：从安装包加载插件并验证
+### 步骤7：从安装包加载插件并验证
 
-### 手动指令
+#### 手动指令
 
 ```bash
 "$BIN/actraild" --config "$WORK/actraild.conf" plugin unload \
@@ -356,14 +378,14 @@ INSTALLED_MARKER="TOOL_FREQUENT_ALERT_INSTALLED_$(date +%s%N)"
   --grant alert-write
 ```
 
-### 预期结果
+#### 预期结果
 
 安装包实例加载成功，该轮 trace 落库一条告警。完成后卸载安装包实例，加载
 仓库实例供真实 Agent 轮使用。
 
-## 步骤8：真实 Agent 轮（可选）
+### 步骤8：真实 Agent 轮（可选）
 
-### 手动指令
+#### 手动指令
 
 ```bash
 "$BIN/actraild" --config "$WORK/actraild.conf" plugin unload \
@@ -463,10 +485,10 @@ else
 fi
 ```
 
-### 预期结果
+#### 预期结果
 
-有可用 Agent 时（自动回测选择 `opencode` 或 `codex`，且优先使用
-`OPENCODE_E2E_BINARY` / `CODEX_E2E_BINARY` 等环境变量），Agent 执行三条独立
+有可用 Agent 时（自动回测按 XiaoO、Pi、OpenCode、Claude、Codex 的默认顺序选择，
+可通过各 Agent 对应的二进制环境变量指定路径），Agent 执行三条独立
 失败命令后，`AGENT_LS_COUNT >= 3`、`AGENT_TOOL_CALL_COUNT >= 3`，并且该
 trace 落库一条告警。告警 payload 为 `failure_count=3`、`total_count=3`、
 `failure_rate=1.0`，证据中至少有三条命令和三条退出动作。自动回测会在最终
@@ -479,9 +501,9 @@ trace 落库一条告警。告警 payload 为 `failure_count=3`、`total_count=3
 
 自动回测最多执行两次，轮次结果按[判定语义](#判定语义)确定。
 
-## 步骤9：清理
+### 步骤9：清理
 
-### 手动指令
+#### 手动指令
 
 ```bash
 "$BIN/actraild" --config "$WORK/actraild.conf" plugin unload \
@@ -493,11 +515,11 @@ trace 落库一条告警。告警 payload 为 `failure_count=3`、`total_count=3
 rm -rf -- /tmp/actrail-frequent-alert-manual
 ```
 
-### 预期结果
+#### 预期结果
 
 两个插件实例卸载成功，daemon 停止，隔离目录被删除。
 
-# 覆盖范围
+## 覆盖范围
 
 本用例覆盖：插件加载与授权、告警定义注册、告警落库与 payload 字段
 （工具名/失败类型/退出状态/失败分布/失败计数/窗口范围/证据列表）、证据唯一性

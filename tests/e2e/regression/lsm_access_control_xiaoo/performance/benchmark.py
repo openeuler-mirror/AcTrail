@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import platform
@@ -14,16 +13,15 @@ from pathlib import Path
 from tests.e2e.common.actrail_runtime import ActrailRuntime
 from tests.e2e.common.patch_builder import PatchBuilder
 from tests.e2e.common.core import TestOutput
-from tests.e2e.common.runner import TestingContextSingleton
 from ..services import WorkloadProvider
-from .paths import ENTRY, OUTPUT_DIR, REPO
+from .paths import ENTRY, REPO
 from .services import Peer, WasmPublisher
 
 from .constants import CASE_CONSTANTS
 
 
 class Benchmark:
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args):
         self.args = args
         xiaoo = args.xiaoo or shutil.which("xiaoo")
         if not xiaoo:
@@ -52,7 +50,7 @@ class Benchmark:
         work.mkdir()
         result_path = work / "measurements.json"
         command = shlex.join([
-            str(Path(sys.executable).resolve()), str(ENTRY), "worker",
+            str(Path(sys.executable).resolve()), str(ENTRY),
             "--backend", backend, "--allow-port", str(self._peers[0].port),
             "--deny-port", str(self._peers[1].port), "--count", str(self.args.count),
             "--rounds", str(self.args.rounds), "--warmup", str(self.args.warmup),
@@ -132,17 +130,12 @@ class Benchmark:
             finally:
                 provider.stop()
 
-    def run(self) -> None:
+    def run(self, context) -> None:
         if os.geteuid() != 0:
             raise RuntimeError("run this BPF benchmark as root")
         self.args.output = self.args.output.resolve()
         self.args.output.parent.mkdir(parents=True, exist_ok=True)
-        context = TestingContextSingleton(
-            lock_path=Path("/run/lock/actrail-v2-regression.lock"),
-            lock_timeout_seconds=self.args.lock_timeout, lock_poll_seconds=CASE_CONSTANTS.run_lock_poll_seconds,
-            output=self._output,
-        )
-        root = Path(tempfile.mkdtemp(prefix=".benchmark-", dir=OUTPUT_DIR))
+        root = Path(tempfile.mkdtemp(prefix=".benchmark-", dir=self.args.output.parent))
         try:
             for peer in self._peers:
                 peer.start()
@@ -171,7 +164,6 @@ class Benchmark:
                 for peer in self._peers:
                     peer.stop()
             finally:
-                context.close()
                 if self.args.keep_work:
                     print(f"Retained benchmark workspace: {root}")
                 else:

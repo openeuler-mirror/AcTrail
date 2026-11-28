@@ -1,3 +1,4 @@
+"""Verify tool alert evidence with separately reported scenario steps."""
 from __future__ import annotations
 
 import json
@@ -7,7 +8,8 @@ import sqlite3
 import time
 from typing import Any
 
-from tests.e2e.common.agent_selection import AgentSelector
+from tests.e2e.common.agents import AgentFactory
+from tests.e2e.common.actrail_runtime import LaunchOptions
 from tests.e2e.common.core import TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.tool_alert_lifecycle import CommandTerminalEvidence
@@ -59,123 +61,86 @@ class ToolConsecutiveFailureAlertTask:
     def __init__(
         self,
         environment: ToolConsecutiveFailureAlertEnvironment,
-        test_context: TestingContextSingleton,
     ):
         self._environment = environment
-        self._test_context = test_context
 
-    def run(self) -> dict[str, TestResult]:
-        results: dict[str, TestResult] = {}
-
-        self._test_context.report_progress(
-            "installed_package",
-            "verifying install-release.sh installed package",
-        )
-        results["installed-package"] = self._check_installed_package()
-
-        self._test_context.report_progress(
-            "success_round",
-            "successful external commands must not alert",
-        )
-        results["no-alert-on-success"] = self._run_no_alert_round(
-            "SUCCESS",
-            ["bash", "-c", "/bin/true; /bin/true; /bin/true"],
-        )
-
-        self._test_context.report_progress(
-            "failure_round",
-            "three consecutive failing commands must alert",
-        )
-        failure_trace_id, payload = self._run_positive_round(
-            "FAILURE",
-            self._MISSING_PATHS,
-        )
-        results["alert-persisted"] = TestResult(
-            TestStatus.PASSED,
-            f"trace-{failure_trace_id} persisted exactly one alert",
-        )
-
-        self._test_context.report_progress(
-            "definition",
-            "verifying alert definition registration",
-        )
-        self._assert_definition()
-        results["alert-definition"] = TestResult(
-            TestStatus.PASSED,
-            "consecutive-failure definition is registered for the plugin",
-        )
-
-        self._test_context.report_progress(
-            "payload",
-            "verifying consecutive-failure alert payload",
-        )
-        self._assert_payload(payload)
-        results["alert-payload"] = TestResult(
-            TestStatus.PASSED,
-            "payload reports three consecutive ls failures",
-        )
-
-        self._test_context.report_progress(
-            "evidence",
-            "verifying unique alert evidence references process.exit",
-        )
-        self._assert_evidence(payload)
-        results["terminal-command-registration"] = CommandTerminalEvidence(self._environment).verify(
-            failure_trace_id, payload, self._MISSING_PATHS
-        )
-        results["alert-evidence"] = TestResult(
-            TestStatus.PASSED,
-            "alert evidence has unique command/exit action ids",
-        )
-
-        self._test_context.report_progress(
-            "reset_round",
-            "a same-tool success between failures must reset the counter",
-        )
-        reset_command = (
-            f"ls {self._RESET_PATHS[0]}; ls {self._RESET_PATHS[1]}; "
-            "ls /etc/hostname; "
-            f"ls {self._RESET_PATHS[2]}; ls {self._RESET_PATHS[3]}"
-        )
-        results["no-alert-on-reset"] = self._run_no_alert_round(
-            "RESET",
-            ["bash", "-c", reset_command],
-        )
-
-        self._test_context.report_progress(
-            "cooldown_round",
-            "failures beyond threshold must not repeat alerts",
-        )
-        results["cooldown-single-alert"] = self._run_cooldown_round()
-
-        self._test_context.report_progress(
-            "plugin_observed",
-            "checking plugin consumed observation records",
-        )
-        observed = self._plugin_observed_records()
-        if observed <= 0:
-            results["plugin-observed"] = TestResult(
-                TestStatus.FAILED,
-                f"plugin observed_records={observed}, expected > 0",
+    def run(self, case) -> None:
+        with case.step("Check the installed plugin package") as step:
+            step.message = 'verifying install-release.sh installed package'
+            result = self._check_installed_package()
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check that successful commands do not raise an alert") as step:
+            step.message = 'successful external commands must not alert'
+            result = self._run_no_alert_round(
+                            "SUCCESS",
+                            ["bash", "-c", "/bin/true; /bin/true; /bin/true"],
+                        )
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check that consecutive failures raise an alert") as step:
+            step.message = 'three consecutive failing commands must alert'
+            failure_trace_id, payload = self._run_positive_round(
+                "FAILURE",
+                self._MISSING_PATHS,
             )
-        else:
-            results["plugin-observed"] = TestResult(
+            step.status = TestStatus.PASSED
+            step.message = (f"trace-{failure_trace_id} persisted exactly one alert")
+        with case.step("Check the registered alert definition") as step:
+            step.message = 'verifying alert definition registration'
+            self._assert_definition()
+            step.status = TestStatus.PASSED
+            step.message = ("consecutive-failure definition is registered for the plugin")
+        with case.step("Check the alert payload") as step:
+            step.message = 'verifying consecutive-failure alert payload'
+            self._assert_payload(payload)
+            step.status = TestStatus.PASSED
+            step.message = ("payload reports three consecutive ls failures")
+        with case.step("Check the alert evidence") as step:
+            step.message = 'verifying unique alert evidence references process.exit'
+            self._assert_evidence(payload)
+            step.details["terminal-command-registration"] = CommandTerminalEvidence(self._environment).verify(
+                failure_trace_id, payload, self._MISSING_PATHS
+            )
+            step.details["alert-evidence"] = TestResult(
                 TestStatus.PASSED,
-                f"plugin observed_records={observed}",
+                "alert evidence has unique command/exit action ids",
             )
-
-        self._test_context.report_progress(
-            "installed_round",
-            "loading the plugin from the installed package",
-        )
-        results["installed-package-round"] = self._run_installed_package_round()
-
-        self._test_context.report_progress(
-            "real_agent",
-            "running the unified failing-command prompt through a real agent",
-        )
-        results["real-agent"] = self._run_real_agent_round()
-        return results
+        with case.step("Check that a success resets the failure count") as step:
+            step.message = 'a same-tool success between failures must reset the counter'
+            reset_command = (
+                f"ls {self._RESET_PATHS[0]}; ls {self._RESET_PATHS[1]}; "
+                "ls /etc/hostname; "
+                f"ls {self._RESET_PATHS[2]}; ls {self._RESET_PATHS[3]}"
+            )
+            result = self._run_no_alert_round(
+                            "RESET",
+                            ["bash", "-c", reset_command],
+                        )
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check that cooldown suppresses repeat alerts") as step:
+            step.message = 'failures beyond threshold must not repeat alerts'
+            result = self._run_cooldown_round()
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check that the plugin received observations") as step:
+            step.message = 'checking plugin consumed observation records'
+            observed = self._plugin_observed_records()
+            if observed <= 0:
+                step.details["plugin-observed"] = TestResult(
+                    TestStatus.FAILED,
+                    f"plugin observed_records={observed}, expected > 0",
+                )
+            else:
+                step.details["plugin-observed"] = TestResult(
+                    TestStatus.PASSED,
+                    f"plugin observed_records={observed}",
+                )
+        with case.step("Check alerts from the installed plugin") as step:
+            step.message = 'loading the plugin from the installed package'
+            result = self._run_installed_package_round()
+            step.status, step.message, step.details = result.status, result.message, result.details
+        with case.step("Check alerts from commands run by an Agent") as step:
+            step.message = 'running the unified failing-command prompt through a real agent'
+            result = self._run_real_agent_round()
+            step.status, step.message, step.details = result.status, result.message, result.details
 
     def _check_installed_package(self) -> TestResult:
         package = self._environment.installed_package_dir
@@ -309,8 +274,9 @@ class ToolConsecutiveFailureAlertTask:
         )
 
     def _run_real_agent_round(self) -> TestResult:
-        agent = AgentSelector(self._environment.config.repo).select(
-            self._test_context
+        agent = AgentFactory.auto(
+            self._environment.config.repo,
+            TestingContextSingleton.current()
         )
         if agent is None:
             return TestResult(
@@ -320,12 +286,14 @@ class ToolConsecutiveFailureAlertTask:
         executed_failing_ls = False
         for attempt in (1, 2):
             marker = f"TOOL_ALERT_AGENT_{attempt}_" + secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
-            launch = self._launch(
-                marker,
-                agent.command(self._AGENT_PROMPT),
-                environment=agent.environment,
-            )
-            trace_id = self._require_trace_id(launch)
+            with self._environment.runtime.launch_scope(LaunchOptions(name=marker, host_ebpf="auto")):
+                with AgentFactory.create(
+                    agent.kind, binary=agent.binary, environment=agent.environment,
+                ).launchWithAcTrailCtl(stream_mode=False) as running:
+                    running.run(self._AGENT_PROMPT)
+                    running.join_all(timeout=self._environment.config.launch_timeout_seconds)
+
+                    trace_id = running.launch_result.trace_id
             self._wait_terminal(trace_id)
             alerts = self._poll_alerts(trace_id)
             if len(alerts) == 1:

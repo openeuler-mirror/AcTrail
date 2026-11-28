@@ -3,6 +3,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU64;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -101,11 +102,9 @@ pub fn start_daemon(
     max_bytes: NonZeroU64,
 ) -> Result<(), String> {
     ensure_start_preconditions(config)?;
-    create_parent_directory(&config.log_path, "log directory")?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config.log_path)
+    OperatorConfig::restrict_runtime_file(config_path)?;
+    let log = file_permissions::FilePermissions
+        .append(&config.log_path)
         .map_err(|error| format!("open log {}: {error}", config.log_path.display()))?;
     let stderr = log
         .try_clone()
@@ -164,7 +163,7 @@ pub fn status_daemon(config: &OperatorConfig) -> Result<DaemonProcessState, Stri
         }
         return Ok(DaemonProcessState::Stopped);
     };
-    if process_exists(pid)? {
+    if process_is_running(pid)? {
         Ok(DaemonProcessState::Running { pid })
     } else {
         Ok(DaemonProcessState::StalePid { pid })
@@ -175,8 +174,8 @@ pub fn write_pid_file(path: &Path, pid: u32) -> Result<(), String> {
     if pid == u32::default() {
         return Err("current process id must not be zero".to_string());
     }
-    create_parent_directory(path, "pid directory")?;
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+    let permissions = file_permissions::FilePermissions;
+    let mut file = match permissions.create_new(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             let existing_pid = read_pid_file(path)?.ok_or_else(|| {
@@ -185,25 +184,29 @@ pub fn write_pid_file(path: &Path, pid: u32) -> Result<(), String> {
                     path.display()
                 )
             })?;
-            if process_exists(existing_pid)? {
+            if process_is_running(existing_pid)? {
                 return Err(format!(
                     "pid file {} belongs to running pid {}",
                     path.display(),
                     existing_pid
                 ));
             }
+            let original = fs::symlink_metadata(path)
+                .map_err(|error| format!("inspect stale pid file {}: {error}", path.display()))?;
             remove_runtime_file(path)?;
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .map_err(|retry_error| {
-                    format!(
-                        "create pid file {} after removing stale pid {}: {retry_error}",
-                        path.display(),
-                        existing_pid
-                    )
-                })?
+            let file = permissions.create_new(path).map_err(|retry_error| {
+                format!(
+                    "create pid file {} after removing stale pid {}: {retry_error}",
+                    path.display(),
+                    existing_pid
+                )
+            })?;
+            permissions
+                .preserve_metadata(&file, &original)
+                .map_err(|error| {
+                    format!("preserve stale pid permissions {}: {error}", path.display())
+                })?;
+            file
         }
         Err(error) => return Err(format!("create pid file {}: {error}", path.display())),
     };
@@ -237,17 +240,6 @@ pub(super) fn cleanup_runtime_files(
         remove_runtime_file(&config.payload_config.tls.sync_event_socket_path)?;
     }
     Ok(())
-}
-
-fn create_parent_directory(path: &Path, label: &str) -> Result<(), String> {
-    let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    else {
-        return Ok(());
-    };
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {label} {}: {error}", parent.display()))
 }
 
 fn ensure_start_preconditions(config: &OperatorConfig) -> Result<(), String> {
@@ -427,7 +419,7 @@ fn wait_until_stopped(pid: u32, config: &OperatorConfig) -> Result<(), String> {
     let poll_every = Duration::from_millis(config.supervision_poll_interval_ms);
     let started_at = Instant::now();
     while started_at.elapsed() < wait_for {
-        if !process_exists(pid)? {
+        if !process_is_running(pid)? {
             return Ok(());
         }
         std::thread::sleep(poll_every);
@@ -470,12 +462,39 @@ fn read_pid_file(path: &Path) -> Result<Option<u32>, String> {
     Ok(Some(pid))
 }
 
-fn process_exists(pid: u32) -> Result<bool, String> {
-    signal_process(pid, process_exists_signal())
-}
+fn process_is_running(pid: u32) -> Result<bool, String> {
+    let raw_pid =
+        libc::pid_t::try_from(pid).map_err(|error| format!("invalid pid {pid}: {error}"))?;
+    let raw_fd = unsafe { libc::syscall(libc::SYS_pidfd_open, raw_pid, 0_u32) };
+    if raw_fd < 0 {
+        let error = io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            // Preserve any PID still reported present when pidfd_open is unavailable or denied.
+            Some(libc::ENOSYS | libc::EPERM | libc::EINVAL) => signal_process(pid, 0),
+            _ => Err(format!("open process descriptor for pid={pid}: {error}")),
+        };
+    }
 
-fn process_exists_signal() -> libc::c_int {
-    libc::c_int::default()
+    let fd = unsafe { OwnedFd::from_raw_fd(raw_fd as libc::c_int) };
+    let mut poll_fd = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // A process descriptor becomes readable after the last thread exits, before reaping.
+    match unsafe { libc::poll(&mut poll_fd, 1, 0) } {
+        0 => Ok(true),
+        -1 => Err(format!(
+            "poll process descriptor for pid={pid}: {}",
+            io::Error::last_os_error()
+        )),
+        _ if poll_fd.revents & (libc::POLLIN | libc::POLLHUP) != 0 => Ok(false),
+        _ => Err(format!(
+            "unexpected process descriptor events for pid={pid}: {:#x}",
+            poll_fd.revents
+        )),
+    }
 }
 
 fn signal_process(pid: u32, signal: libc::c_int) -> Result<bool, String> {

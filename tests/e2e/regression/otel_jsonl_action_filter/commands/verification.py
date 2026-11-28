@@ -82,7 +82,7 @@ class CommandDeliveryVerification:
             for key in ("command.tool.name", "actrail.action.finalized_on_trace_close"):
                 if attributes.get(key) != action["attributes"].get(key):
                     raise AssertionError(f"{action['id']} {key} differs from Web")
-        CommandLinkVerification(self._get, allow_late_agent_links=True).verify(
+        CommandLinkVerification(self._get).verify(
             trace_id, local, by_id
         )
 

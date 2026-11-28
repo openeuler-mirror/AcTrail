@@ -35,7 +35,9 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
         self,
         config: OtelJsonlActionFilterConfig,
         output: TestOutput,
+        agent_binary: Path,
     ):
+        self._agent_binary = agent_binary
         self._operator_config_patch = config.work_dir / "actraild.patch.toml"
         self._json_rpc_receiver = JsonRpcOtelReceiver("otel.export")
         super().__init__(
@@ -191,6 +193,7 @@ class OtelJsonlActionFilterEnvironment(PluginTestEnvironment):
             PatchBuilder()
             .with_work_dir(self.config.work_dir)
             .with_plugin_directory(plugin_root)
+            .with_values({"agent_invocation": {"commands": [str(self._agent_binary.resolve())]}})
             .build()
             .save(self._operator_config_patch)
         )

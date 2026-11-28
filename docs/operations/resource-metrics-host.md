@@ -112,15 +112,3 @@ receiving service. Web serves workload samples at
 Main storage schema version 44 requires a database created with the current
 schema. Existing databases with a different schema version are rejected at
 startup; configure a new database path before starting the current binaries.
-
-## Verification
-
-```bash
-cargo build --release -p daemon -p ctl -p view -p web
-sudo -E python3 tests/e2e/regression/test_all.py --no-profile --case resource_metrics_cgroup
-```
-
-The privileged cgroup v2 regression
-requires root, cgroup v2 and systemd 254+; it checks hierarchy placement, inherited
-membership, completion, restart and timeout. Missing prerequisites are reported as
-skips.

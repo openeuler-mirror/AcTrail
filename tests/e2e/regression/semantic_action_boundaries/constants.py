@@ -11,6 +11,7 @@ class SemanticActionBoundariesConstants:
     launch_command_host_ebpf: str = 'auto'
     launch_command_seccomp_notify: str = 'auto'
     marker_random_bytes: int = 6
+    agent_max_turns: int | None = None
     launch_diagnostic_tail_characters: int = 4000
     command_diagnostic_tail_characters: int = 2000
 

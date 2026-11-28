@@ -1,6 +1,8 @@
 # File Leakage Alert Plugin
 
-This official WIT component observes successful `write` and `writev` operations.
+This official WIT component observes successful `write`, `writev`, and
+`write_summary` operations. Set `[file_observation.collection.write].observed`
+to `true` to enable file write observation.
 During execution it keeps a bounded candidate set for paths outside the trace
 working directory and every configured additional allowed root.
 

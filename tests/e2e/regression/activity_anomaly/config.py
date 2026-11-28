@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.core.loopback_port import resolve_test_port
 
 from .constants import CASE_CONSTANTS
@@ -24,8 +24,8 @@ class ActivityAnomalyConfig(CommonTestConfig):
     long_command_seconds: int
 
     @classmethod
-    def from_environment(cls, inputs: TestCaseInputs) -> "ActivityAnomalyConfig":
-        common = CommonTestConfig.from_environment(inputs, "ACTIVITY_ANOMALY")
+    def from_environment(cls, directories: TestRunDirectories) -> "ActivityAnomalyConfig":
+        common = CommonTestConfig.from_environment(directories, "ACTIVITY_ANOMALY")
         xiaoo = os.environ.get("ACTIVITY_ANOMALY_E2E_XIAOO_BINARY") or shutil.which(
             "xiaoo"
         )
@@ -55,8 +55,8 @@ class ActivityAnomalyConfig(CommonTestConfig):
             )
         return cls(
             **common.as_kwargs(),
-            operator_config=inputs.work_dir / "actraild.conf",
-            operator_config_patch=inputs.work_dir / "actraild.patch.toml",
+            operator_config=directories.work_dir / "actraild.conf",
+            operator_config_patch=directories.work_dir / "actraild.patch.toml",
             xiaoo_binary=Path(xiaoo).resolve(),
             web_host=os.environ.get("ACTIVITY_ANOMALY_E2E_WEB_HOST", CASE_CONSTANTS.web_host),
             web_port=resolve_test_port(

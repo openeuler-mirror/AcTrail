@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from tests.e2e.common.core import CommonTestConfig, TestCaseInputs
+from tests.e2e.common.core import CommonTestConfig, TestRunDirectories
 from tests.e2e.common.core.loopback_port import resolve_test_port
 
 from .constants import CASE_CONSTANTS
@@ -19,15 +19,15 @@ class OtelHttpConfig(CommonTestConfig):
     plugin_instance: str
 
     @classmethod
-    def from_environment(cls, inputs: TestCaseInputs) -> "OtelHttpConfig":
-        common = CommonTestConfig.from_environment(inputs, "OTEL_HTTP")
+    def from_environment(cls, directories: TestRunDirectories) -> "OtelHttpConfig":
+        common = CommonTestConfig.from_environment(directories, "OTEL_HTTP")
         configured_operator = os.environ.get("OTEL_HTTP_E2E_OPERATOR_CONFIG")
         return cls(
             **common.as_kwargs(),
             operator_config=(
                 Path(configured_operator)
                 if configured_operator
-                else inputs.work_dir / "actraild.conf"
+                else directories.work_dir / "actraild.conf"
             ),
             web_host=os.environ.get("OTEL_HTTP_E2E_WEB_HOST", CASE_CONSTANTS.web_host),
             web_port=resolve_test_port(

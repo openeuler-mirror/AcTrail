@@ -1,30 +1,13 @@
 #!/usr/bin/env python3
-
-from __future__ import annotations
-
+"""Run this regression scenario independently."""
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO))
 
-from tests.e2e.common.runner import TestDefinition, run_one
-from tests.e2e.regression.project_subagent_trajectory.case import (  # noqa: E402
-    ProjectSubagentTrajectoryCase,
-)
-from tests.e2e.regression.project_subagent_trajectory.config import (  # noqa: E402
-    ProjectSubagentTrajectoryConfig,
-)
-
-
-TEST_DEFINITION = TestDefinition(
-    name="project_subagent_trajectory",
-    description="Verify sorting-subagent LLM projection and trajectory graph API",
-    build_case=lambda inputs: ProjectSubagentTrajectoryCase(
-        ProjectSubagentTrajectoryConfig.from_environment(inputs)
-    ),
-)
-
+from tests.e2e.common.runner import run_one
+from tests.e2e.regression.project_subagent_trajectory.case import ProjectSubagentTrajectoryCase
 
 if __name__ == "__main__":
-    raise SystemExit(run_one(TEST_DEFINITION, REPO))
+    raise SystemExit(run_one(ProjectSubagentTrajectoryCase, REPO))

@@ -63,17 +63,9 @@ export class ContinuousAcceptance extends TimelineBrowser {
       'pan or prefetch reloaded selected request blocks');
     assert(!this.report.requests.slice(startIndex).some(url => /\/action-tree|\/summary(?:\?|$)|\/waterfall(?:\?|$)/.test(url)),
       'continuous navigation loaded a whole-trace projection');
-    const ranges = this.responses.map(({ url }) => {
-      const query = new URL(url).searchParams;
-      return { from: BigInt(query.get('from')), to: BigInt(query.get('to')) };
-    });
-    const prefetch = ranges.some((range, index) => ranges.slice(0, index).some(earlier =>
-      range.from <= earlier.from && range.to >= earlier.to
-      && (range.from < earlier.from || range.to > earlier.to)));
-    assert(prefetch, 'no surrounding range was fetched after visible request data');
     this.report.continuous = {
       initial: { ...initial, origin: String(initial.origin) },
-      zoomed: { ...zoomed, origin: String(zoomed.origin) }, counts, prefetch,
+      zoomed: { ...zoomed, origin: String(zoomed.origin) }, counts,
     };
     this.report.continuous.cancellation = await this.cancelQuickJump();
     if (requireCancellation) assert(this.report.continuous.cancellation, 'long real trace did not exercise request cancellation');

@@ -5,10 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.e2e.common.core import TestCaseInputs, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestResult, TestStatus
 
 from tests.e2e.regression.virtual_container.v2.case import VirtualContainerCase
-from tests.e2e.regression.virtual_container.v2.config import VirtualContainerConfig
 from tests.e2e.regression.virtual_container.v2.prerequisites import ResolvedBackend
 
 
@@ -26,8 +25,8 @@ class VirtualContainerCaseTest(unittest.TestCase):
             ):
                 (bin_dir / name).write_bytes(name.encode())
             with patch.dict("os.environ", {}, clear=True):
-                config = VirtualContainerConfig.from_environment(
-                    TestCaseInputs(root, bin_dir, root / "work")
+                case = VirtualContainerCase(
+                    TestRunDirectories(root, bin_dir, root / "work")
                 )
             context = Mock()
             with patch(
@@ -41,7 +40,7 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 "tests.e2e.regression.virtual_container.v2.case."
                 "VirtualContainerPrerequisites.release_problem",
             ) as release_problem:
-                result = VirtualContainerCase(config).run(context)
+                result = case.run(context)
 
         release_problem.assert_not_called()
         run_contracts.assert_not_called()
@@ -65,8 +64,8 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 {"VIRTUAL_CONTAINER_E2E_SCOPE": "contracts"},
                 clear=True,
             ):
-                config = VirtualContainerConfig.from_environment(
-                    TestCaseInputs(root, bin_dir, root / "work")
+                case = VirtualContainerCase(
+                    TestRunDirectories(root, bin_dir, root / "work")
                 )
             context = Mock()
             contract_result = TestResult(TestStatus.PASSED, "contracts")
@@ -82,7 +81,7 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 "tests.e2e.regression.virtual_container.v2.case."
                 "VirtualContainerPrerequisites.resolve_deployment"
             ) as resolve_deployment:
-                result = VirtualContainerCase(config).run(context)
+                result = case.run(context)
 
         resolve_deployment.assert_not_called()
         self.assertEqual(result.status, TestStatus.SKIPPED)
@@ -109,8 +108,8 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 },
                 clear=True,
             ):
-                config = VirtualContainerConfig.from_environment(
-                    TestCaseInputs(root, bin_dir, root / "work")
+                case = VirtualContainerCase(
+                    TestRunDirectories(root, bin_dir, root / "work")
                 )
             context = Mock()
             contract_result = TestResult(TestStatus.PASSED, "contracts")
@@ -141,7 +140,7 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 "VirtualContainerPrerequisites.resolve_backends",
                 return_value={"cloud-hypervisor": resolved},
             ):
-                result = VirtualContainerCase(config).run(context)
+                result = case.run(context)
 
         self.assertEqual(result.status, TestStatus.SKIPPED)
         self.assertIn("cloud-hypervisor", result.message)
@@ -169,8 +168,8 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 },
                 clear=True,
             ):
-                config = VirtualContainerConfig.from_environment(
-                    TestCaseInputs(root, bin_dir, root / "work")
+                case = VirtualContainerCase(
+                    TestRunDirectories(root, bin_dir, root / "work")
                 )
             context = Mock()
             contract_result = TestResult(TestStatus.PASSED, "contracts")
@@ -206,7 +205,7 @@ class VirtualContainerCaseTest(unittest.TestCase):
                 "VirtualContainerScenario.run_backend",
                 return_value=backend_pass,
             ):
-                result = VirtualContainerCase(config).run(context)
+                result = case.run(context)
 
         self.assertEqual(result.status, TestStatus.COMPOSITE)
         self.assertEqual(result.effective_status(), TestStatus.PASSED)

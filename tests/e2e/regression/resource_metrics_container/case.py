@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -9,6 +10,8 @@ from tests.e2e.regression.resource_metrics_cgroup.case import (
     PATCH_CONFIG as CGROUP_PATCH_CONFIG,
     ResourceMetricsCase,
 )
+
+from tests.e2e.common.core import TestRunDirectories, TestResult, TestStatus
 
 from .constants import CASE_CONSTANTS
 
@@ -42,22 +45,42 @@ def assert_container_samples(payloads: list[dict], container_id: str, readings: 
 class ContainerAcceptance(ResourceMetricsCase):
     """Standalone acceptance using an isolated daemon and disposable Docker container."""
 
-    def __init__(self, inputs) -> None:
-        super().__init__(inputs, patch_configs=(
+    case_id = "resource_metrics_container"
+    description = "Verify container resource counters, restart recovery and finalization"
+    default_enabled = False
+
+    def run(self, test_context) -> TestResult:
+        image = os.environ.get("RESOURCE_METRICS_CONTAINER_E2E_IMAGE")
+        if not image:
+            return TestResult(TestStatus.SKIPPED, "Set RESOURCE_METRICS_CONTAINER_E2E_IMAGE to a local image with sh and sleep")
+        if os.geteuid() != 0 or not shutil.which("docker") or not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
+            return TestResult(TestStatus.SKIPPED, "Root, Docker and cgroup v2 are required")
+        inspected = subprocess.run(("docker", "image", "inspect", image), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if inspected.returncode:
+            return TestResult(TestStatus.SKIPPED, "Local test image or Docker daemon unavailable")
+        self.exercise(image)
+        return TestResult(TestStatus.PASSED, "Container accounting and lifecycle checks passed")
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        super().__init__(directories, patch_configs=(
             CGROUP_PATCH_CONFIG, Path(__file__).with_name("patch_config.toml"),
         ))
+
+    def cleanup(self, test_context):
+        """Exercise closes its owned daemon and container in its finally block."""
+        return None
 
     def _operator_values(self) -> dict[str, object]:
         values = super()._operator_values()
         managed = values["resource_profiling"]["collection"]["workload"]["cgroup"]["v2"]["managed"]
-        managed["root"] = str(self._inputs.work_dir / "unavailable-managed-root")
+        managed["root"] = str(self._directories.work_dir / "unavailable-managed-root")
         return values
 
     def exercise(self, image: str) -> None:
         self._prepare_config()
         container_id = ""
         daemon = None
-        log = (self._inputs.work_dir / "daemon-output.log").open("w")
+        log = (self._directories.work_dir / "daemon-output.log").open("w")
         try:
             container_id = self._command(("docker", "run", "--pull=never", "-d", "--network=none",
                                           "--entrypoint", "/bin/sh", image, "-c",
@@ -128,7 +151,7 @@ class ContainerAcceptance(ResourceMetricsCase):
 
     def _start_isolated_daemon(self, log):
         process = subprocess.Popen((str(self._binary("actraild")), "--config", str(self._config), "run"),
-                                   cwd=self._inputs.repo, stdout=log, stderr=log)
+                                   cwd=self._directories.repo, stdout=log, stderr=log)
         try:
             self._wait_until(lambda: process.poll() is None and self._doctor_ok(), "daemon not ready")
         except Exception:

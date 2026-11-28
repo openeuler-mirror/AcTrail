@@ -21,6 +21,11 @@ from tests.e2e.regression.lsm_grey_xiaoo.case import LsmGreyXiaooCase
 
 
 class GreyProxyXiaooCase(LsmGreyXiaooCase):
+    case_id = 'grey_proxy_xiaoo'
+    description = 'Managed grey proxy with real process history'
+    default_enabled = False
+
+
     def _run(self, context):
         self.output = context.output
         self.requests = []

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.e2e.common.actrail_runtime import ActrailRuntime
-from tests.e2e.common.core import AgentBinaryNotFoundError, TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, AgentBinaryNotFoundError, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 from tests.e2e.common.mcp_test_support import McpTraceAssertion
 
@@ -14,7 +14,12 @@ from .constants import CASE_CONSTANTS
 
 
 class ProbeClaudeMcpCase(TestCase):
-    def __init__(self, config: ProbeClaudeMcpConfig) -> None:
+    case_id = 'probe_claude_mcp'
+    description = 'Run a real Claude stdio MCP call and verify its fixed semantic graph'
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = ProbeClaudeMcpConfig.from_environment(directories)
         self._config = config
 
     def run(self, test_context: TestingContextSingleton) -> TestResult:
@@ -59,7 +64,7 @@ class ProbeClaudeMcpCase(TestCase):
                 TestStatus.PASSED,
                 "actrailctl launch and Claude exited successfully",
             )
-            execution_evidence = task.require_agent_evidence(launch)
+            execution_evidence = task.require_agent_evidence()
             results["probe_execution"] = TestResult(
                 TestStatus.PASSED,
                 execution_evidence,

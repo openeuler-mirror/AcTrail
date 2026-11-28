@@ -8,7 +8,7 @@ from tests.e2e.common.core import CaseProgressReporter, TestResult, TestStatus
 from tests.e2e.common.runner.run import _dependency_skip_result
 
 from tests.e2e.regression.virtual_container_xiaoo_concurrency.v2.run_e2e import (
-    TEST_DEFINITION as CONCURRENCY_DEFINITION,
+    VirtualContainerXiaooConcurrencyCase as CONCURRENCY_DEFINITION,
 )
 
 

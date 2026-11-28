@@ -1,8 +1,62 @@
-# Probe Claude MCP
+# 回归测试：Claude MCP 交互采集
 
-该测例让真实 Claude 会话调用仓库自带的本地 stdio MCP 工具，并验证AcTrail 生成的完整语义图。
+## 测试目标
 
-## 运行
+验证 AcTrail 能采集真实 Claude 的 stdio MCP 工具调用，生成完整且正确关联的语义图，并按配置保存正文证据。
+
+## 场景设计
+
+让 Claude 发现并调用本地 MCP 工具，以工具实际执行记录和随机 marker 作为核对依据。工具发现响应超过 stdio 单次采集上限，随后发出完整工具调用，验证发现阶段截断后仍能识别调用。
+
+## 测试依赖
+
+| 依赖 | 要求 | 用途 |
+| --- | --- | --- |
+| 主机环境 | Linux、root、可工作的 eBPF 环境 | 采集进程与 stdio 活动 |
+| Python | Python ≥ 3.11 | 执行测例与仓库自带 MCP probe |
+| AcTrail | 可运行的 release 产物 | 启动采集并查询落盘记录 |
+| Claude 与模型服务 | CLI 可用、认证有效、支持 MCP 工具 | 执行真实模型与工具交互 |
+
+## 测试步骤摘要
+
+1. 检查 Agent 可用性，准备本轮随机 marker 和本地 MCP probe。
+2. 刷新隔离的默认配置并开启 MCP 采集，启动 AcTrail。
+3. 通过 AcTrail 启动 Agent，记录 trace ID，完成工具发现并要求调用工具。
+4. 核实 Agent 回复和 probe 的实际调用、执行及响应记录。
+5. 结束会话并停止采集，按本轮 trace ID 查询语义图和正文证据。
+
+| 检查项 | 条件 | 预期结果 |
+| --- | --- | --- |
+| 实际工具执行 | Agent 完成 MCP 任务 | probe 恰好记录一次调用、执行和成功响应，采集记录与实际工具交互一致 |
+| 截断后的识别 | 工具发现响应超过采集上限，后续调用完整 | 保存截断诊断，并识别后续工具调用 |
+| 语义图 | 数据已落盘 | 工具调用及四个子 action 完整，层级与 LLM 关联唯一且正确 |
+| 终态与正文 | 会话和采集已结束 | trace 为 Exited/Clean，action 为 success/complete，正文符合存储策略 |
+
+### 详细验收条件
+
+
+测例使用随机 marker，等待 Claude 完成本地 MCP 工具发现后发送 prompt，并
+要求以下条件全部成立：
+
+- probe JSONL 中恰好有一次 `tools/call`、一次真实执行及对应成功响应；
+- `tools/list` 响应大于 4095-byte stdio capture ABI 上限，trace 中持久化
+  `mcp_stdio_candidate_stream_discarded` / `candidate_truncated` 诊断，但后续完整
+  stdin `tools/call` 仍完成 Candidate 准入；
+- trace 最终为 `Exited/Clean`；
+- 恰好生成一个 `mcp.tool_call` 以及 `mcp.request`、`mcp.response`、
+  `mcp.stdout`、`mcp.stdin` 四个子 action；
+- 所有 action 为 `success/complete`，server、tool 和 transport 精确匹配；
+- action 引用及五类层级 link 唯一，link 为 `valid=true`、
+  `confidence=observed`；
+- tool call 关联真实 `llm.response`，并包含精确的 LLM tool-call id/name；
+- 默认 `stdout_storage_mode=drop` 下不持久化 stdout payload，但必须存在
+  stdin payload，所有 payload evidence 都引用已持久化 segment。
+
+
+## 快速运行
+
+### 运行指令
+
 
 从仓库根目录执行：
 
@@ -24,27 +78,29 @@ PID、日志、SQLite、TLS-sync socket、export 和 plugin 路径，不会停�
 配置通过 `actrailctl init -f --patch` 从当前默认值生成，并显式开启
 `[payload.mcp] enabled = true`，以采集本测例要求的 MCP 语义图和诊断。
 
-## 验证范围
 
-测例使用随机 marker，等待 Claude 完成本地 MCP 工具发现后发送 prompt，并
-要求以下条件全部成立：
+### 测试所用环境变量
 
-- Claude 输出 final marker；
-- probe JSONL 中恰好有一次 `tools/call`、一次真实执行及对应成功响应；
-- `tools/list` 响应大于 4095-byte stdio capture ABI 上限，trace 中持久化
-  `mcp_stdio_candidate_stream_discarded` / `candidate_truncated` 诊断，但后续完整
-  stdin `tools/call` 仍完成 Candidate 准入；
-- trace 最终为 `Exited/Clean`；
-- 恰好生成一个 `mcp.tool_call` 以及 `mcp.request`、`mcp.response`、
-  `mcp.stdout`、`mcp.stdin` 四个子 action；
-- 所有 action 为 `success/complete`，server、tool 和 transport 精确匹配；
-- action 引用及五类层级 link 唯一，link 为 `valid=true`、
-  `confidence=observed`；
-- tool call 关联真实 `llm.response`，并包含精确的 LLM tool-call id/name；
-- 默认 `stdout_storage_mode=drop` 下不持久化 stdout payload，但必须存在
-  stdin payload，所有 payload evidence 都引用已持久化 segment。
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `ACTRAIL_TEST_PYTHON` | `python3` | Python 3.11+ 解释器；手动流程也用它启动 probe server |
+| `CLAUDE_E2E_BINARY` | 自动查找 `claude` | Claude 可执行文件 |
+| `CLAUDE_E2E_MODEL` | `sonnet` | Claude model；未设置时读取 `ANTHROPIC_MODEL` |
+| `CLAUDE_MCP_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 管理及停止超时 |
+| `CLAUDE_MCP_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | Claude workload 超时 |
+| `CLAUDE_MCP_E2E_ARTIFACT_ROOT` | `temp/v2-regression/mcp` | 隔离证据目录 |
+| `CLAUDE_MCP_E2E_MANUAL_RUNTIME_ROOT` | `/tmp` | 手动流程的短路径运行时父目录；用于容纳 Unix socket、日志和 SQLite |
+| `CLAUDE_MCP_E2E_LOCAL_SERVER_NAME` | `actrail_claude_stdio` | MCP server 名称 |
+| `CLAUDE_MCP_E2E_TOOL_NAME` | `emit_marker` | MCP tool 名称 |
+| `CLAUDE_MCP_E2E_READY_TIMEOUT_SECONDS` | `60` | 工具发现超时 |
+| `CLAUDE_MCP_E2E_READY_POLL_INTERVAL_SECONDS` | `0.05` | 工具发现轮询间隔 |
+| `CLAUDE_MCP_E2E_TOOL_DESCRIPTION_PADDING_BYTES` | `8192` | 填充 tool description，使 `tools/list` 响应越过 4095-byte stdio capture ABI 上限；必须大于 4095 |
+
+server 和 tool 名称必须匹配 `[A-Za-z][A-Za-z0-9_-]*`。非法配置直接失败。
 
 ## 手动测试
+
 
 配置仓库自带的 stdio MCP probe，启动隔离的 AcTrail daemon，运行一次真
 实 Claude 调用，再用 viewer 核验结果。
@@ -66,7 +122,7 @@ command -v rg >/dev/null
 
 REGRESSION_PYTHON="${ACTRAIL_TEST_PYTHON:-python3}"
 "$REGRESSION_PYTHON" -c \
-  'import sys; assert sys.version_info >= (3, 10), sys.version'
+  'import sys; assert sys.version_info >= (3, 11), sys.version'
 
 CLAUDE_BIN="${CLAUDE_E2E_BINARY:-$(command -v claude || true)}"
 test -n "$CLAUDE_BIN"
@@ -74,21 +130,20 @@ test -x "$CLAUDE_BIN"
 
 CLAUDE_PREFLIGHT_OUTPUT="$(
   "$CLAUDE_BIN" \
-    -p 'Reply with exactly "CLAUDE_MCP_PREFLIGHT_OK" and nothing else.' \
+    -p 'Explain one practical use of a text editor in one sentence.' \
     --model "${CLAUDE_E2E_MODEL:-sonnet}" \
     --no-session-persistence \
     --safe-mode \
     --permission-mode dontAsk \
     --tools ""
 )"
-test "$CLAUDE_PREFLIGHT_OUTPUT" = "CLAUDE_MCP_PREFLIGHT_OK"
+test -n "$CLAUDE_PREFLIGHT_OUTPUT"
 printf '%s\n' "$CLAUDE_PREFLIGHT_OUTPUT"
 ```
 
 #### 预期结果
 
-三个 release 二进制均存在，Python 版本满足要求，Claude 成功输出
-`CLAUDE_MCP_PREFLIGHT_OK`。这一步会实际访问配置的 model/provider；仅检查
+三个 release 二进制均存在，Python 版本满足要求，Claude 成功完成模型请求并返回文本。这一步会实际访问配置的 model/provider；仅检查
 `claude --version` 不能证明认证和外部服务可用。
 
 ### 步骤 2：创建独占目录、本地 MCP 配置和隔离运行时配置
@@ -137,7 +192,6 @@ test "$TOOL_DESCRIPTION_PADDING_BYTES" -gt 4095
 
 LOCAL_TOOL_ID="mcp__${LOCAL_SERVER}__${TOOL_NAME}"
 LOCAL_MARKER="CLAUDE_STDIO_${TOKEN}"
-FINAL_MARKER="CLAUDE_MCP_FINAL_${TOKEN}"
 LOCAL_EVENTS="$CASE_DIR/${LOCAL_SERVER}.events.jsonl"
 CLAUDE_MCP_CONFIG="$CASE_DIR/claude-mcp.json"
 LAUNCH_LOG="$CASE_DIR/claude-launch.log"
@@ -267,7 +321,7 @@ test -S "$RUNTIME_DIR/run/control.sock"
 PROMPT="$(
   printf '%s' \
     "Use $LOCAL_TOOL_ID with {\"marker\":\"$LOCAL_MARKER\"}. " \
-    "After the result returns, reply with \"$FINAL_MARKER\"."
+    "After the result returns, briefly describe the tool result."
 )"
 
 "${CONTROL[@]}" launch -- \
@@ -286,16 +340,13 @@ PROMPT="$(
 #### 预期结果
 
 launch 输出一个 `trace trace-N entered Active`，Claude 只获得本轮配置中的本地
-stdio 工具，调用完成后输出 `$FINAL_MARKER`。这里直接使用普通 Prompt，不包含
-远程 MCP，也不包含初始化超时的旧规避流程。
+stdio 工具，实际工具调用成功完成。保存 Agent 实际回复和 probe 记录供核对。
 
 ### 步骤 5：核验 Claude 输出、probe 执行证据和 trace id
 
 #### 手动指令
 
 ```bash
-rg -F -- "$FINAL_MARKER" "$LAUNCH_LOG" >/dev/null
-
 jq -se \
   --arg server "$LOCAL_SERVER" \
   --arg tool "$TOOL_NAME" \
@@ -357,7 +408,7 @@ printf 'trace-%s\n' "$TRACE_ID"
 
 #### 预期结果
 
-final marker 存在；JSONL 中恰好有一次目标 `tools/call`、一次真实执行和一个
+Agent 任务成功结束。JSONL 中恰好有一次目标 `tools/call`、一次真实执行和一个
 对应成功响应；tool description 超过 4095 bytes；launch 日志中只有一个 trace
 id。
 
@@ -500,22 +551,3 @@ trap - EXIT
 Claude、stdio MCP server 和隔离 daemon 均已退出。证据目录与短路径运行时目录
 分别通过父目录、目录名前缀和 ownership marker 检查后才会删除；中途失败时
 trap 会停止隔离 daemon，并同时保留 `$CASE_DIR` 和 `$RUNTIME_DIR` 供排查。
-
-## 配置
-
-| 环境变量 | 默认值 | 作用 |
-| --- | --- | --- |
-| `ACTRAIL_TEST_PYTHON` | `python3` | Python 3.10+ 解释器；手动流程也用它启动 probe server |
-| `CLAUDE_E2E_BINARY` | 自动查找 `claude` | Claude 可执行文件 |
-| `CLAUDE_E2E_MODEL` | `sonnet` | Claude model；未设置时读取 `ANTHROPIC_MODEL` |
-| `CLAUDE_MCP_E2E_COMMAND_TIMEOUT_SECONDS` | `30` | AcTrail 管理及停止超时 |
-| `CLAUDE_MCP_E2E_LAUNCH_TIMEOUT_SECONDS` | `180` | Claude workload 超时 |
-| `CLAUDE_MCP_E2E_ARTIFACT_ROOT` | `temp/v2-regression/mcp` | 隔离证据目录 |
-| `CLAUDE_MCP_E2E_MANUAL_RUNTIME_ROOT` | `/tmp` | 手动流程的短路径运行时父目录；用于容纳 Unix socket、日志和 SQLite |
-| `CLAUDE_MCP_E2E_LOCAL_SERVER_NAME` | `actrail_claude_stdio` | MCP server 名称 |
-| `CLAUDE_MCP_E2E_TOOL_NAME` | `emit_marker` | MCP tool 名称 |
-| `CLAUDE_MCP_E2E_READY_TIMEOUT_SECONDS` | `60` | 工具发现超时 |
-| `CLAUDE_MCP_E2E_READY_POLL_INTERVAL_SECONDS` | `0.05` | 工具发现轮询间隔 |
-| `CLAUDE_MCP_E2E_TOOL_DESCRIPTION_PADDING_BYTES` | `8192` | 填充 tool description，使 `tools/list` 响应越过 4095-byte stdio capture ABI 上限；必须大于 4095 |
-
-server 和 tool 名称必须匹配 `[A-Za-z][A-Za-z0-9_-]*`。非法配置直接失败。

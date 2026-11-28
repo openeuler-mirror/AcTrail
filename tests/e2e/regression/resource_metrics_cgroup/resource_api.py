@@ -10,20 +10,20 @@ import time
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, build_opener
 
-from tests.e2e.common.core import TestCaseInputs
+from tests.e2e.common.core import TestRunDirectories
 from .constants import CASE_CONSTANTS as C
 
 
 @contextmanager
-def _web(inputs: TestCaseInputs, config: Path):
-    binary = inputs.bin_dir / "actrailweb"
+def _web(directories: TestRunDirectories, config: Path):
+    binary = directories.bin_dir / "actrailweb"
     if not binary.is_absolute():
-        binary = inputs.repo / binary
-    log_path = inputs.work_dir / "resource-api-web.log"
+        binary = directories.repo / binary
+    log_path = directories.work_dir / "resource-api-web.log"
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             [str(binary), "--config", str(config), "--addr", "127.0.0.1", "--port", "0"],
-            cwd=inputs.repo, stdout=log, stderr=subprocess.STDOUT,
+            cwd=directories.repo, stdout=log, stderr=subprocess.STDOUT,
         )
         try:
             deadline = time.monotonic() + C.web_ready_timeout
@@ -81,9 +81,9 @@ def _assert_timeline(timeline: dict, trace_id: int, start: int, end: int, sample
             raise AssertionError("resource timeline memory/PID peaks differ from stored samples")
 
 
-def assert_resource_api(inputs: TestCaseInputs, config: Path, traces: dict[int, list[dict]]) -> str:
+def assert_resource_api(directories: TestRunDirectories, config: Path, traces: dict[int, list[dict]]) -> str:
     opener = build_opener(ProxyHandler({}))
-    with _web(inputs, config) as base:
+    with _web(directories, config) as base:
         def read(path: str) -> dict:
             with opener.open(base + path, timeout=C.web_request_timeout) as response:
                 return json.load(response)

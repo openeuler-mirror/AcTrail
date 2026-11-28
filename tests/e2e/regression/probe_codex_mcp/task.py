@@ -4,7 +4,7 @@ import json
 import secrets
 from pathlib import Path
 
-from tests.e2e.common.actrail_runtime import ActrailRuntime, CommandResult
+from tests.e2e.common.agents import AgentFactory
 from tests.e2e.common.core import AgentBinaryNotFoundError
 from tests.e2e.common.mcp_test_support import McpProbeSpec, McpProbeWorkspace
 from tests.e2e.common.testing_env import AgentBinaryDiscovery
@@ -30,7 +30,6 @@ class ProbeCodexMcpTask:
         )
         try:
             token = secrets.token_hex(CASE_CONSTANTS.marker_random_bytes)
-            self.final_marker = f"CODEX_MCP_FINAL_{token}"
             self.local = self._workspace.spec(
                 server_name=config.local_server_name,
                 tool_name=config.tool_name,
@@ -55,26 +54,32 @@ class ProbeCodexMcpTask:
     def expected_calls(self) -> tuple[McpProbeSpec, ...]:
         return (self.local,)
 
-    def run(self, runtime: ActrailRuntime) -> CommandResult:
-        return runtime.run(
-            self._command(runtime),
-            timeout_seconds=self._config.launch_timeout_seconds,
-            environment=self.environment(),
-        )
+    def run(self):
+        with self.create_agent().launchWithAcTrailCtl(stream_mode=False) as agent:
+            agent.run(self._prompt())
+            agent.join_all(self._config.launch_timeout_seconds)
+            result = agent.results[-1]
+            if not result.succeeded:
+                raise AssertionError(result.error or "Codex MCP task failed")
+            launch = agent.launch_result
+        if agent.returncode != 0:
+            raise AssertionError(f"Codex launch exited with {agent.returncode}")
+        return launch, result
 
-    def require_agent_evidence(self, launch: CommandResult) -> str:
-        if self.final_marker not in launch.stdout:
-            raise AssertionError(
-                "Codex stdout answer does not contain final marker "
-                f"{self.final_marker}"
-            )
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception_type, exception, traceback):
+        self.close()
+
+    def require_agent_evidence(self) -> str:
         return self._workspace.require_execution(self.local)
 
     def tool_execution_count(self) -> int:
         return self._workspace.execution_count(self.local)
 
-    def replied_no_tool(self, launch: CommandResult) -> bool:
-        return "NO_MCP_TOOL" in launch.stdout
+    def replied_no_tool(self, output: str) -> bool:
+        return "NO_MCP_TOOL" in output
 
     def environment(self) -> dict[str, str]:
         environment = self._discovery.environment(self._codex)
@@ -88,33 +93,25 @@ class ProbeCodexMcpTask:
     def close(self) -> None:
         self._workspace.close()
 
-    def _command(self, runtime: ActrailRuntime) -> list[Path | str]:
+    def create_agent(self):
         command, arguments = self._workspace.stdio_command(self.local)
         server_key = f"mcp_servers.{self.local.server_name}"
         overrides = [
+            f"model={json.dumps(self._config.model)}",
             f"model_reasoning_effort={self._config.reasoning_effort}",
             f"{server_key}.command={json.dumps(command)}",
             f"{server_key}.args={json.dumps(arguments)}",
         ]
-        argv: list[Path | str] = [
-            *runtime.control_command("launch"),
-            "--",
-            self._codex,
-            "exec",
-            "--ephemeral",
-            "-m",
-            self._config.model,
-        ]
-        for override in overrides:
-            argv.extend(["-c", override])
-        argv.append(self._prompt())
-        return argv
+        options = tuple(value for override in overrides for value in ("-c", override))
+        return AgentFactory.codex(
+            binary=self._codex, arguments=("--skip-git-repo-check", *options),
+            environment=self.environment(),
+        )
 
     def _prompt(self) -> str:
         return (
             f"Use the {self.local.tool_id} MCP tool exactly once with "
-            f'{{"marker":"{self.local.marker}"}}, then reply exactly '
-            f'"{self.final_marker}". You must call the MCP tool before replying.'
+            f'{{"marker":"{self.local.marker}"}}, then describe the tool result.'
         )
 
     def _resolve_codex(self) -> Path:

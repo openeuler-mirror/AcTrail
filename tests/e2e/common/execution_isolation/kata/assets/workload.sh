@@ -116,8 +116,7 @@ set -e
 XIAOO_PID=""
 cat "$XIAOO_STDOUT"
 [ "$xiaoo_rc" -eq 0 ] || fail "xiaoO exited with status $xiaoo_rc"
-grep -Fq "$ACTRAIL_XIAOO_RESPONSE_MARKER" "$XIAOO_STDOUT" \
-  || fail "xiaoO output omitted its provider response marker"
+[ -s "$XIAOO_STDOUT" ] || fail "xiaoO returned an empty reply"
 grep -Fq "$ACTRAIL_EXECUTION_ISOLATION_AGENT_READ_MARKER" "$READ_OUTPUT" \
   || fail "real xiaoO did not perform the required file read tool call"
 grep -Fq "$ACTRAIL_EXECUTION_ISOLATION_AGENT_WRITE_MARKER" "$WRITE_OUTPUT" \

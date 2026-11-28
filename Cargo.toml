@@ -15,6 +15,7 @@ members = [
     "crates/core/linux_platform",
     "crates/core/linux_cgroup",
     "crates/core/config",
+    "crates/core/file_permissions",
     "crates/core/config_export_filter",
     "crates/core/resource_profiling",
     "crates/core/idle_detector",

@@ -20,7 +20,9 @@ class SemanticActionBoundariesEnvironment(PluginTestEnvironment):
         self,
         config: SemanticActionBoundariesConfig,
         output: TestOutput,
+        agent_binary: Path,
     ):
+        self._agent_binary = agent_binary
         self._operator_config_patch = config.work_dir / "actraild.patch.toml"
         super().__init__(
             config,
@@ -105,6 +107,7 @@ class SemanticActionBoundariesEnvironment(PluginTestEnvironment):
             PatchBuilder()
             .with_work_dir(self.config.work_dir)
             .with_plugin_directory(plugin_root)
+            .with_values({"agent_invocation": {"commands": [str(self._agent_binary.resolve())]}})
             .build()
             .save(self._operator_config_patch)
         )

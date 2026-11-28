@@ -12,7 +12,7 @@ from tests.e2e.common.kata_runtime import (
     shim_binary,
 )
 from tests.e2e.common.kata_runtime.process import SubprocessRunner
-from tests.e2e.common.core import TestCase, TestResult, TestStatus
+from tests.e2e.common.core import TestRunDirectories, TestCase, TestResult, TestStatus
 from tests.e2e.common.runner import TestingContextSingleton
 
 from .config import VirtualContainerXiaooConcurrencyConfig
@@ -20,7 +20,13 @@ from .scenario import DualKataXiaooScenario
 
 
 class VirtualContainerXiaooConcurrencyCase(TestCase):
-    def __init__(self, config: VirtualContainerXiaooConcurrencyConfig):
+    case_id = 'virtual_container_xiaoo_concurrency'
+    description = 'Run two overlapping xiaoO workloads in two independently managed Kata VMs'
+    skip_if_skipped = ('virtual_container',)
+
+
+    def __init__(self, directories: TestRunDirectories) -> None:
+        config = VirtualContainerXiaooConcurrencyConfig.from_environment(directories)
         self._config = config
         self._validator = (
             config.repo
@@ -36,7 +42,7 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
         if problem is not None:
             return problem
         test_context.report_progress(
-            "artifacts",
+            "Check concurrency deployment assets",
             "validating concurrency deployment assets",
         )
         deployment, problem = self._resolve_deployment()
@@ -53,7 +59,7 @@ class VirtualContainerXiaooConcurrencyCase(TestCase):
         assert runtime_config is not None
 
         test_context.report_progress(
-            "preflight",
+            "Check the data profile and guest kernel",
             "validating data Profile and guest kernel capabilities",
         )
         validation = SubprocessRunner().run(
